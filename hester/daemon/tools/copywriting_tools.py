@@ -24,9 +24,9 @@ def _get_client():
     return _gemini_client
 
 
-# Coefficiency brand voice guidelines for reference
-COEFFICIENCY_VOICE = """
-Coefficiency Brand Voice:
+# Default brand voice guidelines for reference
+DEFAULT_BRAND_VOICE = """
+Brand Voice Guidelines:
 - Direct and confident, never hedging or apologetic
 - No corporate buzzwords or hollow jargon
 - Speaks like a trusted advisor with scar tissue
@@ -47,7 +47,7 @@ async def analyze_tone(
 
     Args:
         content: The content to analyze
-        brand_voice: Brand voice to compare against ("coefficiency" or "neutral")
+        brand_voice: Brand voice to compare against ("brand" or "neutral")
         model: Gemini model to use
 
     Returns:
@@ -63,8 +63,8 @@ async def analyze_tone(
         client = _get_client()
 
         brand_context = ""
-        if brand_voice == "coefficiency":
-            brand_context = f"\n\nCompare against this brand voice standard:\n{COEFFICIENCY_VOICE}"
+        if brand_voice == "brand":
+            brand_context = f"\n\nCompare against this brand voice standard:\n{DEFAULT_BRAND_VOICE}"
 
         prompt = f"""Analyze the tone and voice of this content:{brand_context}
 
@@ -80,7 +80,7 @@ Provide a structured analysis with:
 4. **Voice Characteristics**: Key patterns you notice
 5. **Strengths**: What works well
 6. **Opportunities**: What could be improved
-{"7. **Brand Alignment**: How well it matches Coefficiency voice (if brand_voice is coefficiency)" if brand_voice == "coefficiency" else ""}
+{"7. **Brand Alignment**: How well it matches the brand voice standard" if brand_voice == "brand" else ""}
 
 Be specific and cite examples from the text."""
 

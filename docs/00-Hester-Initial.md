@@ -1,72 +1,41 @@
-# Hester: The Internal Daemon
+# Hester: The AI Daemon
 
-> Sybil's infrastructure, applied to the system domain. Watchful, practical, no BS.
+> Watchful, practical, no BS.
 
 ---
 
 ## The Naming
 
-**Hester** is the daemon of Lee Scoresby in Philip Pullman's *His Dark Materials*—an arctic hare who speaks truth, watches what Lee can't see, and keeps him grounded. She's fierce, practical, and deeply loyal.
+**Hester** is the daemon of Lee Scoresby in Philip Pullman's *His Dark Materials*--an arctic hare who speaks truth, watches what Lee can't see, and keeps him grounded. She's fierce, practical, and deeply loyal.
 
 The name carries an oblique homage to **Hestia**, goddess of the hearth, who tends the fire while others do the visible work.
 
-Hester serves the Coefficiency team the way a daemon serves their human: always present, always watching, never customer-facing.
+Hester serves the developer the way a daemon serves their human: always present, always watching, never in the way.
 
 ---
 
 ## The Core Principle
 
-**Hester is built to reuse Sybil/Coefficiency tech for internal use.**
+**Hester is built to give developers deep, contextual AI assistance while they work.**
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              THE INNOVATION LOOP                                 │
-│                                                                                  │
-│         ┌──────────────┐                              ┌──────────────┐          │
-│         │    SYBIL     │                              │    HESTER    │          │
-│         │              │                              │              │          │
-│         │  User-facing │                              │   Internal   │          │
-│         │  Chief of    │                              │   daemon     │          │
-│         │  Staff       │                              │   for team   │          │
-│         └──────┬───────┘                              └──────┬───────┘          │
-│                │                                             │                   │
-│                │         ┌─────────────────────┐             │                   │
-│                └────────►│      SHARED         │◄────────────┘                   │
-│                          │   INFRASTRUCTURE    │                                 │
-│                          │                     │                                 │
-│                          │  • Intelligence     │                                 │
-│                          │    Pipeline         │                                 │
-│                          │  • GraphRAG         │                                 │
-│                          │  • ReAct Loop       │                                 │
-│                          │  • Validators       │                                 │
-│                          │  • Agent Base       │                                 │
-│                          │  • Stanley's        │                                 │
-│                          │    Perception       │                                 │
-│                          └─────────────────────┘                                 │
-│                                                                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+She sits alongside the Lee editor, maintaining awareness of what you're working on, what tools you have open, and what your codebase looks like. When you ask a question, she already has context. When something breaks, she's already watching.
 
-**Primary goal:** Solve real internal problems.
+**Primary goal:** Solve real problems in the development workflow.
 
-**Secondary goal:** Dogfood our own tech—learn how to use it better, make it more robust.
-
-**The innovation loop:** Using the same code/infrastructure in different ways reveals unexpected problems, but also unique opportunities. Bugs found by either agent get fixed for both. Capabilities built for one become available to the other.
+**Secondary goal:** Stay out of the way until needed.
 
 ---
 
-## What Hester Is Not
+## What Hester Does
 
-Hester is not a separate system. She is Sybil's infrastructure applied to a different domain.
-
-| Layer | Sybil's Application | Hester's Application |
-|-------|---------------------|----------------------|
-| **Intelligence Pipeline** | User career insights | System health insights |
-| **GraphRAG** | User's career graph | System's knowledge graph |
-| **Validators** | Salary math, timelines | Test coverage, build status |
-| **ReAct Loop** | Career reasoning | System reasoning |
-| **Falsification** | Red-team career advice | Adversarial Sybil testing |
-| **Stanley Perception** | User document/voice analysis | Idea capture from any format |
+| Capability | Description |
+|------------|-------------|
+| **Code Exploration** | ReAct-loop agents that search, read, and reason about codebases |
+| **Documentation** | Detect drift between docs and code, semantic search across docs |
+| **Context Management** | Reusable context bundles that aggregate code, schemas, and docs |
+| **DevOps** | Service management, Docker Compose, health checks |
+| **Web Research** | Gemini-powered search with source attribution |
+| **Plugin Extensions** | Project-specific tools, commands, and agents via plugin system |
 
 ---
 
@@ -78,7 +47,7 @@ Hester will **never**:
 - Make direct code changes (suggest only)
 - Send external communications
 - Modify production database
-- Be exposed to customers
+- Be exposed to end users
 
 Hester's knowledge graph is **strictly internal**.
 
@@ -88,27 +57,27 @@ Hester's knowledge graph is **strictly internal**.
 
 Like Hester in the books:
 
-- **Loyal but no BS** — Tells the team what they need to hear, not what they want to hear
-- **Not pushy** — Surfaces information, doesn't nag
-- **Blunt with humor** — Direct communication, but not robotic
+- **Loyal but no BS** -- Tells you what you need to hear, not what you want to hear
+- **Not pushy** -- Surfaces information, doesn't nag
+- **Blunt with humor** -- Direct communication, but not robotic
 
 ### Voice Examples
 
 ```
 # Good: Blunt, slight humor
-"Upload tests failing again. Third time this week. The 5MB boundary 
-is cursed—want me to dig into it?"
+"Upload tests failing again. Third time this week. The 5MB boundary
+is cursed--want me to dig into it?"
 
 # Good: Direct, actionable
-"PR #312 touches graph/sybil but no tests updated. Last three PRs 
+"PR #312 touches the auth module but no tests updated. Last three PRs
 to this file introduced regressions."
 
 # Good: Observational, not naggy
-"Four people have asked about Genome scoring in Slack this month. 
+"Four people have asked about the scoring algorithm in Slack this month.
 We might have a doc gap."
 
 # Bad: Too warm/corporate
-"Hey team! 👋 Just wanted to flag a small issue I noticed..."
+"Hey team! Just wanted to flag a small issue I noticed..."
 
 # Bad: Too robotic
 "ERROR: Test failure detected. Count: 3. Module: upload."
@@ -116,168 +85,15 @@ We might have a doc gap."
 
 ---
 
-## The Four Capabilities
+## Core Capabilities
 
-### Priority Order
+### 1. Documentation Validation (HesterDocs)
 
-1. **Scene Testing** — Highest impact, directly improves product
-2. **Daily Brief** — High value, keeps business informed
-3. **Idea Capture** — High value, preserves institutional knowledge
-4. **Doc Sync** — Important, but less urgent
-
-### Guiding Constraint
-
-> **If we spend more time building Hester than building Sybil, we've failed.**
-
-Short time to value. Start small. Expand based on actual use.
-
----
-
-## Capability 1: Scene Testing (HesterQA)
-
-### The Problem
-
-Manual play-testing of Sybil scenes is time-consuming and inconsistent.
-
-### The Solution
-
-Hester drives real conversations through scenes, evaluates outcomes against success criteria.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  HESTER QA: Scene Testing                                                        │
-│                                                                                  │
-│  1. THINK: Select persona based on what needs testing                           │
-│  2. ACT: ChromeDevTools drives conversation with Sybil                          │
-│  3. OBSERVE: Capture transcript, artifacts, timing, errors                      │
-│  4. REFLECT: Evaluate against success criteria (Tier 4 for adversarial)        │
-│  5. RESPOND: Log results, notify on failure                                     │
-│                                                                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Test Types
-
-**Happy Path:**
-- Engaged user completes flow successfully
-- All expected artifacts generated
-- Timing within bounds
-
-**Adversarial:**
-- The Vague User — minimal input, expects clarifying questions
-- The Contradictor — says conflicting things, expects Sybil to notice
-- The Speed Runner — rushes through, tests graceful degradation
-
-### Infrastructure Reuse
-
-| Capability | Reused From |
-|------------|-------------|
-| Persona-based conversation | Sybil's core (inverted) |
-| Success criteria evaluation | Falsification / REFLECT |
-| Evidence logging | Intelligence Pipeline |
-| Pattern formation | Pattern corroboration |
-
-### Surfaces
-
-- **CLI:** `hester qa scene onboarding/genome --persona vague`
-- **CI/CD:** Auto-run on PR to `graph/sybil/*`
-- **Slack:** Notify on failure with transcript link
-
----
-
-## Capability 2: Daily Brief (HesterBrief)
-
-### The Problem
-
-Dev team iterates fast. Business/strategy team struggles to stay current.
-
-### The Solution
-
-Hester synthesizes dev activity into a daily summary written for non-technical stakeholders.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  HESTER BRIEF: Daily Summary                                                     │
-│                                                                                  │
-│  Sources: GitHub PRs, Linear issues, Slack #dev                                 │
-│                                                                                  │
-│  Output:                                                                         │
-│  • Big Picture — What's the theme of recent work?                               │
-│  • Shipped — What landed?                                                       │
-│  • In Progress — What's being worked on?                                        │
-│  • Decisions Made — What was resolved?                                          │
-│  • Questions for Business — What needs input?                                   │
-│                                                                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Infrastructure Reuse
-
-| Capability | Reused From |
-|------------|-------------|
-| Evidence extraction | Sydney's document extraction |
-| Theme synthesis | Pattern formation |
-| Brief generation | Sybil's journal generation |
-
-### Surfaces
-
-- **Slack:** Morning post to #daily-brief
-- **CLI:** `hester brief --since yesterday`
-
----
-
-## Capability 3: Idea Capture (HesterIdeas)
-
-### The Problem
-
-Team is mobile. Ideas happen on the go. Voice notes and sketches get lost.
-
-### The Solution
-
-Slack DM to Hester with any format (text, voice, sketch). Get structured markdown back.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  HESTER IDEAS: Capture                                                           │
-│                                                                                  │
-│  Input: Slack DM with text, voice note, image, or mix                           │
-│                                                                                  │
-│  Processing:                                                                     │
-│  1. Stanley perception (transcription, image analysis)                          │
-│  2. Hester contextualization (GraphRAG: what does this relate to?)             │
-│  3. Markdown generation with related context                                    │
-│                                                                                  │
-│  Output:                                                                         │
-│  • Immediate Slack confirmation                                                 │
-│  • Structured markdown in /ideas/                                               │
-│  • Optional: Linear issue, #ideas post                                          │
-│                                                                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Infrastructure Reuse
-
-| Capability | Reused From |
-|------------|-------------|
-| Voice transcription | Stanley (identical code) |
-| Image analysis | Stanley (identical code) |
-| Context enrichment | GraphRAG |
-| Markdown generation | Sydney document generation |
-
-### Surfaces
-
-- **Slack DM:** Primary input
-- **CLI:** `hester ideas --list`, `hester ideas --search "genome"`
-
----
-
-## Capability 4: Doc Sync (HesterDocs)
-
-### The Problem
+#### The Problem
 
 Docs drift from code. Too many docs to fit in context. Staleness erodes trust.
 
-### The Solution
+#### The Solution
 
 Hester detects drift between docs and code, builds semantic knowledge graph for queries.
 
@@ -292,26 +108,44 @@ Hester detects drift between docs and code, builds semantic knowledge graph for 
 │                                                                                  │
 │  Semantic Search:                                                               │
 │  • Build graph: Concept → Module → Function → Doc                              │
-│  • Query: "How does GraphRAG work?"                                            │
+│  • Query: "How does authentication work?"                                      │
 │  • Return: relevant doc sections + actual code                                  │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Infrastructure Reuse
-
-| Capability | Reused From |
-|------------|-------------|
-| Claim extraction | Sydney document extraction |
-| Code validation | Neuro-symbolic validators |
-| Semantic search | GraphRAG |
-| Graph traversal | Existing functions |
-
-### Surfaces
+#### Surfaces
 
 - **CLI:** `hester docs check`, `hester docs query "how does X work"`
 - **GitHub:** PR comment when touching documented modules
-- **Slack:** Weekly drift report
+- **CI/CD:** Drift report on merge
+
+### 2. Code Exploration (Agents)
+
+Scoped agents with tool restrictions for safe codebase exploration:
+
+- **code_explorer** -- Search and analyze codebase files
+- **web_researcher** -- Research topics using Google Search grounding
+- **docs_manager** -- Documentation search, drift check, write/update
+- **db_explorer** -- Natural language database exploration
+- **test_runner** -- Multi-framework test execution (pytest, flutter, jest)
+
+### 3. Context Bundles
+
+Reusable knowledge packages that aggregate code, docs, schemas, and search results into portable markdown documents. Bundles have TTL-based staleness and can be refreshed manually or automatically.
+
+### 4. DevOps Management
+
+Service orchestration for local development: Docker Compose management, service health checks, log tailing, and a TUI dashboard.
+
+### 5. Plugin System
+
+Project-specific extensions via `.hester/plugins/`. Plugins can add:
+- **Tools** -- MCP-style tool modules with `TOOLS` and `HANDLERS` exports
+- **Commands** -- Click CLI command groups
+- **Modules** -- Full Python packages injected into `sys.path`
+- **Prompts** -- Markdown templates and YAML configurations
+- **Agents** -- Custom agent configurations and toolsets
 
 ---
 
@@ -319,115 +153,70 @@ Hester detects drift between docs and code, builds semantic knowledge graph for 
 
 ### Deployment
 
-Hester runs on the same infrastructure as Sybil:
-- Same Celery workers
-- Same Supabase database (separate tenant)
-- Same Redis cache
-- CLI is separate (local install)
-
-### Graph Tenancy
-
-Hester gets her own tenant in the shared graph:
-
-```sql
--- Hester can read global nodes
-WHERE (tenant_id = 'hester' OR tenant_id = 'global')
-
--- But only writes to her own
-INSERT INTO graph_nodes (tenant_id, ...) VALUES ('hester', ...)
-```
+Hester runs locally alongside the Lee editor:
+- FastAPI daemon on port 9000
+- Redis for session persistence
+- Supabase for database exploration
+- CLI for direct interaction
 
 ### Sub-Agent Structure
 
 ```
-services/agentic/src/
-├── hester/
-│   ├── __init__.py
-│   ├── qa/                    # HesterQA - Scene testing
-│   │   ├── agent.py
-│   │   ├── personas.py
-│   │   └── evaluators.py
-│   ├── brief/                 # HesterBrief - Daily summaries  
-│   │   ├── agent.py
-│   │   └── sources.py
-│   ├── ideas/                 # HesterIdeas - Idea capture
-│   │   ├── agent.py
-│   │   └── templates.py
-│   ├── docs/                  # HesterDocs - Doc sync
-│   │   ├── agent.py
-│   │   ├── validators.py
-│   │   └── graph.py
-│   └── shared/
-│       ├── memory.py          # Hester's GraphRAG queries
-│       └── surfaces.py        # Slack, CLI, GitHub adapters
+hester/
+├── daemon/                 # FastAPI daemon service
+│   ├── agent.py            # ReAct loop agent
+│   ├── session.py          # Redis session management
+│   ├── plugins/            # Plugin loader
+│   ├── tasks/              # Background task system
+│   ├── tools/              # Core tools
+│   └── registries/         # Prompt and agent registries
+├── docs/                   # Documentation validation
+├── devops/                 # Service management
+└── shared/                 # Utilities
 ```
 
-### Integrations (Greenfield)
+### Integrations
 
 | Integration | Purpose | Auth |
 |-------------|---------|------|
-| **Slack** | DM input, channel output, notifications | Bot token |
+| **Lee IDE** | Live context via WebSocket | Local |
 | **GitHub** | PR comments, commit monitoring | App installation |
-| **Linear** | Issue creation, status tracking | API key |
-| **ChromeDevTools** | Scene testing via browser | Local MCP (existing) |
+| **ChromeDevTools** | Browser automation | Local MCP |
+| **Supabase** | Database exploration | Local/cloud |
 
 ---
 
 ## Implementation Approach
 
-### Phase 1: Foundation + QA MVP
+### Phase 1: Foundation + Docs MVP
 
-**Goal:** Hester can run one scene test and report results.
+**Goal:** Hester can validate documentation and answer questions about the codebase.
 
-- [ ] Hester tenant in graph
-- [ ] Basic CLI scaffold (`hester` command)
-- [ ] HesterQA agent with one persona (Engaged User)
-- [ ] ChromeDevTools integration for Sybil conversation
-- [ ] Simple pass/fail evaluation
-- [ ] CLI output: `hester qa scene onboarding/genome`
+- [ ] CLI scaffold (`hester` command)
+- [ ] Daemon with ReAct loop agent
+- [ ] Doc claim extraction and validation
+- [ ] Semantic search over docs
+- [ ] Context bundle system
 
-**Success:** We run it. It finds something useful.
+**Success:** We use it daily for codebase questions.
 
-### Phase 2: Adversarial Testing + Slack
+### Phase 2: Code Exploration + Context
 
-- [ ] Additional personas (Vague User, Contradictor, Speed Runner)
-- [ ] Tier 4 evaluation for adversarial tests
-- [ ] Slack bot setup
-- [ ] Failure notifications to Slack
-- [ ] Test definitions in YAML
+- [ ] Scoped agent types (code_explorer, web_researcher, db_explorer)
+- [ ] Tool scoping with progressive access levels
+- [ ] Context chaining between agent batches
+- [ ] Lee IDE integration (live context)
 
-**Success:** Catches a regression before users do.
+**Success:** Faster onboarding for new team members.
 
-### Phase 3: Idea Capture
+### Phase 3: DevOps + Plugins
 
-- [ ] Slack DM listener
-- [ ] Stanley perception integration (voice, image)
-- [ ] Markdown generation
-- [ ] `/ideas/` file creation
-- [ ] GraphRAG context enrichment
+- [ ] DevOps TUI dashboard
+- [ ] Docker Compose integration
+- [ ] Plugin system for project-specific extensions
+- [ ] Plugin loader with manifests
 
-**Success:** Someone captures an idea via voice note, finds it useful later.
-
-### Phase 4: Daily Brief
-
-- [ ] GitHub PR monitoring
-- [ ] Linear status monitoring  
-- [ ] Slack #dev monitoring
-- [ ] Evidence aggregation
-- [ ] Brief generation
-- [ ] Morning Slack post
-
-**Success:** Business team reports feeling more informed.
-
-### Phase 5: Doc Sync
-
-- [ ] Doc claim extraction
-- [ ] Code validation
-- [ ] Drift detection
-- [ ] Semantic codebase graph
-- [ ] Query interface
-
-**Success:** Outdated doc caught and fixed before causing confusion.
+**Success:** Team builds project-specific plugins without modifying core.
 
 ---
 
@@ -436,33 +225,27 @@ services/agentic/src/
 **Primary metric:** We use it.
 
 **Secondary signals:**
-- Scene regressions caught before users
-- Ideas captured that would have been lost
-- Business team feels informed without meetings
 - Docs stay accurate
+- Codebase questions answered without context switching
+- New team members productive faster
+- Project-specific tools built as plugins
 
-**Failure signal:** More time building Hester than Sybil.
+**Failure signal:** More time configuring Hester than using her.
 
 ---
 
 ## The Daemon Dynamic
 
 > **Lee:** "Hester, what do you see?"
-> 
-> **Hester:** "Three things. Sybil's struggling with vague users—she's making assumptions instead of asking questions. The file upload code hasn't been touched in 6 weeks but it's still fragile. And someone asked about Genome scoring in Slack for the fourth time this month."
+>
+> **Hester:** "Three things. The auth module has two tests failing -- looks like the token expiry change broke them. The API docs haven't been updated since the endpoint refactor last week. And someone pushed a migration without updating the schema docs."
 >
 > **Lee:** "What should we do?"
 >
-> **Hester:** "Fix the upload validation—it's user-facing. I'll draft the Genome docs. And I think we need to tighten Sybil's onboarding prompts."
+> **Hester:** "Fix the auth tests -- they're blocking CI. I'll draft the API doc update. And flag the migration PR for a docs review."
 
-Watchful. Practical. No BS. Serves the team.
+Watchful. Practical. No BS.
 
 ---
 
-**Related Docs:**
-- [Delphi-01-Principles](./Delphi-01-Principles.md)
-- [Delphi-02-Intelligence-System](./Delphi-02-Intelligence-System.md)
-- [Delphi-04-Data-Memory](./Delphi-04-Data-Memory.md)
-- [Agentic Service Architecture](./Agentic.md)
-
-**Last Updated:** January 2026
+**Last Updated:** March 2026

@@ -1,5 +1,5 @@
 {
-  "name": "@coefficiency/lee",
+  "name": "@intrafocal/lee",
   "version": "0.1.0",
   "description": "Lee - Terminal IDE with Hester AI",
   "main": "dist/index.js",
@@ -29,8 +29,8 @@
     "pty",
     "blessed"
   ],
-  "author": "Coefficiency",
-  "license": "Proprietary",
+  "author": "Intrafocal",
+  "license": "MIT",
   "dependencies": {
     "blessed-contrib": "^4.11.0",
     "express": "^4.21.0",

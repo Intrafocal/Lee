@@ -15,13 +15,13 @@ Evaluates content for:
 - Formality level (formal, professional, casual, conversational)
 - Emotional temperature (warm, neutral, cool, cold)
 - Confidence level (assertive, tentative, uncertain)
-- Brand alignment (matches Coefficiency voice or not)
+- Brand alignment (matches brand voice or not)
 
 Returns a detailed analysis with specific examples from the text.
 
 Examples:
 - analyze_tone(content="We're thrilled to announce our new product!")
-- analyze_tone(content="Please find attached the quarterly report.", brand_voice="coefficiency")""",
+- analyze_tone(content="Please find attached the quarterly report.", brand_voice="brand")""",
     parameters={
         "type": "object",
         "properties": {
@@ -31,7 +31,7 @@ Examples:
             },
             "brand_voice": {
                 "type": "string",
-                "enum": ["coefficiency", "neutral"],
+                "enum": ["brand", "neutral"],
                 "description": "Brand voice to compare against (default: neutral)",
             },
         },

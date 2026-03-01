@@ -16,8 +16,8 @@ Aeronaut treats each Lee instance as a named **machine**. You might have:
 
 | Machine | IP | Workspace | Use Case |
 |---------|-----|-----------|----------|
-| MacBook Pro | 192.168.1.100 | coefficiency | Primary dev — Sybil, Frame, services |
-| Mac Mini | 192.168.1.101 | coefficiency | Background — long CI runs, GPU tasks |
+| MacBook Pro | 192.168.1.100 | my-project | Primary dev — services, frontend |
+| Mac Mini | 192.168.1.101 | my-project | Background — long CI runs, GPU tasks |
 | Mac Mini | 192.168.1.101 | side-project | Secondary workspace on same machine |
 
 Each machine has its own Lee Host (port 9001) and optionally its own Hester daemon (port 9000). Aeronaut maintains independent WebSocket connections to each and lets you switch between them with a swipe or tap.
@@ -171,9 +171,9 @@ No accounts, no cloud, no certificates. Just a shared secret over local WiFi.
 
 #### Technology Choice: Flutter
 
-- Frame is already Flutter — shared toolchain, CI, and knowledge
 - Cross-platform (iOS + Android) from one codebase
-- Riverpod for state management (same as Frame)
+- Riverpod for state management
+- Strong WebSocket and SSE support in Dart
 - Strong WebSocket and SSE support in Dart
 
 #### App Structure
@@ -227,14 +227,14 @@ class Machine {
   final int hostPort;       // 9001 (Lee Host)
   final int? hesterPort;    // 9000 (Hester daemon, optional)
   final String token;       // Bearer token from ~/.lee/aeronaut.token
-  final String? workspace;  // "/Users/ben/Coefficiency/..." (from /context)
+  final String? workspace;  // "/Users/ben/my-project/..." (from /context)
   final DateTime? lastSeen; // Last successful connection
 }
 ```
 
 Machines are persisted locally on the phone. On launch, Aeronaut pings `/health` on each saved machine to show online/offline status. The active machine is the one whose WebSocket connections are live.
 
-**Multiple workspaces on one host:** If the same Mac runs Lee on two different ports (e.g., `:9001` for coefficiency, `:9002` for side-project), these are two separate Machine entries with the same `host` but different `hostPort`. The workspace path (discovered from `LeeContext.workspace` on first connect) disambiguates them in the UI.
+**Multiple workspaces on one host:** If the same Mac runs Lee on two different ports (e.g., `:9001` for main-project, `:9002` for side-project), these are two separate Machine entries with the same `host` but different `hostPort`. The workspace path (discovered from `LeeContext.workspace` on first connect) disambiguates them in the UI.
 
 #### Screen Designs
 
@@ -310,8 +310,8 @@ Auto-discover Lee instances on the network instead of manual entry:
 // TXT records: { workspace: "/path/to/project", name: "MacBook Pro" }
 //
 // Aeronaut scans and shows available instances:
-// "MacBook Pro — coefficiency (192.168.1.100)"
-// "Mac Mini — coefficiency (192.168.1.101)"
+// "MacBook Pro — my-project (192.168.1.100)"
+// "Mac Mini — my-project (192.168.1.101)"
 // "Mac Mini — side-project (192.168.1.101:9002)"
 //
 // Tap to pair — still requires token for auth.

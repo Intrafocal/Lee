@@ -18,13 +18,10 @@ Documentation drift accumulates over time. Currently:
 docs/
 ├── Auth.md                    # Active docs
 ├── API.md
-├── Genome.md
+├── Architecture.md
 └── archive/                   # Already exists!
     ├── misc/
-    ├── circles/
     ├── old-architecture/
-    ├── corbusier/
-    ├── genome/
     └── legacy-services/
 ```
 
@@ -91,8 +88,8 @@ Create manifest tracking archived docs:
 version: 1
 archived:
 
-  - file: "Genome Onboarding.md"
-    original_path: "docs/Genome Onboarding.md"
+  - file: "Setup Guide.md"
+    original_path: "docs/Setup Guide.md"
     archived_at: "2026-01-05T14:30:00Z"
     archived_by: "hester docs prune"
     reason: "drift"
@@ -102,12 +99,12 @@ archived:
       drifted_claims: 5
       last_check: "2026-01-05T14:28:00Z"
 
-  - file: "genome/Genome Sequence.md"
-    original_path: "docs/Genome Sequence.md"
+  - file: "old-architecture/Original Design.md"
+    original_path: "docs/Original Design.md"
     archived_at: "2025-12-15T10:00:00Z"
     archived_by: "manual"
     reason: "superseded"
-    notes: "Replaced by Genome.md"
+    notes: "Replaced by Architecture.md"
 ```
 
 ### 3. CLI Commands
@@ -121,7 +118,7 @@ Archive badly drifted docs:
 hester docs prune --dry-run
 # Output:
 #   Would archive:
-#   - docs/Genome Onboarding.md (45.2% drift)
+#   - docs/Setup Guide.md (45.2% drift)
 #   - docs/Session Cache.md (38.0% drift)
 
 # Archive docs with >30% drift
@@ -179,9 +176,9 @@ hester docs list-archived
 # Output:
 #   ARCHIVED DOCUMENTS
 #
-#   docs/archive/genome/Genome Onboarding.md
+#   docs/archive/old-architecture/Setup Guide.md
 #     Archived: 2026-01-05 (drift: 45.2%)
-#     Original: docs/Genome Onboarding.md
+#     Original: docs/Setup Guide.md
 #
 #   docs/archive/misc/Session Cache.md
 #     Archived: 2025-12-15 (superseded)
@@ -195,9 +192,9 @@ hester docs list-archived --reason drift
 
 ```bash
 # Restore archived doc to original location
-hester docs restore "docs/archive/genome/Genome Onboarding.md"
+hester docs restore "docs/archive/old-architecture/Setup Guide.md"
 # Output:
-#   Restored to: docs/Genome Onboarding.md
+#   Restored to: docs/Setup Guide.md
 #   Removed from archive manifest
 
 # Restore to different location

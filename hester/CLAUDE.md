@@ -1,40 +1,22 @@
-# Hester - The Internal Daemon
+# Hester - The AI Daemon
 
-> Sybil's infrastructure, applied to the system domain. Watchful, practical, no BS.
+> Watchful, practical, no BS.
 
 ## Overview
 
 **Hester** is the AI daemon that accompanies the Lee editor. Named after Lee Scoresby's daemon in Philip Pullman's *His Dark Materials*--an arctic hare who speaks truth, watches what Lee can't see, and keeps him grounded.
 
-Hester serves the Coefficiency team the way a daemon serves their human: always present, always watching, never customer-facing.
+Hester serves the developer the way a daemon serves their human: always present, always watching, deeply contextual.
 
 ## Core Principle
 
-**Hester is built to reuse Sybil/Coefficiency tech for internal use.**
+**Hester is built to solve real problems for developers working in complex codebases.**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     THE INNOVATION LOOP                          │
-│                                                                  │
-│    ┌──────────────┐                    ┌──────────────┐         │
-│    │    SYBIL     │                    │    HESTER    │         │
-│    │  User-facing │                    │   Internal   │         │
-│    │  Chief of    │                    │   daemon     │         │
-│    │  Staff       │                    │   for team   │         │
-│    └──────┬───────┘                    └──────┬───────┘         │
-│           │      ┌─────────────────┐          │                 │
-│           └─────►│     SHARED      │◄─────────┘                 │
-│                  │  INFRASTRUCTURE │                            │
-│                  │  • Intelligence │                            │
-│                  │  • GraphRAG     │                            │
-│                  │  • ReAct Loop   │                            │
-│                  │  • Validators   │                            │
-│                  └─────────────────┘                            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Primary goal:** Solve real internal problems.
-**Secondary goal:** Dogfood our own tech--learn how to use it better, make it more robust.
+- Code exploration and understanding via ReAct-loop agents
+- Documentation validation and drift detection
+- Context management across long-running development sessions
+- Service orchestration and DevOps automation
+- Extensible via plugins for project-specific tools
 
 ## Hard Boundaries
 
@@ -43,14 +25,14 @@ Hester will **never**:
 - Make direct code changes (suggest only)
 - Send external communications
 - Modify production database
-- Be exposed to customers
+- Be exposed to end users
 
 ## Architecture
 
 ### Directory Structure
 
 ```
-lee/hester/
+hester/
 ├── cli.py                  # CLI entry point (hester command)
 ├── __init__.py
 ├── daemon/                 # FastAPI daemon service
@@ -60,6 +42,9 @@ lee/hester/
 │   ├── settings.py         # Configuration
 │   ├── models.py           # Pydantic models
 │   ├── thinking_depth.py   # Response depth control
+│   ├── plugins/            # Plugin system
+│   │   ├── loader.py       # Plugin discovery and loading
+│   │   └── models.py       # PluginManifest, LoadedPlugin
 │   ├── tasks/              # Background task system
 │   │   ├── planner.py      # Task planning
 │   │   ├── store.py        # Task persistence
@@ -68,27 +53,17 @@ lee/hester/
 │   │   ├── claude_delegate.py      # Claude Code delegation
 │   │   ├── hester_agent_delegate.py # Scoped codebase exploration
 │   │   └── gemini_grounded_delegate.py # Web research with sources
-│   └── tools/              # Available tools
-│       ├── file_read.py    # File reading
-│       ├── db_tools.py     # Database queries
-│       ├── doc_tools.py    # Documentation tools
-│       ├── web_search.py   # Web search
-│       ├── devops_tools.py # Docker/service management
-│       ├── summarize.py    # Text summarization
-│       ├── ui_control.py   # Lee IDE + browser control
-│       └── scoping.py      # Tool scoping for subagents
-├── qa/                     # HesterQA - Scene testing
-│   ├── agent.py            # QA orchestration
-│   ├── driver.py           # Chrome DevTools driver
-│   ├── browser.py          # Browser management
-│   ├── mcp_client.py       # MCP connection
-│   ├── personas.py         # Test personas
-│   ├── evaluators.py       # Result evaluation
-│   ├── models.py           # QA data models
-│   ├── components.py       # UI component handlers
-│   ├── logger.py           # Test logging
-│   └── tui.py              # Interactive TUI
-├── docs/                   # HesterDocs - Documentation
+│   ├── tools/              # Available tools
+│   │   ├── file_read.py    # File reading
+│   │   ├── db_tools.py     # Database queries
+│   │   ├── doc_tools.py    # Documentation tools
+│   │   ├── web_search.py   # Web search
+│   │   ├── devops_tools.py # Docker/service management
+│   │   ├── summarize.py    # Text summarization
+│   │   ├── ui_control.py   # Lee IDE + browser control
+│   │   └── scoping.py      # Tool scoping for subagents
+│   └── registries/         # Prompt and agent registries
+├── docs/                   # HesterDocs - Documentation validation
 │   ├── agent.py            # Docs agent
 │   ├── models.py           # Drift reports, claims
 │   └── embeddings.py       # Vector embeddings
@@ -114,21 +89,58 @@ lee/hester/
 | Output | Rich Console |
 | Lee Integration | WebSocket client for live context |
 
-## The Four Capabilities
+## Core Capabilities
 
-### Priority Order
+1. **Chat** - Interactive AI-powered code exploration with ReAct loop
+2. **Agents** - Scoped headless agents (code explorer, web researcher, docs manager, db explorer, test runner)
+3. **Context Bundles** - Reusable knowledge packages aggregating code, docs, and schemas
+4. **DevOps** - Service management, Docker Compose, health checks
+5. **Documentation** - Drift detection, semantic search, claim validation
+6. **Plugin System** - Project-specific tools, commands, prompts, and agents via `.hester/plugins/`
 
-1. **HesterQA** (Phase 1) - Scene testing - Highest impact
-2. **HesterDocs** (Implemented) - Documentation sync
-3. **HesterIdeas** (Phase 3) - Idea capture
-4. **HesterBrief** (Phase 4) - Daily summaries
+## Plugin System
+
+Hester supports workspace plugins for project-specific extensions. Plugins are declared in `.lee/config.yaml` and loaded at daemon startup.
+
+**Plugin structure:**
+```
+.hester/plugins/my-project/
+├── plugin.yaml          # Manifest (name, version, tools, commands, etc.)
+├── tools/               # MCP-style tool modules (TOOLS + HANDLERS exports)
+├── commands/            # Click CLI command groups
+├── modules/             # Full Python modules (added to sys.path)
+├── prompts/             # Markdown prompt templates
+├── prompts.yaml         # Prompt configurations
+└── agents.yaml          # Agent and toolset configurations
+```
+
+**plugin.yaml example:**
+```yaml
+name: my-project
+version: 0.1.0
+description: "Project-specific tools for my-project"
+
+python_paths:
+  - modules/
+
+tools:
+  - my_tools
+commands:
+  - my_command
+prompts:
+  - my_prompt
+agents:
+  - my_agent
+```
+
+Plugins can add tools, CLI commands, prompts, agents, and full Python modules. The `python_paths` field injects directories into `sys.path` at load time for complex module dependencies.
 
 ## CLI Reference
 
 ### Installation
 
 ```bash
-pip install -e ./lee
+pip install -e .
 ```
 
 ### Global Commands
@@ -137,46 +149,6 @@ pip install -e ./lee
 hester --version           # Show version
 hester --help              # Show help
 ```
-
-### QA Commands (HesterQA)
-
-Scene testing via simulated conversation using Chrome DevTools MCP.
-
-```bash
-# Run a scene test
-hester qa scene <scene_slug> [options]
-  --persona, -p NAME       # Test persona (default: engaged_user)
-  --verbose, -v            # Show detailed output
-  --frame-url URL          # Frame URL (default: http://localhost:8889)
-  --screenshot-dir PATH    # Save screenshots
-  --no-save                # Don't save to database
-  --headless               # Run Chrome headless
-  --no-browser             # Assume Chrome already running
-  --max-turns, -t N        # Max conversation turns
-  --tui                    # Interactive TUI mode
-
-# Examples
-hester qa scene welcome --verbose
-hester qa scene onboarding --persona vague_user --headless
-hester qa scene genome_discovery --tui
-
-# Start Chrome for testing
-hester qa start-browser
-hester qa start-browser --headless --port 9222
-
-# List resources
-hester qa list-scenes
-hester qa list-personas
-```
-
-**Available Personas:**
-
-| Persona | Behavior |
-|---------|----------|
-| `engaged_user` | Cooperative, detailed answers, follows prompts |
-| `vague_user` | Short answers, non-committal, expects clarification |
-| `contradictor` | Says conflicting things, tests consistency detection |
-| `speed_runner` | Rushes through, tests graceful degradation |
 
 ### Chat Command
 
@@ -219,11 +191,11 @@ hester agent <TYPE> [PROMPT] [options]
   --dir, -d PATH           # Working directory
 
 # Examples
-hester agent code_explorer "Find all usages of EncryptionService"
+hester agent code_explorer "Find all usages of AuthService"
 hester agent web_researcher "Best practices for pgvector indexes"
 hester agent docs_manager "How does authentication work?"
-hester agent db_explorer "What vector columns exist in profiles?"
-hester agent test_runner --path services/api/tests/
+hester agent db_explorer "What tables store user data?"
+hester agent test_runner --path tests/
 hester agent code_explorer "What does auth.py do?" --output json --quiet
 ```
 
@@ -277,7 +249,7 @@ hester db tables --schema public
 
 # Describe table structure
 hester db describe <table_name>
-hester db describe profiles --schema auth
+hester db describe users --schema auth
 
 # List functions
 hester db functions
@@ -290,29 +262,13 @@ hester db rls <table_name>
 hester db constraints <table_name>
 
 # Execute SELECT queries (read-only)
-hester db query "SELECT * FROM profiles" --limit 10
+hester db query "SELECT * FROM users" --limit 10
 hester db query "SELECT id, name FROM users" --json
 
 # Count rows
 hester db count <table_name>
 hester db count users --where "active = true"
-
-# Decrypt encrypted columns (local Supabase only)
-# Automatically decrypts encrypted_* columns using the user's DEKs
-hester db query "SELECT user_id, encrypted_observation FROM evidence_with_decay" \
-    --decrypt --user-id "cd10e3eb-eaef-4351-b40d-7c687fff1b59"
-
-# JSON output with decryption
-hester db query "SELECT * FROM sybil_conversations" \
-    --decrypt -u "UUID" --json
 ```
-
-**Decryption Notes:**
-- Only works with local Supabase (127.0.0.1, localhost, host.docker.internal)
-- Requires `--user-id` to specify whose DEKs to use
-- Tries all active DEKs for the user (different data types use different keys)
-- Automatically renames `encrypted_*` columns to plain names in output
-- Removes hash columns from output for cleaner display
 
 ### Context Bundle Commands
 
@@ -360,13 +316,13 @@ hester context status
 
 # Examples
 hester context create auth-system \
-  --file services/api/src/auth.py \
+  --file src/auth.py \
   --grep "jwt|token" \
-  --db-schema profiles \
+  --db-schema users \
   --ttl 48
 
 hester context show auth-system
-hester context copy matching-algo
+hester context copy auth-system
 ```
 
 ### Documentation Commands (HesterDocs)
@@ -411,38 +367,6 @@ hester ask gemini "Current Bitcoin price"
 hester ask gemini "Latest AI news" --verbose
 hester ask gemini "Explain photosynthesis" --no-search
 ```
-
-### Audio Commands
-
-TTS generation, de-essing, and playback tools.
-
-```bash
-# Generate TTS audio with ElevenLabs
-hester audio generate <text> <storage_path>
-hester audio generate "Hello world" hester/hello.mp3
-hester audio generate "Welcome to Sybil" welcome.mp3 --de-ess
-hester audio generate "Test" test.mp3 --voice-id abc123 --json
-
-# De-ess existing audio (reduce sibilance)
-hester audio de-ess <source> <output_path>
-hester audio de-ess welcome/intro.mp3 de-essed/intro.mp3
-hester audio de-ess asset://audio/scenes/step1.mp3 processed.mp3 --strength heavy
-
-# Play audio (requires sox)
-hester audio play <source>
-hester audio play hester/hello.mp3
-hester audio play asset://audio/scenes/welcome/intro.mp3 --volume 0.5
-
-# List audio files in storage
-hester audio list
-hester audio list --prefix hester/ --limit 10
-```
-
-**Source types supported:**
-- Local file: `./audio.mp3` or `/path/to/file.mp3`
-- Supabase storage path: `scene/stage/0.mp3`
-- Full Supabase URL: `http://127.0.0.1:54321/storage/v1/object/public/audio-assets/...`
-- Frame asset path: `asset://audio/scenes/welcome/intro.mp3`
 
 ### DevOps Commands (HesterDevOps)
 
@@ -652,43 +576,6 @@ data: {"session_id": "abc123"}
 - `error` - Error information
 - `done` - Processing complete
 
-## QA Testing Flow
-
-HesterQA tests Sybil scenes by simulating user conversations:
-
-```
-1. THINK: Select persona based on what needs testing
-2. ACT: Chrome DevTools drives conversation with Sybil
-3. OBSERVE: Capture transcript, artifacts, timing, errors
-4. REFLECT: Evaluate against success criteria
-5. RESPOND: Log results, notify on failure
-```
-
-### Test Types
-
-**Happy Path (engaged_user):**
-- Completes flow successfully
-- All expected artifacts generated
-- Timing within bounds
-
-**Adversarial:**
-- `vague_user` - Minimal input, expects clarifying questions
-- `contradictor` - Conflicting info, expects Sybil to notice
-- `speed_runner` - Rushes through, tests graceful degradation
-
-### CI/CD Integration
-
-```bash
-# Run in CI pipeline
-hester qa scene welcome --headless --no-save
-exit_code=$?
-
-# Exit codes
-# 0 = Test passed
-# 1 = Test failed
-# 130 = Interrupted (Ctrl+C)
-```
-
 ## Documentation Validation
 
 HesterDocs detects drift between documentation and code:
@@ -781,7 +668,7 @@ Natural language database exploration using Gemini.
 
 ```python
 delegate = DbExplorerDelegate()
-result = await delegate.execute(prompt="What vector columns exist in profiles?")
+result = await delegate.execute(prompt="What tables store user data?")
 # Returns: {success, answer, operations: [...], operation_count: N}
 ```
 
@@ -822,7 +709,7 @@ batch = TaskBatch(
 Tools are organized into categories with progressive access levels:
 
 ```python
-# lee/hester/daemon/tools/scoping.py
+# hester/daemon/tools/scoping.py
 
 TOOL_SETS = {
     "observe": ["read_file", "search_files", "search_content", "list_directory", "change_directory"],
@@ -858,7 +745,7 @@ REDIS_URL=redis://localhost:6379
 
 Like Hester in the books:
 
-- **Loyal but no BS** - Tells the team what they need to hear, not what they want to hear
+- **Loyal but no BS** - Tells you what you need to hear, not what you want to hear
 - **Not pushy** - Surfaces information, doesn't nag
 - **Blunt with humor** - Direct communication, but not robotic
 
@@ -870,11 +757,11 @@ Like Hester in the books:
 is cursed--want me to dig into it?"
 
 # Good: Direct, actionable
-"PR #312 touches graph/sybil but no tests updated. Last three PRs
+"PR #312 touches the auth module but no tests updated. Last three PRs
 to this file introduced regressions."
 
 # Good: Observational, not naggy
-"Four people have asked about Genome scoring in Slack this month.
+"Four people have asked about the scoring algorithm in Slack this month.
 We might have a doc gap."
 
 # Bad: Too warm/corporate
@@ -886,8 +773,7 @@ We might have a doc gap."
 
 ## Related Documentation
 
-- `lee/CLAUDE.md` - Lee editor documentation
-- `lee/docs/00-Hester-Initial.md` - Full specification
-- `lee/docs/02-Hester-Context-Bundles.md` - Context bundle design
-- `lee/docs/04-Hester-Subagents.md` - Subagent architecture spec
-- `docs/Hester.md` - Quick reference
+- `CLAUDE.md` - Lee editor documentation
+- `docs/00-Hester-Initial.md` - Full specification
+- `docs/02-Hester-Context-Bundles.md` - Context bundle design
+- `docs/04-Hester-Subagents.md` - Subagent architecture spec

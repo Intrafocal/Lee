@@ -22,7 +22,7 @@ from .base import ToolResult
 # Configuration
 # =============================================================================
 
-PRODUCTION_REDIS_NAMESPACE = "coefficiency"
+PRODUCTION_REDIS_NAMESPACE = "app"
 PRODUCTION_REDIS_LABEL = "app=redis"
 LOCAL_REDIS_URL = "redis://localhost:6379"
 

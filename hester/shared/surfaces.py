@@ -89,7 +89,7 @@ def format_qa_result(result: HesterQAResult, verbose: bool = False) -> None:
                 if perception:
                     title = perception.get("title", "")
                     desc = perception.get("description", "")[:80]
-                    console.print(f"  [green]Sybil:[/green] {title or desc}")
+                    console.print(f"  [green]Assistant:[/green] {title or desc}")
 
             elif turn_type == "system":
                 event = data.get("event", "")

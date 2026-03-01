@@ -43,10 +43,10 @@ Lee is a Node.js terminal IDE built on the Mosaic architecture - combining robus
 
 ```bash
 # From npm (global install)
-npm install -g @coefficiency/lee
+npm install -g @intrafocal/lee
 
 # Or run without install
-npx @coefficiency/lee
+npx @intrafocal/lee
 
 # Or from source
 cd host
@@ -165,4 +165,4 @@ npm run clean
 
 ## License
 
-Proprietary - Coefficiency
+MIT

@@ -403,7 +403,7 @@ class SessionManager:
         session.add_message(
             role="system",
             content=(
-                "You are Hester, the internal daemon for Coefficiency development. "
+                "You are Hester, the AI development daemon. "
                 "You are watchful, practical, and direct. You help with code exploration "
                 "and analysis. You have access to file read and search tools."
             )
@@ -543,7 +543,7 @@ class InMemorySessionManager:
         session.add_message(
             role="system",
             content=(
-                "You are Hester, the internal daemon for Coefficiency development. "
+                "You are Hester, the AI development daemon. "
                 "You are watchful, practical, and direct. You help with code exploration "
                 "and analysis. You have access to file read and search tools."
             )

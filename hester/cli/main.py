@@ -26,7 +26,7 @@ def _load_env():
     possible_paths = [
         Path(__file__).parent.parent / ".env.local",  # lee/hester/.env.local
         Path(__file__).parent.parent.parent / ".env.local",  # lee/.env.local
-        Path(__file__).parent.parent.parent.parent / ".env.local",  # coefficiency/.env.local
+        Path(__file__).parent.parent.parent.parent / ".env.local",  # parent project/.env.local
     ]
 
     for env_file in possible_paths:
@@ -46,7 +46,7 @@ _load_env()
 @click.group()
 @click.version_option(version="0.1.0", prog_name="hester")
 def cli():
-    """Hester - The Internal Daemon for Coefficiency.
+    """Hester - AI Development Daemon.
 
     Watchful, practical, no BS.
     """
@@ -60,8 +60,8 @@ def cli():
 def _register_commands():
     """Register all command groups with the CLI.
 
-    Note: qa, aura, session, memory, intel, audio, bugs are loaded
-    dynamically from the Coefficiency plugin via _register_plugin_commands().
+    Note: Some commands (qa, aura, session, memory, etc.) are loaded
+    dynamically from workspace plugins via _register_plugin_commands().
     """
     from .chat import chat
     from .agent import agent

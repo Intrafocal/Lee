@@ -28,12 +28,12 @@ class LocalDecryptor:
 
     # Known encrypted column mappings: encrypted_col -> (plain_col, hash_col)
     ENCRYPTED_COLUMNS = {
-        # Genome tables
+        # Assessment tables
         "encrypted_narrative": ("narrative", "narrative_hash"),
         "encrypted_marker_text": ("marker_text", "marker_text_hash"),
         "encrypted_description": ("description", "description_hash"),
         "encrypted_content": ("content", "content_hash"),
-        # Sybil tables
+        # Conversation tables
         "encrypted_messages": ("messages", "messages_hash"),
         "encrypted_insight_data": ("insight_data", "insight_data_hash"),
         "encrypted_relationship_data": ("relationship_data", "relationship_data_hash"),

@@ -16,7 +16,7 @@ Returns service names, commands, ports, and running state.
 
 Examples:
 - devops_list_services() - list all configured services
-- devops_list_services(environment="Coefficiency Local") - list services in specific environment""",
+- devops_list_services(environment="Local Dev") - list services in specific environment""",
     parameters={
         "type": "object",
         "properties": {
@@ -38,7 +38,7 @@ The service must be defined in lee/config.yaml.
 
 Examples:
 - devops_start_service(service_name="API Gateway") - start the API Gateway
-- devops_start_service(service_name="Redis", environment="Coefficiency Local")""",
+- devops_start_service(service_name="Redis", environment="Local Dev")""",
     parameters={
         "type": "object",
         "properties": {
@@ -145,7 +145,7 @@ Returns health status for each service with response times.
 Examples:
 - devops_health_check() - check all services with health_check configured
 - devops_health_check(service_name="API Gateway") - check specific service
-- devops_health_check(environment="Coefficiency Local") - check all in environment""",
+- devops_health_check(environment="Local Dev") - check all in environment""",
     parameters={
         "type": "object",
         "properties": {
@@ -170,7 +170,7 @@ Lists running containers with their status, ports, and resource usage.
 
 Examples:
 - devops_docker_status() - list all containers
-- devops_docker_status(filter="coefficiency") - filter by name
+- devops_docker_status(filter="myapp") - filter by name
 - devops_docker_status(all=true) - include stopped containers""",
     parameters={
         "type": "object",
@@ -195,7 +195,7 @@ DEVOPS_DOCKER_LOGS_TOOL = ToolDefinition(
 Returns recent logs from the specified container.
 
 Examples:
-- devops_docker_logs(container="coefficiency-api-1") - get container logs
+- devops_docker_logs(container="myapp-api-1") - get container logs
 - devops_docker_logs(container="redis", lines=100) - get last 100 lines""",
     parameters={
         "type": "object",

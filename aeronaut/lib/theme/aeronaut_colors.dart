@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 /// Aeronaut's color palette - terminal-inspired dark theme
 ///
 /// GitHub dark style backgrounds with terminal green accents.
-/// Distinct from Sybil's blue palette - Aeronaut is an IDE companion.
+/// Terminal-inspired dark theme for the IDE companion.
 class AeronautColors {
   AeronautColors._();
 

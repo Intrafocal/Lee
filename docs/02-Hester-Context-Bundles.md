@@ -258,7 +258,7 @@ Quick access to browse and inject bundles:
 │  > matching-algo      [OK]       Matching Algorithm Context     │
 │    auth-flow          [STALE 1d] Authentication Flow            │
 │    deploy-pipeline    [STALE 7d] CI/CD Pipeline                 │
-│    frame-architecture [OK]       Flutter App Structure          │
+│    frontend-arch      [OK]       Frontend Architecture          │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  [Enter] Open   [C]opy to clipboard   [I]nject to Hester        │

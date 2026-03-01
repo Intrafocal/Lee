@@ -496,7 +496,7 @@ class ServiceManager:
                     # Docker Compose uses project_service_1 naming
                     containers[name] = container
                     # Also index by service name extracted from compose naming
-                    # e.g., "coefficiency-api-1" -> "api"
+                    # e.g., "myapp-api-1" -> "api"
                     if "-" in name:
                         parts = name.split("-")
                         if len(parts) >= 2:
@@ -611,7 +611,7 @@ class ServiceManager:
                 container_count = 0
                 for name, container in docker_containers.items():
                     container_name = container.get("Names", "")
-                    if "coefficiency" in container_name.lower():
+                    if container_name:  # Count running containers
                         container_count += 1
 
                 if container_count > 0:

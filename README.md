@@ -1,6 +1,6 @@
 # Lee Tools
 
-Lee Editor and Hester Daemon - Development tools for Coefficiency.
+Lee Editor and Hester AI Daemon - Terminal-native IDE with AI sidecar.
 
 ## Components
 
@@ -25,11 +25,11 @@ AI-powered code exploration assistant using Gemini 3 Pro with a ReAct loop.
 
 ```bash
 # Create/activate virtual environment
-python3 -m venv venvs/venv-lee
-source venvs/venv-lee/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Install in editable mode
-pip install -e ./lee
+pip install -e .
 ```
 
 ## Usage

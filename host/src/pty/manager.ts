@@ -119,7 +119,7 @@ export class PTYManager extends EventEmitter {
   spawnLee(workspace?: string): number {
     // Use full path to lee in the venv, or fall back to PATH
     const leePath = process.env.LEE_PATH ||
-      '/Users/ben/Coefficiency/github/coefficiency/venvs/venv-lee/bin/lee';
+      'lee';
 
     return this.spawn(
       leePath,

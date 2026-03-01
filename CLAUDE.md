@@ -10,24 +10,24 @@ Lee operates alongside **Hester**, an AI daemon that maintains deep context of t
 
 Lee uses a **Mosaic Architecture** that combines:
 
-1. **Host Wrapper (Node.js)** - The container/window manager (`lee/host/`)
+1. **Host Wrapper (Node.js)** - The container/window manager (`host/`)
    - Tab system and split panes using `react-blessed` and `neo-blessed`
    - Terminal emulation via `node-pty` (battle-tested by VS Code/Hyper)
    - API listener on port 9001 for system-level commands
    - Spawns Lee Python TUI as a child process
 
-2. **Lee Editor (Python TUI)** - The editing environment (`lee/editor/`)
+2. **Lee Editor (Python TUI)** - The editing environment (`editor/`)
    - Built with `textual` framework
    - Syntax highlighting via `tree-sitter`
    - File I/O, diff viewing, version control
    - API listener on port 9000 for editor commands
    - Context export to Hester for AI assistance
 
-3. **Hester Daemon (AI Sidecar)** - See `lee/hester/CLAUDE.md`
+3. **Hester Daemon (AI Sidecar)** - See `hester/CLAUDE.md`
    - Receives context from Lee
    - Can orchestrate UI by sending commands to Host or Lee
 
-## Electron App (`lee/electron/`)
+## Electron App (`electron/`)
 
 The Electron version provides a native desktop experience with:
 
@@ -195,7 +195,7 @@ lee/
 │   └── package.json
 ├── hester/                 # AI daemon (see hester/CLAUDE.md)
 ├── docs/                   # Documentation
-└── config.yaml             # Configuration file
+└── pyproject.toml          # Python package config
 ```
 
 ## Editor Modules
@@ -472,11 +472,11 @@ The following cannot be configured via `tuis:` as they have special handling:
 
 ```bash
 # Create/activate virtual environment
-python3 -m venv venvs/venv-lee
-source venvs/venv-lee/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Install in editable mode
-pip install -e ./lee
+pip install -e .
 ```
 
 ## Usage
@@ -575,6 +575,6 @@ Open tabs:
 
 ## Related Documentation
 
-- `lee/hester/CLAUDE.md` - Hester AI daemon documentation
-- `lee/docs/00-Lee-Initial.md` - Technical specification
-- `lee/docs/01-Mosaic-Infra.md` - Architecture details
+- `hester/CLAUDE.md` - Hester AI daemon documentation
+- `docs/00-Lee-Initial.md` - Technical specification
+- `docs/01-Mosaic-Infra.md` - Architecture details

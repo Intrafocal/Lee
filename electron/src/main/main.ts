@@ -333,7 +333,7 @@ function setupApplicationMenu(): void {
           label: 'Learn More',
           click: async () => {
             const { shell } = require('electron');
-            await shell.openExternal('https://coefficiency.net');
+            await shell.openExternal('https://github.com/Intrafocal/Lee');
           },
         },
       ],

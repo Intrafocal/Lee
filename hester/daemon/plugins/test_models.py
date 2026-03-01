@@ -23,9 +23,9 @@ def test_parse_full_manifest():
     from hester.daemon.plugins.models import PluginManifest
 
     m = PluginManifest(
-        name="coefficiency",
+        name="example-plugin",
         version="0.1.0",
-        description="Sybil tools",
+        description="Example tools",
         dependencies={"pip": ["supabase>=2.0.0"], "local": ["../../shared"]},
         tools=["scene_tools", "audio_tools"],
         categories={"scene": ["scene_list", "scene_read"]},
