@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+build/
+node_modules/
+out/
+.env
+.env.local
+*.log
+.hester/
+!.hester/plugins/
+venvs/
+.claude/
+.DS_Store
+.pytest_cache/

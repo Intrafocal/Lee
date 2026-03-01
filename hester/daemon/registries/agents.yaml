@@ -1,0 +1,374 @@
+# Bespoke Agent Registry
+#
+# Pre-bundled agent configurations that combine prompt + toolset + model tier.
+# Agents are matched to user messages using embedding similarity.
+
+# ==========================================================================
+# Named Toolsets
+# ==========================================================================
+# Toolsets map to tool categories defined in tools/definitions/__init__.py
+
+toolsets:
+  observe:
+    description: "Read-only codebase access - files, search, navigation, git status"
+    categories:
+      - observe
+
+  database:
+    description: "Database exploration - schema, queries, constraints, RLS"
+    categories:
+      - database
+
+  research:
+    description: "Full research capabilities - codebase, database, web, docs, context bundles"
+    categories:
+      - observe
+      - database
+      - research
+      - context
+      - docs
+      - redis
+
+  develop:
+    description: "Development tools - codebase access plus git write operations"
+    categories:
+      - observe
+      - git_write
+
+  devops:
+    description: "Infrastructure tools - services, docker, compose, plus observation"
+    categories:
+      - observe
+      - devops
+      - redis
+
+  full:
+    description: "All tools except task orchestration"
+    categories:
+      - observe
+      - database
+      - devops
+      - research
+      - context
+      - docs
+      - git_write
+      - ui
+      - redis
+      - copywriting
+
+  copywriting:
+    description: "Content analysis and transformation tools"
+    categories:
+      - copywriting
+      - research  # Include summarize
+
+  synthesis:
+    description: "Synthesis tools - summarize conversations and research context"
+    categories:
+      - copywriting
+      - research
+
+  research_ideas:
+    description: "Research with idea management - combines research tools with idea push/pop"
+    categories:
+      - observe
+      - database
+      - research
+      - context
+      - docs
+      - redis
+      - ideas
+
+  diagram:
+    description: "Visualization tools - Mermaid diagrams, Gemini image generation, structured markdown"
+    categories:
+      - visualization
+      - research
+
+  brainstorm:
+    description: "Research + workstream creation - ideation with the ability to formalize into workstreams"
+    categories:
+      - observe
+      - database
+      - research
+      - context
+      - docs
+      - redis
+      - workstream
+
+
+# ==========================================================================
+# Pre-bundled Agents
+# ==========================================================================
+
+agents:
+  code_explorer:
+    name: "Code Explorer"
+    description: "Deep codebase analysis with read-only access. Finds patterns, traces calls, explains implementations."
+    prompt: code_analysis
+    toolset: observe
+    model_tier: STANDARD
+    max_iterations: 15
+    keywords:
+      - explore code
+      - find in codebase
+      - how does this work
+      - where is this defined
+      - trace
+      - usage
+      - implementation
+      - what does this do
+
+  db_explorer:
+    name: "Database Explorer"
+    description: "Natural language database exploration. Queries schemas, finds relationships, analyzes data."
+    prompt: database
+    toolset: research
+    model_tier: STANDARD
+    max_iterations: 10
+    keywords:
+      - database
+      - table
+      - schema
+      - query
+      - SQL
+      - what tables
+      - columns
+      - relationships
+
+  web_researcher:
+    name: "Web Researcher"
+    description: "External research with source tracking. Finds latest information, best practices, documentation."
+    prompt: research
+    toolset: research
+    model_tier: STANDARD
+    max_iterations: 8
+    keywords:
+      - research
+      - search the web
+      - latest
+      - current
+      - best practice
+      - how do I
+      - tutorial
+      - documentation for
+
+  docs_manager:
+    name: "Documentation Manager"
+    description: "Documentation search and maintenance. Finds drift, searches semantically, writes docs."
+    prompt: documentation
+    toolset: research
+    model_tier: STANDARD
+    max_iterations: 10
+    keywords:
+      - documentation
+      - docs
+      - readme
+      - drift
+      - outdated
+      - write docs
+      - update documentation
+
+  devops_assistant:
+    name: "DevOps Assistant"
+    description: "Service and container management. Checks health, views logs, manages docker compose."
+    prompt: devops
+    toolset: devops
+    model_tier: STANDARD
+    max_iterations: 12
+    keywords:
+      - docker
+      - service
+      - container
+      - logs
+      - health
+      - start service
+      - stop service
+      - compose
+
+  git_assistant:
+    name: "Git Assistant"
+    description: "Version control operations. Status, diffs, commits, branches, history."
+    prompt: git
+    toolset: develop
+    model_tier: STANDARD
+    max_iterations: 10
+    keywords:
+      - git
+      - commit
+      - branch
+      - diff
+      - status
+      - history
+      - changes
+      - staged
+
+  task_planner:
+    name: "Task Planner"
+    description: "Complex task decomposition and orchestration. Plans multi-step workflows for implementation."
+    prompt: orchestration
+    toolset: full
+    model_tier: REASONING
+    max_iterations: 20
+    keywords:
+      - plan
+      - break down
+      - steps
+      - complex task
+      - implement
+      - build
+      - create feature
+      - fix bug
+
+  copyeditor:
+    name: "Copyeditor"
+    description: "Content analysis and rewriting. Analyzes tone, readability, rewrites with parameters."
+    prompt: copywriting
+    toolset: copywriting
+    model_tier: STANDARD
+    max_iterations: 8
+    keywords:
+      - edit this
+      - rewrite
+      - make it more
+      - tone
+      - readability
+      - too formal
+      - too casual
+      - shorten
+      - expand
+      - summarize this
+      - brand voice
+      - warm it up
+      - cool it down
+
+  idea_explorer:
+    name: "Idea Explorer"
+    description: "Deep exploration of a captured idea. Analyzes the idea, searches codebase for related code, researches concepts, and suggests actionable next steps. Can save and retrieve ideas."
+    prompt: idea_exploration
+    toolset: research_ideas
+    model_tier: STANDARD
+    max_iterations: 12
+    keywords:
+      - idea
+      - ideas
+      - explore idea
+      - review idea
+      - captured idea
+      - idea exploration
+      - concept
+      - save idea
+      - capture idea
+      - my ideas
+      - last idea
+      - list ideas
+      - show ideas
+      - what ideas
+      - ideas we have
+
+  teacher:
+    name: "Teacher"
+    description: "Deep explanations of new topics, technologies, and concepts. Builds mental models with analogies, explains why before how, layers from intuition to mechanics."
+    prompt: learning
+    toolset: research
+    model_tier: REASONING
+    max_iterations: 10
+    keywords:
+      - learn
+      - teach me
+      - explain
+      - understand
+      - how does
+      - what is
+      - why does
+      - mental model
+      - deep dive
+      - fundamentals
+
+  ideator:
+    name: "Ideator"
+    description: "Blue-sky thinking partner. Yes-and exploration, divergent thinking, generating possibilities without judgment. Improv energy."
+    prompt: ideation
+    toolset: research
+    model_tier: DEEP
+    max_iterations: 6
+    keywords:
+      - ideate
+      - what if
+      - blue sky
+      - riff on
+      - spitball
+      - wild idea
+      - possibilities
+      - imagine
+
+  synthesizer:
+    name: "Synthesizer"
+    description: "Synthesize exploration threads. Summarize a node, compare two nodes, or combine multiple nodes into unified insights."
+    prompt: synthesis
+    toolset: synthesis
+    model_tier: STANDARD
+    max_iterations: 6
+    keywords:
+      - synthesize
+      - summarize this
+      - compare these
+      - combine these
+      - merge threads
+      - distill
+      - consolidate
+
+  diagram:
+    name: "Diagram"
+    description: "Visual thinking partner. Transforms conversations and ideas into Mermaid diagrams, generated images, and structured markdown tables."
+    prompt: visualize
+    toolset: diagram
+    model_tier: STANDARD
+    max_iterations: 8
+    keywords:
+      - visualize
+      - diagram
+      - flowchart
+      - mind map
+      - draw
+      - chart
+      - render
+      - mermaid
+      - infographic
+      - visual
+      - picture
+      - timeline
+      - comparison table
+
+  brainstorm:
+    name: "Brainstorm"
+    description: "Structured ideation partner that turns ideas into workstreams. Explores divergently, then converges toward an objective, constraints, and scope. Can create workstreams when the idea is ready."
+    prompt: brainstorm
+    toolset: brainstorm
+    model_tier: DEEP
+    max_iterations: 12
+    keywords:
+      - workstream
+      - turn this into a project
+      - scope this
+      - make this real
+      - plan this out
+      - new project
+      - new feature
+      - build this
+      - create workstream
+      - scope
+
+
+# ==========================================================================
+# Routing Configuration
+# ==========================================================================
+
+routing:
+  # Minimum similarity score (0-1) to select a pre-bundled agent
+  # Higher threshold than prompts - agents should be confident matches
+  match_threshold: 0.55
+
+  # If no agent matches above threshold, build bespoke agent from
+  # prompt match + tool selection
+  fallback_to_bespoke: true

@@ -1,0 +1,432 @@
+# Bespoke Agent Prompts Registry
+#
+# Defines domain-specific prompts with semantic routing.
+# Prompts are matched to user messages using embedding similarity.
+
+prompts:
+  # ==========================================================================
+  # Domain-Specific Prompts
+  # ==========================================================================
+
+  code_analysis:
+    name: "Code Analysis"
+    description: "Deep codebase exploration, code reading, pattern finding, and architecture understanding"
+    keywords:
+      - code
+      - function
+      - class
+      - method
+      - implementation
+      - how does
+      - where is
+      - find
+      - search
+      - codebase
+      - refactor
+      - variable
+      - import
+      - module
+      - file
+      - definition
+      - usage
+      - call
+      - reference
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/code_analysis.md
+
+  devops:
+    name: "DevOps & Infrastructure"
+    description: "Docker, services, deployment, containers, logs, health checks, and system management"
+    keywords:
+      - docker
+      - container
+      - service
+      - deploy
+      - deployment
+      - kubernetes
+      - k8s
+      - logs
+      - health
+      - start
+      - stop
+      - restart
+      - compose
+      - image
+      - build
+      - redis
+      - nginx
+      - port
+      - process
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: STANDARD
+    template_file: prompts/devops.md
+
+  database:
+    name: "Database Analysis"
+    description: "Schema exploration, queries, tables, columns, indexes, RLS policies, and data analysis"
+    keywords:
+      - database
+      - table
+      - schema
+      - query
+      - SQL
+      - postgres
+      - postgresql
+      - supabase
+      - column
+      - index
+      - RLS
+      - migration
+      - row
+      - select
+      - constraint
+      - foreign key
+      - primary key
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/database.md
+
+  orchestration:
+    name: "Task Orchestration"
+    description: "Multi-step task planning, delegation, workflow coordination, and complex problem decomposition"
+    keywords:
+      - task
+      - plan
+      - steps
+      - workflow
+      - delegate
+      - break down
+      - orchestrate
+      - complex
+      - implement
+      - build
+      - create
+      - fix
+      - update
+      - change
+      - add
+      - modify
+      - refactor
+    min_tier: STANDARD
+    preferred_tier: DEEP
+    max_tier: REASONING
+    template_file: prompts/orchestration.md
+
+  research:
+    name: "Web Research"
+    description: "External information gathering, documentation lookup, best practices, and technical research"
+    keywords:
+      - research
+      - search
+      - web
+      - latest
+      - current
+      - news
+      - best practices
+      - how to
+      - tutorial
+      - documentation
+      - example
+      - library
+      - package
+      - version
+      - release
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: STANDARD
+    template_file: prompts/research.md
+
+  documentation:
+    name: "Documentation"
+    description: "Documentation search, drift detection, writing, and knowledge management"
+    keywords:
+      - docs
+      - documentation
+      - readme
+      - explain
+      - drift
+      - outdated
+      - write docs
+      - update docs
+      - markdown
+      - comment
+      - docstring
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: STANDARD
+    template_file: prompts/documentation.md
+
+  git:
+    name: "Git Operations"
+    description: "Version control, commits, branches, diffs, and repository management"
+    keywords:
+      - git
+      - commit
+      - branch
+      - merge
+      - pull
+      - push
+      - diff
+      - status
+      - log
+      - history
+      - checkout
+      - rebase
+      - stash
+      - remote
+      - origin
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: STANDARD
+    template_file: prompts/git.md
+
+  copywriting:
+    name: "Copywriting & Editing"
+    description: "Content analysis, tone adjustment, readability assessment, and professional rewriting"
+    keywords:
+      - copy
+      - copywriting
+      - copyediting
+      - edit
+      - rewrite
+      - tone
+      - voice
+      - readability
+      - temperature
+      - warm
+      - cool
+      - formal
+      - casual
+      - summarize
+      - tldr
+      - headline
+      - executive summary
+      - brand voice
+      - audience
+      - shorten
+      - expand
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: STANDARD
+    template_file: prompts/copywriting.md
+
+  browser_snapshot:
+    name: "Browser Snapshot Analysis"
+    description: "Analyze browser watch snapshots from Lee - screenshots, console logs, DOM, and session state"
+    keywords:
+      - browser snapshot
+      - browser watch
+      - console log
+      - console error
+      - dom snapshot
+      - screenshot
+      - frame debug
+      - agentgraph
+      - stream end
+      - browser debug
+      - watch capture
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/browser_snapshot.md
+
+  synthesis:
+    name: "Synthesis"
+    description: "Summarize, compare, or combine exploration conversation threads into new insights"
+    keywords:
+      - synthesize
+      - synthesis
+      - summarize node
+      - compare nodes
+      - combine nodes
+      - merge threads
+      - distill
+      - consolidate
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/synthesis.md
+
+  visualize:
+    name: "Visualization"
+    description: "Transform conversations and ideas into visual artifacts — Mermaid diagrams, generated images, structured markdown"
+    keywords:
+      - visualize
+      - diagram
+      - flowchart
+      - mind map
+      - infographic
+      - visual
+      - chart
+      - draw
+      - render
+      - mermaid
+      - image
+      - picture
+      - table
+      - comparison
+      - timeline
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/visualize.md
+
+  idea_exploration:
+    name: "Idea Exploration"
+    description: "Structured exploration of captured ideas with codebase and web research"
+    keywords:
+      - idea
+      - explore
+      - review idea
+      - captured
+      - brainstorm
+      - concept
+      - feasibility
+    min_tier: STANDARD
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/idea_exploration.md
+
+  learning:
+    name: "Learning & Understanding"
+    description: "Deep explanations of new topics, technologies, and concepts with analogies and mental models"
+    keywords:
+      - learn
+      - explain
+      - understand
+      - teach
+      - how does
+      - what is
+      - why does
+      - mental model
+      - intuition
+      - deep dive
+      - fundamentals
+      - concept
+      - technology
+      - works
+    min_tier: STANDARD
+    preferred_tier: REASONING
+    max_tier: REASONING
+    template_file: prompts/learning.md
+
+  ideation:
+    name: "Ideation & Blue Sky"
+    description: "Divergent thinking, yes-and exploration, generating possibilities without judgment"
+    keywords:
+      - ideate
+      - brainstorm
+      - what if
+      - blue sky
+      - possibilities
+      - ideas
+      - riff
+      - explore
+      - imagine
+      - could we
+      - spitball
+      - wild idea
+      - crazy idea
+    min_tier: STANDARD
+    preferred_tier: DEEP
+    max_tier: REASONING
+    template_file: prompts/ideation.md
+
+  # ==========================================================================
+  # Lightweight/Quick Prompts
+  # ==========================================================================
+
+  quick_answer:
+    name: "Quick Answer"
+    description: "Fast responses for simple queries, definitions, and brief explanations"
+    keywords:
+      - what is
+      - define
+      - quick
+      - simple
+      - brief
+      - short
+      - meaning
+      - definition
+    min_tier: QUICK
+    preferred_tier: QUICK
+    max_tier: QUICK
+    template: |
+      You are Hester, a helpful AI assistant. Answer concisely in 1-2 sentences.
+      Be direct and avoid unnecessary preamble.
+
+      If you need more context to answer properly, ask a clarifying question.
+
+  # ==========================================================================
+  # Meta-Prompts (for low-confidence routing fallback)
+  # These are selected via FunctionGemma when semantic routing is uncertain
+  # ==========================================================================
+
+  multi_domain_exploration:
+    name: "Cross-Domain Investigation"
+    description: "Exploring questions that span multiple parts of the system - code, database, docs, infrastructure"
+    keywords: []  # Selected by FunctionGemma, not semantic routing
+    min_tier: STANDARD
+    preferred_tier: DEEP
+    max_tier: REASONING
+    template_file: prompts/multi_domain_exploration.md
+    meta_prompt: true  # Flag for FunctionGemma selection
+
+  implementation_planning:
+    name: "Implementation Architect"
+    description: "Planning implementations that touch multiple services, require task decomposition, or have complex dependencies"
+    keywords: []  # Selected by FunctionGemma, not semantic routing
+    min_tier: STANDARD
+    preferred_tier: DEEP
+    max_tier: REASONING
+    template_file: prompts/implementation_planning.md
+    meta_prompt: true  # Flag for FunctionGemma selection
+
+  novel_concept:
+    name: "Concept Explorer"
+    description: "Exploring new concepts, researching unfamiliar technologies, or evaluating approaches not yet in the codebase"
+    keywords: []  # Selected by FunctionGemma, not semantic routing
+    min_tier: STANDARD
+    preferred_tier: DEEP
+    max_tier: REASONING
+    template_file: prompts/novel_concept.md
+    meta_prompt: true  # Flag for FunctionGemma selection
+
+  # ==========================================================================
+  # Fallback Prompt
+  # ==========================================================================
+
+  general:
+    name: "General Assistant"
+    description: "Fallback for unmatched requests - versatile problem-solving across all domains"
+    keywords: []  # Empty keywords = fallback
+    min_tier: QUICK
+    preferred_tier: STANDARD
+    max_tier: DEEP
+    template_file: prompts/general.md
+
+
+# ==========================================================================
+# Routing Configuration
+# ==========================================================================
+
+routing:
+  # Minimum similarity score (0-1) to select a prompt
+  # Scores below this trigger meta-prompt classification
+  match_threshold: 0.45
+
+  # Fallback prompt when no match and meta-classification fails
+  fallback: general
+
+  # Meta-prompts for FunctionGemma classification when below threshold
+  meta_prompts:
+    - multi_domain_exploration
+    - implementation_planning
+    - novel_concept
+
+  # Whether to log routing decisions
+  log_routing: true

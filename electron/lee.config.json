@@ -1,0 +1,11 @@
+{
+  "paths": [],
+  "tools": {
+    "lazygit": null,
+    "lazydocker": null,
+    "k9s": null,
+    "flx": null,
+    "claude": null,
+    "hester": null
+  }
+}

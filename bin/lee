@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Lee - Terminal IDE with Hester AI
+#
+# This script starts the Lee IDE:
+# 1. Hester daemon (AI backend on port 9000)
+# 2. Lee host (Node.js on port 9001)
+#
+# Usage:
+#   lee [--workspace <path>] [--no-hester] [--help]
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Default values
+WORKSPACE="${PWD}"
+START_HESTER=true
+HESTER_PORT=9000
+API_PORT=9001
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LEE_DIR="$(dirname "${SCRIPT_DIR}")"
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -w|--workspace)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        --no-hester)
+            START_HESTER=false
+            shift
+            ;;
+        --hester-port)
+            HESTER_PORT="$2"
+            shift 2
+            ;;
+        --api-port)
+            API_PORT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Lee - Terminal IDE with Hester AI"
+            echo ""
+            echo "Usage: lee [options] [workspace]"
+            echo ""
+            echo "Options:"
+            echo "  -w, --workspace <path>  Set the workspace directory (default: current directory)"
+            echo "  --no-hester             Don't start the Hester daemon"
+            echo "  --hester-port <port>    Hester daemon port (default: 9000)"
+            echo "  --api-port <port>       API port (default: 9001)"
+            echo "  -h, --help              Show this help message"
+            echo ""
+            echo "Examples:"
+            echo "  lee                          # Start in current directory"
+            echo "  lee ~/projects/myapp         # Start in specified directory"
+            echo "  lee --no-hester .            # Start without Hester"
+            echo ""
+            echo "Components:"
+            echo "  Hester (port $HESTER_PORT) - AI reasoning daemon"
+            echo "  Lee API (port $API_PORT)  - IDE control API"
+            exit 0
+            ;;
+        *)
+            # Positional argument (workspace)
+            WORKSPACE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Resolve workspace to absolute path
+WORKSPACE="$(cd "${WORKSPACE}" 2>/dev/null && pwd)" || {
+    echo -e "${RED}Error: Workspace '${WORKSPACE}' does not exist${NC}"
+    exit 1
+}
+
+echo -e "${BLUE}┌─────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│              Lee IDE                    │${NC}"
+echo -e "${BLUE}└─────────────────────────────────────────┘${NC}"
+echo ""
+echo -e "Workspace: ${GREEN}${WORKSPACE}${NC}"
+
+# Check for required commands
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        echo -e "${RED}Error: $1 is required but not installed${NC}"
+        exit 1
+    fi
+}
+
+check_command node
+check_command python3
+
+# Lee venv path (for Python editor component and Hester)
+LEE_VENV="/Users/ben/Coefficiency/github/coefficiency/venvs/venv-lee"
+
+# Export paths for node-pty to find the Python editor
+export EDITOR_PATH="${LEE_VENV}/bin/python3 -m editor"
+export HESTER_PATH="${LEE_VENV}/bin/hester"
+
+# PID file for cleanup
+HESTER_PID=""
+cleanup() {
+    echo ""
+    echo -e "${YELLOW}Shutting down Lee...${NC}"
+
+    if [[ -n "${HESTER_PID}" ]] && kill -0 "${HESTER_PID}" 2>/dev/null; then
+        echo "Stopping Hester daemon..."
+        kill "${HESTER_PID}" 2>/dev/null || true
+    fi
+
+    echo -e "${GREEN}Goodbye!${NC}"
+}
+trap cleanup EXIT
+
+# Start Hester daemon if enabled
+if [[ "${START_HESTER}" == "true" ]]; then
+    echo ""
+    echo -e "Starting Hester daemon on port ${HESTER_PORT}..."
+
+    # Check if Hester is already running
+    if curl -s "http://127.0.0.1:${HESTER_PORT}/health" &>/dev/null; then
+        echo -e "${GREEN}Hester already running${NC}"
+    else
+        if [[ -x "${HESTER_PATH}" ]]; then
+            "${HESTER_PATH}" daemon start --port "${HESTER_PORT}" --background &
+            HESTER_PID=$!
+            sleep 2
+
+            if curl -s "http://127.0.0.1:${HESTER_PORT}/health" &>/dev/null; then
+                echo -e "${GREEN}Hester daemon started${NC}"
+            else
+                echo -e "${YELLOW}Warning: Hester may not have started correctly${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Warning: hester not found at ${HESTER_PATH}, skipping daemon${NC}"
+        fi
+    fi
+fi
+
+# Start Lee host
+echo ""
+echo -e "Starting Lee on port ${API_PORT}..."
+echo ""
+
+HOST_DIR="${LEE_DIR}/host"
+if [[ -d "${HOST_DIR}" ]]; then
+    cd "${HOST_DIR}"
+
+    # Check if node_modules exists
+    if [[ ! -d "node_modules" ]]; then
+        echo -e "${YELLOW}Installing Node.js dependencies...${NC}"
+        npm install
+    fi
+
+    # Check if built
+    if [[ ! -d "dist" ]]; then
+        echo -e "${YELLOW}Building Lee...${NC}"
+        npm run build
+    fi
+
+    # Start the host
+    node dist/index.js \
+        --workspace "${WORKSPACE}" \
+        --api-port "${API_PORT}" \
+        --hester-port "${HESTER_PORT}"
+else
+    echo -e "${RED}Error: Host directory not found at ${HOST_DIR}${NC}"
+    echo -e "Run: ${GREEN}cd ${LEE_DIR}/host && npm install && npm run build${NC}"
+    exit 1
+fi

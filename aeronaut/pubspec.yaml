@@ -1,0 +1,63 @@
+name: aeronaut
+description: "Aeronaut - Lee's mobile companion. Native mobile access to your IDE."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Icons
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.4.0
+
+  # Models
+  equatable: ^2.0.5
+  json_annotation: ^4.8.1
+
+  # Networking
+  http: ^1.1.0
+  web_socket_channel: ^2.4.0
+
+  # Storage
+  shared_preferences: ^2.2.2
+
+  # URL launching
+  url_launcher: ^6.2.1
+
+  # Terminal emulator
+  xterm: ^4.0.0
+
+  # Utils
+  uuid: ^4.2.1
+  flutter_markdown: ^0.7.7+1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  json_serializable: ^6.7.1
+  build_runner: ^2.4.6
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  ios: true
+  android: false
+  image_path: "icon.png"
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+          weight: 400

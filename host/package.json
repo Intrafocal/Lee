@@ -1,0 +1,51 @@
+{
+  "name": "@coefficiency/lee",
+  "version": "0.1.0",
+  "description": "Lee - Terminal IDE with Hester AI",
+  "main": "dist/index.js",
+  "bin": {
+    "lee": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/check-python.js || true"
+  },
+  "files": [
+    "dist",
+    "scripts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "terminal",
+    "ide",
+    "editor",
+    "tui",
+    "pty",
+    "blessed"
+  ],
+  "author": "Coefficiency",
+  "license": "Proprietary",
+  "dependencies": {
+    "blessed-contrib": "^4.11.0",
+    "express": "^4.21.0",
+    "neo-blessed": "^0.2.0",
+    "node-pty": "^0.10.1",
+    "term.js": "^0.0.7"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
