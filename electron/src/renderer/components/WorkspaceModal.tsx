@@ -15,9 +15,10 @@ interface RecentWorkspace {
 interface WorkspaceModalProps {
   onSelect: (workspace: string) => void;
   onSkip: () => void;
+  onOpenInNewWindow?: (workspace: string) => void;
 }
 
-export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip }) => {
+export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip, onOpenInNewWindow }) => {
   const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspace[]>([]);
 
   useEffect(() => {
@@ -97,17 +98,31 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip
               <h3>Recent</h3>
               <div className="workspace-list">
                 {recentWorkspaces.map((workspace) => (
-                  <button
-                    key={workspace.path}
-                    className="workspace-item"
-                    onClick={() => handleSelectRecent(workspace)}
-                  >
-                    <span className="workspace-icon">📁</span>
-                    <div className="workspace-info">
-                      <span className="workspace-name">{workspace.name}</span>
-                      <span className="workspace-path">{workspace.path}</span>
-                    </div>
-                  </button>
+                  <div key={workspace.path} className="workspace-item-row">
+                    <button
+                      className="workspace-item"
+                      onClick={() => handleSelectRecent(workspace)}
+                    >
+                      <span className="workspace-icon">📁</span>
+                      <div className="workspace-info">
+                        <span className="workspace-name">{workspace.name}</span>
+                        <span className="workspace-path">{workspace.path}</span>
+                      </div>
+                    </button>
+                    {onOpenInNewWindow && (
+                      <button
+                        className="workspace-new-window-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          saveRecentWorkspace(workspace.path);
+                          onOpenInNewWindow(workspace.path);
+                        }}
+                        title="Open in New Window"
+                      >
+                        ⧉
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>

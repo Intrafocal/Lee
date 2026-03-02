@@ -58,6 +58,8 @@ export interface LeeAPI {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
     close: () => Promise<void>;
+    new: (workspace?: string) => Promise<number>;
+    getId: () => Promise<number | null>;
   };
   app: {
     getWorkspace: () => Promise<string>;
@@ -241,6 +243,8 @@ contextBridge.exposeInMainWorld('lee', {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
     close: () => ipcRenderer.invoke('window:close'),
+    new: (workspace?: string) => ipcRenderer.invoke('window:new', workspace),
+    getId: () => ipcRenderer.invoke('window:get-id'),
   },
 
   app: {

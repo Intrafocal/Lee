@@ -11,14 +11,18 @@ import { Socket } from 'net';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
+import { windowRegistry, WindowState } from './window-registry';
 import { LeeContext } from '../shared/context';
 
 export interface APIServerConfig {
   port: number;
   ptyManager: PTYManager;
-  contextBridge: ContextBridge;
   browserManager?: BrowserManager;
-  getMainWindow: () => Electron.BrowserWindow | null;
+  /** @deprecated Use windowRegistry instead */
+  contextBridge?: ContextBridge;
+  /** @deprecated Use windowRegistry instead */
+  getMainWindow?: () => Electron.BrowserWindow | null;
+  windowRegistry?: typeof windowRegistry;
 }
 
 /**
@@ -36,17 +40,13 @@ export class APIServer {
   private browserCastWss: WebSocketServer | null = null;
   private browserCastClients: Map<number, Set<WebSocket>> = new Map(); // tabId -> clients
   private ptyManager: PTYManager;
-  private contextBridge: ContextBridge;
   private browserManager?: BrowserManager;
-  private getMainWindow: () => Electron.BrowserWindow | null;
   private port: number;
   private leeState: LeeState = {};
 
   constructor(config: APIServerConfig) {
     this.ptyManager = config.ptyManager;
-    this.contextBridge = config.contextBridge;
     this.browserManager = config.browserManager;
-    this.getMainWindow = config.getMainWindow;
     this.port = config.port;
 
     this.app = express();
@@ -73,6 +73,17 @@ export class APIServer {
   }
 
   /**
+   * Get the window for a command. If params has window_id, use that;
+   * otherwise use the focused window or any available window.
+   */
+  private getWindowForCommand(params?: Record<string, unknown>): WindowState | undefined {
+    if (params?.window_id) {
+      return windowRegistry.get(params.window_id as number);
+    }
+    return windowRegistry.getFocused() || windowRegistry.getAny();
+  }
+
+  /**
    * Send a command to the EditorPanel via IPC.
    * The EditorPanel listens for these commands in the renderer process.
    */
@@ -80,9 +91,10 @@ export class APIServer {
     action: 'open' | 'save' | 'close',
     params?: Record<string, unknown>
   ): { success: boolean; error?: string } {
-    const mainWindow = this.getMainWindow();
+    const ws = this.getWindowForCommand(params);
+    const mainWindow = ws?.browserWindow || null;
     if (!mainWindow) {
-      return { success: false, error: 'No main window available' };
+      return { success: false, error: 'No window available' };
     }
 
     try {
@@ -164,9 +176,12 @@ export class APIServer {
             console.log('WebSocket client connected to /context/stream');
             this.wsClients.add(ws);
 
-            // Send current context immediately on connect
-            const ctx = this.contextBridge.getContext();
-            ws.send(JSON.stringify({ type: 'context_update', data: ctx }));
+            // Send current context from focused (or first) window immediately on connect
+            const focusedWs = windowRegistry.getFocused() || windowRegistry.getAny();
+            if (focusedWs) {
+              const ctx = focusedWs.contextBridge.getContext();
+              ws.send(JSON.stringify({ type: 'context_update', data: ctx }));
+            }
 
             ws.on('close', () => {
               console.log('WebSocket client disconnected');
@@ -190,10 +205,11 @@ export class APIServer {
             }
             this.ptyClients.get(ptyId)!.add(ws);
 
-            // Notify renderer that this PTY is being cast
-            const ptyMainWin = this.getMainWindow();
-            if (ptyMainWin) {
-              ptyMainWin.webContents.send('cast:active', { ptyId });
+            // Notify renderer that this PTY is being cast (send to owning window)
+            const ptyWindowId = this.ptyManager.getWindowForPty(ptyId);
+            const ptyWinState = ptyWindowId != null ? windowRegistry.get(ptyWindowId) : windowRegistry.getAny();
+            if (ptyWinState) {
+              ptyWinState.browserWindow.webContents.send('cast:active', { ptyId });
             }
 
             // Replay buffered PTY output so Aeronaut sees history
@@ -245,9 +261,10 @@ export class APIServer {
                 if (clients.size === 0) {
                   this.ptyClients.delete(ptyId);
                   // No more cast clients — notify renderer
-                  const cleanupPtyWin = this.getMainWindow();
+                  const cleanupPtyWindowId = this.ptyManager.getWindowForPty(ptyId);
+                  const cleanupPtyWin = cleanupPtyWindowId != null ? windowRegistry.get(cleanupPtyWindowId) : windowRegistry.getAny();
                   if (cleanupPtyWin) {
-                    cleanupPtyWin.webContents.send('cast:inactive', { ptyId });
+                    cleanupPtyWin.browserWindow.webContents.send('cast:inactive', { ptyId });
                   }
                 }
               }
@@ -290,9 +307,9 @@ export class APIServer {
             this.browserCastClients.get(tabId)!.add(ws);
 
             // Notify renderer that this tab is being cast
-            const castMainWin = this.getMainWindow();
-            if (castMainWin) {
-              castMainWin.webContents.send('cast:active', { tabId });
+            const castWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+            if (castWinState) {
+              castWinState.browserWindow.webContents.send('cast:active', { tabId });
             }
 
             // Get the webContentsId and actual webContents from Electron
@@ -366,9 +383,9 @@ export class APIServer {
                     });
 
                     // Resize the webview container in the renderer to match
-                    const mainWin = this.getMainWindow();
-                    if (mainWin) {
-                      mainWin.webContents.send('browser:cast-resize', tabId, logicalViewportWidth, logicalViewportHeight);
+                    const resizeWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+                    if (resizeWinState) {
+                      resizeWinState.browserWindow.webContents.send('browser:cast-resize', tabId, logicalViewportWidth, logicalViewportHeight);
                     }
 
                     await this.browserManager!.startScreencast(tabId, {
@@ -427,9 +444,9 @@ export class APIServer {
                   }
 
                   case 'navigate': {
-                    const mainWindow = this.getMainWindow();
-                    if (mainWindow && parsed.url) {
-                      mainWindow.webContents.send('browser:navigate', tabId, parsed.url);
+                    const navWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+                    if (navWinState && parsed.url) {
+                      navWinState.browserWindow.webContents.send('browser:navigate', tabId, parsed.url);
                     }
                     break;
                   }
@@ -450,9 +467,9 @@ export class APIServer {
               }
 
               // Restore the webview container size in the renderer
-              const mainWin = this.getMainWindow();
-              if (mainWin) {
-                mainWin.webContents.send('browser:cast-restore', tabId);
+              const restoreWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+              if (restoreWinState) {
+                restoreWinState.browserWindow.webContents.send('browser:cast-restore', tabId);
               }
 
               // Remove CDP debugger listener
@@ -471,9 +488,9 @@ export class APIServer {
                 if (clients.size === 0) {
                   this.browserCastClients.delete(tabId);
                   // No more cast clients — notify renderer
-                  const cleanupMainWin = this.getMainWindow();
-                  if (cleanupMainWin) {
-                    cleanupMainWin.webContents.send('cast:inactive', { tabId });
+                  const cleanupCastWin = windowRegistry.getFocused() || windowRegistry.getAny();
+                  if (cleanupCastWin) {
+                    cleanupCastWin.browserWindow.webContents.send('cast:inactive', { tabId });
                   }
                 }
               }
@@ -486,10 +503,9 @@ export class APIServer {
             });
           });
 
-          // Subscribe to context changes and broadcast to all WebSocket clients
-          this.contextBridge.on('change', (ctx: LeeContext) => {
-            this.broadcastContext(ctx);
-          });
+          // Context broadcasting is now handled per-window:
+          // Each window's ContextBridge calls apiServer.broadcastContext(windowId, ctx)
+          // via the wiring in createWindow()
 
           // Buffer PTY output for replay when Aeronaut connects
           this.ptyManager.on('data', (id: number, data: string) => {
@@ -521,9 +537,10 @@ export class APIServer {
 
   /**
    * Broadcast context update to all connected WebSocket clients.
+   * Includes window_id so Hester can distinguish contexts from different windows.
    */
-  private broadcastContext(ctx: LeeContext): void {
-    const message = JSON.stringify({ type: 'context_update', data: ctx });
+  broadcastContext(windowId: number, ctx: LeeContext): void {
+    const message = JSON.stringify({ type: 'context_update', window_id: windowId, data: ctx });
     this.wsClients.forEach((ws) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
@@ -597,10 +614,21 @@ export class APIServer {
     });
 
     // Get Lee context (full state from ContextBridge)
-    this.app.get('/context', (_req: Request, res: Response) => {
+    // Optionally accepts ?window_id=N to target a specific window
+    this.app.get('/context', (req: Request, res: Response) => {
+      const windowIdParam = req.query.window_id ? parseInt(req.query.window_id as string, 10) : undefined;
+      const ws = windowIdParam != null
+        ? windowRegistry.get(windowIdParam)
+        : (windowRegistry.getFocused() || windowRegistry.getAny());
+
+      if (!ws) {
+        res.status(503).json({ success: false, error: 'No window available' });
+        return;
+      }
+
       res.json({
         success: true,
-        data: this.contextBridge.getContext(),
+        data: ws.contextBridge.getContext(),
       });
     });
 
@@ -699,11 +727,12 @@ export class APIServer {
     params: Record<string, unknown>,
     res: Response
   ): void {
-    const mainWindow = this.getMainWindow();
+    const ws = this.getWindowForCommand(params);
+    const mainWindow = ws?.browserWindow || null;
     if (!mainWindow) {
       res.status(503).json({
         success: false,
-        error: 'Main window not available',
+        error: 'No window available',
       });
       return;
     }
@@ -816,13 +845,14 @@ export class APIServer {
 
       case 'status':
         // EditorPanel doesn't have a separate daemon - just report context
-        const context = this.contextBridge.getContext();
+        const statusWs = this.getWindowForCommand(params);
+        const context = statusWs?.contextBridge.getContext();
         res.json({
           success: true,
           data: {
             connected: true,
             type: 'editor-panel',
-            editor: context.editor || null,
+            editor: context?.editor || null,
           },
         });
         break;
@@ -880,9 +910,10 @@ export class APIServer {
     }
 
     // Delegate to renderer — it handles PTY spawning, prewarming, and tab creation
-    const mainWindow = this.getMainWindow();
+    const tuiWs = this.getWindowForCommand(params);
+    const mainWindow = tuiWs?.browserWindow || null;
     if (!mainWindow) {
-      res.status(503).json({ success: false, error: 'Main window not available' });
+      res.status(503).json({ success: false, error: 'No window available' });
       return;
     }
 
@@ -902,11 +933,12 @@ export class APIServer {
     params: Record<string, unknown>,
     res: Response
   ): void {
-    const mainWindow = this.getMainWindow();
+    const panelWs = this.getWindowForCommand(params);
+    const mainWindow = panelWs?.browserWindow || null;
     if (!mainWindow) {
       res.status(503).json({
         success: false,
-        error: 'Main window not available',
+        error: 'No window available',
       });
       return;
     }
@@ -973,11 +1005,12 @@ export class APIServer {
     params: Record<string, unknown>,
     res: Response
   ): void {
-    const mainWindow = this.getMainWindow();
+    const statusWinState = this.getWindowForCommand(params);
+    const mainWindow = statusWinState?.browserWindow || null;
     if (!mainWindow) {
       res.status(503).json({
         success: false,
-        error: 'Main window not available',
+        error: 'No window available',
       });
       return;
     }
@@ -1060,9 +1093,9 @@ export class APIServer {
         );
         if (navResult.approved) {
           // If immediately approved, tell renderer to navigate
-          const mainWindow = this.getMainWindow();
-          if (mainWindow) {
-            mainWindow.webContents.send('browser:navigate', tabId, params.url);
+          const navWin = this.getWindowForCommand(params)?.browserWindow;
+          if (navWin) {
+            navWin.webContents.send('browser:navigate', tabId, params.url);
           }
           res.json({ success: true, data: { action: 'navigate', url: params.url, approved: true } });
         } else {

@@ -56,11 +56,11 @@ export class BrowserManager extends EventEmitter {
   private tabToBrowser: Map<number, number> = new Map(); // tabId -> webContentsId
   private approvedDomains: Set<string> = new Set();
   private pendingNavigations: Map<string, NavigationRequest> = new Map();
-  private getMainWindow: () => BrowserWindow | null;
+  private getWindow: () => BrowserWindow | null;
 
-  constructor(getMainWindow: () => BrowserWindow | null) {
+  constructor(getWindow: () => BrowserWindow | null) {
     super();
-    this.getMainWindow = getMainWindow;
+    this.getWindow = getWindow;
 
     // Always approved domains (safe defaults)
     this.approvedDomains.add('google.com');
@@ -213,8 +213,8 @@ export class BrowserManager extends EventEmitter {
     // Emit event for UI to show confirmation
     this.emit('navigation-request', request);
 
-    // Send status message to UI via main window
-    const mainWindow = this.getMainWindow();
+    // Send status message to UI via available window
+    const mainWindow = this.getWindow();
     if (mainWindow) {
       mainWindow.webContents.send('status:push', {
         id: requestId,

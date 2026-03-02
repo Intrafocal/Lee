@@ -22,11 +22,11 @@ interface FileEntry {
   type: 'file' | 'directory';
 }
 
-// Keep a global reference to prevent garbage collection
-let mainWindow: BrowserWindow | null = null;
+import { windowRegistry } from './window-registry';
+
+// Global singletons (shared across all windows)
 let ptyManager: PTYManager;
 let apiServer: APIServer;
-let contextBridge: ContextBridge;
 let browserManager: BrowserManager;
 
 // Check if we're in development mode (explicitly set or running with vite dev server)
@@ -35,22 +35,20 @@ const isDev = process.env.NODE_ENV === 'development';
 // Track if quit has been confirmed to avoid showing dialog twice
 let quitConfirmed = false;
 
-// Track if reload has been confirmed to avoid showing dialog twice
-let reloadConfirmed = false;
+// Track which windows have reload confirmed (per-window)
+const reloadConfirmedWindows = new Set<number>();
 
 // Helper function to confirm and reload (shared by menu and keyboard shortcut)
-async function confirmAndReload(forceReload: boolean): Promise<void> {
-  if (!mainWindow) return;
-
-  const activeCount = ptyManager?.getActiveTerminalCount() ?? 0;
+async function confirmAndReload(bw: BrowserWindow, forceReload: boolean): Promise<void> {
+  const activeCount = ptyManager?.getActiveCountForWindow(bw.id) ?? 0;
 
   if (activeCount > 0) {
-    const terminalNames = ptyManager.getActiveTerminalNames();
+    const terminalNames = ptyManager.getActiveNamesForWindow(bw.id);
     const terminalList = terminalNames.length <= 5
       ? terminalNames.join(', ')
       : `${terminalNames.slice(0, 5).join(', ')} and ${terminalNames.length - 5} more`;
 
-    const result = await dialog.showMessageBox(mainWindow, {
+    const result = await dialog.showMessageBox(bw, {
       type: 'question',
       buttons: ['Reload', 'Cancel'],
       defaultId: 1,
@@ -62,26 +60,29 @@ async function confirmAndReload(forceReload: boolean): Promise<void> {
 
     if (result.response === 0) {
       // User clicked "Reload"
-      reloadConfirmed = true;
+      reloadConfirmedWindows.add(bw.id);
       if (forceReload) {
-        mainWindow.webContents.reloadIgnoringCache();
+        bw.webContents.reloadIgnoringCache();
       } else {
-        mainWindow.webContents.reload();
+        bw.webContents.reload();
       }
-      setTimeout(() => { reloadConfirmed = false; }, 100);
+      setTimeout(() => { reloadConfirmedWindows.delete(bw.id); }, 100);
     }
   } else {
     // No active terminals, just reload
     if (forceReload) {
-      mainWindow.webContents.reloadIgnoringCache();
+      bw.webContents.reloadIgnoringCache();
     } else {
-      mainWindow.webContents.reload();
+      bw.webContents.reload();
     }
   }
 }
 
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
+// Track windows that have confirmed close (to avoid double-dialog)
+const closeConfirmedWindows = new Set<number>();
+
+function createWindow(workspace?: string): BrowserWindow {
+  const bw = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
@@ -99,70 +100,115 @@ function createWindow(): void {
     },
   });
 
-  // Load the app
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/public/index.html'));
+  // Create per-window ContextBridge
+  const contextBridge = new ContextBridge(workspace || process.cwd());
+
+  // Register with WindowRegistry
+  windowRegistry.register(bw, workspace || null, contextBridge);
+
+  // Wire context changes to API server broadcasting
+  contextBridge.on('change', (ctx: any) => {
+    apiServer?.broadcastContext(bw.id, ctx);
+  });
+
+  // Wire PTY state to this window's context bridge
+  const onPtyState = (id: number, state: any) => {
+    const ownerWindow = ptyManager.getWindowForPty(id);
+    if (ownerWindow === bw.id) {
+      contextBridge.updateFromPty(id, state);
+    }
+  };
+  ptyManager.on('state', onPtyState);
+
+  // Wire browser state to context bridge
+  const onBrowserState = (state: any) => {
+    contextBridge.updateBrowserContext(state);
+  };
+  browserManager.on('state', onBrowserState);
+
+  // Build URL hash to communicate window init state to renderer
+  // - #new → show workspace modal (no pre-selected workspace)
+  // - #workspace=<path> → use this workspace directly, skip modal
+  // - (no hash) → first window, use localStorage lastWorkspace as usual
+  const isFirstWindow = windowRegistry.getAll().size === 1;
+  let urlHash = '';
+  if (workspace) {
+    urlHash = `#workspace=${encodeURIComponent(workspace)}`;
+  } else if (!isFirstWindow) {
+    // New window without workspace → show modal
+    urlHash = '#new';
   }
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  // Load the app
+  if (isDev) {
+    bw.loadURL(`http://localhost:5173${urlHash}`);
+    bw.webContents.openDevTools();
+  } else {
+    bw.loadFile(path.join(__dirname, '../renderer/public/index.html'), {
+      hash: urlHash.replace('#', ''),
+    });
+  }
+
+  bw.on('closed', () => {
+    // Remove event listeners
+    ptyManager.removeListener('state', onPtyState);
+    browserManager.removeListener('state', onBrowserState);
+
+    // Kill PTYs owned by this window
+    ptyManager.killForWindow(bw.id);
+
+    // Unregister from registry
+    windowRegistry.unregister(bw.id);
+    closeConfirmedWindows.delete(bw.id);
+    reloadConfirmedWindows.delete(bw.id);
   });
 
   // Handle window close with confirmation dialog
-  mainWindow.on('close', async (event) => {
-    // Skip if quit already confirmed or no active terminals
-    if (quitConfirmed) return;
+  bw.on('close', async (event) => {
+    // Skip if quit already confirmed or this window's close already confirmed
+    if (quitConfirmed || closeConfirmedWindows.has(bw.id)) return;
 
-    const activeCount = ptyManager?.getActiveTerminalCount() ?? 0;
+    const activeCount = ptyManager?.getActiveCountForWindow(bw.id) ?? 0;
 
     if (activeCount > 0) {
       // Prevent close until user confirms
       event.preventDefault();
 
-      const terminalNames = ptyManager.getActiveTerminalNames();
+      const terminalNames = ptyManager.getActiveNamesForWindow(bw.id);
       const terminalList = terminalNames.length <= 5
         ? terminalNames.join(', ')
         : `${terminalNames.slice(0, 5).join(', ')} and ${terminalNames.length - 5} more`;
 
-      const result = await dialog.showMessageBox(mainWindow!, {
+      const result = await dialog.showMessageBox(bw, {
         type: 'question',
-        buttons: ['Quit', 'Cancel'],
+        buttons: ['Close Window', 'Cancel'],
         defaultId: 1,
         cancelId: 1,
-        title: 'Quit Lee?',
+        title: 'Close Window?',
         message: `You have ${activeCount} active terminal${activeCount > 1 ? 's' : ''} open`,
-        detail: `Running: ${terminalList}\n\nAre you sure you want to quit? All terminal sessions will be closed.`,
+        detail: `Running: ${terminalList}\n\nAre you sure you want to close this window? All terminal sessions will be closed.`,
       });
 
       if (result.response === 0) {
-        // User clicked "Quit" - set flag and close
-        quitConfirmed = true;
-        mainWindow?.close();
+        // User clicked "Close Window" - set flag and close
+        closeConfirmedWindows.add(bw.id);
+        bw.close();
       }
       // If user clicked "Cancel", do nothing - close is already prevented
     }
   });
 
   // Intercept Cmd+R / Cmd+Shift+R to show reload confirmation
-  // Note: The menu also handles these via confirmAndReload, but we intercept
-  // keyboard input here to prevent the default browser reload behavior
-  mainWindow.webContents.on('before-input-event', async (event, input) => {
-    // Check for Cmd+R (macOS) or Ctrl+R (Windows/Linux)
+  bw.webContents.on('before-input-event', async (event, input) => {
     const isReloadKey = (input.meta || input.control) && input.key.toLowerCase() === 'r';
 
-    if (isReloadKey && !reloadConfirmed) {
-      // Prevent the default reload - menu will handle via confirmAndReload
+    if (isReloadKey && !reloadConfirmedWindows.has(bw.id)) {
       event.preventDefault();
-      // The menu accelerator will trigger confirmAndReload
-      await confirmAndReload(input.shift);
+      await confirmAndReload(bw, input.shift);
     }
   });
 
-  // Setup global shortcuts
-  setupGlobalShortcuts();
+  return bw;
 }
 
 function setupGlobalShortcuts(): void {
@@ -171,9 +217,10 @@ function setupGlobalShortcuts(): void {
 
   // Ctrl/Cmd+Shift+L to focus Lee from anywhere
   globalShortcut.register('CommandOrControl+Shift+L', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    const ws = windowRegistry.getFocused() || windowRegistry.getAny();
+    if (ws) {
+      if (ws.browserWindow.isMinimized()) ws.browserWindow.restore();
+      ws.browserWindow.focus();
     }
   });
 }
@@ -206,7 +253,14 @@ function setupApplicationMenu(): void {
           label: 'New File',
           accelerator: 'CmdOrCtrl+N',
           click: () => {
-            mainWindow?.webContents.send('file:new');
+            BrowserWindow.getFocusedWindow()?.webContents.send('file:new');
+          },
+        },
+        {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => {
+            createWindow();
           },
         },
         { type: 'separator' },
@@ -214,12 +268,13 @@ function setupApplicationMenu(): void {
           label: 'Open...',
           accelerator: 'CmdOrCtrl+O',
           click: async () => {
-            const result = await dialog.showOpenDialog(mainWindow!, {
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            if (!focusedWindow) return;
+            const result = await dialog.showOpenDialog(focusedWindow, {
               properties: ['openFile'],
             });
             if (!result.canceled && result.filePaths.length > 0) {
-              // Send file path to renderer to open in editor
-              mainWindow?.webContents.send('file:open', result.filePaths[0]);
+              focusedWindow.webContents.send('file:open', result.filePaths[0]);
             }
           },
         },
@@ -227,11 +282,13 @@ function setupApplicationMenu(): void {
           label: 'Open Folder...',
           accelerator: 'CmdOrCtrl+Shift+O',
           click: async () => {
-            const result = await dialog.showOpenDialog(mainWindow!, {
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            if (!focusedWindow) return;
+            const result = await dialog.showOpenDialog(focusedWindow, {
               properties: ['openDirectory'],
             });
             if (!result.canceled && result.filePaths.length > 0) {
-              mainWindow?.webContents.send('folder:open', result.filePaths[0]);
+              focusedWindow.webContents.send('folder:open', result.filePaths[0]);
             }
           },
         },
@@ -240,16 +297,18 @@ function setupApplicationMenu(): void {
           label: 'Save',
           accelerator: 'CmdOrCtrl+S',
           click: () => {
-            mainWindow?.webContents.send('file:save');
+            BrowserWindow.getFocusedWindow()?.webContents.send('file:save');
           },
         },
         {
           label: 'Save As...',
           accelerator: 'CmdOrCtrl+Shift+S',
           click: async () => {
-            const result = await dialog.showSaveDialog(mainWindow!, {});
+            const focusedWindow = BrowserWindow.getFocusedWindow();
+            if (!focusedWindow) return;
+            const result = await dialog.showSaveDialog(focusedWindow, {});
             if (!result.canceled && result.filePath) {
-              mainWindow?.webContents.send('file:save-as', result.filePath);
+              focusedWindow.webContents.send('file:save-as', result.filePath);
             }
           },
         },
@@ -288,14 +347,16 @@ function setupApplicationMenu(): void {
           label: 'Reload',
           accelerator: 'CmdOrCtrl+R',
           click: async () => {
-            await confirmAndReload(false);
+            const focused = BrowserWindow.getFocusedWindow();
+            if (focused) await confirmAndReload(focused, false);
           },
         },
         {
           label: 'Force Reload',
           accelerator: 'CmdOrCtrl+Shift+R',
           click: async () => {
-            await confirmAndReload(true);
+            const focused = BrowserWindow.getFocusedWindow();
+            if (focused) await confirmAndReload(focused, true);
           },
         },
         { role: 'toggleDevTools' as const },
@@ -357,21 +418,28 @@ function parseYamlConfig(content: string): any {
 
 function setupIPC(): void {
   // PTY operations
-  ipcMain.handle('pty:spawn', (_event, command?: string, args?: string[], cwd?: string, name?: string) => {
+  ipcMain.handle('pty:spawn', (event, command?: string, args?: string[], cwd?: string, name?: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+
     // For terminal spawns, use prewarm pool
     if (!command) {
       return ptyManager.getOrSpawnTUI(
         'terminal',
-        () => ptyManager.spawn(command, args, cwd, name || 'Terminal'),
-        cwd
+        () => ptyManager.spawn(command, args, cwd, name || 'Terminal', true, undefined, windowId),
+        cwd,
+        windowId
       );
     }
-    return ptyManager.spawn(command, args, cwd, name);
+    return ptyManager.spawn(command, args, cwd, name, true, undefined, windowId);
   });
 
-  ipcMain.handle('pty:spawn-tui', async (_event, tuiType: string, cwd?: string, options?: any) => {
+  ipcMain.handle('pty:spawn-tui', async (event, tuiType: string, cwd?: string, options?: any) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+
     // Check if TUI definition exists
-    const def = ptyManager.getTUIDefinition(tuiType);
+    const def = ptyManager.getTUIDefinition(tuiType, windowId);
     if (!def) {
       throw new Error(`Unknown TUI type: ${tuiType}. Available: ${ptyManager.getAvailableTUITypes().join(', ')}`);
     }
@@ -388,17 +456,19 @@ function setupIPC(): void {
     if (def.prewarm && !hasSpecialOptions) {
       return ptyManager.getOrSpawnTUI(
         tuiType,
-        () => ptyManager.spawnConfiguredTUI(tuiType, cwd, options),
-        cwd
+        () => ptyManager.spawnConfiguredTUI(tuiType, cwd, options, windowId),
+        cwd,
+        windowId
       );
     }
 
     // Spawn configured TUI
-    return ptyManager.spawnConfiguredTUI(tuiType, cwd, options);
+    return ptyManager.spawnConfiguredTUI(tuiType, cwd, options, windowId);
   });
 
-  ipcMain.handle('pty:getAvailableTUIs', () => {
-    return ptyManager.getAvailableTUIsWithMeta();
+  ipcMain.handle('pty:getAvailableTUIs', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    return ptyManager.getAvailableTUIsWithMeta(bw?.id);
   });
 
   ipcMain.handle('pty:write', (_event, id: number, data: string) => {
@@ -413,34 +483,57 @@ function setupIPC(): void {
     ptyManager.kill(id);
   });
 
-  // Forward PTY events to renderer
+  // Forward PTY events to the correct window's renderer
   ptyManager.on('data', (id: number, data: string) => {
-    mainWindow?.webContents.send('pty:data', id, data);
-  });
-
-  ptyManager.on('exit', (id: number, code: number) => {
-    mainWindow?.webContents.send('pty:exit', id, code);
-  });
-
-  ptyManager.on('state', (id: number, state: any) => {
-    mainWindow?.webContents.send('pty:state', id, state);
-  });
-
-  // Window operations
-  ipcMain.handle('window:minimize', () => {
-    mainWindow?.minimize();
-  });
-
-  ipcMain.handle('window:maximize', () => {
-    if (mainWindow?.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow?.maximize();
+    const windowId = ptyManager.getWindowForPty(id);
+    if (windowId != null) {
+      windowRegistry.get(windowId)?.browserWindow.webContents.send('pty:data', id, data);
     }
   });
 
-  ipcMain.handle('window:close', () => {
-    mainWindow?.close();
+  ptyManager.on('exit', (id: number, code: number) => {
+    const windowId = ptyManager.getWindowForPty(id);
+    if (windowId != null) {
+      windowRegistry.get(windowId)?.browserWindow.webContents.send('pty:exit', id, code);
+    }
+  });
+
+  ptyManager.on('state', (id: number, state: any) => {
+    const windowId = ptyManager.getWindowForPty(id);
+    if (windowId != null) {
+      windowRegistry.get(windowId)?.browserWindow.webContents.send('pty:state', id, state);
+    }
+  });
+
+  // Window operations
+  ipcMain.handle('window:minimize', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.minimize();
+  });
+
+  ipcMain.handle('window:maximize', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw?.isMaximized()) {
+      bw.unmaximize();
+    } else {
+      bw?.maximize();
+    }
+  });
+
+  ipcMain.handle('window:close', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.close();
+  });
+
+  // New window IPC
+  ipcMain.handle('window:new', (_event, workspace?: string) => {
+    const bw = createWindow(workspace);
+    return bw.id;
+  });
+
+  ipcMain.handle('window:get-id', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    return bw?.id ?? null;
   });
 
   // Get workspace (current working directory)
@@ -449,8 +542,9 @@ function setupIPC(): void {
   });
 
   // Dialog operations
-  ipcMain.handle('dialog:open', async (_event, options: { properties?: string[]; title?: string }) => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
+  ipcMain.handle('dialog:open', async (event, options: { properties?: string[]; title?: string }) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(bw!, {
       properties: options.properties as any || ['openDirectory'],
       title: options.title || 'Select Folder',
     });
@@ -461,8 +555,14 @@ function setupIPC(): void {
   });
 
   // Prewarm with workspace
-  ipcMain.handle('pty:prewarm', async (_event, workspace: string) => {
-    console.log('Prewarming with workspace:', workspace);
+  ipcMain.handle('pty:prewarm', async (event, workspace: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    console.log('Prewarming with workspace:', workspace, 'windowId:', windowId);
+
+    // Get this window's context bridge
+    const winState = windowId != null ? windowRegistry.get(windowId) : undefined;
+    const contextBridge = winState?.contextBridge;
 
     // Load workspace config and set on PTY manager
     try {
@@ -477,8 +577,8 @@ function setupIPC(): void {
           const config = parseYamlConfig(content);
           console.log('Setting workspace config from:', configPath);
           console.log('  source files:', config.source || []);
-          ptyManager.setWorkspaceConfig(workspace, config);
-          contextBridge.setWorkspaceConfig(config);
+          ptyManager.setWorkspaceConfig(workspace, config, windowId);
+          contextBridge?.setWorkspaceConfig(config);
           break;
         } catch {
           // Try next path
@@ -486,6 +586,11 @@ function setupIPC(): void {
       }
     } catch (error) {
       console.error('Failed to load workspace config:', error);
+    }
+
+    // Update window workspace in registry
+    if (windowId != null) {
+      windowRegistry.setWorkspace(windowId, workspace);
     }
 
     // Bootstrap hester venv before starting TUIs/daemon that depend on it
@@ -496,7 +601,7 @@ function setupIPC(): void {
     }
 
     // Prewarm commonly used TUIs (terminal, hester, claude) for instant startup
-    ptyManager.prewarmAllTUIs(workspace);
+    ptyManager.prewarmAllTUIs(workspace, windowId);
 
     // Also start Hester daemon in background for command palette
     // (async - checks if port 9000 is available first)
@@ -506,7 +611,12 @@ function setupIPC(): void {
   });
 
   // Config operations - load .lee/config.yaml
-  ipcMain.handle('config:load', async (_event, workspace: string) => {
+  ipcMain.handle('config:load', async (event, workspace: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    const winState = windowId != null ? windowRegistry.get(windowId) : undefined;
+    const contextBridge = winState?.contextBridge;
+
     try {
       // Try workspace-local config first, then global
       const configPaths = [
@@ -517,15 +627,13 @@ function setupIPC(): void {
       for (const configPath of configPaths) {
         try {
           const content = await fs.promises.readFile(configPath, 'utf-8');
-          // Simple YAML parsing for environments section
-          // For a full implementation, use a proper YAML parser
           const config = parseYamlConfig(content);
           console.log('Loaded config from:', configPath);
           console.log('  sql.default:', config.sql?.default);
           console.log('  sql.connections:', config.sql?.connections?.length, config.sql?.connections?.map((c: any) => c.name));
           // Also update pty-manager and context-bridge with the config
-          ptyManager.setWorkspaceConfig(workspace, config);
-          contextBridge.setWorkspaceConfig(config);
+          ptyManager.setWorkspaceConfig(workspace, config, windowId);
+          contextBridge?.setWorkspaceConfig(config);
           return config;
         } catch {
           // Try next path
@@ -553,7 +661,12 @@ function setupIPC(): void {
   });
 
   // Config operations - save raw YAML content
-  ipcMain.handle('config:saveRaw', async (_event, workspace: string, content: string) => {
+  ipcMain.handle('config:saveRaw', async (event, workspace: string, content: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    const winState = windowId != null ? windowRegistry.get(windowId) : undefined;
+    const contextBridge = winState?.contextBridge;
+
     try {
       const configDir = path.join(workspace, '.lee');
       const configPath = path.join(configDir, 'config.yaml');
@@ -567,8 +680,8 @@ function setupIPC(): void {
 
       // Reload config into pty-manager and context-bridge
       const config = parseYamlConfig(content);
-      ptyManager.setWorkspaceConfig(workspace, config);
-      contextBridge.setWorkspaceConfig(config);
+      ptyManager.setWorkspaceConfig(workspace, config, windowId);
+      contextBridge?.setWorkspaceConfig(config);
 
       return { success: true };
     } catch (error: any) {
@@ -578,7 +691,12 @@ function setupIPC(): void {
   });
 
   // Config operations - save structured config as YAML
-  ipcMain.handle('config:save', async (_event, workspace: string, config: any) => {
+  ipcMain.handle('config:save', async (event, workspace: string, config: any) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    const winState = windowId != null ? windowRegistry.get(windowId) : undefined;
+    const contextBridge = winState?.contextBridge;
+
     try {
       const configDir = path.join(workspace, '.lee');
       const configPath = path.join(configDir, 'config.yaml');
@@ -599,8 +717,8 @@ function setupIPC(): void {
       console.log('Saved config to:', configPath);
 
       // Reload config into pty-manager and context-bridge
-      ptyManager.setWorkspaceConfig(workspace, config);
-      contextBridge.setWorkspaceConfig(config);
+      ptyManager.setWorkspaceConfig(workspace, config, windowId);
+      contextBridge?.setWorkspaceConfig(config);
 
       return { success: true };
     } catch (error: any) {
@@ -740,47 +858,52 @@ function setupIPC(): void {
     return clipboard.readText();
   });
 
-  // Context bridge operations
-  ipcMain.on('context:update', (_event, update: RendererContextUpdate) => {
-    contextBridge.updateFromRenderer(update);
+  // Context bridge operations - route to correct window's ContextBridge
+  ipcMain.on('context:update', (event, update: RendererContextUpdate) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const winState = bw ? windowRegistry.get(bw.id) : undefined;
+    winState?.contextBridge.updateFromRenderer(update);
   });
 
-  ipcMain.on('context:action', (_event, actionType: UserActionType, target: string) => {
-    contextBridge.recordAction(actionType, target);
+  ipcMain.on('context:action', (event, actionType: UserActionType, target: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const winState = bw ? windowRegistry.get(bw.id) : undefined;
+    winState?.contextBridge.recordAction(actionType, target);
   });
 
-  ipcMain.handle('context:get', () => {
-    return contextBridge.getContext();
+  ipcMain.handle('context:get', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const winState = bw ? windowRegistry.get(bw.id) : undefined;
+    return winState?.contextBridge.getContext() ?? null;
   });
 
   // Editor context from new React-based EditorPanel
-  ipcMain.on('context:editor', (_event, ctx: {
+  ipcMain.on('context:editor', (event, ctx: {
     file: string | null;
     language: string | null;
     cursor: { line: number; column: number };
     selection: string | null;
     modified: boolean;
   }) => {
-    contextBridge.updateEditorContext(ctx);
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const winState = bw ? windowRegistry.get(bw.id) : undefined;
+    winState?.contextBridge.updateEditorContext(ctx);
   });
 
-  // Editor commands - relay from App.tsx to EditorPanel
-  ipcMain.on('editor:open-file', (_event, filePath: string) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('editor:open', filePath);
-    }
+  // Editor commands - relay from App.tsx to EditorPanel (within same window)
+  ipcMain.on('editor:open-file', (event, filePath: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.webContents.send('editor:open', filePath);
   });
 
-  ipcMain.on('editor:save-file', () => {
-    if (mainWindow) {
-      mainWindow.webContents.send('editor:save');
-    }
+  ipcMain.on('editor:save-file', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.webContents.send('editor:save');
   });
 
-  ipcMain.on('editor:close-file', () => {
-    if (mainWindow) {
-      mainWindow.webContents.send('editor:close');
-    }
+  ipcMain.on('editor:close-file', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.webContents.send('editor:close');
   });
 
   // Hester daemon control - delegate to PTYManager for proper tracking
@@ -875,7 +998,7 @@ function setupIPC(): void {
   // Browser snapshot capture
   // ============================================
 
-  ipcMain.handle('browser:capture-snapshot', async (_event, tabId: number, options: {
+  ipcMain.handle('browser:capture-snapshot', async (event, tabId: number, options: {
     screenshot: boolean;
     consoleLogs: string[];
     dom: boolean;
@@ -884,8 +1007,10 @@ function setupIPC(): void {
     sessionState?: object;
   }) => {
     try {
-      // Get workspace from context bridge (not process.cwd() which may be wrong when launched from Finder)
-      const workspacePath = contextBridge.getContext().workspace || process.cwd();
+      // Get workspace from the window's context bridge
+      const bw = BrowserWindow.fromWebContents(event.sender);
+      const winState = bw ? windowRegistry.get(bw.id) : undefined;
+      const workspacePath = winState?.contextBridge.getContext().workspace || process.cwd();
       const timestamp = Date.now();
 
       const trace: DebugTrace = {
@@ -983,40 +1108,28 @@ app.whenReady().then(() => {
   // Set app name for macOS menu bar
   app.name = 'Lee';
 
-  // Initialize PTY manager
+  // Initialize PTY manager (global singleton)
   ptyManager = new PTYManager();
 
-  // Initialize context bridge with initial workspace (cwd)
-  contextBridge = new ContextBridge(process.cwd());
-
   // Initialize browser manager for embedded browser tabs
-  browserManager = new BrowserManager(() => mainWindow);
-
-  // Wire browser state updates to context bridge
-  browserManager.on('state', (state: any) => {
-    contextBridge.updateBrowserContext(state);
+  // Uses windowRegistry to find the relevant window
+  browserManager = new BrowserManager(() => {
+    return windowRegistry.getFocused()?.browserWindow || windowRegistry.getAny()?.browserWindow || null;
   });
 
-  // Wire PTY state updates to context bridge
-  ptyManager.on('state', (id: number, state: any) => {
-    contextBridge.updateFromPty(id, state);
-  });
-
-  // Forward hester-setup events to renderer for UI feedback
+  // Forward hester-setup events to ALL windows (setup progress is global)
   ptyManager.on('hester-setup', (info: { phase: string; message: string }) => {
-    mainWindow?.webContents.send('hester-setup', info);
+    for (const ws of windowRegistry.getAll().values()) {
+      ws.browserWindow.webContents.send('hester-setup', info);
+    }
   });
 
-  // Note: We no longer prewarm on startup - we wait for workspace selection
-  // The renderer will trigger prewarm after workspace is known via the IPC handler
-
-  // Initialize API server with context bridge and browser manager
+  // Initialize API server with windowRegistry for multi-window support
   apiServer = new APIServer({
     port: 9001,
     ptyManager,
-    contextBridge,
     browserManager,
-    getMainWindow: () => mainWindow,
+    windowRegistry,
   });
   apiServer.start();
 
@@ -1026,10 +1139,13 @@ app.whenReady().then(() => {
   // Setup IPC handlers
   setupIPC();
 
-  // Create window
+  // Setup global shortcuts (once, not per-window)
+  setupGlobalShortcuts();
+
+  // Create first window
   createWindow();
 
-  // macOS: Re-create window when dock icon clicked
+  // macOS: Re-create window when dock icon clicked, or focus existing
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -1049,6 +1165,7 @@ app.on('before-quit', async (event) => {
   // Skip if already confirmed
   if (quitConfirmed) return;
 
+  // Aggregate active terminals across ALL windows
   const activeCount = ptyManager.getActiveTerminalCount();
 
   if (activeCount > 0) {
@@ -1060,7 +1177,10 @@ app.on('before-quit', async (event) => {
       ? terminalNames.join(', ')
       : `${terminalNames.slice(0, 5).join(', ')} and ${terminalNames.length - 5} more`;
 
-    const result = await dialog.showMessageBox(mainWindow!, {
+    // Use any available window as dialog parent
+    const parentWindow = windowRegistry.getAny()?.browserWindow || BrowserWindow.getAllWindows()[0] || null;
+
+    const result = await dialog.showMessageBox(parentWindow!, {
       type: 'question',
       buttons: ['Quit', 'Cancel'],
       defaultId: 1,

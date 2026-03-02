@@ -214,6 +214,7 @@ export interface PTYProcess {
   name: string;
   pty: pty.IPty;
   state: LeeState;
+  windowId: number | null;  // null = daemon/background
 }
 
 /**
@@ -243,9 +244,25 @@ export class PTYManager extends EventEmitter {
   private hesterVenvReady: boolean = false;
   private hesterBootstrapPromise: Promise<void> | null = null;
 
-  // Workspace-specific config (loaded from .lee/config.yaml)
-  private workspaceConfig: WorkspaceConfig | null = null;
-  private currentWorkspace: string | null = null;
+  // Per-window workspace configs (loaded from .lee/config.yaml)
+  private windowConfigs: Map<number, { workspace: string; config: WorkspaceConfig | null }> = new Map();
+
+  // Legacy accessors for daemon/global operations
+  private get currentWorkspace(): string | null {
+    // Return first window's workspace (for daemon startup etc.)
+    for (const entry of this.windowConfigs.values()) {
+      return entry.workspace;
+    }
+    return null;
+  }
+
+  private get workspaceConfig(): WorkspaceConfig | null {
+    // Return first window's config (for daemon startup etc.)
+    for (const entry of this.windowConfigs.values()) {
+      return entry.config;
+    }
+    return null;
+  }
 
   constructor() {
     super();
@@ -271,12 +288,42 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
-   * Set workspace configuration (called when workspace is selected).
+   * Set workspace configuration for a specific window.
+   * If no windowId is provided, sets for the first window (legacy compat).
    */
-  setWorkspaceConfig(workspace: string, config: WorkspaceConfig | null): void {
-    this.currentWorkspace = workspace;
-    this.workspaceConfig = config;
-    console.log('Workspace config set:', workspace, config?.source || 'no source files');
+  setWorkspaceConfig(workspace: string, config: WorkspaceConfig | null, windowId?: number): void {
+    const id = windowId ?? this.getDefaultWindowId();
+    if (id !== null) {
+      this.windowConfigs.set(id, { workspace, config });
+    } else {
+      // No windows yet — store with a temp key that will be replaced
+      this.windowConfigs.set(-1, { workspace, config });
+    }
+    console.log('Workspace config set:', workspace, 'windowId:', id, config?.source || 'no source files');
+  }
+
+  /**
+   * Get the default window ID (first window).
+   */
+  private getDefaultWindowId(): number | null {
+    for (const id of this.windowConfigs.keys()) {
+      if (id !== -1) return id;
+    }
+    return null;
+  }
+
+  /**
+   * Get workspace config for a specific window.
+   */
+  getWindowConfig(windowId: number): { workspace: string; config: WorkspaceConfig | null } | undefined {
+    return this.windowConfigs.get(windowId);
+  }
+
+  /**
+   * Remove config for a window (called on window close).
+   */
+  removeWindowConfig(windowId: number): void {
+    this.windowConfigs.delete(windowId);
   }
 
   /**
@@ -486,14 +533,18 @@ export class PTYManager extends EventEmitter {
   /**
    * Get environment variables including sourced files.
    */
-  private getEnvironment(cwd?: string): Record<string, string> {
+  private getEnvironment(cwd?: string, windowId?: number): Record<string, string> {
     // Start with process environment
     const env: Record<string, string> = { ...process.env } as Record<string, string>;
 
+    // Resolve workspace config: prefer window-specific, fall back to legacy
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const workspace = cwd || winConfig?.workspace || this.currentWorkspace;
+
     // Load source files from workspace config FIRST
-    const workspace = cwd || this.currentWorkspace;
-    if (this.workspaceConfig?.source && this.workspaceConfig.source.length > 0) {
-      const sourceEnv = loadSourceEnv(this.workspaceConfig.source, workspace || undefined);
+    if (wsConfig?.source && wsConfig.source.length > 0) {
+      const sourceEnv = loadSourceEnv(wsConfig.source, workspace || undefined);
       // Don't let sourced files override PATH - we'll handle that specially
       delete sourceEnv.PATH;
       Object.assign(env, sourceEnv);
@@ -556,7 +607,8 @@ export class PTYManager extends EventEmitter {
     cwd?: string,
     name?: string,
     loginShell: boolean = true,
-    extraEnv?: Record<string, string>
+    extraEnv?: Record<string, string>,
+    windowId?: number
   ): number {
     const id = this.nextId++;
 
@@ -564,8 +616,12 @@ export class PTYManager extends EventEmitter {
     let cmd = command;
     let finalArgs = args;
 
+    // Resolve config for the window
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+
     if (!cmd) {
-      const configuredShell = this.workspaceConfig?.terminal?.shell;
+      const configuredShell = wsConfig?.terminal?.shell;
       cmd = configuredShell && configuredShell.length > 0 ? configuredShell : this.shell;
 
       // Spawn as login shell to properly source .bash_profile/.bashrc
@@ -581,11 +637,12 @@ export class PTYManager extends EventEmitter {
       cwd: cwd || process.cwd(),
       name: name || cmd,
       loginShell: loginShell && !command,
-      configuredShell: this.workspaceConfig?.terminal?.shell || null,
+      configuredShell: wsConfig?.terminal?.shell || null,
+      windowId: windowId ?? null,
     });
 
     // Get environment with sourced files
-    const env = this.getEnvironment(cwd);
+    const env = this.getEnvironment(cwd, windowId);
 
     // Merge extra environment variables (e.g., daemon-specific config)
     if (extraEnv) {
@@ -605,6 +662,7 @@ export class PTYManager extends EventEmitter {
       name: name || cmd,
       pty: ptyProcess,
       state: {},
+      windowId: windowId ?? null,
     };
 
     this.processes.set(id, proc);
@@ -844,49 +902,54 @@ export class PTYManager extends EventEmitter {
    * Prewarm a TUI instance for instant startup.
    * Only prewarms if not already warmed for this type.
    */
-  prewarmTUI(tuiType: string, workspace?: string): void {
+  prewarmTUI(tuiType: string, workspace?: string, windowId?: number): void {
     // Only prewarm supported types
     if (!PTYManager.PREWARMABLE_TUIS.includes(tuiType as any)) {
       return;
     }
 
-    // Already warmed for this type
-    if (this.warmTUIPool.has(tuiType)) {
+    // Pool key includes windowId to keep per-window pools
+    const poolKey = windowId != null ? `${tuiType}:${windowId}` : tuiType;
+
+    // Already warmed for this type+window
+    if (this.warmTUIPool.has(poolKey)) {
       return;
     }
 
-    this.log('INFO', `Prewarming ${tuiType} TUI`, { workspace });
+    this.log('INFO', `Prewarming ${tuiType} TUI`, { workspace, windowId });
 
     let id: number;
     const cwd = workspace || this.currentWorkspace || undefined;
 
     switch (tuiType) {
       case 'terminal':
-        id = this.spawn(undefined, [], cwd, 'Terminal (warm)');
+        id = this.spawn(undefined, [], cwd, 'Terminal (warm)', true, undefined, windowId);
         break;
       case 'hester':
         id = this.spawnTUI(
           'hester',
           ['chat', '--daemon-url', 'http://localhost:9000', '--dir', cwd || process.cwd()],
           cwd,
-          'Hester (warm)'
+          'Hester (warm)',
+          undefined,
+          windowId
         );
         break;
       case 'claude':
-        id = this.spawnTUI('claude', [], cwd, 'Claude (warm)', { DEBUG: 'false' });
+        id = this.spawnTUI('claude', [], cwd, 'Claude (warm)', { DEBUG: 'false' }, windowId);
         break;
       default:
         return;
     }
 
-    this.warmTUIPool.set(tuiType, { id, workspace: workspace || null });
+    this.warmTUIPool.set(poolKey, { id, workspace: workspace || null });
 
     // If warm TUI exits, remove from pool
     this.once('exit', (exitId: number) => {
-      const warm = this.warmTUIPool.get(tuiType);
+      const warm = this.warmTUIPool.get(poolKey);
       if (warm && warm.id === exitId) {
         this.log('INFO', `Prewarmed ${tuiType} exited, removing from pool`);
-        this.warmTUIPool.delete(tuiType);
+        this.warmTUIPool.delete(poolKey);
       }
     });
   }
@@ -899,16 +962,18 @@ export class PTYManager extends EventEmitter {
   getOrSpawnTUI(
     tuiType: string,
     spawnFn: () => number,
-    workspace?: string
+    workspace?: string,
+    windowId?: number
   ): number {
-    const warm = this.warmTUIPool.get(tuiType);
+    const poolKey = windowId != null ? `${tuiType}:${windowId}` : tuiType;
+    const warm = this.warmTUIPool.get(poolKey);
 
     if (warm) {
       const workspaceMatches = warm.workspace === (workspace || null);
 
       if (workspaceMatches) {
-        this.log('INFO', `Using prewarmed ${tuiType}`, { id: warm.id });
-        this.warmTUIPool.delete(tuiType);
+        this.log('INFO', `Using prewarmed ${tuiType}`, { id: warm.id, windowId });
+        this.warmTUIPool.delete(poolKey);
 
         // Rename the warm process to remove "(warm)" suffix
         const proc = this.processes.get(warm.id);
@@ -917,14 +982,14 @@ export class PTYManager extends EventEmitter {
         }
 
         // Start warming replacement after short delay
-        setTimeout(() => this.prewarmTUI(tuiType, workspace), 500);
+        setTimeout(() => this.prewarmTUI(tuiType, workspace, windowId), 500);
 
         return warm.id;
       } else {
         // Workspace mismatch - kill warm and spawn fresh
         this.log('INFO', `Prewarmed ${tuiType} workspace mismatch, spawning fresh`);
         this.kill(warm.id);
-        this.warmTUIPool.delete(tuiType);
+        this.warmTUIPool.delete(poolKey);
       }
     }
 
@@ -932,7 +997,7 @@ export class PTYManager extends EventEmitter {
     const id = spawnFn();
 
     // Start warming replacement
-    setTimeout(() => this.prewarmTUI(tuiType, workspace), 500);
+    setTimeout(() => this.prewarmTUI(tuiType, workspace, windowId), 500);
 
     return id;
   }
@@ -941,12 +1006,12 @@ export class PTYManager extends EventEmitter {
    * Prewarm all commonly used TUIs for a workspace.
    * Called on app startup after workspace is determined.
    */
-  prewarmAllTUIs(workspace?: string): void {
-    this.log('INFO', 'Prewarming all TUIs', { workspace });
+  prewarmAllTUIs(workspace?: string, windowId?: number): void {
+    this.log('INFO', 'Prewarming all TUIs', { workspace, windowId });
 
     // Stagger the prewarming to avoid spike
     PTYManager.PREWARMABLE_TUIS.forEach((tuiType, index) => {
-      setTimeout(() => this.prewarmTUI(tuiType, workspace), index * 200);
+      setTimeout(() => this.prewarmTUI(tuiType, workspace, windowId), index * 200);
     });
   }
 
@@ -970,7 +1035,8 @@ export class PTYManager extends EventEmitter {
     args: string[] = [],
     cwd?: string,
     name?: string,
-    envOverrides?: Record<string, string>
+    envOverrides?: Record<string, string>,
+    windowId?: number
   ): number {
     const resolvedCmd = this.resolveTool(command);
 
@@ -989,8 +1055,10 @@ export class PTYManager extends EventEmitter {
     // Spawn through interactive login shell so PATH is set from .bashrc
     // -i = interactive (sources .bashrc), -l = login (sources .bash_profile)
     // -c = run command
-    const shell = this.workspaceConfig?.terminal?.shell || this.shell;
-    return this.spawn(shell, ['-il', '-c', fullCommand], cwd, name || command, false);
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const shell = wsConfig?.terminal?.shell || this.shell;
+    return this.spawn(shell, ['-il', '-c', fullCommand], cwd, name || command, false, undefined, windowId);
   }
 
   /**
@@ -1086,9 +1154,11 @@ export class PTYManager extends EventEmitter {
   /**
    * Get a TUI definition by key, checking config first then falling back to defaults.
    */
-  getTUIDefinition(tuiType: string): TUIDefinition | null {
-    // Check workspace config first
-    const configTui = this.workspaceConfig?.tuis?.[tuiType];
+  getTUIDefinition(tuiType: string, windowId?: number): TUIDefinition | null {
+    // Check window-specific config first
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const configTui = wsConfig?.tuis?.[tuiType];
     if (configTui) {
       return configTui;
     }
@@ -1123,8 +1193,10 @@ export class PTYManager extends EventEmitter {
    * If workspace config has a non-empty `tuis` section, returns only those.
    * Otherwise falls back to all DEFAULT_TUIS.
    */
-  getAvailableTUIsWithMeta(): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
-    const configTuis = this.workspaceConfig?.tuis;
+  getAvailableTUIsWithMeta(windowId?: number): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const configTuis = wsConfig?.tuis;
     const hasConfigTuis = configTuis && Object.keys(configTuis).length > 0;
 
     if (hasConfigTuis) {
@@ -1168,9 +1240,10 @@ export class PTYManager extends EventEmitter {
       connection?: string; // SQL connection name
       context?: string; // k8s context
       namespace?: string; // k8s namespace
-    }
+    },
+    windowId?: number
   ): number {
-    const def = this.getTUIDefinition(tuiType);
+    const def = this.getTUIDefinition(tuiType, windowId);
 
     if (!def) {
       throw new Error(`Unknown TUI type: ${tuiType}`);
@@ -1182,10 +1255,15 @@ export class PTYManager extends EventEmitter {
     // Determine working directory
     let workingDir = cwd;
 
+    // Resolve config for the window
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const wsWorkspace = winConfig?.workspace ?? this.currentWorkspace;
+
     if (def.cwd_from_config) {
       // Resolve cwd from config path (e.g., 'flutter.path')
       const parts = def.cwd_from_config.split('.');
-      let configValue: any = this.workspaceConfig;
+      let configValue: any = wsConfig;
       for (const part of parts) {
         configValue = configValue?.[part];
       }
@@ -1193,12 +1271,12 @@ export class PTYManager extends EventEmitter {
         // Resolve relative to workspace
         workingDir = path.isAbsolute(configValue)
           ? configValue
-          : path.join(this.currentWorkspace || process.cwd(), configValue);
+          : path.join(wsWorkspace || process.cwd(), configValue);
       }
     }
 
     if (!workingDir && def.cwd_aware) {
-      workingDir = this.currentWorkspace || undefined;
+      workingDir = wsWorkspace || undefined;
     }
 
     // Handle path argument based on TUI definition
@@ -1243,7 +1321,7 @@ export class PTYManager extends EventEmitter {
       }
     }
 
-    return this.spawnTUI(def.command, args, workingDir, def.name, def.env);
+    return this.spawnTUI(def.command, args, workingDir, def.name, def.env, windowId);
   }
 
   /**
@@ -1443,6 +1521,75 @@ export class PTYManager extends EventEmitter {
     for (const [id] of this.processes) {
       this.kill(id);
     }
+  }
+
+  /**
+   * Get the window that owns a PTY.
+   */
+  getWindowForPty(ptyId: number): number | null {
+    const proc = this.processes.get(ptyId);
+    return proc?.windowId ?? null;
+  }
+
+  /**
+   * Get count of active terminal PTYs for a specific window.
+   */
+  getActiveCountForWindow(windowId: number): number {
+    let count = 0;
+    for (const [id, proc] of this.processes) {
+      if (proc.windowId !== windowId) continue;
+      if (id === this.daemonPtyId) continue;
+      let isWarm = false;
+      for (const warm of this.warmTUIPool.values()) {
+        if (warm.id === id) { isWarm = true; break; }
+      }
+      if (isWarm) continue;
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * Get names of active terminal PTYs for a specific window.
+   */
+  getActiveNamesForWindow(windowId: number): string[] {
+    const names: string[] = [];
+    for (const [id, proc] of this.processes) {
+      if (proc.windowId !== windowId) continue;
+      if (id === this.daemonPtyId) continue;
+      let isWarm = false;
+      for (const warm of this.warmTUIPool.values()) {
+        if (warm.id === id) { isWarm = true; break; }
+      }
+      if (isWarm) continue;
+      names.push(proc.name.replace(' (warm)', ''));
+    }
+    return names;
+  }
+
+  /**
+   * Kill all PTYs owned by a specific window.
+   * Also cleans up warm pool entries for that window.
+   */
+  killForWindow(windowId: number): void {
+    // Kill active processes
+    for (const [id, proc] of this.processes) {
+      if (proc.windowId === windowId) {
+        proc.pty.kill();
+        this.processes.delete(id);
+      }
+    }
+
+    // Clean up warm pool entries for this window
+    for (const [key, warm] of this.warmTUIPool) {
+      if (key.endsWith(`:${windowId}`)) {
+        this.kill(warm.id);
+        this.warmTUIPool.delete(key);
+      }
+    }
+
+    // Clean up window config
+    this.windowConfigs.delete(windowId);
   }
 
   /**

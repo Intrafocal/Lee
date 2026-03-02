@@ -1035,7 +1035,36 @@ const App: React.FC = () => {
     }
 
     const init = async () => {
-      // Check for stored last workspace
+      // Check URL hash for window init signals from main process
+      // #new → new window, show workspace modal
+      // #workspace=<path> → use this workspace directly
+      // (no hash) → first window, use localStorage lastWorkspace
+      const hash = window.location.hash;
+
+      if (hash === '#new') {
+        // New window without pre-selected workspace — show modal
+        const cwd = await lee.app.getWorkspace();
+        setWorkspace(cwd);
+        setShowWorkspaceModal(true);
+        setWorkspaceInitialized(true);
+        // Clear hash so reload behaves normally
+        window.location.hash = '';
+        return;
+      }
+
+      if (hash.startsWith('#workspace=')) {
+        // New window with pre-selected workspace — use it directly
+        const preselected = decodeURIComponent(hash.replace('#workspace=', ''));
+        setWorkspace(preselected);
+        setWorkspaceInitialized(true);
+        localStorage.setItem('lee:lastWorkspace', preselected);
+        lee.pty.prewarm(preselected);
+        // Clear hash so reload behaves normally
+        window.location.hash = '';
+        return;
+      }
+
+      // Default: first window, check localStorage
       const lastWorkspace = localStorage.getItem('lee:lastWorkspace');
 
       if (lastWorkspace) {
@@ -1616,6 +1645,10 @@ const App: React.FC = () => {
         <WorkspaceModal
           onSelect={handleWorkspaceSelect}
           onSkip={handleWorkspaceSkip}
+          onOpenInNewWindow={(selectedWorkspace) => {
+            setShowWorkspaceModal(false);
+            lee.window.new(selectedWorkspace);
+          }}
         />
       )}
       {showWorkstreamPicker && (
