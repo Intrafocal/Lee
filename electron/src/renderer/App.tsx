@@ -57,9 +57,11 @@ const App: React.FC = () => {
   const [showWorkspaceModal, setShowWorkspaceModal] = useState<boolean>(false);
   const [showCommandPalette, setShowCommandPalette] = useState<boolean>(false);
   const [workspaceInitialized, setWorkspaceInitialized] = useState<boolean>(false);
+  const [sessionRestored, setSessionRestored] = useState(false);
   const nextTabIdRef = useRef(1);
   const tabsRef = useRef<TabData[]>([]);
   const closeTabRef = useRef<((tabId: number) => void) | null>(null);
+  const isSwitchingRef = useRef(false);
 
   // Track editor daemon port from state updates
   const [editorDaemonPort, setEditorDaemonPort] = useState<number | null>(null);
@@ -432,6 +434,59 @@ const App: React.FC = () => {
   useEffect(() => {
     closeTabRef.current = closeTab;
   }, [closeTab]);
+
+  // Close all tabs and kill their PTY processes (used during workspace switch)
+  const closeAllTabs = useCallback(() => {
+    for (const tab of tabsRef.current) {
+      if (tab.ptyId !== null && isElectron) {
+        lee.pty.kill(tab.ptyId);
+      }
+    }
+    ptyEventManager.clearAll();
+    setTabs([]);
+    setActiveTabId(null);
+    setActiveLeftTabId(null);
+    setActiveRightTabId(null);
+    setActiveBottomTabId(null);
+  }, []);
+
+  // Switch to a new workspace: save old session, close tabs, restore new session
+  const switchWorkspace = useCallback((newWorkspace: string) => {
+    if (newWorkspace === workspace) return;
+
+    isSwitchingRef.current = true;
+
+    // Save current tabs to the OLD workspace's session before switching
+    saveSession(tabsRef.current, workspace);
+
+    closeAllTabs();
+
+    // Reset session restore gate so the restore effect re-triggers for the new workspace
+    setSessionRestored(false);
+
+    // Set new workspace
+    setWorkspace(newWorkspace);
+    setWorkspaceInitialized(true);
+
+    // Update localStorage
+    localStorage.setItem('lee:lastWorkspace', newWorkspace);
+
+    // Update recent workspaces list
+    const stored = localStorage.getItem('lee:recentWorkspaces');
+    let workspaces: { path: string; lastOpened: string }[] = stored ? JSON.parse(stored) : [];
+    workspaces = workspaces.filter(w => w.path !== newWorkspace);
+    workspaces.unshift({ path: newWorkspace, lastOpened: new Date().toISOString() });
+    workspaces = workspaces.slice(0, 10);
+    localStorage.setItem('lee:recentWorkspaces', JSON.stringify(workspaces));
+
+    // Prewarm PTYs for the new workspace
+    if (isElectron) {
+      lee.pty.prewarm(newWorkspace);
+    }
+
+    // Clear the switching guard after current React batch completes
+    setTimeout(() => { isSwitchingRef.current = false; }, 0);
+  }, [workspace, saveSession, closeAllTabs]);
 
   // Rename a tab
   const renameTab = useCallback((tabId: number, newLabel: string) => {
@@ -907,32 +962,40 @@ const App: React.FC = () => {
 
   // Handle workspace selection from modal
   const handleWorkspaceSelect = useCallback((selectedWorkspace: string) => {
-    setWorkspace(selectedWorkspace);
     setShowWorkspaceModal(false);
-    setWorkspaceInitialized(true);
 
-    // Save as last workspace
-    localStorage.setItem('lee:lastWorkspace', selectedWorkspace);
-
-    // Trigger prewarm with the new workspace
-    if (isElectron) {
-      lee.pty.prewarm(selectedWorkspace);
+    if (workspace && workspaceInitialized) {
+      // Already have a workspace — do a full switch (close old tabs, restore new session)
+      switchWorkspace(selectedWorkspace);
+    } else {
+      // First-time init — no tabs to clean up
+      setWorkspace(selectedWorkspace);
+      setWorkspaceInitialized(true);
+      localStorage.setItem('lee:lastWorkspace', selectedWorkspace);
+      if (isElectron) {
+        lee.pty.prewarm(selectedWorkspace);
+      }
     }
-  }, []);
+  }, [workspace, workspaceInitialized, switchWorkspace]);
 
   const handleWorkspaceSkip = useCallback(async () => {
-    // Use current directory as workspace
+    setShowWorkspaceModal(false);
+
     if (isElectron) {
       const cwd = await lee.app.getWorkspace();
-      setWorkspace(cwd);
-      localStorage.setItem('lee:lastWorkspace', cwd);
 
-      // Trigger prewarm with cwd
-      lee.pty.prewarm(cwd);
+      if (workspace && workspaceInitialized) {
+        switchWorkspace(cwd);
+      } else {
+        setWorkspace(cwd);
+        setWorkspaceInitialized(true);
+        localStorage.setItem('lee:lastWorkspace', cwd);
+        lee.pty.prewarm(cwd);
+      }
+    } else {
+      setWorkspaceInitialized(true);
     }
-    setShowWorkspaceModal(false);
-    setWorkspaceInitialized(true);
-  }, []);
+  }, [workspace, workspaceInitialized, switchWorkspace]);
 
   // Handle workstream selection from picker modal
   const handleWorkstreamSelect = useCallback((wsId: string, wsTitle: string) => {
@@ -1104,7 +1167,6 @@ const App: React.FC = () => {
   }, [checkDaemonHealth]);
 
   // Restore session when workspace is set
-  const [sessionRestored, setSessionRestored] = useState(false);
   useEffect(() => {
     if (!workspace || !workspaceInitialized || sessionRestored || !isElectron) return;
 
@@ -1130,6 +1192,8 @@ const App: React.FC = () => {
   // Save session when tabs change (debounced via useEffect)
   useEffect(() => {
     if (!workspace || !sessionRestored || tabs.length === 0) return;
+    // Don't save during a workspace switch — old tabs haven't been fully cleared yet
+    if (isSwitchingRef.current) return;
     saveSession(tabs, workspace);
   }, [tabs, workspace, sessionRestored, saveSession]);
 
@@ -1198,7 +1262,7 @@ const App: React.FC = () => {
     // File > Open Folder
     lee.file.onFolderOpen((folderPath: string) => {
       console.log('Folder open requested:', folderPath);
-      setWorkspace(folderPath);
+      switchWorkspace(folderPath);
     });
 
     // File > Save - saves current active file tab
@@ -1215,7 +1279,7 @@ const App: React.FC = () => {
     return () => {
       lee.file.removeAllListeners();
     };
-  }, [handleNewFile, handleFileOpen, handleFileSave]);
+  }, [handleNewFile, handleFileOpen, handleFileSave, switchWorkspace]);
 
   // Handle system commands from API server (via IPC from main process)
   useEffect(() => {

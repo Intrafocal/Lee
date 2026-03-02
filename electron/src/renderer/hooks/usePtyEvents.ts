@@ -132,6 +132,18 @@ class PtyEventManager {
   hasHandlers(ptyId: number): boolean {
     return this.dataHandlers.has(ptyId);
   }
+
+  /**
+   * Clear all handlers and buffers. Used during workspace transitions
+   * to reset state before restoring a new session.
+   */
+  clearAll(): void {
+    this.dataHandlers.clear();
+    this.exitHandlers.clear();
+    this.expectedPtyIds.clear();
+    this.dataBuffer.clear();
+    this.exitBuffer.clear();
+  }
 }
 
 // Singleton instance - initializes on module load
