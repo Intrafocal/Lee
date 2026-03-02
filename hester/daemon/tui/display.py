@@ -75,7 +75,7 @@ class HesterChatTUI:
         header = Text()
         header.append("Hester ", style="bold green")
         header.append("— ", style="dim")
-        header.append("Elite Operator Daemon\n", style="dim italic")
+        header.append("AI Sidekick and Daemon\n", style="dim italic")
         header.append(f"📁 {self.working_directory}", style="dim")
 
         return Panel(
