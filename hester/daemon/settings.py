@@ -14,7 +14,7 @@ class HesterDaemonSettings(BaseSettings):
 
     # Service configuration
     port: int = Field(default=9000, description="Port to listen on")
-    host: str = Field(default="127.0.0.1", description="Host to bind to")
+    host: str = Field(default="0.0.0.0", description="Host to bind to")
 
     # Redis configuration
     redis_url: str = Field(
