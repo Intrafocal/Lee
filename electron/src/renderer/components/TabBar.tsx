@@ -33,27 +33,23 @@ export interface NewTabOption {
   defaultDock?: DockPosition;
 }
 
-export const NEW_TAB_OPTIONS: NewTabOption[] = [
-  { type: 'files', label: 'Files', icon: '📂', shortcut: '⇧⌘E' },  // No default dock - starts in center
+/** Core tabs — always shown, fundamental IDE features */
+export const CORE_TAB_OPTIONS: NewTabOption[] = [
+  { type: 'files', label: 'Files', icon: '📂', shortcut: '⇧⌘E' },
   { type: 'terminal', label: 'Terminal', icon: '💻', shortcut: '⇧⌘T' },
   { type: 'browser', label: 'Browser', icon: '🌐', shortcut: '⇧⌘B' },
-  { type: 'hester', label: 'Hester', icon: '🐇', shortcut: '⇧⌘H' },
-  { type: 'claude', label: 'Claude', icon: '🤖', shortcut: '⇧⌘C' },
-  { type: 'git', label: 'Git (lazygit)', icon: '🌿', shortcut: '⇧⌘G' },
-  { type: 'docker', label: 'Docker (lazydocker)', icon: '🐳', shortcut: '⇧⌘D' },
-  { type: 'flutter', label: 'Flutter (flx)', icon: '📱', shortcut: '⇧⌘F' },
-  { type: 'k8s', label: 'Kubernetes (k9s)', icon: '☸️', shortcut: '⇧⌘K' },
-  { type: 'sql', label: 'SQL (pgcli)', icon: '🗄️', shortcut: '⇧⌘P' },
-  { type: 'devops', label: 'DevOps', icon: '🚀', shortcut: '⇧⌘O' },
-  { type: 'system', label: 'System Monitor (btop)', icon: '📊', shortcut: '⇧⌘M' },
+];
+
+/** Feature tabs — React components, always shown */
+export const FEATURE_TAB_OPTIONS: NewTabOption[] = [
   { type: 'library', label: 'Library', icon: '📚', shortcut: '⇧⌘L' },
-  { type: 'hester-qa', label: 'Hester QA', icon: '🧪', shortcut: '⇧⌘Q' },
   { type: 'workstream', label: 'Workstream', icon: '📋', shortcut: '⇧⌘W' },
 ];
 
 interface TabBarProps {
   tabs: Tab[];
   activeTabId: number | null;
+  tuiOptions?: NewTabOption[];
   onSelectTab: (id: number) => void;
   onCloseTab: (id: number) => void;
   onNewTab: (type: Tab['type'], dockPosition?: DockPosition) => void;
@@ -61,6 +57,7 @@ interface TabBarProps {
   onRenameTab?: (id: number, newLabel: string) => void;
   onToggleWatch?: (id: number) => void; // Toggle watch state for idle detection
   onRefocus?: () => void; // Called when clicking empty area to refocus terminal
+  onConfigureTUIs?: () => void; // Open TUI config editor
 }
 
 export const TAB_ICONS: Record<Tab['type'], string> = {
@@ -155,6 +152,7 @@ function getTabDisplayIcon(tab: Tab): string {
 export const TabBar: React.FC<TabBarProps> = ({
   tabs,
   activeTabId,
+  tuiOptions,
   onSelectTab,
   onCloseTab,
   onNewTab,
@@ -162,6 +160,7 @@ export const TabBar: React.FC<TabBarProps> = ({
   onRenameTab,
   onToggleWatch,
   onRefocus,
+  onConfigureTUIs,
 }) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -341,7 +340,7 @@ export const TabBar: React.FC<TabBarProps> = ({
         </button>
         {showDropdown && (
           <div className="new-tab-dropdown">
-            {NEW_TAB_OPTIONS.map((option) => (
+            {CORE_TAB_OPTIONS.map((option) => (
               <button
                 key={option.type}
                 className="dropdown-item"
@@ -354,6 +353,53 @@ export const TabBar: React.FC<TabBarProps> = ({
                 )}
               </button>
             ))}
+            {tuiOptions && tuiOptions.length > 0 && (
+              <>
+                <div className="dropdown-divider" />
+                {tuiOptions.map((option) => (
+                  <button
+                    key={option.type + '-' + option.label}
+                    className="dropdown-item"
+                    onClick={() => handleNewTab(option)}
+                  >
+                    <span className="dropdown-icon">{option.icon}</span>
+                    <span className="dropdown-label">{option.label}</span>
+                    {option.shortcut && (
+                      <span className="dropdown-shortcut">{option.shortcut}</span>
+                    )}
+                  </button>
+                ))}
+              </>
+            )}
+            <div className="dropdown-divider" />
+            {FEATURE_TAB_OPTIONS.map((option) => (
+              <button
+                key={option.type}
+                className="dropdown-item"
+                onClick={() => handleNewTab(option)}
+              >
+                <span className="dropdown-icon">{option.icon}</span>
+                <span className="dropdown-label">{option.label}</span>
+                {option.shortcut && (
+                  <span className="dropdown-shortcut">{option.shortcut}</span>
+                )}
+              </button>
+            ))}
+            {onConfigureTUIs && (
+              <>
+                <div className="dropdown-divider" />
+                <button
+                  className="dropdown-item dropdown-configure"
+                  onClick={() => {
+                    onConfigureTUIs();
+                    setShowDropdown(false);
+                  }}
+                >
+                  <span className="dropdown-icon">⚙️</span>
+                  <span className="dropdown-label">Configure TUIs...</span>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

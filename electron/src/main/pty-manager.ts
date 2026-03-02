@@ -56,6 +56,12 @@ interface WorkspaceConfig {
   terminal?: { shell?: string; scrollback?: number; font_size?: number; copy_on_select?: boolean };
   tuis?: Record<string, TUIDefinition>;
   keybindings?: Record<string, string>;
+  hester?: {
+    google_api_key?: string;
+    model?: string;
+    thinking_depth?: boolean;
+    ollama_url?: string;
+  };
 }
 
 /** Load and parse lee.config.json */
@@ -549,7 +555,8 @@ export class PTYManager extends EventEmitter {
     args: string[] = [],
     cwd?: string,
     name?: string,
-    loginShell: boolean = true
+    loginShell: boolean = true,
+    extraEnv?: Record<string, string>
   ): number {
     const id = this.nextId++;
 
@@ -579,6 +586,11 @@ export class PTYManager extends EventEmitter {
 
     // Get environment with sourced files
     const env = this.getEnvironment(cwd);
+
+    // Merge extra environment variables (e.g., daemon-specific config)
+    if (extraEnv) {
+      Object.assign(env, extraEnv);
+    }
 
     const ptyProcess = pty.spawn(cmd, finalArgs, {
       name: 'xterm-256color',
@@ -644,6 +656,29 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
+   * Build extra environment variables for the Hester daemon from workspace config.
+   */
+  private getDaemonEnvironment(): Record<string, string> {
+    const env: Record<string, string> = {};
+    const hesterConfig = this.workspaceConfig?.hester;
+    if (!hesterConfig) return env;
+
+    if (hesterConfig.google_api_key) {
+      env.GOOGLE_API_KEY = hesterConfig.google_api_key;
+    }
+    if (hesterConfig.model) {
+      env.HESTER_GEMINI_MODEL = hesterConfig.model;
+    }
+    if (hesterConfig.thinking_depth !== undefined) {
+      env.HESTER_THINKING_DEPTH_ENABLED = hesterConfig.thinking_depth ? 'true' : 'false';
+    }
+    if (hesterConfig.ollama_url) {
+      env.HESTER_OLLAMA_URL = hesterConfig.ollama_url;
+    }
+    return env;
+  }
+
+  /**
    * Start the Hester daemon in background (hidden PTY, not attached to any tab).
    * The daemon provides AI assistance via the command palette.
    * Checks if port 9000 is available first - if already in use, assumes daemon is running.
@@ -678,11 +713,14 @@ export class PTYManager extends EventEmitter {
 
     // Use hester daemon start command - pass workspace for env sourcing
     const hesterPath = this.resolveTool('hester');
+    const daemonEnv = this.getDaemonEnvironment();
     const id = this.spawn(
       hesterPath,
       ['daemon', 'start', '--port', '9000', '--host', '0.0.0.0'],
       this.currentWorkspace || undefined,
-      'Hester Daemon'
+      'Hester Daemon',
+      true,
+      daemonEnv
     );
 
     this.daemonPtyId = id;
@@ -962,23 +1000,31 @@ export class PTYManager extends EventEmitter {
   private static readonly DEFAULT_TUIS: Record<string, TUIDefinition> = {
     git: {
       command: 'lazygit',
-      name: 'Git',
+      name: 'Git (lazygit)',
+      icon: '🌿',
+      shortcut: '⇧⌘G',
       cwd_aware: true,
       path_arg: '-p',  // lazygit uses -p/--path
     },
     docker: {
       command: 'lazydocker',
-      name: 'Docker',
+      name: 'Docker (lazydocker)',
+      icon: '🐳',
+      shortcut: '⇧⌘D',
       path_arg: 'cwd',  // lazydocker uses working directory
     },
     k8s: {
       command: 'k9s',
-      name: 'K8s',
+      name: 'Kubernetes (k9s)',
+      icon: '☸️',
+      shortcut: '⇧⌘K',
       path_arg: 'cwd',  // k9s uses working directory
     },
     flutter: {
       command: 'flx',
-      name: 'Flutter',
+      name: 'Flutter (flx)',
+      icon: '📱',
+      shortcut: '⇧⌘F',
       cwd_from_config: 'flutter.path',
       cwd_aware: true,
       path_arg: 'cwd',
@@ -986,6 +1032,8 @@ export class PTYManager extends EventEmitter {
     claude: {
       command: 'claude',
       name: 'Claude',
+      icon: '🤖',
+      shortcut: '⇧⌘C',
       env: { DEBUG: 'false' },
       cwd_aware: true,
       prewarm: true,
@@ -994,6 +1042,8 @@ export class PTYManager extends EventEmitter {
     hester: {
       command: 'hester',
       name: 'Hester',
+      icon: '🐇',
+      shortcut: '⇧⌘H',
       args: ['chat', '--daemon-url', 'http://localhost:9000'],
       cwd_aware: true,
       prewarm: true,
@@ -1002,6 +1052,8 @@ export class PTYManager extends EventEmitter {
     devops: {
       command: 'hester',
       name: 'DevOps',
+      icon: '🚀',
+      shortcut: '⇧⌘O',
       args: ['devops', 'tui'],
       cwd_aware: true,
       path_arg: '--dir',
@@ -1009,16 +1061,26 @@ export class PTYManager extends EventEmitter {
     'hester-qa': {
       command: 'hester',
       name: 'Hester QA',
+      icon: '🧪',
+      shortcut: '⇧⌘Q',
       args: ['qa', 'scene', 'welcome', '--tui'],
       cwd_aware: true,
       path_arg: '--dir',
     },
     system: {
       command: 'btop',
-      name: 'System Monitor',
+      name: 'System Monitor (btop)',
+      icon: '📊',
+      shortcut: '⇧⌘M',
       path_arg: 'cwd',
     },
-    // SQL TUIs are defined in config with connection details - no default here
+    sql: {
+      command: 'pgcli',
+      name: 'SQL (pgcli)',
+      icon: '🗄️',
+      shortcut: '⇧⌘P',
+      path_arg: 'cwd',
+    },
   };
 
   /**
@@ -1054,6 +1116,38 @@ export class PTYManager extends EventEmitter {
     }
 
     return Array.from(types);
+  }
+
+  /**
+   * Get available TUIs with full metadata for dropdown rendering.
+   * If workspace config has a non-empty `tuis` section, returns only those.
+   * Otherwise falls back to all DEFAULT_TUIS.
+   */
+  getAvailableTUIsWithMeta(): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
+    const configTuis = this.workspaceConfig?.tuis;
+    const hasConfigTuis = configTuis && Object.keys(configTuis).length > 0;
+
+    if (hasConfigTuis) {
+      // Config-driven: only show what's configured
+      return Object.entries(configTuis!).map(([key, def]) => {
+        // Merge with defaults for icon/shortcut fallback
+        const defaultDef = PTYManager.DEFAULT_TUIS[key];
+        return {
+          key,
+          name: def.name || defaultDef?.name || key,
+          icon: def.icon || defaultDef?.icon || '🔧',
+          shortcut: def.shortcut || defaultDef?.shortcut,
+        };
+      });
+    }
+
+    // Fallback: show all defaults
+    return Object.entries(PTYManager.DEFAULT_TUIS).map(([key, def]) => ({
+      key,
+      name: def.name || key,
+      icon: def.icon || '🔧',
+      shortcut: def.shortcut,
+    }));
   }
 
   /**

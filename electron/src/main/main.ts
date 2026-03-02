@@ -397,6 +397,10 @@ function setupIPC(): void {
     return ptyManager.spawnConfiguredTUI(tuiType, cwd, options);
   });
 
+  ipcMain.handle('pty:getAvailableTUIs', () => {
+    return ptyManager.getAvailableTUIsWithMeta();
+  });
+
   ipcMain.handle('pty:write', (_event, id: number, data: string) => {
     ptyManager.write(id, data);
   });

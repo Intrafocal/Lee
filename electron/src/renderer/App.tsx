@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { TabBar, Tab, DockPosition, getFileTabIcon } from './components/TabBar';
+import { TabBar, Tab, DockPosition, NewTabOption, getFileTabIcon } from './components/TabBar';
 import { TerminalPane } from './components/TerminalPane';
 import { TitleBar } from './components/TitleBar';
 import { WorkspaceModal } from './components/WorkspaceModal';
@@ -83,6 +83,10 @@ const App: React.FC = () => {
 
   // Config editor modal
   const [showConfigEditor, setShowConfigEditor] = useState<boolean>(false);
+  const [configEditorInitialSection, setConfigEditorInitialSection] = useState<'tuis' | 'keybindings' | 'terminal' | 'hester' | 'raw' | undefined>(undefined);
+
+  // TUI options for the new-tab dropdown (fetched from main process)
+  const [tuiOptions, setTuiOptions] = useState<NewTabOption[]>([]);
 
   // Workstream picker modal
   const [showWorkstreamPicker, setShowWorkstreamPicker] = useState<boolean>(false);
@@ -1107,6 +1111,28 @@ const App: React.FC = () => {
     loadWorkspaceConfig();
   }, [loadWorkspaceConfig]);
 
+  // Fetch available TUI options from main process (after config loads)
+  const fetchTuiOptions = useCallback(async () => {
+    if (!isElectron) return;
+    try {
+      const tuis = await lee.pty.getAvailableTUIs();
+      const options: NewTabOption[] = tuis.map((tui: { key: string; name: string; icon: string; shortcut?: string }) => ({
+        type: tui.key as Tab['type'],
+        label: tui.name,
+        icon: tui.icon,
+        shortcut: tui.shortcut,
+      }));
+      setTuiOptions(options);
+    } catch (error) {
+      console.error('Failed to fetch TUI options:', error);
+    }
+  }, []);
+
+  // Refetch TUI options whenever config changes
+  useEffect(() => {
+    fetchTuiOptions();
+  }, [config, fetchTuiOptions]);
+
   // Handle config save from editor
   const handleConfigSave = useCallback((newConfig: any) => {
     setConfig(newConfig);
@@ -1600,11 +1626,15 @@ const App: React.FC = () => {
       )}
       <ConfigEditorModal
         isOpen={showConfigEditor}
-        onClose={() => setShowConfigEditor(false)}
+        onClose={() => {
+          setShowConfigEditor(false);
+          setConfigEditorInitialSection(undefined);
+        }}
         onSave={handleConfigSave}
         onReload={handleConfigReload}
         config={config}
         workspace={workspace}
+        initialSection={configEditorInitialSection}
       />
       <CommandPalette
         isOpen={showCommandPalette}
@@ -1630,6 +1660,7 @@ const App: React.FC = () => {
       <TabBar
         tabs={centerTabs}
         activeTabId={activeTabId}
+        tuiOptions={tuiOptions}
         onSelectTab={(tabId) => {
           setActiveTabId(tabId);
           setFocusedPanel('center');
@@ -1640,6 +1671,10 @@ const App: React.FC = () => {
         onRenameTab={renameTab}
         onToggleWatch={toggleWatch}
         onRefocus={() => focusManager.refocus()}
+        onConfigureTUIs={() => {
+          setConfigEditorInitialSection('tuis');
+          setShowConfigEditor(true);
+        }}
       />
       <div className="main-content">
         <PanelLayout

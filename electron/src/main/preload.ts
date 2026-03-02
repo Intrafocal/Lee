@@ -44,6 +44,7 @@ export interface LeeAPI {
   pty: {
     spawn: (command?: string, args?: string[], cwd?: string, name?: string) => Promise<number>;
     spawnTUI: (tuiType: string, cwd?: string, options?: any) => Promise<number>;
+    getAvailableTUIs: () => Promise<Array<{ key: string; name: string; icon: string; shortcut?: string }>>;
     prewarm: (workspace: string) => Promise<void>;
     write: (id: number, data: string) => Promise<void>;
     resize: (id: number, cols: number, rows: number) => Promise<void>;
@@ -192,6 +193,9 @@ contextBridge.exposeInMainWorld('lee', {
 
     spawnTUI: (tuiType: string, cwd?: string, options?: any) =>
       ipcRenderer.invoke('pty:spawn-tui', tuiType, cwd, options),
+
+    getAvailableTUIs: () =>
+      ipcRenderer.invoke('pty:getAvailableTUIs'),
 
     prewarm: (workspace: string) =>
       ipcRenderer.invoke('pty:prewarm', workspace),

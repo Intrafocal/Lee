@@ -38,9 +38,10 @@ interface ConfigEditorModalProps {
   onReload: () => void;
   config: any;
   workspace: string;
+  initialSection?: TabSection;
 }
 
-type TabSection = 'tuis' | 'keybindings' | 'terminal' | 'raw';
+type TabSection = 'tuis' | 'keybindings' | 'terminal' | 'hester' | 'raw';
 
 export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
   isOpen,
@@ -49,8 +50,9 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
   onReload,
   config,
   workspace,
+  initialSection,
 }) => {
-  const [activeSection, setActiveSection] = useState<TabSection>('tuis');
+  const [activeSection, setActiveSection] = useState<TabSection>(initialSection || 'tuis');
   const [editedConfig, setEditedConfig] = useState<any>(null);
   const [selectedTui, setSelectedTui] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
@@ -60,17 +62,25 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
 
   // Initialize edited config when modal opens
   useEffect(() => {
-    if (isOpen && config) {
-      setEditedConfig(JSON.parse(JSON.stringify(config)));
+    if (isOpen) {
+      const defaultConfig = { tuis: {}, keybindings: {}, terminal: {}, hester: {} };
+      const initial = config ? JSON.parse(JSON.stringify(config)) : defaultConfig;
+      // Ensure all sections exist even if config is partial
+      if (!initial.tuis) initial.tuis = {};
+      if (!initial.keybindings) initial.keybindings = {};
+      if (!initial.terminal) initial.terminal = {};
+      if (!initial.hester) initial.hester = {};
+      setEditedConfig(initial);
       setHasChanges(false);
       setError(null);
+      setActiveSection(initialSection || 'tuis');
       // Select first TUI if available
-      const tuiKeys = Object.keys(config.tuis || {});
+      const tuiKeys = Object.keys(initial.tuis || {});
       if (tuiKeys.length > 0) {
         setSelectedTui(tuiKeys[0]);
       }
     }
-  }, [isOpen, config]);
+  }, [isOpen, config, initialSection]);
 
   // Load raw YAML when switching to raw tab
   useEffect(() => {
@@ -127,6 +137,16 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
       const updated = { ...prev };
       if (!updated.terminal) updated.terminal = {};
       updated.terminal[field] = value;
+      return updated;
+    });
+    setHasChanges(true);
+  }, []);
+
+  const handleHesterChange = useCallback((field: string, value: any) => {
+    setEditedConfig((prev: any) => {
+      const updated = { ...prev };
+      if (!updated.hester) updated.hester = {};
+      updated.hester[field] = value;
       return updated;
     });
     setHasChanges(true);
@@ -254,6 +274,12 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
             onClick={() => setActiveSection('terminal')}
           >
             Terminal
+          </button>
+          <button
+            className={`config-tab ${activeSection === 'hester' ? 'active' : ''}`}
+            onClick={() => setActiveSection('hester')}
+          >
+            Hester
           </button>
           <button
             className={`config-tab ${activeSection === 'raw' ? 'active' : ''}`}
@@ -516,6 +542,59 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
                 />
                 <span>Copy on select</span>
               </label>
+            </div>
+          )}
+
+          {/* Hester Section */}
+          {activeSection === 'hester' && (
+            <div className="config-hester-section">
+              <div className="config-form-group">
+                <label>Google API Key</label>
+                <div className="config-secret-input">
+                  <input
+                    type="password"
+                    value={editedConfig?.hester?.google_api_key || ''}
+                    onChange={(e) => handleHesterChange('google_api_key', e.target.value)}
+                    className="config-input"
+                    placeholder="Enter your Google API key"
+                  />
+                </div>
+                <span className="config-input-hint">Required for Gemini models. Stored in .lee/config.yaml</span>
+              </div>
+
+              <div className="config-form-row">
+                <div className="config-form-group">
+                  <label>Model</label>
+                  <input
+                    type="text"
+                    value={editedConfig?.hester?.model || ''}
+                    onChange={(e) => handleHesterChange('model', e.target.value)}
+                    className="config-input"
+                    placeholder="gemini-2.5-flash"
+                  />
+                </div>
+                <div className="config-form-group">
+                  <label>Ollama URL</label>
+                  <input
+                    type="text"
+                    value={editedConfig?.hester?.ollama_url || ''}
+                    onChange={(e) => handleHesterChange('ollama_url', e.target.value)}
+                    className="config-input"
+                    placeholder="http://localhost:11434"
+                  />
+                </div>
+              </div>
+
+              <div className="config-form-checkboxes">
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={editedConfig?.hester?.thinking_depth || false}
+                    onChange={(e) => handleHesterChange('thinking_depth', e.target.checked)}
+                  />
+                  <span>Enable thinking depth</span>
+                </label>
+              </div>
             </div>
           )}
 

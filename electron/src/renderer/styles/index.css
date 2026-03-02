@@ -296,6 +296,20 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+.dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+.dropdown-configure {
+  color: var(--text-muted);
+}
+
+.dropdown-configure:hover {
+  color: var(--text-primary);
+}
+
 /* Ensure Panel children fill properly */
 [data-panel] {
   display: flex;
@@ -2403,6 +2417,24 @@ body {
   flex-direction: column;
   gap: 16px;
   max-width: 400px;
+}
+
+/* Hester Section */
+.config-hester-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 500px;
+}
+
+.config-secret-input {
+  position: relative;
+}
+
+.config-secret-input input {
+  width: 100%;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  letter-spacing: 1px;
 }
 
 /* Raw YAML Section */
