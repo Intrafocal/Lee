@@ -929,8 +929,9 @@ function setupIPC(): void {
   // ============================================
 
   // Register a browser tab with its webContents ID
-  ipcMain.handle('browser:register', (_event, tabId: number, webContentsId: number) => {
-    return browserManager.registerBrowser(tabId, webContentsId);
+  ipcMain.handle('browser:register', (event, tabId: number, webContentsId: number) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    return browserManager.registerBrowser(tabId, webContentsId, bw?.id);
   });
 
   // Unregister a browser tab

@@ -300,14 +300,21 @@ export class APIServer {
               return;
             }
 
+            // Resolve the window that owns this browser tab
+            const getOwnerWindow = () => {
+              const windowId = this.browserManager!.getWindowForTab(tabId);
+              return (windowId != null ? windowRegistry.get(windowId) : null)
+                || windowRegistry.getFocused() || windowRegistry.getAny();
+            };
+
             // Track client
             if (!this.browserCastClients.has(tabId)) {
               this.browserCastClients.set(tabId, new Set());
             }
             this.browserCastClients.get(tabId)!.add(ws);
 
-            // Notify renderer that this tab is being cast
-            const castWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+            // Notify renderer that this tab is being cast (send to owning window)
+            const castWinState = getOwnerWindow();
             if (castWinState) {
               castWinState.browserWindow.webContents.send('cast:active', { tabId });
             }
@@ -383,7 +390,7 @@ export class APIServer {
                     });
 
                     // Resize the webview container in the renderer to match
-                    const resizeWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+                    const resizeWinState = getOwnerWindow();
                     if (resizeWinState) {
                       resizeWinState.browserWindow.webContents.send('browser:cast-resize', tabId, logicalViewportWidth, logicalViewportHeight);
                     }
@@ -444,7 +451,7 @@ export class APIServer {
                   }
 
                   case 'navigate': {
-                    const navWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+                    const navWinState = getOwnerWindow();
                     if (navWinState && parsed.url) {
                       navWinState.browserWindow.webContents.send('browser:navigate', tabId, parsed.url);
                     }
@@ -467,7 +474,7 @@ export class APIServer {
               }
 
               // Restore the webview container size in the renderer
-              const restoreWinState = windowRegistry.getFocused() || windowRegistry.getAny();
+              const restoreWinState = getOwnerWindow();
               if (restoreWinState) {
                 restoreWinState.browserWindow.webContents.send('browser:cast-restore', tabId);
               }
@@ -488,7 +495,7 @@ export class APIServer {
                 if (clients.size === 0) {
                   this.browserCastClients.delete(tabId);
                   // No more cast clients — notify renderer
-                  const cleanupCastWin = windowRegistry.getFocused() || windowRegistry.getAny();
+                  const cleanupCastWin = getOwnerWindow();
                   if (cleanupCastWin) {
                     cleanupCastWin.browserWindow.webContents.send('cast:inactive', { tabId });
                   }
@@ -677,6 +684,24 @@ export class APIServer {
     });
 
     // ============================================
+    // Window Discovery (for Aeronaut multi-window)
+    // ============================================
+
+    // List all open windows with their workspaces
+    this.app.get('/windows', (_req: Request, res: Response) => {
+      const windows: Array<{ id: number; workspace: string | null; focused: boolean }> = [];
+      const focused = windowRegistry.getFocused();
+      for (const [id, ws] of windowRegistry.getAll()) {
+        windows.push({
+          id,
+          workspace: ws.workspace,
+          focused: focused?.browserWindow.id === id,
+        });
+      }
+      res.json({ success: true, data: windows });
+    });
+
+    // ============================================
     // Process Management (utility endpoints)
     // ============================================
 
@@ -686,6 +711,7 @@ export class APIServer {
         id: p.id,
         name: p.name,
         state: p.state,
+        windowId: p.windowId,
       }));
 
       res.json({

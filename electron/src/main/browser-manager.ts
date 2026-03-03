@@ -54,6 +54,7 @@ export interface CDPResult {
 export class BrowserManager extends EventEmitter {
   private browsers: Map<number, BrowserState> = new Map(); // webContentsId -> state
   private tabToBrowser: Map<number, number> = new Map(); // tabId -> webContentsId
+  private tabToWindow: Map<number, number> = new Map(); // tabId -> windowId
   private approvedDomains: Set<string> = new Set();
   private pendingNavigations: Map<string, NavigationRequest> = new Map();
   private getWindow: () => BrowserWindow | null;
@@ -74,7 +75,7 @@ export class BrowserManager extends EventEmitter {
    * Register a browser tab with its webContentsId.
    * Called from renderer when a browser tab is created.
    */
-  registerBrowser(tabId: number, webContentsId: number): BrowserState {
+  registerBrowser(tabId: number, webContentsId: number, windowId?: number): BrowserState {
     const state: BrowserState = {
       webContentsId,
       tabId,
@@ -88,8 +89,11 @@ export class BrowserManager extends EventEmitter {
 
     this.browsers.set(webContentsId, state);
     this.tabToBrowser.set(tabId, webContentsId);
+    if (windowId != null) {
+      this.tabToWindow.set(tabId, windowId);
+    }
 
-    console.log(`[BrowserManager] Registered browser tab ${tabId} with webContents ${webContentsId}`);
+    console.log(`[BrowserManager] Registered browser tab ${tabId} with webContents ${webContentsId}${windowId != null ? ` in window ${windowId}` : ''}`);
     return state;
   }
 
@@ -107,6 +111,7 @@ export class BrowserManager extends EventEmitter {
 
       this.browsers.delete(webContentsId);
       this.tabToBrowser.delete(tabId);
+      this.tabToWindow.delete(tabId);
       console.log(`[BrowserManager] Unregistered browser tab ${tabId}`);
     }
   }
@@ -138,6 +143,13 @@ export class BrowserManager extends EventEmitter {
    */
   getAll(): BrowserState[] {
     return Array.from(this.browsers.values());
+  }
+
+  /**
+   * Get the window ID that owns a browser tab.
+   */
+  getWindowForTab(tabId: number): number | undefined {
+    return this.tabToWindow.get(tabId);
   }
 
   /**
