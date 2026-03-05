@@ -280,11 +280,11 @@ export class PTYManager extends EventEmitter {
     // App-managed venv path
     this.hesterVenvPath = path.join(app.getPath('home'), '.lee', 'venv');
 
-    // Quick check if venv already exists and has hester
+    // Note: don't set hesterVenvReady here — ensureHesterVenv() handles
+    // validation including source change detection for auto-upgrades.
     const hesterBin = path.join(this.hesterVenvPath, 'bin', 'hester');
     if (fs.existsSync(hesterBin)) {
-      this.hesterVenvReady = true;
-      console.log('Hester venv already exists at:', this.hesterVenvPath);
+      console.log('Hester venv found at:', this.hesterVenvPath, '(will validate on first use)');
     }
   }
 
