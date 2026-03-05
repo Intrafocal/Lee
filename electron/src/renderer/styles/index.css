@@ -707,6 +707,12 @@ body {
   gap: 4px;
 }
 
+.workspace-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
 .workspace-item {
   display: flex;
   align-items: center;
@@ -718,7 +724,30 @@ body {
   cursor: pointer;
   transition: all 0.15s;
   text-align: left;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-new-window-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 16px;
+  transition: all 0.15s;
+}
+
+.workspace-new-window-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 
 .workspace-item:hover {
