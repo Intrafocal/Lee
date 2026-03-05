@@ -1552,7 +1552,7 @@ const App: React.FC = () => {
     map[getKeybinding('k8s', 'meta+shift+k')] = () => createTab('k8s');
     map[getKeybinding('sql', 'meta+shift+p')] = () => createTab('sql');
     map[getKeybinding('hester_qa', 'meta+shift+q')] = () => createTab('hester-qa');
-    map[getKeybinding('library', 'meta+shift+l')] = () => getOrCreateTab('library');
+    map[getKeybinding('library', 'meta+shift+y')] = () => getOrCreateTab('library');
     map[getKeybinding('devops', 'meta+shift+o')] = () => getOrCreateTab('devops');
     map[getKeybinding('system', 'meta+shift+m')] = () => getOrCreateTab('system');
     map[getKeybinding('workstream', 'meta+shift+w')] = () => setShowWorkstreamPicker(true);
@@ -1894,7 +1894,7 @@ const App: React.FC = () => {
                   <div className="shortcut-chip" onClick={() => getOrCreateTab('library')}>
                     <span className="shortcut-icon">📚</span>
                     <span className="shortcut-name">Library</span>
-                    <kbd>{getDisplayKeybinding('library', 'meta+shift+l')}</kbd>
+                    <kbd>{getDisplayKeybinding('library', 'meta+shift+y')}</kbd>
                   </div>
                   {/* Dynamic TUI items from config */}
                   {Object.entries(config?.tuis || {}).map(([key, tui]: [string, any]) => {

@@ -718,6 +718,12 @@ export class PTYManager extends EventEmitter {
    */
   private getDaemonEnvironment(): Record<string, string> {
     const env: Record<string, string> = {};
+
+    // Pass resources path so Hester can find bundled binaries (redis-server, etc.)
+    if (app.isPackaged) {
+      env.HESTER_RESOURCES_PATH = process.resourcesPath;
+    }
+
     const hesterConfig = this.workspaceConfig?.hester;
     if (!hesterConfig) return env;
 
@@ -1190,36 +1196,29 @@ export class PTYManager extends EventEmitter {
 
   /**
    * Get available TUIs with full metadata for dropdown rendering.
-   * If workspace config has a non-empty `tuis` section, returns only those.
-   * Otherwise falls back to all DEFAULT_TUIS.
+   * Only returns TUIs explicitly configured in workspace config.
+   * Core tabs (Terminal, Browser, Library, Workstream) are handled by TabBar.
    */
   getAvailableTUIsWithMeta(windowId?: number): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
     const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
     const wsConfig = winConfig?.config ?? this.workspaceConfig;
     const configTuis = wsConfig?.tuis;
-    const hasConfigTuis = configTuis && Object.keys(configTuis).length > 0;
 
-    if (hasConfigTuis) {
-      // Config-driven: only show what's configured
-      return Object.entries(configTuis!).map(([key, def]) => {
-        // Merge with defaults for icon/shortcut fallback
-        const defaultDef = PTYManager.DEFAULT_TUIS[key];
-        return {
-          key,
-          name: def.name || defaultDef?.name || key,
-          icon: def.icon || defaultDef?.icon || '🔧',
-          shortcut: def.shortcut || defaultDef?.shortcut,
-        };
-      });
+    // Only show TUIs that are explicitly configured — no fallback to all defaults.
+    // Core tabs (Terminal, Browser, Library, Workstream) are handled separately in TabBar.
+    if (!configTuis || Object.keys(configTuis).length === 0) {
+      return [];
     }
 
-    // Fallback: show all defaults
-    return Object.entries(PTYManager.DEFAULT_TUIS).map(([key, def]) => ({
-      key,
-      name: def.name || key,
-      icon: def.icon || '🔧',
-      shortcut: def.shortcut,
-    }));
+    return Object.entries(configTuis).map(([key, def]) => {
+      const defaultDef = PTYManager.DEFAULT_TUIS[key];
+      return {
+        key,
+        name: def.name || defaultDef?.name || key,
+        icon: def.icon || defaultDef?.icon || '🔧',
+        shortcut: def.shortcut || defaultDef?.shortcut,
+      };
+    });
   }
 
   /**
