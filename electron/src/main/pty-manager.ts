@@ -722,6 +722,9 @@ export class PTYManager extends EventEmitter {
     // Pass resources path so Hester can find bundled binaries (redis-server, etc.)
     if (app.isPackaged) {
       env.HESTER_RESOURCES_PATH = process.resourcesPath;
+    } else {
+      // Dev mode: point to local resources directory
+      env.HESTER_RESOURCES_PATH = path.join(app.getAppPath(), 'resources');
     }
 
     const hesterConfig = this.workspaceConfig?.hester;

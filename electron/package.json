@@ -17,10 +17,11 @@
     "start": "electron .",
     "pack": "electron-builder --dir",
     "fetch-python": "bash scripts/download-python.sh",
-    "dist": "npm run fetch-python && electron-builder",
-    "dist:mac": "npm run fetch-python && electron-builder --mac",
-    "dist:win": "npm run fetch-python && electron-builder --win",
-    "dist:linux": "npm run fetch-python && electron-builder --linux",
+    "fetch-redis": "bash scripts/download-redis.sh",
+    "dist": "npm run fetch-python && npm run fetch-redis && electron-builder",
+    "dist:mac": "npm run fetch-python && npm run fetch-redis && electron-builder --mac",
+    "dist:win": "npm run fetch-python && npm run fetch-redis && electron-builder --win",
+    "dist:linux": "npm run fetch-python && npm run fetch-redis && electron-builder --linux",
     "clean": "rm -rf dist out node_modules/.vite",
     "typecheck": "tsc --noEmit",
     "postinstall": "electron-builder install-app-deps",
@@ -105,6 +106,11 @@
       {
         "from": "resources/python-standalone",
         "to": "python",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "resources/redis-standalone",
+        "to": "redis",
         "filter": ["**/*"]
       }
     ],

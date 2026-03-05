@@ -269,6 +269,144 @@ class ExplorationSessionManager:
         return sessions
 
 
+class InMemoryExplorationSessionManager:
+    """
+    In-memory exploration session manager for when Redis is unavailable.
+
+    Same interface as ExplorationSessionManager but stores sessions in a dict.
+    Sessions are lost on daemon restart.
+    """
+
+    def __init__(self, ttl_seconds: int = 7200):
+        self._sessions: Dict[str, ExplorationSession] = {}
+        self.ttl = ttl_seconds
+
+    async def get(self, session_id: str) -> Optional[ExplorationSession]:
+        return self._sessions.get(session_id)
+
+    async def save(self, session: ExplorationSession) -> None:
+        session.last_activity = datetime.now()
+        self._sessions[session.session_id] = session
+
+    async def create_session(
+        self,
+        title: str,
+        working_directory: str = ".",
+    ) -> ExplorationSession:
+        session = ExplorationSession(
+            title=title,
+            working_directory=working_directory,
+        )
+        root = ExplorationNode(
+            label=title,
+            node_type="thought",
+            agent_mode="ideate",
+        )
+        session.root_id = root.id
+        session.active_node_id = root.id
+        session.nodes[root.id] = root
+
+        await self.save(session)
+        logger.info(f"Created in-memory exploration session: {session.session_id} ({title})")
+        return session
+
+    async def add_node(
+        self,
+        session_id: str,
+        parent_id: str,
+        label: str,
+        node_type: str = "thought",
+        agent_mode: str = "ideate",
+    ) -> Optional[ExplorationNode]:
+        session = await self.get(session_id)
+        if not session:
+            return None
+
+        parent = session.nodes.get(parent_id)
+        if not parent:
+            return None
+
+        node = ExplorationNode(
+            parent_id=parent_id,
+            label=label,
+            node_type=node_type,
+            agent_mode=agent_mode,
+        )
+        session.nodes[node.id] = node
+        parent.children.append(node.id)
+        session.active_node_id = node.id
+
+        await self.save(session)
+        return node
+
+    async def add_node_message(
+        self,
+        session_id: str,
+        node_id: str,
+        role: str,
+        content: str,
+    ) -> bool:
+        session = await self.get(session_id)
+        if not session:
+            return False
+
+        node = session.nodes.get(node_id)
+        if not node:
+            return False
+
+        node.conversation_history.append(
+            ConversationMessage(role=role, content=content)
+        )
+        await self.save(session)
+        return True
+
+    async def rename_node(
+        self,
+        session_id: str,
+        node_id: str,
+        label: str,
+    ) -> bool:
+        session = await self.get(session_id)
+        if not session:
+            return False
+
+        node = session.nodes.get(node_id)
+        if not node:
+            return False
+
+        node.label = label
+        if node_id == session.root_id:
+            session.title = label
+        await self.save(session)
+        return True
+
+    async def get_node_context(self, session_id: str, node_id: str) -> str:
+        session = await self.get(session_id)
+        if not session:
+            return ""
+        return session.get_breadcrumb_summary(node_id)
+
+    async def delete(self, session_id: str) -> bool:
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            logger.info(f"Deleted in-memory exploration session: {session_id}")
+            return True
+        return False
+
+    async def list_sessions(self) -> List[Dict[str, Any]]:
+        sessions = []
+        for session in self._sessions.values():
+            sessions.append({
+                "session_id": session.session_id,
+                "title": session.title,
+                "node_count": len(session.nodes),
+                "created_at": session.created_at.isoformat(),
+                "last_activity": session.last_activity.isoformat(),
+            })
+        sessions.sort(key=lambda s: s["last_activity"], reverse=True)
+        return sessions
+
+
 class HesterSession(BaseModel):
     """Persistent session state for Hester daemon."""
 

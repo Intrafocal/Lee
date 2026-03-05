@@ -21,6 +21,10 @@ class HesterDaemonSettings(BaseSettings):
         default="redis://localhost:6379",
         description="Redis connection URL"
     )
+    redis_managed_enabled: bool = Field(
+        default=True,
+        description="Auto-start bundled redis-server when no external Redis is available"
+    )
     session_ttl_seconds: int = Field(
         default=3600,
         description="Session timeout in seconds (1 hour default)"

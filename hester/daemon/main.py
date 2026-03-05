@@ -27,7 +27,8 @@ from .models import (
     TelemetryRequest, TelemetryResponse, AgentTelemetry, AgentSessionInfo,
     AgentListRequest, AgentStatus, AgentType, EditorState
 )
-from .session import SessionManager, InMemorySessionManager, ExplorationSessionManager
+from .redis_manager import ManagedRedis
+from .session import SessionManager, InMemorySessionManager, ExplorationSessionManager, InMemoryExplorationSessionManager
 from .settings import HesterDaemonSettings
 from ..shared.gemini_tools import PhaseUpdate, ReActPhase
 
@@ -153,6 +154,9 @@ class AppState:
     # Plugin loader
     plugin_loader: Optional["PluginLoader"] = None
 
+    # Managed Redis lifecycle
+    managed_redis: Optional[ManagedRedis] = None
+
 
 app_state = AppState()
 
@@ -181,17 +185,16 @@ async def lifespan(app: FastAPI):
     app_state.settings = HesterDaemonSettings()
     logger.info(f"Loaded settings - port: {app_state.settings.port}")
 
-    # Try to initialize Redis, fall back to in-memory if unavailable
-    try:
-        app_state.redis_client = redis.from_url(
-            app_state.settings.redis_url,
-            encoding="utf-8",
-            decode_responses=True,
-        )
-        # Test the connection
-        await app_state.redis_client.ping()
+    # Initialize Redis via ManagedRedis (tries external → existing managed → new managed)
+    app_state.managed_redis = ManagedRedis(
+        enabled=app_state.settings.redis_managed_enabled,
+    )
+    app_state.redis_client = await app_state.managed_redis.acquire(
+        app_state.settings.redis_url,
+    )
+
+    if app_state.redis_client:
         app_state.redis_available = True
-        logger.info(f"Connected to Redis: {app_state.settings.redis_url}")
 
         # Initialize Redis-backed session manager
         app_state.session_manager = SessionManager(
@@ -204,15 +207,18 @@ async def lifespan(app: FastAPI):
             redis_client=app_state.redis_client,
             ttl_seconds=app_state.settings.session_ttl_seconds * 2,  # Longer TTL for explorations
         )
-
-    except Exception as e:
-        logger.warning(f"Redis unavailable ({e}), falling back to in-memory sessions")
+    else:
+        logger.warning("No Redis available, falling back to in-memory sessions")
         app_state.redis_available = False
-        app_state.redis_client = None
 
         # Initialize in-memory session manager
         app_state.session_manager = InMemorySessionManager(
             ttl_seconds=app_state.settings.session_ttl_seconds,
+        )
+
+        # Initialize in-memory exploration session manager (Library pane)
+        app_state.exploration_sessions = InMemoryExplorationSessionManager(
+            ttl_seconds=app_state.settings.session_ttl_seconds * 2,
         )
 
     # Initialize Lee context client (connects to Lee WebSocket for real-time context)
@@ -470,8 +476,10 @@ async def lifespan(app: FastAPI):
     # Disconnect from Lee
     await app_state.lee_client.disconnect()
 
-    # Close Redis connection last
-    if app_state.redis_client:
+    # Shut down Redis (SHUTDOWN SAVE for managed, close for external)
+    if app_state.managed_redis:
+        await app_state.managed_redis.shutdown(app_state.redis_client)
+    elif app_state.redis_client:
         await app_state.redis_client.close()
 
     logger.info("Hester daemon stopped")
@@ -517,11 +525,12 @@ async def health_check() -> Dict[str, Any]:
 
     Returns status of the daemon and its dependencies.
     """
-    # Check Redis connection (or report in-memory fallback)
+    # Check Redis connection (report managed vs external vs in-memory)
     if app_state.redis_available and app_state.redis_client:
         try:
             await app_state.redis_client.ping()
-            redis_status = "healthy"
+            mode = "managed" if (app_state.managed_redis and app_state.managed_redis.is_managed) else "external"
+            redis_status = f"healthy ({mode})"
         except Exception as e:
             logger.error(f"Redis health check failed: {e}")
             redis_status = f"unhealthy: {e}"
@@ -1428,10 +1437,10 @@ async def docs_save(body: Dict[str, Any]):
 # ========================================================================
 
 
-def get_exploration_sessions() -> ExplorationSessionManager:
-    """Dependency to get the exploration session manager."""
+def get_exploration_sessions():
+    """Dependency to get the exploration session manager (Redis or in-memory)."""
     if not app_state.exploration_sessions:
-        raise HTTPException(status_code=503, detail="Exploration sessions not available (requires Redis)")
+        raise HTTPException(status_code=503, detail="Exploration sessions not available")
     return app_state.exploration_sessions
 
 
