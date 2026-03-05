@@ -9,6 +9,7 @@
 
 import * as pty from 'node-pty';
 import { EventEmitter } from 'events';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
@@ -433,28 +434,26 @@ export class PTYManager extends EventEmitter {
     const hesterBin = path.join(this.hesterVenvPath, 'bin', 'hester');
 
     // Quick validation: if binary exists, try running it
+    let venvExists = false;
+    let sourceChanged = false;
     if (fs.existsSync(hesterBin)) {
       try {
         execSync(`${hesterBin} --version`, { timeout: 10000, stdio: 'pipe' });
-        this.hesterVenvReady = true;
-        this.log('INFO', 'Hester venv validated successfully');
-        this.emit('hester-setup', { phase: 'ready', message: 'Hester ready' });
-        return;
+        venvExists = true;
+
+        // Check if bundled source is newer than installed version
+        if (!this.isHesterSourceChanged()) {
+          this.hesterVenvReady = true;
+          this.log('INFO', 'Hester venv validated successfully');
+          this.emit('hester-setup', { phase: 'ready', message: 'Hester ready' });
+          return;
+        }
+        sourceChanged = true;
+        this.log('INFO', 'Hester source changed, upgrading');
       } catch {
         this.log('WARN', 'Hester venv exists but is broken, rebuilding');
       }
     }
-
-    // Find system python
-    this.emit('hester-setup', { phase: 'finding-python', message: 'Finding Python...' });
-    const python = this.findPython();
-    if (!python) {
-      const error = 'Python 3.11+ not found. Install Python to use Hester.';
-      this.log('ERROR', error);
-      this.emit('hester-setup', { phase: 'error', message: error });
-      throw new Error(error);
-    }
-    this.log('INFO', `Using Python: ${python}`);
 
     // Find bundled source
     const hesterSrc = this.getBundledHesterSource();
@@ -466,7 +465,54 @@ export class PTYManager extends EventEmitter {
       throw new Error(error);
     }
 
-    // Create venv
+    const pip = path.join(this.hesterVenvPath, 'bin', 'pip');
+
+    // Fast path: venv works but source changed — just pip install over the top
+    if (venvExists && sourceChanged) {
+      this.emit('hester-setup', { phase: 'upgrading', message: 'Updating Hester...' });
+      this.log('INFO', 'Upgrading hester in existing venv', { src: hesterSrc });
+
+      try {
+        const pipArgs = app.isPackaged
+          ? ['install', '--upgrade', hesterSrc]
+          : ['install', '-e', hesterSrc];
+
+        await new Promise<void>((resolve, reject) => {
+          execFile(pip, pipArgs, {
+            timeout: 300000,
+            env: { ...process.env, PATH: this.extendedPath },
+          }, (err, _stdout, stderr) => {
+            if (err) {
+              this.log('ERROR', 'pip upgrade failed, will rebuild venv', { stderr });
+              reject(err);
+            } else {
+              this.log('INFO', 'pip upgrade succeeded');
+              resolve();
+            }
+          });
+        });
+
+        this.writeHesterSourceHash();
+        this.hesterVenvReady = true;
+        this.log('INFO', 'Hester upgrade complete');
+        this.emit('hester-setup', { phase: 'ready', message: 'Hester ready' });
+        return;
+      } catch {
+        this.log('WARN', 'Upgrade failed, falling through to full rebuild');
+      }
+    }
+
+    // Full bootstrap: find python, create venv, install
+    this.emit('hester-setup', { phase: 'finding-python', message: 'Finding Python...' });
+    const python = this.findPython();
+    if (!python) {
+      const error = 'Python 3.11+ not found. Install Python to use Hester.';
+      this.log('ERROR', error);
+      this.emit('hester-setup', { phase: 'error', message: error });
+      throw new Error(error);
+    }
+    this.log('INFO', `Using Python: ${python}`);
+
     this.emit('hester-setup', { phase: 'creating-venv', message: 'Creating Python environment...' });
     this.log('INFO', 'Creating hester venv', { path: this.hesterVenvPath, python });
 
@@ -489,8 +535,6 @@ export class PTYManager extends EventEmitter {
       // Install hester from bundled source
       this.emit('hester-setup', { phase: 'installing', message: 'Installing Hester (first launch)...' });
       this.log('INFO', 'Installing hester from bundled source', { src: hesterSrc });
-
-      const pip = path.join(this.hesterVenvPath, 'bin', 'pip');
 
       // In dev mode, use editable install so code changes are reflected immediately.
       // In packaged mode, do a regular install from the bundled source.
@@ -518,6 +562,9 @@ export class PTYManager extends EventEmitter {
         throw new Error('hester binary not found after install');
       }
 
+      // Write source hash so we can detect changes on next launch
+      this.writeHesterSourceHash();
+
       this.hesterVenvReady = true;
       this.log('INFO', 'Hester venv bootstrap complete');
       this.emit('hester-setup', { phase: 'ready', message: 'Hester ready' });
@@ -528,6 +575,52 @@ export class PTYManager extends EventEmitter {
       this.emit('hester-setup', { phase: 'error', message: msg });
       throw error;
     }
+  }
+
+  /**
+   * Check if the bundled hester source has changed since last install.
+   * Compares a hash of pyproject.toml against a stored hash in the venv.
+   */
+  private isHesterSourceChanged(): boolean {
+    try {
+      const currentHash = this.computeHesterSourceHash();
+      if (!currentHash) return false;
+
+      const hashFile = path.join(this.hesterVenvPath, '.hester-source-hash');
+      if (!fs.existsSync(hashFile)) return true; // No hash = first install or pre-hash version
+
+      const storedHash = fs.readFileSync(hashFile, 'utf-8').trim();
+      return currentHash !== storedHash;
+    } catch {
+      return false; // Don't block on hash check errors
+    }
+  }
+
+  /** Write the current source hash after a successful install. */
+  private writeHesterSourceHash(): void {
+    try {
+      const hash = this.computeHesterSourceHash();
+      if (!hash) return;
+      fs.writeFileSync(path.join(this.hesterVenvPath, '.hester-source-hash'), hash);
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  /**
+   * Compute a fingerprint of the bundled hester source.
+   * Hashes pyproject.toml content — bump the version field to trigger a reinstall.
+   */
+  private computeHesterSourceHash(): string | null {
+    const hesterSrc = this.getBundledHesterSource();
+    const pyprojectPath = path.join(hesterSrc, 'pyproject.toml');
+    if (!fs.existsSync(pyprojectPath)) return null;
+
+    return crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(pyprojectPath))
+      .digest('hex')
+      .slice(0, 16);
   }
 
   /**

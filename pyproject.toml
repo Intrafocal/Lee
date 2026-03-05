@@ -1,6 +1,6 @@
 [project]
 name = "lee-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lee Editor and Hester AI Daemon - Terminal-native IDE with AI sidecar"
 readme = "README.md"
 requires-python = ">=3.11"
