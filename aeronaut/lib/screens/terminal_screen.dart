@@ -49,9 +49,57 @@ class TerminalScreen extends ConsumerStatefulWidget {
 
 class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   final ScrollController _scrollController = ScrollController();
+  Terminal? _terminal;
+
+  /// When true, new terminal output auto-scrolls to bottom.
+  /// Broken when the user manually scrolls up; restored by the ⤓ button.
+  bool _anchored = true;
+
+  /// Guards against our own jumpTo calls triggering the scroll listener.
+  bool _programmaticScroll = false;
+
+  /// Tolerance in pixels for considering the scroll position "at the bottom".
+  static const _bottomThreshold = 4.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (_programmaticScroll) return;
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - _bottomThreshold;
+    if (atBottom != _anchored) {
+      setState(() => _anchored = atBottom);
+    }
+  }
+
+  void _onTerminalChange() {
+    if (!_anchored) return;
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      _programmaticScroll = true;
+      _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      _programmaticScroll = false;
+    });
+  }
+
+  void _reanchor() {
+    setState(() => _anchored = true);
+    _scrollToBottom();
+  }
 
   @override
   void dispose() {
+    _terminal?.removeListener(_onTerminalChange);
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
   }
@@ -65,6 +113,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     final ptyState = ref.watch(ptyProvider(ptyId));
+
+    // When the terminal instance changes, attach a persistent listener for
+    // auto-scroll anchoring and do an initial scroll-to-bottom.
+    if (_terminal != ptyState.terminal) {
+      _terminal?.removeListener(_onTerminalChange);
+      _terminal = ptyState.terminal;
+      _terminal!.addListener(_onTerminalChange);
+      _anchored = true;
+      _scrollToBottom();
+    }
 
     return Column(
       children: [
@@ -82,7 +140,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             keyboardType: TextInputType.text,
           ),
         ),
-        _ExtraKeysBar(terminal: ptyState.terminal),
+        _ExtraKeysBar(
+          terminal: ptyState.terminal,
+          anchored: _anchored,
+          onScrollToBottom: _reanchor,
+        ),
         if (ptyState.exited)
           Container(
             width: double.infinity,
@@ -111,8 +173,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 /// like Claude Code, lazygit, vim, etc.
 class _ExtraKeysBar extends StatelessWidget {
   final Terminal terminal;
+  final bool anchored;
+  final VoidCallback onScrollToBottom;
 
-  const _ExtraKeysBar({required this.terminal});
+  const _ExtraKeysBar({
+    required this.terminal,
+    required this.anchored,
+    required this.onScrollToBottom,
+  });
 
   void _sendKey(TerminalKey key) {
     terminal.keyInput(key);
@@ -137,6 +205,13 @@ class _ExtraKeysBar extends StatelessWidget {
           _KeyButton(label: '\u2191', onTap: () => _sendKey(TerminalKey.arrowUp)),
           _KeyButton(label: '\u2192', onTap: () => _sendKey(TerminalKey.arrowRight)),
           const Spacer(),
+          if (!anchored)
+            _KeyButton(
+              label: '\u2913',
+              onTap: onScrollToBottom,
+              highlighted: true,
+            ),
+          _KeyButton(label: '\u21E7Tab', onTap: () => terminal.keyInput(TerminalKey.tab, shift: true)),
           _KeyButton(label: 'Tab', onTap: () => _sendKey(TerminalKey.tab)),
         ],
       ),
@@ -147,8 +222,13 @@ class _ExtraKeysBar extends StatelessWidget {
 class _KeyButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
+  final bool highlighted;
 
-  const _KeyButton({required this.label, required this.onTap});
+  const _KeyButton({
+    required this.label,
+    required this.onTap,
+    this.highlighted = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -158,15 +238,22 @@ class _KeyButton extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 2),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: AeronautColors.bgSurface,
+          color: highlighted
+              ? AeronautColors.accent.withValues(alpha: 0.15)
+              : AeronautColors.bgSurface,
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: AeronautColors.border, width: 0.5),
+          border: Border.all(
+            color: highlighted ? AeronautColors.accent : AeronautColors.border,
+            width: 0.5,
+          ),
         ),
         child: Text(
           label,
           style: AeronautTheme.mono.copyWith(
             fontSize: 12,
-            color: AeronautColors.textSecondary,
+            color: highlighted
+                ? AeronautColors.accent
+                : AeronautColors.textSecondary,
           ),
         ),
       ),
