@@ -154,7 +154,7 @@ def devops_start(service_name: str, working_dir: Optional[str], environment: Opt
 
     console.print(f"[cyan]Starting {service_name}...[/cyan]")
 
-    success, message = asyncio.run(manager.start_service(service_name, environment))
+    success, message = asyncio.run(manager.start_service(service_name, environment=environment))
 
     if success:
         console.print(f"[green]{message}[/green]")
@@ -195,7 +195,7 @@ def devops_stop(service_name: str, working_dir: Optional[str], environment: Opti
 
     console.print(f"[cyan]Stopping {service_name}...[/cyan]")
 
-    success, message = asyncio.run(manager.stop_service(service_name, environment))
+    success, message = asyncio.run(manager.stop_service(service_name, environment=environment))
 
     if success:
         console.print(f"[green]{message}[/green]")
@@ -673,3 +673,162 @@ def devops_ps(working_dir: Optional[str]):
         subprocess.run(cmd, cwd=working_dir, check=True)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)
+
+
+@devops.command("env")
+@click.argument("name", required=False)
+@click.option(
+    "--dir", "-d",
+    "working_dir",
+    default=None,
+    help="Working directory with .lee/config.yaml"
+)
+def devops_env(name: Optional[str], working_dir: Optional[str]):
+    """Show or switch the active environment.
+
+    Without arguments, shows the current environment and available contexts.
+    With a name, switches to that environment.
+
+    Examples:
+        hester devops env
+        hester devops env staging
+        hester devops env local
+    """
+    from hester.devops import ServiceManager
+
+    working_dir = working_dir or os.getcwd()
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        console.print(f"[red]Error loading config: {manager.config['error']}[/red]")
+        sys.exit(1)
+
+    if not name:
+        # Show current environment
+        console.print("[bold]Environments[/bold]")
+        console.print()
+
+        for env in manager.environments:
+            is_active = env.name == manager.active_environment
+            marker = "→" if is_active else " "
+            style = "bold green" if is_active else "dim"
+
+            console.print(f"  {marker} [bold]{env.name}[/bold]", style=style, end="")
+            if env.description:
+                console.print(f"  [dim]{env.description}[/dim]", end="")
+            console.print()
+
+            if env.docker_context:
+                console.print(f"      docker context: [cyan]{env.docker_context}[/cyan]")
+            if env.kubectl_context:
+                console.print(f"      kubectl context: [cyan]{env.kubectl_context}[/cyan]")
+            if env.confirm_actions:
+                console.print(f"      [yellow]confirm_actions: true[/yellow]")
+
+            svc_count = len(env.services)
+            console.print(f"      {svc_count} service{'s' if svc_count != 1 else ''}")
+            console.print()
+    else:
+        # Switch environment
+        success, message = manager.switch_environment(name)
+        if success:
+            console.print(f"[green]{message}[/green]")
+        else:
+            console.print(f"[red]{message}[/red]")
+            sys.exit(1)
+
+
+@devops.command("macro")
+@click.argument("name", required=False)
+@click.option(
+    "--dir", "-d",
+    "working_dir",
+    default=None,
+    help="Working directory with .lee/config.yaml"
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show steps without executing"
+)
+def devops_macro(name: Optional[str], working_dir: Optional[str], dry_run: bool):
+    """List or run macros.
+
+    Without arguments, lists all available macros.
+    With a name, runs the macro (or shows steps with --dry-run).
+
+    Examples:
+        hester devops macro
+        hester devops macro flush-all-redis
+        hester devops macro deploy-staging --dry-run
+    """
+    from hester.devops import ServiceManager
+
+    working_dir = working_dir or os.getcwd()
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        console.print(f"[red]Error loading config: {manager.config['error']}[/red]")
+        sys.exit(1)
+
+    if not name:
+        # List macros
+        if not manager.macros:
+            console.print("[yellow]No macros configured.[/yellow]")
+            return
+
+        console.print("[bold]Macros[/bold]")
+        console.print()
+
+        for macro in manager.macros:
+            shortcut = f"  [cyan]{macro.shortcut}[/cyan]" if macro.shortcut else ""
+            confirm = "  [yellow]⚠ confirm[/yellow]" if macro.confirm else ""
+            console.print(f"  [bold]{macro.name}[/bold]{shortcut}{confirm}")
+            if macro.description:
+                console.print(f"    {macro.description}")
+            console.print(f"    [dim]{len(macro.steps)} steps[/dim]")
+            console.print()
+    else:
+        # Run or dry-run macro
+        macro = manager.get_macro(name)
+        if not macro:
+            console.print(f"[red]Macro '{name}' not found[/red]")
+            sys.exit(1)
+
+        if dry_run:
+            console.print(f"[bold]Macro: {macro.name}[/bold]")
+            if macro.description:
+                console.print(f"[dim]{macro.description}[/dim]")
+            console.print()
+
+            for i, step in enumerate(macro.steps):
+                step_num = f"[dim]{i+1}.[/dim]"
+                if step.context:
+                    console.print(f"  {step_num} [cyan]Switch context → {step.context}[/cyan]")
+                elif step.service and step.action:
+                    env_info = f" [dim](in {step.environment})[/dim]" if step.environment else ""
+                    console.print(f"  {step_num} [green]{step.service}[/green]:{step.action}{env_info}")
+                elif step.command:
+                    console.print(f"  {step_num} [yellow]$ {step.command}[/yellow]")
+            return
+
+        console.print(f"[cyan]Running macro: {macro.name}[/cyan]")
+        if macro.description:
+            console.print(f"[dim]{macro.description}[/dim]")
+        console.print()
+
+        def on_step(idx, total, step):
+            if step.context:
+                console.print(f"  [{idx+1}/{total}] Switching to {step.context}...")
+            elif step.service and step.action:
+                console.print(f"  [{idx+1}/{total}] {step.service}: {step.action}...")
+            elif step.command:
+                console.print(f"  [{idx+1}/{total}] $ {step.command}...")
+
+        success, message = asyncio.run(manager.run_macro(name, on_step=on_step))
+
+        if success:
+            console.print(f"\n[green]{message}[/green]")
+        else:
+            console.print(f"\n[red]{message}[/red]")
+            sys.exit(1)

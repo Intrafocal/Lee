@@ -88,6 +88,50 @@ class ServiceStatus:
 
 
 @dataclass
+class EnvironmentConfig:
+    """Environment configuration (local, staging, etc.)."""
+    name: str
+    description: str = ""
+    docker_context: Optional[str] = None
+    kubectl_context: Optional[str] = None
+    confirm_actions: bool = False
+    services: List[ServiceConfig] = field(default_factory=list)
+
+
+@dataclass
+class MacroStep:
+    """A single step in a macro."""
+    # Pattern 1: service action reference
+    service: Optional[str] = None
+    action: Optional[str] = None
+    environment: Optional[str] = None
+    # Pattern 2: raw shell command
+    command: Optional[str] = None
+    cwd: Optional[str] = None
+    # Pattern 3: context switch
+    context: Optional[str] = None
+
+
+@dataclass
+class MacroConfig:
+    """Macro definition - a composable multi-step workflow."""
+    name: str
+    description: str = ""
+    shortcut: Optional[str] = None
+    confirm: bool = False
+    steps: List[MacroStep] = field(default_factory=list)
+
+    def get_shortcut_key(self) -> Optional[str]:
+        """Get the key character for this shortcut (e.g., 'x' from 'ctrl+x')."""
+        if not self.shortcut:
+            return None
+        parts = self.shortcut.lower().split('+')
+        if len(parts) == 2 and parts[0] == 'ctrl':
+            return parts[1]
+        return None
+
+
+@dataclass
 class RunningService:
     """State of a running service."""
     config: ServiceConfig
@@ -113,8 +157,12 @@ class ServiceManager:
         self.running_services: Dict[str, RunningService] = {}
         self.config: Dict[str, Any] = {}
         self.services: List[ServiceConfig] = []
+        # Environment support
+        self.environments: List[EnvironmentConfig] = []
+        self.active_environment: str = "default"
+        self.macros: List[MacroConfig] = []
         # Track which action is currently active for each service
-        self.active_actions: Dict[str, str] = {}  # service_name -> action_name
+        self.active_actions: Dict[str, str] = {}  # env:service_name -> action_name
         self._log_callbacks: Dict[str, Callable[[str, str], None]] = {}
         self._status_callbacks: Dict[str, Callable[[str, str], None]] = {}
 
@@ -144,16 +192,70 @@ class ServiceManager:
     def _parse_services(self):
         """Parse services from config.yaml.
 
-        Each service is a category (Docker, Supabase, Frame, etc.) with:
-        - Multiple actions (up, down, rebuild, web, simulator, etc.)
-        - Detection method (docker, supabase, port)
-        - Ports to check
-        - Health check URLs
+        Supports two formats:
+        1. environments: { local: { services: [...] }, staging: { ... } }
+        2. services: [...] (bare list, wrapped in implicit "default" environment)
         """
         self.services = []
+        self.environments = []
+        self.macros = []
 
-        for svc_data in self.config.get("services", []):
-            # Parse actions for this service
+        if "environments" in self.config and isinstance(self.config["environments"], dict):
+            # New format: named environments
+            for env_name, env_data in self.config["environments"].items():
+                if not isinstance(env_data, dict):
+                    continue
+                env = EnvironmentConfig(
+                    name=env_name,
+                    description=env_data.get("description", ""),
+                    docker_context=env_data.get("docker_context"),
+                    kubectl_context=env_data.get("kubectl_context"),
+                    confirm_actions=env_data.get("confirm_actions", False),
+                    services=self._parse_service_list(env_data.get("services", [])),
+                )
+                self.environments.append(env)
+
+            # Set active environment
+            self.active_environment = self.config.get(
+                "active_environment",
+                self.environments[0].name if self.environments else "default",
+            )
+        elif "services" in self.config:
+            # Legacy format: bare services list -> implicit "default" environment
+            env = EnvironmentConfig(
+                name="default",
+                services=self._parse_service_list(self.config.get("services", [])),
+            )
+            self.environments = [env]
+            self.active_environment = "default"
+
+        # Parse macros
+        for macro_data in self.config.get("macros", []):
+            steps = []
+            for step_data in macro_data.get("steps", []):
+                steps.append(MacroStep(
+                    service=step_data.get("service"),
+                    action=step_data.get("action"),
+                    environment=step_data.get("environment"),
+                    command=step_data.get("command"),
+                    cwd=step_data.get("cwd"),
+                    context=step_data.get("context"),
+                ))
+            self.macros.append(MacroConfig(
+                name=macro_data.get("name", ""),
+                description=macro_data.get("description", ""),
+                shortcut=macro_data.get("shortcut"),
+                confirm=macro_data.get("confirm", False),
+                steps=steps,
+            ))
+
+        # Point self.services at active environment's services
+        self._sync_active_services()
+
+    def _parse_service_list(self, services_data: list) -> List[ServiceConfig]:
+        """Parse a list of service dicts into ServiceConfig objects."""
+        services = []
+        for svc_data in services_data:
             actions = []
             for action_data in svc_data.get("actions", []):
                 actions.append(ServiceAction(
@@ -161,8 +263,7 @@ class ServiceManager:
                     command=action_data.get("command", ""),
                     shortcut=action_data.get("shortcut"),
                 ))
-
-            self.services.append(ServiceConfig(
+            services.append(ServiceConfig(
                 name=svc_data.get("name", "Unknown"),
                 description=svc_data.get("description", ""),
                 cwd=svc_data.get("cwd"),
@@ -171,10 +272,205 @@ class ServiceManager:
                 ports=svc_data.get("ports", []),
                 health_checks=svc_data.get("health_checks", []),
             ))
+        return services
+
+    def _sync_active_services(self):
+        """Point self.services at the active environment's service list."""
+        env = self.get_environment(self.active_environment)
+        self.services = env.services if env else []
 
     def _get_service_key(self, service_name: str) -> str:
         """Generate unique key for service tracking."""
-        return service_name
+        return f"{self.active_environment}:{service_name}"
+
+    # =========================================================================
+    # Environment Management
+    # =========================================================================
+
+    def get_environment(self, name: str) -> Optional[EnvironmentConfig]:
+        """Find an environment by name."""
+        for env in self.environments:
+            if env.name == name:
+                return env
+        return None
+
+    def get_environment_names(self) -> List[str]:
+        """Get list of all environment names."""
+        return [env.name for env in self.environments]
+
+    def switch_environment(self, name: str) -> tuple[bool, str]:
+        """Switch to a different environment.
+
+        Runs docker context use and kubectl config use-context if configured.
+        Updates self.services to point at the new environment's services.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        env = self.get_environment(name)
+        if not env:
+            return False, f"Environment '{name}' not found"
+
+        if name == self.active_environment:
+            return True, f"Already on environment '{name}'"
+
+        messages = []
+
+        # Switch Docker context
+        if env.docker_context:
+            try:
+                result = subprocess.run(
+                    ["docker", "context", "use", env.docker_context],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    messages.append(f"Docker context → {env.docker_context}")
+                else:
+                    return False, f"Failed to switch Docker context: {result.stderr.strip()}"
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                return False, f"Docker context switch failed: {e}"
+
+        # Switch kubectl context
+        if env.kubectl_context:
+            try:
+                result = subprocess.run(
+                    ["kubectl", "config", "use-context", env.kubectl_context],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    messages.append(f"kubectl context → {env.kubectl_context}")
+                else:
+                    return False, f"Failed to switch kubectl context: {result.stderr.strip()}"
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                return False, f"kubectl context switch failed: {e}"
+
+        self.active_environment = name
+        self._sync_active_services()
+
+        msg = f"Switched to '{name}'"
+        if messages:
+            msg += " (" + ", ".join(messages) + ")"
+        return True, msg
+
+    def get_service_in_env(self, service_name: str, env_name: str) -> Optional[ServiceConfig]:
+        """Find a service in a specific environment."""
+        env = self.get_environment(env_name)
+        if not env:
+            return None
+        for service in env.services:
+            if service.name == service_name:
+                return service
+        return None
+
+    # =========================================================================
+    # Macro Execution
+    # =========================================================================
+
+    async def run_macro(
+        self,
+        macro_name: str,
+        on_step: Optional[Callable] = None,
+    ) -> tuple[bool, str]:
+        """Run a macro by name.
+
+        Args:
+            macro_name: Name of the macro to run
+            on_step: Optional callback(step_index, total_steps, step) for progress
+
+        Returns:
+            Tuple of (success, message)
+        """
+        macro = None
+        for m in self.macros:
+            if m.name == macro_name:
+                macro = m
+                break
+        if not macro:
+            return False, f"Macro '{macro_name}' not found"
+
+        total = len(macro.steps)
+        for i, step in enumerate(macro.steps):
+            if on_step:
+                on_step(i, total, step)
+
+            if step.context:
+                # Context switch step
+                success, msg = self.switch_environment(step.context)
+                if not success:
+                    return False, f"Step {i+1}/{total} failed: {msg}"
+
+            elif step.service and step.action:
+                # Service action step
+                env_name = step.environment or self.active_environment
+                service = self.get_service_in_env(step.service, env_name)
+                if not service:
+                    return False, f"Step {i+1}/{total}: service '{step.service}' not found in '{env_name}'"
+                action = service.get_action(step.action)
+                if not action:
+                    return False, f"Step {i+1}/{total}: action '{step.action}' not found on '{step.service}'"
+
+                # Temporarily switch if needed, run, switch back
+                original_env = self.active_environment
+                if env_name != self.active_environment:
+                    success, msg = self.switch_environment(env_name)
+                    if not success:
+                        return False, f"Step {i+1}/{total}: {msg}"
+
+                cwd = str(self.working_dir / service.cwd) if service.cwd else str(self.working_dir)
+                try:
+                    result = subprocess.run(
+                        action.command, shell=True, cwd=cwd,
+                        capture_output=True, text=True, timeout=300,
+                        env=os.environ.copy(),
+                    )
+                    if result.returncode != 0:
+                        # Restore environment before returning
+                        if env_name != original_env:
+                            self.switch_environment(original_env)
+                        return False, f"Step {i+1}/{total} failed (exit {result.returncode}): {result.stderr.strip()}"
+                except subprocess.TimeoutExpired:
+                    if env_name != original_env:
+                        self.switch_environment(original_env)
+                    return False, f"Step {i+1}/{total} timed out"
+
+                if env_name != original_env:
+                    self.switch_environment(original_env)
+
+            elif step.command:
+                # Raw shell command step
+                cwd = step.cwd or str(self.working_dir)
+                try:
+                    result = subprocess.run(
+                        step.command, shell=True, cwd=cwd,
+                        capture_output=True, text=True, timeout=300,
+                        env=os.environ.copy(),
+                    )
+                    if result.returncode != 0:
+                        return False, f"Step {i+1}/{total} failed (exit {result.returncode}): {result.stderr.strip()}"
+                except subprocess.TimeoutExpired:
+                    return False, f"Step {i+1}/{total} timed out"
+
+        return True, f"Macro '{macro_name}' completed ({total} steps)"
+
+    def get_macro(self, name: str) -> Optional[MacroConfig]:
+        """Find a macro by name."""
+        for macro in self.macros:
+            if macro.name == name:
+                return macro
+        return None
+
+    def get_macro_shortcuts(self) -> Dict[str, MacroConfig]:
+        """Get macros that have keyboard shortcuts.
+
+        Returns:
+            Dict mapping shortcut key to MacroConfig
+        """
+        shortcuts = {}
+        for macro in self.macros:
+            key = macro.get_shortcut_key()
+            if key:
+                shortcuts[key] = macro
+        return shortcuts
 
     def get_service(self, service_name: str) -> Optional[ServiceConfig]:
         """Find a service by name."""
@@ -197,8 +493,8 @@ class ServiceManager:
                 running.status = "stopped"
                 del self.running_services[key]
                 # Clear active action
-                if service.name in self.active_actions:
-                    del self.active_actions[service.name]
+                if key in self.active_actions:
+                    del self.active_actions[key]
                 running = None
 
             result.append((service, running))
@@ -231,6 +527,7 @@ class ServiceManager:
         self,
         service_name: str,
         action_name: Optional[str] = None,
+        environment: Optional[str] = None,
     ) -> tuple[bool, str]:
         """
         Start a service with a specific action.
@@ -238,11 +535,15 @@ class ServiceManager:
         Args:
             service_name: Name of the service (e.g., "Docker", "Frame")
             action_name: Name of the action (e.g., "up", "web"). Uses default if not specified.
+            environment: Environment to find the service in. Uses active if not specified.
 
         Returns:
             Tuple of (success, message)
         """
-        service = self.get_service(service_name)
+        if environment:
+            service = self.get_service_in_env(service_name, environment)
+        else:
+            service = self.get_service(service_name)
         if not service:
             return False, f"Service '{service_name}' not found"
 
@@ -262,13 +563,13 @@ class ServiceManager:
         if service_key in self.running_services:
             running = self.running_services[service_key]
             if running.process.poll() is None:
-                current_action = self.active_actions.get(service_name, "unknown")
+                current_action = self.active_actions.get(service_key, "unknown")
                 return False, f"Service '{service_name}' is already running action '{current_action}' (PID: {running.pid})"
             else:
                 # Process died, clean up
                 del self.running_services[service_key]
-                if service_name in self.active_actions:
-                    del self.active_actions[service_name]
+                if service_key in self.active_actions:
+                    del self.active_actions[service_key]
 
         # Resolve working directory
         cwd = str(self.working_dir / service.cwd) if service.cwd else str(self.working_dir)
@@ -296,7 +597,7 @@ class ServiceManager:
                 status="running",
             )
             self.running_services[service_key] = running
-            self.active_actions[service_name] = action.name
+            self.active_actions[service_key] = action.name
 
             # Start log collection
             asyncio.create_task(self._collect_logs(service_key, process))
@@ -337,14 +638,21 @@ class ServiceManager:
         except Exception:
             pass
 
-    async def stop_service(self, service_name: str) -> tuple[bool, str]:
+    async def stop_service(self, service_name: str, environment: Optional[str] = None) -> tuple[bool, str]:
         """
         Stop a running service.
+
+        Args:
+            service_name: Name of the service to stop.
+            environment: Environment to find the service in. Uses active if not specified.
 
         Returns:
             Tuple of (success, message)
         """
-        service = self.get_service(service_name)
+        if environment:
+            service = self.get_service_in_env(service_name, environment)
+        else:
+            service = self.get_service(service_name)
         if not service:
             return False, f"Service '{service_name}' not found"
 
@@ -355,7 +663,7 @@ class ServiceManager:
 
         running = self.running_services[service_key]
         pid = running.pid
-        action_name = self.active_actions.get(service_name, "unknown")
+        action_name = self.active_actions.get(service_key, "unknown")
 
         try:
             # Send SIGTERM
@@ -369,16 +677,16 @@ class ServiceManager:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
 
             del self.running_services[service_key]
-            if service_name in self.active_actions:
-                del self.active_actions[service_name]
+            if service_key in self.active_actions:
+                del self.active_actions[service_key]
 
             return True, f"Stopped '{service_name}' action '{action_name}' (PID: {pid})"
 
         except ProcessLookupError:
             # Already dead
             del self.running_services[service_key]
-            if service_name in self.active_actions:
-                del self.active_actions[service_name]
+            if service_key in self.active_actions:
+                del self.active_actions[service_key]
             return True, f"Service '{service_name}' was already stopped"
         except Exception as e:
             return False, f"Failed to stop: {e}"
@@ -386,6 +694,7 @@ class ServiceManager:
     async def health_check(
         self,
         service_name: Optional[str] = None,
+        environment: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Run health checks on services.
@@ -436,10 +745,14 @@ class ServiceManager:
     def get_logs(
         self,
         service_name: str,
+        environment: Optional[str] = None,
         lines: int = 50,
     ) -> Optional[List[str]]:
         """Get logs from a running service."""
-        service = self.get_service(service_name)
+        if environment:
+            service = self.get_service_in_env(service_name, environment)
+        else:
+            service = self.get_service(service_name)
         if not service:
             return None
 
@@ -598,7 +911,7 @@ class ServiceManager:
                 running=True,
                 source="managed",
                 details=f"PID {running.pid}",
-                active_action=self.active_actions.get(service.name),
+                active_action=self.active_actions.get(service_key),
             )
 
         # 2. Check Docker containers for docker services
@@ -643,7 +956,7 @@ class ServiceManager:
                         running=True,
                         source="port",
                         details=f"Port {port} in use",
-                        active_action=self.active_actions.get(service.name),
+                        active_action=self.active_actions.get(service_key),
                     )
 
         # 5. Fall back to health check results

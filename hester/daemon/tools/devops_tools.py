@@ -901,6 +901,170 @@ async def devops_compose_ps(
         return ToolResult(success=False, error=f"docker-compose ps error: {e}")
 
 
+async def devops_switch_environment(
+    name: str,
+    working_dir: str = None,
+    **kwargs,
+) -> ToolResult:
+    """Switch the active environment (changes docker/kubectl contexts if configured)."""
+    working_dir = working_dir or os.getcwd()
+
+    from hester.devops import ServiceManager
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        return ToolResult(success=False, error=manager.config["error"])
+
+    success, message = manager.switch_environment(name)
+
+    if success:
+        env = manager.get_environment(name)
+        return ToolResult(
+            success=True,
+            data={
+                "environment": name,
+                "description": env.description if env else "",
+                "docker_context": env.docker_context if env else None,
+                "kubectl_context": env.kubectl_context if env else None,
+                "services": [s.name for s in env.services] if env else [],
+            },
+            message=message,
+        )
+    else:
+        return ToolResult(success=False, error=message)
+
+
+async def devops_list_environments(
+    working_dir: str = None,
+    **kwargs,
+) -> ToolResult:
+    """List all configured environments."""
+    working_dir = working_dir or os.getcwd()
+
+    from hester.devops import ServiceManager
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        return ToolResult(success=False, error=manager.config["error"])
+
+    envs = []
+    for env in manager.environments:
+        envs.append({
+            "name": env.name,
+            "description": env.description,
+            "docker_context": env.docker_context,
+            "kubectl_context": env.kubectl_context,
+            "confirm_actions": env.confirm_actions,
+            "services": [s.name for s in env.services],
+            "active": env.name == manager.active_environment,
+        })
+
+    return ToolResult(
+        success=True,
+        data={"environments": envs, "active": manager.active_environment},
+        message=f"Found {len(envs)} environments (active: {manager.active_environment})",
+    )
+
+
+async def devops_run_macro(
+    name: str,
+    dry_run: bool = False,
+    working_dir: str = None,
+    **kwargs,
+) -> ToolResult:
+    """Run a macro by name, or preview its steps with dry_run=True."""
+    working_dir = working_dir or os.getcwd()
+
+    from hester.devops import ServiceManager
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        return ToolResult(success=False, error=manager.config["error"])
+
+    macro = manager.get_macro(name)
+    if not macro:
+        available = [m.name for m in manager.macros]
+        return ToolResult(
+            success=False,
+            error=f"Macro '{name}' not found. Available: {', '.join(available) if available else 'none'}",
+        )
+
+    if dry_run:
+        steps_preview = []
+        for i, step in enumerate(macro.steps):
+            if step.context:
+                steps_preview.append({"step": i + 1, "type": "context_switch", "target": step.context})
+            elif step.service and step.action:
+                steps_preview.append({
+                    "step": i + 1, "type": "service_action",
+                    "service": step.service, "action": step.action,
+                    "environment": step.environment,
+                })
+            elif step.command:
+                steps_preview.append({"step": i + 1, "type": "command", "command": step.command})
+
+        return ToolResult(
+            success=True,
+            data={
+                "macro": name,
+                "description": macro.description,
+                "confirm": macro.confirm,
+                "steps": steps_preview,
+            },
+            message=f"Macro '{name}' has {len(macro.steps)} steps (dry run)",
+        )
+
+    # Execute the macro
+    step_log = []
+
+    def on_step(idx, total, step):
+        if step.context:
+            step_log.append(f"[{idx+1}/{total}] Switch context → {step.context}")
+        elif step.service and step.action:
+            step_log.append(f"[{idx+1}/{total}] {step.service}: {step.action}")
+        elif step.command:
+            step_log.append(f"[{idx+1}/{total}] $ {step.command}")
+
+    success, message = await manager.run_macro(name, on_step=on_step)
+
+    return ToolResult(
+        success=success,
+        data={"macro": name, "steps_executed": step_log},
+        message=message,
+        error=message if not success else None,
+    )
+
+
+async def devops_list_macros(
+    working_dir: str = None,
+    **kwargs,
+) -> ToolResult:
+    """List all configured macros."""
+    working_dir = working_dir or os.getcwd()
+
+    from hester.devops import ServiceManager
+    manager = ServiceManager(working_dir)
+
+    if "error" in manager.config:
+        return ToolResult(success=False, error=manager.config["error"])
+
+    macros = []
+    for macro in manager.macros:
+        macros.append({
+            "name": macro.name,
+            "description": macro.description,
+            "shortcut": macro.shortcut,
+            "confirm": macro.confirm,
+            "steps": len(macro.steps),
+        })
+
+    return ToolResult(
+        success=True,
+        data={"macros": macros},
+        message=f"Found {len(macros)} macros",
+    )
+
+
 async def devops_compose_logs(
     services: Optional[List[str]] = None,
     lines: int = 50,

@@ -47,7 +47,10 @@ from rich.text import Text
 from rich.style import Style
 from rich.ansi import AnsiDecoder
 
-from .manager import ServiceManager, ServiceConfig, ServiceAction, ServiceStatus
+from .manager import (
+    ServiceManager, ServiceConfig, ServiceAction, ServiceStatus,
+    EnvironmentConfig, MacroConfig, MacroStep,
+)
 
 
 # Styles
@@ -91,6 +94,20 @@ class TUIState:
     service_master_fds: Dict[str, int] = field(default_factory=dict)  # service_name -> PTY master fd (for Flutter)
     active_output_tab: int = 0  # Index of currently viewed tab in command mode
     output_tabs: List[str] = field(default_factory=list)  # List of service names with output
+    # Environment state
+    active_environment: str = "default"
+    environment_names: List[str] = field(default_factory=list)
+    # Macro state
+    macro_running: bool = False
+    macro_step: int = 0
+    macro_total: int = 0
+    macro_name: str = ""
+    # Confirm dialog
+    confirm_pending: bool = False
+    confirm_message: str = ""
+    confirm_callback: Optional[Any] = None  # async callable
+    # Macro number input mode (press 'm' then digit)
+    macro_input_mode: bool = False
 
 
 class DevOpsTUI:
@@ -116,6 +133,14 @@ class DevOpsTUI:
         # e.g., 'u' -> (Docker, up), 'f' -> (Frame, web)
         self._quick_actions: Dict[str, tuple[ServiceConfig, ServiceAction]] = {}
         self._quick_actions = self.manager.get_action_shortcuts()
+
+        # Build macro shortcuts map: shortcut_key -> MacroConfig
+        self._macro_shortcuts: Dict[str, MacroConfig] = self.manager.get_macro_shortcuts()
+
+        # Initialize environment state
+        self.state.active_environment = self.manager.active_environment
+        self.state.environment_names = self.manager.get_environment_names()
+        self._has_multiple_environments = len(self.state.environment_names) > 1
 
     def _get_service_cwd(self, service: ServiceConfig) -> str:
         """Get working directory for a service."""
@@ -153,40 +178,77 @@ class DevOpsTUI:
         """Create the main dashboard layout."""
         layout = Layout()
 
-        layout.split_column(
+        sections = [
             Layout(name="header", size=3),
             Layout(name="actions", size=6),
             Layout(name="services"),
+        ]
+
+        # Add macros panel if macros exist
+        if self.manager.macros:
+            macro_height = min(len(self.manager.macros) + 2, 8)
+            sections.append(Layout(name="macros", size=macro_height))
+
+        # Add confirm dialog if pending
+        if self.state.confirm_pending:
+            sections.append(Layout(name="confirm", size=3))
+
+        sections.extend([
             Layout(name="hints", size=6),
             Layout(name="input", size=3),
-        )
+        ])
+
+        layout.split_column(*sections)
 
         layout["header"].update(self._create_header_panel())
         layout["actions"].update(self._create_actions_panel())
         layout["services"].update(self._create_services_panel())
+        if self.manager.macros:
+            layout["macros"].update(self._create_macros_panel())
+        if self.state.confirm_pending:
+            layout["confirm"].update(self._create_confirm_panel())
         layout["hints"].update(self._create_hints_panel())
         layout["input"].update(self._create_input_panel())
 
         return layout
 
     def _create_header_panel(self) -> Panel:
-        """Create header panel."""
+        """Create header panel with environment indicator."""
         header = Text()
-        header.append("Hester DevOps Dashboard", style="bold cyan")
+        header.append("Hester DevOps", style="bold cyan")
         header.append("  ", style="dim")
         header.append(str(self.manager.working_dir), style="dim")
 
-        if self.state.command_running:
+        # Environment indicator (only when multiple environments)
+        if self._has_multiple_environments:
+            header.append("  Env: ", style="dim")
+            for env_name in self.state.environment_names:
+                if env_name == self.state.active_environment:
+                    header.append(f"[{env_name}]", style="bold white on blue")
+                else:
+                    header.append(f"  {env_name}", style="dim")
+            header.append(" ", style="dim")
+
+        if self.state.macro_running:
+            header.append("  ")
+            header.append(f"[Macro: {self.state.macro_name} {self.state.macro_step}/{self.state.macro_total}]", style="yellow bold")
+        elif self.state.command_running:
             header.append("  ")
             header.append("[Running in background]", style="yellow bold")
         elif self.state.status_message:
             header.append("  ")
             header.append(self.state.status_message, style="yellow")
 
+        subtitle_parts = ["q: quit"]
+        if self._has_multiple_environments:
+            subtitle_parts.insert(0, "e/E: switch env")
+        if self.manager.macros:
+            subtitle_parts.insert(0, "m: macros")
+
         return Panel(
             header,
             border_style="blue",
-            subtitle="[dim]q: quit[/dim]",
+            subtitle=f"[dim]{' | '.join(subtitle_parts)}[/dim]",
             subtitle_align="right",
         )
 
@@ -352,6 +414,45 @@ class DevOpsTUI:
             subtitle="[dim]Commands run without 'hester devops' prefix[/dim]",
             subtitle_align="right",
             border_style="dim",
+        )
+
+    def _create_macros_panel(self) -> Panel:
+        """Create macros panel showing available macros."""
+        content = Text()
+
+        for i, macro in enumerate(self.manager.macros):
+            shortcut_key = macro.get_shortcut_key()
+            if shortcut_key:
+                content.append(f"  [Ctrl+{shortcut_key.upper()}]", style=STYLES["key"])
+            else:
+                content.append(f"  [m{i+1}]    ", style=STYLES["key"])
+
+            content.append(f" {macro.name}", style="white")
+
+            padding = max(1, 25 - len(macro.name))
+            content.append(" " * padding, style="dim")
+            content.append(macro.description, style=STYLES["hint"])
+
+            if macro.confirm:
+                content.append(" ⚠", style="yellow")
+
+            content.append("\n")
+
+        return Panel(
+            content,
+            title="[bold]Macros[/bold]",
+            border_style="magenta",
+        )
+
+    def _create_confirm_panel(self) -> Panel:
+        """Create confirmation dialog panel."""
+        content = Text()
+        content.append(self.state.confirm_message, style="yellow bold")
+        content.append("  [y/N]", style="white bold")
+
+        return Panel(
+            content,
+            border_style="red",
         )
 
     def _create_input_panel(self) -> Panel:
@@ -617,19 +718,73 @@ class DevOpsTUI:
 
     async def _handle_dashboard_input(self, char: str):
         """Handle input in dashboard mode (escape sequences handled in _handle_input)."""
+        # Confirm dialog handling
+        if self.state.confirm_pending:
+            if char == 'y' or char == 'Y':
+                callback = self.state.confirm_callback
+                self.state.confirm_pending = False
+                self.state.confirm_message = ""
+                self.state.confirm_callback = None
+                self._refresh()
+                if callback:
+                    await callback()
+            else:
+                # Any other key cancels
+                self.state.confirm_pending = False
+                self.state.confirm_message = ""
+                self.state.confirm_callback = None
+                self.state.status_message = "Cancelled"
+                self._refresh()
+            return
+
+        # Macro number input mode (after pressing 'm')
+        if self.state.macro_input_mode:
+            self.state.macro_input_mode = False
+            if char.isdigit() and char != '0':
+                idx = int(char) - 1
+                if 0 <= idx < len(self.manager.macros):
+                    await self._trigger_macro(self.manager.macros[idx])
+                else:
+                    self.state.status_message = f"No macro #{char}"
+                    self._refresh()
+            else:
+                self.state.status_message = ""
+                self._refresh()
+            return
+
         # Quit
         if char == 'q' and not self.state.command_input:
             self._running = False
             return
 
-        # Handle Ctrl+<key> shortcuts from config
+        # Handle Ctrl+<key> shortcuts from config (actions and macros)
         # Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1A
         if 0x01 <= ord(char) <= 0x1A:
             key = chr(ord('a') + ord(char) - 1)  # Convert to letter
+            # Check macro shortcuts first
+            if key in self._macro_shortcuts:
+                await self._trigger_macro(self._macro_shortcuts[key])
+                return
             if key in self._quick_actions:
                 service, action = self._quick_actions[key]
-                await self._run_quick_action(service, action)
+                await self._run_quick_action_with_confirm(service, action)
                 return
+
+        # Environment cycling (only when not typing in command input)
+        if not self.state.command_input and self._has_multiple_environments:
+            if char == 'e':
+                await self._cycle_environment(1)
+                return
+            elif char == 'E':
+                await self._cycle_environment(-1)
+                return
+
+        # Macro input mode
+        if char == 'm' and not self.state.command_input and self.manager.macros:
+            self.state.macro_input_mode = True
+            self.state.status_message = "Macro: press 1-9..."
+            self._refresh()
+            return
 
         # Enter - execute command or run default action on selected service
         if char == '\n' or char == '\r':
@@ -641,7 +796,7 @@ class DevOpsTUI:
                 if service:
                     default_action = service.get_default_action()
                     if default_action:
-                        await self._run_quick_action(service, default_action)
+                        await self._run_quick_action_with_confirm(service, default_action)
                     else:
                         self.state.status_message = f"No actions for {service.name}"
                         self._refresh()
@@ -758,6 +913,73 @@ class DevOpsTUI:
             self.state.selected_service_index + delta
         ) % len(self.manager.services)
         self._refresh()
+
+    # =========================================================================
+    # Environment & Macro Handling
+    # =========================================================================
+
+    async def _cycle_environment(self, direction: int):
+        """Cycle to the next/previous environment."""
+        names = self.state.environment_names
+        if len(names) <= 1:
+            return
+
+        current_idx = names.index(self.state.active_environment) if self.state.active_environment in names else 0
+        new_idx = (current_idx + direction) % len(names)
+        new_env = names[new_idx]
+
+        success, msg = self.manager.switch_environment(new_env)
+        if success:
+            self.state.active_environment = new_env
+            self.state.status_message = msg
+            # Rebuild quick actions for new environment's services
+            self._quick_actions = self.manager.get_action_shortcuts()
+        else:
+            self.state.status_message = f"Switch failed: {msg}"
+        self._refresh()
+
+    async def _trigger_macro(self, macro: MacroConfig):
+        """Trigger a macro, with confirmation if required."""
+        if macro.confirm:
+            self.state.confirm_pending = True
+            self.state.confirm_message = f"Run macro '{macro.name}'? ({len(macro.steps)} steps)"
+            self.state.confirm_callback = lambda: self._execute_macro(macro)
+            self._refresh()
+        else:
+            await self._execute_macro(macro)
+
+    async def _execute_macro(self, macro: MacroConfig):
+        """Execute a macro and show progress."""
+        self.state.macro_running = True
+        self.state.macro_name = macro.name
+        self.state.macro_total = len(macro.steps)
+        self.state.macro_step = 0
+        self._refresh()
+
+        def on_step(idx, total, step):
+            self.state.macro_step = idx + 1
+            self._refresh()
+
+        success, msg = await self.manager.run_macro(macro.name, on_step=on_step)
+
+        self.state.macro_running = False
+        self.state.macro_name = ""
+        self.state.status_message = msg
+        # Sync environment state in case macro switched it
+        self.state.active_environment = self.manager.active_environment
+        self._quick_actions = self.manager.get_action_shortcuts()
+        self._refresh()
+
+    async def _run_quick_action_with_confirm(self, service: ServiceConfig, action: ServiceAction):
+        """Run a quick action, checking if environment requires confirmation."""
+        env = self.manager.get_environment(self.state.active_environment)
+        if env and env.confirm_actions:
+            self.state.confirm_pending = True
+            self.state.confirm_message = f"Run '{action.name}' on {service.name} in {env.name}?"
+            self.state.confirm_callback = lambda: self._run_quick_action(service, action)
+            self._refresh()
+        else:
+            await self._run_quick_action(service, action)
 
     # =========================================================================
     # Command Execution

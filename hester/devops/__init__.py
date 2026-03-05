@@ -10,10 +10,18 @@ defined in lee/config.yaml. Features:
 """
 
 from .tui import DevOpsTUI, run_devops_tui
-from .manager import ServiceManager
+from .manager import (
+    ServiceManager,
+    EnvironmentConfig,
+    MacroConfig,
+    MacroStep,
+)
 
 __all__ = [
     "DevOpsTUI",
     "run_devops_tui",
     "ServiceManager",
+    "EnvironmentConfig",
+    "MacroConfig",
+    "MacroStep",
 ]
