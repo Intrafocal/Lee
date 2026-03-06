@@ -21,6 +21,7 @@ import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
 import { SpyglassPane } from './components/SpyglassPane';
 import { BridgePicker } from './components/BridgePicker';
+import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
 import { useHotkeys } from './hooks/useHotkeys';
 import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
@@ -96,6 +97,9 @@ const App: React.FC = () => {
   // Config editor modal
   const [showConfigEditor, setShowConfigEditor] = useState<boolean>(false);
   const [configEditorInitialSection, setConfigEditorInitialSection] = useState<'tuis' | 'keybindings' | 'terminal' | 'hester' | 'raw' | undefined>(undefined);
+
+  // Global config editor modal
+  const [showGlobalConfigEditor, setShowGlobalConfigEditor] = useState<boolean>(false);
 
   // TUI options for the new-tab dropdown (fetched from main process)
   const [tuiOptions, setTuiOptions] = useState<NewTabOption[]>([]);
@@ -1469,9 +1473,14 @@ const App: React.FC = () => {
       setShowCommandPalette(true);
     });
 
-    // Lee > Edit Config
+    // Lee > Edit Workspace Config
     lee.menu.onEditConfig(() => {
       setShowConfigEditor(true);
+    });
+
+    // Lee > Edit Lee Config
+    lee.menu.onEditGlobalConfig(() => {
+      setShowGlobalConfigEditor(true);
     });
 
     // Lee > Switch Workspace
@@ -1817,6 +1826,16 @@ const App: React.FC = () => {
         config={config}
         workspace={workspace}
         initialSection={configEditorInitialSection}
+      />
+      <GlobalConfigEditorModal
+        isOpen={showGlobalConfigEditor}
+        onClose={() => setShowGlobalConfigEditor(false)}
+        onSave={() => {
+          setShowGlobalConfigEditor(false);
+          if (lee?.machines?.reload) {
+            lee.machines.reload();
+          }
+        }}
       />
       <CommandPalette
         isOpen={showCommandPalette}

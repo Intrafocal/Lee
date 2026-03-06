@@ -92,6 +92,13 @@ export const BridgePicker: React.FC<BridgePickerProps> = ({
       setTuis(tuiOptions);
     } catch (err: any) {
       setError(err.message || 'Failed to connect');
+      // Always offer Terminal even if remote context fetch fails
+      setTuis([{
+        key: 'terminal',
+        name: 'Terminal',
+        command: '$SHELL',
+        args: ['-l'],
+      }]);
     }
     setLoading(false);
   }, []);
@@ -103,8 +110,8 @@ export const BridgePicker: React.FC<BridgePickerProps> = ({
   }, [selectedMachine, fetchRemoteTUIs]);
 
   const handleSpawn = (tui: TUIOption) => {
-    if (selectedMachine && remoteWorkspace) {
-      onSpawn(selectedMachine.config, remoteWorkspace, tui);
+    if (selectedMachine) {
+      onSpawn(selectedMachine.config, remoteWorkspace || '~', tui);
     }
   };
 

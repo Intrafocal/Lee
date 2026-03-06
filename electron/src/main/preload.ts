@@ -80,6 +80,12 @@ export interface LeeAPI {
     saveRaw: (workspace: string, content: string) => Promise<{ success: boolean; error?: string }>;
     save: (workspace: string, config: any) => Promise<{ success: boolean; error?: string }>;
   };
+  globalConfig: {
+    load: () => Promise<any>;
+    getRaw: () => Promise<string | null>;
+    saveRaw: (content: string) => Promise<{ success: boolean; error?: string }>;
+    save: (config: any) => Promise<{ success: boolean; error?: string }>;
+  };
   file: {
     onNew: (callback: () => void) => void;
     onOpen: (callback: (filePath: string) => void) => void;
@@ -277,6 +283,13 @@ contextBridge.exposeInMainWorld('lee', {
     save: (workspace: string, config: any) => ipcRenderer.invoke('config:save', workspace, config),
   },
 
+  globalConfig: {
+    load: () => ipcRenderer.invoke('globalConfig:load'),
+    getRaw: () => ipcRenderer.invoke('globalConfig:getRaw'),
+    saveRaw: (content: string) => ipcRenderer.invoke('globalConfig:saveRaw', content),
+    save: (config: any) => ipcRenderer.invoke('globalConfig:save', config),
+  },
+
   file: {
     onNew: (callback: () => void) => {
       ipcRenderer.on('file:new', () => callback());
@@ -309,12 +322,16 @@ contextBridge.exposeInMainWorld('lee', {
     onEditConfig: (callback: () => void) => {
       ipcRenderer.on('menu:edit-config', () => callback());
     },
+    onEditGlobalConfig: (callback: () => void) => {
+      ipcRenderer.on('menu:edit-global-config', () => callback());
+    },
     onSwitchWorkspace: (callback: () => void) => {
       ipcRenderer.on('menu:switch-workspace', () => callback());
     },
     removeAllListeners: () => {
       ipcRenderer.removeAllListeners('command-palette:open');
       ipcRenderer.removeAllListeners('menu:edit-config');
+      ipcRenderer.removeAllListeners('menu:edit-global-config');
       ipcRenderer.removeAllListeners('menu:switch-workspace');
     },
   },
