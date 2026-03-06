@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/machine.dart';
 import '../services/lee_api.dart';
 import 'machines_provider.dart';
 
