@@ -249,10 +249,16 @@ function setupApplicationMenu(): void {
         { role: 'about' as const },
         { type: 'separator' as const },
         {
-          label: 'Edit Config...',
+          label: 'Edit Workspace Config...',
           accelerator: 'CmdOrCtrl+,' as string,
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('menu:edit-config');
+          },
+        },
+        {
+          label: 'Edit Lee Config...',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('menu:edit-global-config');
           },
         },
         {
@@ -786,6 +792,65 @@ function setupIPC(): void {
     }
   });
 
+  // Global config operations - load ~/.lee/config.yaml
+  ipcMain.handle('globalConfig:load', async () => {
+    try {
+      const configPath = path.join(app.getPath('home'), '.lee', 'config.yaml');
+      const content = await fs.promises.readFile(configPath, 'utf-8');
+      return parseYamlConfig(content);
+    } catch (error) {
+      console.error('Failed to load global config:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('globalConfig:getRaw', async () => {
+    try {
+      const configPath = path.join(app.getPath('home'), '.lee', 'config.yaml');
+      const content = await fs.promises.readFile(configPath, 'utf-8');
+      return content;
+    } catch (error) {
+      console.error('Failed to read raw global config:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('globalConfig:saveRaw', async (_event, content: string) => {
+    try {
+      const configDir = path.join(app.getPath('home'), '.lee');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.promises.mkdir(configDir, { recursive: true });
+      await fs.promises.writeFile(configPath, content, 'utf-8');
+      console.log('Saved raw global config to:', configPath);
+      await machineManager.loadConfig();
+      return { success: true };
+    } catch (error: any) {
+      console.error('Failed to save raw global config:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('globalConfig:save', async (_event, config: any) => {
+    try {
+      const configDir = path.join(app.getPath('home'), '.lee');
+      const configPath = path.join(configDir, 'config.yaml');
+      await fs.promises.mkdir(configDir, { recursive: true });
+      const content = yaml.dump(config, {
+        indent: 2,
+        lineWidth: -1,
+        noRefs: true,
+        sortKeys: false,
+      });
+      await fs.promises.writeFile(configPath, content, 'utf-8');
+      console.log('Saved global config to:', configPath);
+      await machineManager.loadConfig();
+      return { success: true };
+    } catch (error: any) {
+      console.error('Failed to save global config:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // File system operations
   ipcMain.handle('fs:readdir', async (_event, dirPath: string): Promise<FileEntry[]> => {
     try {
@@ -1189,6 +1254,21 @@ function setupIPC(): void {
 app.whenReady().then(() => {
   // Set app name for macOS menu bar
   app.name = 'Lee';
+
+  // Configure About panel with splash image
+  const splashPath = path.join(__dirname, '..', 'renderer', 'splash.png');
+  const aboutIcon = nativeImage.createFromPath(splashPath);
+  app.setAboutPanelOptions({
+    applicationName: 'Lee',
+    applicationVersion: '0.1.0',
+    copyright: 'Copyright © 2026 Intrafocal',
+    iconPath: splashPath,
+    ...(process.platform === 'darwin' ? {
+      credits: 'A Lightweight IDE',
+      version: '0.1.0',
+      icon: aboutIcon,
+    } : {}),
+  });
 
   // Initialize PTY manager (global singleton)
   ptyManager = new PTYManager();
