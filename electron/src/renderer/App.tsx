@@ -19,6 +19,8 @@ import { StatusBar, StatusMessage, DaemonStatus } from './components/StatusBar';
 import { LibraryPane } from './components/LibraryPane';
 import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
+import { SpyglassPane } from './components/SpyglassPane';
+import { BridgePicker } from './components/BridgePicker';
 import { useHotkeys } from './hooks/useHotkeys';
 import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
@@ -44,6 +46,16 @@ export interface TabData extends Tab {
   browserCheckpointReady?: boolean; // True when session+email captured for Frame checkpoint
   // Workstream-specific data (for type='workstream')
   workstreamId?: string;
+  // Machine-specific data (for type='spyglass' or 'bridge')
+  machineConfig?: {
+    name: string;
+    emoji: string;
+    host: string;
+    user: string;
+    ssh_port: number;
+    lee_port: number;
+    hester_port: number;
+  };
 }
 
 const App: React.FC = () => {
@@ -90,6 +102,10 @@ const App: React.FC = () => {
 
   // Workstream picker modal
   const [showWorkstreamPicker, setShowWorkstreamPicker] = useState<boolean>(false);
+
+  // Bridge picker modal
+  const [showBridgePicker, setShowBridgePicker] = useState(false);
+  const [bridgePreselectedMachine, setBridgePreselectedMachine] = useState<any>(null);
 
   // Helper to convert config keybinding format to useHotkeys format
   // Config uses: cmd+shift+t, useHotkeys uses: meta+shift+t
@@ -220,8 +236,15 @@ const App: React.FC = () => {
 
   // Create a new tab - defined BEFORE useEffects that depend on it
   const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string) => {
+    // Bridge type opens the picker instead of creating a tab directly
+    if (type === 'bridge' as any) {
+      setBridgePreselectedMachine(null);
+      setShowBridgePicker(true);
+      return null;
+    }
+
     // Non-PTY tabs that don't need Electron
-    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream'];
+    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream', 'spyglass'];
 
     if (!isElectron && !nonPtyTabs.includes(type)) {
       console.warn('Cannot create tab - not running in Electron');
@@ -951,7 +974,18 @@ const App: React.FC = () => {
       );
     }
 
-    // All other tabs are PTY-based terminals (including devops which now uses hester devops tui)
+    if (tab.type === 'spyglass') {
+      const tabData = tab as TabData;
+      return (
+        <SpyglassPane
+          key={tab.id}
+          active={active}
+          machineConfig={tabData.machineConfig!}
+        />
+      );
+    }
+
+    // All other tabs are PTY-based terminals (including bridge tabs which have a PTY)
     return (
       <TerminalPane
         key={tab.id}
@@ -1220,6 +1254,79 @@ const App: React.FC = () => {
       setDaemonStatus('unhealthy');
     }
   }, [checkDaemonHealth]);
+
+  const handleSpyglass = useCallback((machine: any) => {
+    const existing = tabs.find(t =>
+      t.type === 'spyglass' &&
+      (t as TabData).machineConfig?.host === machine.config.host &&
+      (t as TabData).machineConfig?.lee_port === machine.config.lee_port
+    );
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const tabId = nextTabIdRef.current++;
+    const newTab: TabData = {
+      id: tabId,
+      type: 'spyglass' as any,
+      label: `${machine.config.emoji} ${machine.config.name}`,
+      closable: true,
+      ptyId: null,
+      dockPosition: 'center',
+      machineConfig: machine.config,
+    };
+    setTabs(prev => [...prev, newTab]);
+    setActiveTabId(tabId);
+  }, [tabs]);
+
+  const handleBridge = useCallback((machine?: any) => {
+    setBridgePreselectedMachine(machine || null);
+    setShowBridgePicker(true);
+  }, []);
+
+  const handleBridgeSpawn = useCallback(async (machineConfig: any, workspace: string, tui: any) => {
+    setShowBridgePicker(false);
+    setBridgePreselectedMachine(null);
+
+    if (!isElectron) return;
+
+    const port = machineConfig.ssh_port || 22;
+    const remoteCmd = tui.key === 'terminal'
+      ? `cd ${workspace} && exec $SHELL -l`
+      : `cd ${workspace} && ${tui.command}${tui.args ? ' ' + tui.args.join(' ') : ''}`;
+
+    const sshArgs = ['-t'];
+    if (port !== 22) {
+      sshArgs.push('-p', String(port));
+    }
+    sshArgs.push(`${machineConfig.user}@${machineConfig.host}`, remoteCmd);
+
+    try {
+      const ptyId = await lee.pty.spawn('ssh', sshArgs, undefined, `${machineConfig.emoji} ${tui.name}`);
+      if (ptyId !== null) {
+        ptyEventManager.expect(ptyId);
+      }
+
+      const tabId = nextTabIdRef.current++;
+      const newTab: TabData = {
+        id: tabId,
+        type: 'bridge' as any,
+        label: `${machineConfig.emoji} ${tui.name}`,
+        closable: true,
+        ptyId,
+        dockPosition: 'center',
+        machineConfig,
+      };
+      setTabs(prev => [...prev, newTab]);
+      setActiveTabId(tabId);
+
+      if (isElectron) {
+        lee.context.recordAction('tab_create', `bridge:${machineConfig.name}:${tui.name}`);
+      }
+    } catch (error) {
+      console.error('[Bridge] Failed to spawn SSH:', error);
+    }
+  }, []);
 
   // Restore session when workspace is set
   useEffect(() => {
@@ -1938,6 +2045,10 @@ const App: React.FC = () => {
                     <span className="shortcut-name">Library</span>
                     <kbd>{getDisplayKeybinding('library', 'meta+shift+y')}</kbd>
                   </div>
+                  <div className="shortcut-chip" onClick={() => handleBridge()}>
+                    <span className="shortcut-icon">🌉</span>
+                    <span className="shortcut-name">Bridge</span>
+                  </div>
                   {/* Dynamic TUI items from config */}
                   {Object.entries(config?.tuis || {}).map(([key, tui]: [string, any]) => {
                     const keybinding = config?.keybindings?.[key];
@@ -1973,7 +2084,19 @@ const App: React.FC = () => {
         onMessageClick={handleStatusMessageClick}
         onClearMessage={handleClearStatusMessage}
         onDaemonAction={handleDaemonAction}
+        onSpyglass={handleSpyglass}
+        onBridge={handleBridge}
       />
+      {showBridgePicker && (
+        <BridgePicker
+          preselectedMachine={bridgePreselectedMachine}
+          onSpawn={handleBridgeSpawn}
+          onCancel={() => {
+            setShowBridgePicker(false);
+            setBridgePreselectedMachine(null);
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -2020,6 +2143,10 @@ function getDefaultLabel(type: Tab['type']): string {
       return 'Workstream';
     case 'custom':
       return 'TUI';
+    case 'spyglass':
+      return 'Spyglass';
+    case 'bridge':
+      return 'Bridge';
     default:
       return 'Tab';
   }
