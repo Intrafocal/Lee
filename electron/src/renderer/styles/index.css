@@ -5301,3 +5301,350 @@ body {
   opacity: 0.5;
   cursor: default;
 }
+
+/* Machine status indicators */
+.machine-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+
+.machine-emoji {
+  cursor: pointer;
+  font-size: 14px;
+  user-select: none;
+  transition: opacity 0.2s;
+}
+
+.machine-emoji.online {
+  opacity: 1;
+}
+
+.machine-emoji.offline {
+  opacity: 0.35;
+  filter: grayscale(0.5);
+}
+
+.machine-emoji:hover {
+  transform: scale(1.2);
+}
+
+/* Spyglass pane */
+.spyglass-pane {
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+  overflow-y: auto;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
+.spyglass-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #30363d;
+  margin-bottom: 16px;
+}
+
+.spyglass-machine-emoji {
+  font-size: 20px;
+}
+
+.spyglass-machine-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.spyglass-status {
+  font-size: 10px;
+}
+
+.spyglass-status.connected {
+  color: #3fb950;
+}
+
+.spyglass-status.disconnected {
+  color: #f85149;
+}
+
+.spyglass-idle {
+  margin-left: auto;
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.spyglass-workspace {
+  font-size: 12px;
+  color: #8b949e;
+  margin-bottom: 12px;
+}
+
+.spyglass-error {
+  color: #f85149;
+  font-size: 13px;
+  padding: 8px;
+  background: rgba(248, 81, 73, 0.1);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.spyglass-loading {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.spyglass-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.spyglass-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #21262d;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+.spyglass-tab:hover {
+  background: #30363d;
+}
+
+.spyglass-tab.active {
+  background: #30363d;
+  border: 1px solid #3fb950;
+}
+
+.spyglass-tab-icon {
+  font-size: 12px;
+}
+
+.spyglass-tab-label {
+  color: #e6edf3;
+}
+
+.spyglass-editor {
+  padding: 10px;
+  background: #161b22;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.spyglass-editor-file {
+  font-family: 'JetBrainsMono', monospace;
+  font-size: 13px;
+  color: #e6edf3;
+}
+
+.spyglass-modified {
+  color: #d29922;
+}
+
+.spyglass-editor-meta {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 4px;
+}
+
+.spyglass-activity {
+  margin-bottom: 16px;
+}
+
+.spyglass-section-label {
+  font-size: 11px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.spyglass-action {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.spyglass-action-type {
+  color: #8b949e;
+  min-width: 80px;
+}
+
+.spyglass-action-target {
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spyglass-no-activity {
+  color: #484f58;
+  font-style: italic;
+}
+
+.spyglass-session {
+  font-size: 11px;
+  color: #484f58;
+  padding-top: 8px;
+  border-top: 1px solid #21262d;
+}
+
+/* Bridge picker modal */
+.bridge-picker-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.bridge-picker {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  width: 360px;
+  max-height: 500px;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.bridge-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #30363d;
+}
+
+.bridge-picker-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.bridge-picker-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.bridge-picker-close:hover {
+  color: #e6edf3;
+}
+
+.bridge-section {
+  padding: 12px 16px;
+}
+
+.bridge-section-label {
+  font-size: 12px;
+  color: #8b949e;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bridge-workspace {
+  color: #484f58;
+}
+
+.bridge-back-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.bridge-back-btn:hover {
+  color: #e6edf3;
+  border-color: #8b949e;
+}
+
+.bridge-machine-btn,
+.bridge-tui-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: #21262d;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #e6edf3;
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 4px;
+  transition: all 0.15s;
+}
+
+.bridge-machine-btn:hover:not(:disabled),
+.bridge-tui-btn:hover {
+  background: #30363d;
+  border-color: #3fb950;
+}
+
+.bridge-machine-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bridge-status-dot.online {
+  color: #3fb950;
+  margin-left: auto;
+}
+
+.bridge-status-dot.offline {
+  color: #f85149;
+  margin-left: auto;
+}
+
+.bridge-tui-name {
+  font-weight: 500;
+}
+
+.bridge-tui-command {
+  margin-left: auto;
+  color: #484f58;
+  font-family: 'JetBrainsMono', monospace;
+  font-size: 11px;
+}
+
+.bridge-loading,
+.bridge-empty {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 12px 0;
+  text-align: center;
+}
+
+.bridge-error {
+  color: #f85149;
+  font-size: 13px;
+  padding: 8px;
+  background: rgba(248, 81, 73, 0.1);
+  border-radius: 6px;
+}
