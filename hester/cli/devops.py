@@ -30,13 +30,13 @@ def devops():
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml (default: current directory)"
+    help="Working directory with .lee/config.yaml (default: current directory)"
 )
 def devops_tui(working_dir: Optional[str]):
     """Launch the DevOps TUI dashboard.
 
     Provides a terminal-based dashboard for managing local development
-    services defined in lee/config.yaml. Features:
+    services defined in .lee/config.yaml. Features:
     - Real-time service status monitoring
     - Start/stop services with keyboard shortcuts
     - Live log streaming
@@ -70,7 +70,7 @@ def devops_tui(working_dir: Optional[str]):
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml"
+    help="Working directory with .lee/config.yaml"
 )
 @click.option(
     "--env", "-e",
@@ -81,7 +81,7 @@ def devops_tui(working_dir: Optional[str]):
 def devops_status(working_dir: Optional[str], environment: Optional[str]):
     """Show status of all configured services.
 
-    Lists all services from lee/config.yaml with their current state.
+    Lists all services from .lee/config.yaml with their current state.
 
     Examples:
         hester devops status
@@ -104,7 +104,7 @@ def devops_status(working_dir: Optional[str], environment: Optional[str]):
 
     if not services:
         console.print("[yellow]No services configured.[/yellow]")
-        console.print("[dim]Add services to lee/config.yaml[/dim]")
+        console.print("[dim]Add services to .lee/config.yaml[/dim]")
         return
 
     # Show all services with their status
@@ -128,7 +128,7 @@ def devops_status(working_dir: Optional[str], environment: Optional[str]):
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml"
+    help="Working directory with .lee/config.yaml"
 )
 @click.option(
     "--env", "-e",
@@ -169,7 +169,7 @@ def devops_start(service_name: str, working_dir: Optional[str], environment: Opt
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml"
+    help="Working directory with .lee/config.yaml"
 )
 @click.option(
     "--env", "-e",
@@ -210,7 +210,7 @@ def devops_stop(service_name: str, working_dir: Optional[str], environment: Opti
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml"
+    help="Working directory with .lee/config.yaml"
 )
 @click.option(
     "--env", "-e",
@@ -289,7 +289,7 @@ def devops_logs(
     "--dir", "-d",
     "working_dir",
     default=None,
-    help="Working directory with lee/config.yaml"
+    help="Working directory with .lee/config.yaml"
 )
 @click.option(
     "--env", "-e",

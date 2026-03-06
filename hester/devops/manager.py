@@ -2,7 +2,7 @@
 Service Manager - Core logic for managing services.
 
 Handles:
-- Parsing lee/config.yaml
+- Parsing .lee/config.yaml
 - Starting/stopping services
 - Collecting logs
 - Health checks
@@ -145,7 +145,7 @@ class RunningService:
 
 class ServiceManager:
     """
-    Manages services defined in lee/config.yaml.
+    Manages services defined in .lee/config.yaml.
 
     Provides methods to start/stop services and track their state.
     Services are categories (Docker, Supabase, Frame, etc.) with multiple

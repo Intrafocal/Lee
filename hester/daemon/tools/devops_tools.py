@@ -1,7 +1,7 @@
 """
 DevOps Tools - Service management for local development environments.
 
-These tools allow Hester to manage services defined in lee/config.yaml,
+These tools allow Hester to manage services defined in .lee/config.yaml,
 check Docker container status, and run health checks.
 """
 

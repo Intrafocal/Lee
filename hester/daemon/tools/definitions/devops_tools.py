@@ -11,7 +11,7 @@ _DEVOPS_ENVIRONMENTS = {"daemon", "cli", "subagent"}
 DEVOPS_LIST_SERVICES_TOOL = ToolDefinition(
     name="devops_list_services",
     description="""List all configured services from the workspace config.
-Shows services defined in lee/config.yaml with their current status.
+Shows services defined in .lee/config.yaml with their current status.
 Returns service names, commands, ports, and running state.
 
 Examples:
@@ -34,7 +34,7 @@ DEVOPS_START_SERVICE_TOOL = ToolDefinition(
     name="devops_start_service",
     description="""Start a configured service.
 Launches the service in background and returns the process ID.
-The service must be defined in lee/config.yaml.
+The service must be defined in .lee/config.yaml.
 
 Examples:
 - devops_start_service(service_name="API Gateway") - start the API Gateway
