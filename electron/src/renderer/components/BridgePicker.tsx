@@ -74,7 +74,7 @@ export const BridgePicker: React.FC<BridgePickerProps> = ({
 
       setRemoteWorkspace(ctx.workspace || null);
 
-      const remoteTuis = ctx.workspaceConfig?.tuis || {};
+      const remoteTuis = ctx.availableTuis || {};
       const tuiOptions: TUIOption[] = Object.entries(remoteTuis).map(([key, tui]: [string, any]) => ({
         key,
         name: tui.name || key,

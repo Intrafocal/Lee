@@ -1290,31 +1290,65 @@ export class PTYManager extends EventEmitter {
     return Array.from(types);
   }
 
+  // TUIs that always appear in the tab menu (part of Lee itself)
+  // Note: hester and devops are now in CORE_TAB_OPTIONS / FEATURE_TAB_OPTIONS in TabBar
+  private static readonly ALWAYS_SHOW_TUIS: string[] = [];
+
+  /**
+   * Get all available TUI definitions (defaults merged with config).
+   * Used to broadcast available TUIs in context for Bridge discovery.
+   */
+  getAllTUIDefinitions(windowId?: number): Record<string, TUIDefinition> {
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const configTuis = wsConfig?.tuis ?? {};
+
+    const merged: Record<string, TUIDefinition> = { ...PTYManager.DEFAULT_TUIS };
+    for (const [key, def] of Object.entries(configTuis)) {
+      merged[key] = { ...merged[key], ...def };
+    }
+    return merged;
+  }
+
   /**
    * Get available TUIs with full metadata for dropdown rendering.
-   * Only returns TUIs explicitly configured in workspace config.
+   * Always includes Hester and DevOps (bundled with Lee).
+   * Additional TUIs appear when explicitly configured in workspace config.
    * Core tabs (Terminal, Browser, Library, Workstream) are handled by TabBar.
    */
   getAvailableTUIsWithMeta(windowId?: number): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
     const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
     const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const configTuis = wsConfig?.tuis;
+    const configTuis = wsConfig?.tuis ?? {};
 
-    // Only show TUIs that are explicitly configured — no fallback to all defaults.
-    // Core tabs (Terminal, Browser, Library, Workstream) are handled separately in TabBar.
-    if (!configTuis || Object.keys(configTuis).length === 0) {
-      return [];
-    }
+    // Merge always-show defaults with configured TUIs
+    const merged = new Map<string, { key: string; name: string; icon: string; shortcut?: string }>();
 
-    return Object.entries(configTuis).map(([key, def]) => {
+    // Always-show TUIs first
+    for (const key of PTYManager.ALWAYS_SHOW_TUIS) {
+      const def = configTuis[key] ?? {};
       const defaultDef = PTYManager.DEFAULT_TUIS[key];
-      return {
+      merged.set(key, {
         key,
         name: def.name || defaultDef?.name || key,
         icon: def.icon || defaultDef?.icon || '🔧',
         shortcut: def.shortcut || defaultDef?.shortcut,
-      };
-    });
+      });
+    }
+
+    // Then configured TUIs
+    for (const [key, def] of Object.entries(configTuis)) {
+      if (merged.has(key)) continue;
+      const defaultDef = PTYManager.DEFAULT_TUIS[key];
+      merged.set(key, {
+        key,
+        name: def.name || defaultDef?.name || key,
+        icon: def.icon || defaultDef?.icon || '🔧',
+        shortcut: def.shortcut || defaultDef?.shortcut,
+      });
+    }
+
+    return Array.from(merged.values());
   }
 
   /**

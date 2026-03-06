@@ -1974,6 +1974,15 @@ const App: React.FC = () => {
                 />
               );
             }
+            if (tab.type === 'spyglass') {
+              return (
+                <SpyglassPane
+                  key={tab.id}
+                  active={isActive}
+                  machineConfig={tab.machineConfig!}
+                />
+              );
+            }
             return (
               <TerminalPane
                 key={tab.id}

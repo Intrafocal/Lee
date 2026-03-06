@@ -642,10 +642,16 @@ function setupIPC(): void {
           console.log('  source files:', config.source || []);
           ptyManager.setWorkspaceConfig(workspace, config, windowId);
           contextBridge?.setWorkspaceConfig(config);
+          contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
           break;
         } catch {
           // Try next path
         }
+      }
+
+      // Even if no config was found, broadcast default TUI definitions
+      if (!contextBridge?.getContext().availableTuis) {
+        contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
       }
     } catch (error) {
       console.error('Failed to load workspace config:', error);
@@ -699,6 +705,7 @@ function setupIPC(): void {
           // Also update pty-manager and context-bridge with the config
           ptyManager.setWorkspaceConfig(workspace, config, windowId);
           contextBridge?.setWorkspaceConfig(config);
+          contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
           return config;
         } catch {
           // Try next path
@@ -747,6 +754,7 @@ function setupIPC(): void {
       const config = parseYamlConfig(content);
       ptyManager.setWorkspaceConfig(workspace, config, windowId);
       contextBridge?.setWorkspaceConfig(config);
+      contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
 
       return { success: true };
     } catch (error: any) {
@@ -784,6 +792,7 @@ function setupIPC(): void {
       // Reload config into pty-manager and context-bridge
       ptyManager.setWorkspaceConfig(workspace, config, windowId);
       contextBridge?.setWorkspaceConfig(config);
+      contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
 
       return { success: true };
     } catch (error: any) {

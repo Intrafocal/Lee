@@ -275,6 +275,9 @@ export interface LeeContext {
   // Browser tabs (by tab ID)
   browsers?: Record<number, BrowserContext>;
 
+  // Available TUIs (merged defaults + config) for Bridge discovery
+  availableTuis?: Record<string, TUIDefinition>;
+
   // Activity
   activity: ActivityContext;
 

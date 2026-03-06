@@ -228,6 +228,15 @@ export class ContextBridge extends EventEmitter {
   }
 
   /**
+   * Update available TUIs (merged defaults + config).
+   * Used by Bridge to discover what can be spawned on this machine.
+   */
+  setAvailableTuis(tuis: Record<string, import('../shared/context').TUIDefinition>): void {
+    this.context.availableTuis = tuis;
+    this.emitChange();
+  }
+
+  /**
    * Get current context snapshot with computed activity.
    */
   getContext(): LeeContext {

@@ -114,7 +114,9 @@ export class MachineManager extends EventEmitter {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           try {
-            resolve(JSON.parse(data));
+            const parsed = JSON.parse(data);
+            // API returns {success, data} wrapper — unwrap it
+            resolve(parsed.data ?? parsed);
           } catch {
             reject(new Error('Invalid JSON from remote context'));
           }
