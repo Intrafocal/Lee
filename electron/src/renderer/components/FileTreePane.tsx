@@ -243,17 +243,11 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
     return items.filter(entry => entryMatchesFilter(entry, lowerFilter));
   }, [entryMatchesFilter]);
 
-  // Handle keyboard shortcut to focus filter
+  // Handle keyboard shortcut to clear filter
   useEffect(() => {
     if (!active) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl+F to focus filter
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        filterInputRef.current?.focus();
-        filterInputRef.current?.select();
-      }
       // Escape to clear filter and blur
       if (e.key === 'Escape' && document.activeElement === filterInputRef.current) {
         setFilter('');
