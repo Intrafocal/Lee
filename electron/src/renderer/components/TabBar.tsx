@@ -8,7 +8,7 @@ export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
 
 export interface Tab {
   id: number;
-  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'custom';
+  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'spyglass' | 'bridge' | 'custom';
   label: string;
   closable: boolean;
   watched?: boolean; // Whether this tab is being watched for idle state
@@ -38,10 +38,13 @@ export const CORE_TAB_OPTIONS: NewTabOption[] = [
   { type: 'files', label: 'Files', icon: '📂', shortcut: '⇧⌘E' },
   { type: 'terminal', label: 'Terminal', icon: '💻', shortcut: '⇧⌘T' },
   { type: 'browser', label: 'Browser', icon: '🌐', shortcut: '⇧⌘B' },
+  { type: 'hester', label: 'Hester', icon: '🐇', shortcut: '⇧⌘H' },
+  { type: 'bridge', label: 'Bridge', icon: '🌉' },
 ];
 
 /** Feature tabs — React components, always shown */
 export const FEATURE_TAB_OPTIONS: NewTabOption[] = [
+  { type: 'devops', label: 'DevOps', icon: '🚀', shortcut: '⇧⌘O' },
   { type: 'library', label: 'Library', icon: '📚', shortcut: '⇧⌘Y' },
   { type: 'workstream', label: 'Workstream', icon: '📋', shortcut: '⇧⌘W' },
 ];
@@ -79,6 +82,8 @@ export const TAB_ICONS: Record<Tab['type'], string> = {
   'hester-qa': '🧪',
   library: '📚',
   workstream: '📋',
+  spyglass: '🔭',
+  bridge: '🌉',
   custom: '🔧',
 };
 

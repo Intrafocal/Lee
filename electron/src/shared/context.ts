@@ -22,7 +22,9 @@ export type TabType =
   | 'system'
   | 'sql'
   | 'library'
-  | 'workstream';
+  | 'workstream'
+  | 'spyglass'
+  | 'bridge';
 
 // Dock positions for multi-panel layout
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
@@ -231,6 +233,20 @@ export interface WorkspaceConfig {
   /** Config-driven TUI definitions */
   tuis?: Record<string, TUIDefinition>;
   [key: string]: unknown;
+}
+
+/**
+ * Machine configuration for Lee-to-Lee connectivity.
+ * Configured in ~/.lee/config.yaml under `machines:`.
+ */
+export interface MachineConfig {
+  name: string;
+  emoji: string;
+  host: string;
+  user: string;
+  ssh_port?: number;   // default 22
+  lee_port?: number;    // default 9001
+  hester_port?: number; // default 9000
 }
 
 /**
