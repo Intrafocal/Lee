@@ -6,12 +6,14 @@ import '../models/machine.dart';
 import '../providers/connection_provider.dart';
 import '../providers/context_provider.dart';
 import '../providers/machines_provider.dart';
+import '../providers/windows_provider.dart';
 import '../services/lee_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../widgets/machine_switcher.dart';
 import '../widgets/new_tab_sheet.dart';
 import '../widgets/tab_bar.dart';
+import '../widgets/workspace_switcher.dart';
 import 'browser_screen.dart';
 import 'editor_screen.dart';
 import 'hester_screen.dart';
@@ -42,9 +44,19 @@ class HomeScreen extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
+    final windowsState = ref.watch(windowsProvider);
+
     return Scaffold(
       appBar: AppBar(
-        title: const MachineSwitcher(),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const MachineSwitcher(),
+            if (windowsState.hasMultipleWindows)
+              const WorkspaceSwitcher(),
+          ],
+        ),
         leading: IconButton(
           icon: const Icon(Icons.dns_outlined),
           tooltip: 'Machines',
@@ -133,8 +145,11 @@ class HomeScreen extends ConsumerWidget {
   }
 
   void _focusTab(WidgetRef ref, Machine machine, TabContext tab) {
+    final windowId = ref.read(activeWindowIdProvider);
     final api = LeeApi(machine: machine);
-    api.sendCommand('system', 'focus_tab', {'tab_id': tab.id}).then((_) {
+    api
+        .sendCommand('system', 'focus_tab', {'tab_id': tab.id}, windowId)
+        .then((_) {
       api.dispose();
     });
   }
@@ -151,8 +166,9 @@ class HomeScreen extends ConsumerWidget {
     );
 
     if (action != null) {
+      final windowId = ref.read(activeWindowIdProvider);
       final api = LeeApi(machine: machine);
-      await api.sendCommand('tui', action, {});
+      await api.sendCommand('tui', action, {}, windowId);
       api.dispose();
     }
   }

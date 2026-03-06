@@ -8,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/lee_context.dart';
 import '../models/machine.dart';
 import 'machines_provider.dart';
+import 'windows_provider.dart';
 
 /// Connection state for the active machine's WebSocket.
 enum ConnectionStatus { disconnected, connecting, connected, error }
@@ -42,6 +43,8 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
   Timer? _reconnectTimer;
   String? _connectedMachineId;
 
+  int? _activeWindowId;
+
   ConnectionNotifier(this._ref) : super(const ConnectionState()) {
     // Watch for active machine changes
     _ref.listen<MachinesState>(machinesProvider, (prev, next) {
@@ -51,6 +54,14 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
         if (newId != null && next.activeMachine != null) {
           _connect(next.activeMachine!);
         }
+      }
+    });
+
+    // Watch for active window changes — clear cached context
+    _ref.listen<WindowsState>(windowsProvider, (prev, next) {
+      if (prev?.activeWindowId != next.activeWindowId) {
+        _activeWindowId = next.activeWindowId;
+        _lastContext = null;
       }
     });
   }
@@ -113,6 +124,15 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
       final type = json['type'] as String?;
 
       if (type == 'context_update') {
+        // Filter by active window_id if set
+        final msgWindowId = (json['window_id'] as num?)?.toInt();
+        final activeWindowId = _ref.read(windowsProvider).activeWindowId;
+        if (activeWindowId != null &&
+            msgWindowId != null &&
+            msgWindowId != activeWindowId) {
+          return; // Context from a different window, skip
+        }
+
         final contextData = json['data'] as Map<String, dynamic>;
         final context = LeeContext.fromJson(contextData);
         _lastContext = context;
