@@ -1326,15 +1326,57 @@ const App: React.FC = () => {
       handleFileSave();
     });
 
-    // File > Save As - not yet supported in new editor, log for now
+    // File > Save As - save current file tab to a new path
     lee.file.onSaveAs(async (filePath: string) => {
-      console.log('Save As requested (not yet implemented):', filePath);
+      if (!activeTabId) return;
+      const tab = tabs.find((t) => t.id === activeTabId);
+      if (!tab || tab.type !== 'file') return;
+
+      try {
+        const result = await lee.fs.writeFile(filePath, tab.fileContent || '');
+        if (result.success) {
+          const fileName = filePath.split('/').pop() || filePath;
+          setTabs((prev) => prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  filePath,
+                  label: fileName,
+                  fileModified: false,
+                  fileOriginalContent: t.fileContent,
+                  fileLanguage: getLanguageName(filePath),
+                }
+              : t
+          ));
+          lee.context.recordAction('file_save_as', filePath);
+        } else {
+          console.error('Failed to save file as:', result.error);
+        }
+      } catch (error) {
+        console.error('Failed to save file as:', error);
+      }
+    });
+
+    // Help > Ask Hester - opens command palette
+    lee.menu.onCommandPalette(() => {
+      setShowCommandPalette(true);
+    });
+
+    // Lee > Edit Config
+    lee.menu.onEditConfig(() => {
+      setShowConfigEditor(true);
+    });
+
+    // Lee > Switch Workspace
+    lee.menu.onSwitchWorkspace(() => {
+      setShowWorkspaceModal(true);
     });
 
     return () => {
       lee.file.removeAllListeners();
+      lee.menu.removeAllListeners();
     };
-  }, [handleNewFile, handleFileOpen, handleFileSave, switchWorkspace]);
+  }, [handleNewFile, handleFileOpen, handleFileSave, switchWorkspace, tabs, activeTabId, getLanguageName]);
 
   // Handle system commands from API server (via IPC from main process)
   useEffect(() => {
