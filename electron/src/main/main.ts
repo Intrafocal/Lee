@@ -1288,6 +1288,17 @@ app.whenReady().then(() => {
     return windowRegistry.getFocused()?.browserWindow || windowRegistry.getAny()?.browserWindow || null;
   });
 
+  // Forward daemon warnings (e.g. missing API key) to ALL windows as status messages
+  ptyManager.on('daemon-warning', (info: { message: string; type: string }) => {
+    for (const ws of windowRegistry.getAll().values()) {
+      ws.browserWindow.webContents.send('status:push', {
+        id: `daemon-warning-${Date.now()}`,
+        message: info.message,
+        type: info.type || 'warning',
+      });
+    }
+  });
+
   // Forward hester-setup events to ALL windows (setup progress is global)
   ptyManager.on('hester-setup', (info: { phase: string; message: string }) => {
     for (const ws of windowRegistry.getAll().values()) {

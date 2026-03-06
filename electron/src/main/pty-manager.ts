@@ -839,6 +839,16 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
+   * Check if GOOGLE_API_KEY is available from workspace config or process environment.
+   * Returns the source if found, or null if missing.
+   */
+  private getGoogleApiKeySource(): 'config' | 'env' | null {
+    if (this.workspaceConfig?.hester?.google_api_key) return 'config';
+    if (process.env.GOOGLE_API_KEY) return 'env';
+    return null;
+  }
+
+  /**
    * Start the Hester daemon in background (hidden PTY, not attached to any tab).
    * The daemon provides AI assistance via the command palette.
    * Checks if port 9000 is available first - if already in use, assumes daemon is running.
@@ -858,6 +868,17 @@ export class PTYManager extends EventEmitter {
         this.log('WARN', 'Skipping daemon start: hester venv bootstrap failed');
         return;
       }
+    }
+
+    // Pre-flight: check if GOOGLE_API_KEY is available
+    const apiKeySource = this.getGoogleApiKeySource();
+    if (!apiKeySource) {
+      this.log('WARN', 'Skipping daemon start: GOOGLE_API_KEY not found in workspace config or environment');
+      this.emit('daemon-warning', {
+        message: 'Hester needs GOOGLE_API_KEY — set it in .lee/config.yaml under hester.google_api_key or export it in your shell',
+        type: 'warning' as const,
+      });
+      return;
     }
 
     // Check if port 9000 is already in use (daemon from previous session)
@@ -912,6 +933,15 @@ export class PTYManager extends EventEmitter {
    * Returns success status and any error message.
    */
   async startDaemon(): Promise<{ success: boolean; error?: string; alreadyRunning?: boolean }> {
+    // Pre-flight: check API key before attempting to start
+    const apiKeySource = this.getGoogleApiKeySource();
+    if (!apiKeySource) {
+      const error = 'GOOGLE_API_KEY not configured. Set hester.google_api_key in .lee/config.yaml or export GOOGLE_API_KEY in your shell.';
+      this.log('WARN', error);
+      this.emit('daemon-warning', { message: error, type: 'warning' as const });
+      return { success: false, error };
+    }
+
     // Check if already running via PTY
     if (this.daemonPtyId !== null) {
       this.log('INFO', 'Daemon already running (PTY tracked)');
