@@ -624,6 +624,7 @@ function setupIPC(): void {
     try {
       const configPaths = [
         path.join(workspace, '.lee', 'config.yaml'),
+        path.join(app.getPath('home'), '.lee', 'config.yaml'),
         path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
       ];
 
@@ -678,6 +679,7 @@ function setupIPC(): void {
       // Try workspace-local config first, then global
       const configPaths = [
         path.join(workspace, '.lee', 'config.yaml'),
+        path.join(app.getPath('home'), '.lee', 'config.yaml'),
         path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
       ];
 
