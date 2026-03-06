@@ -14,6 +14,7 @@ import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
 import { RendererContextUpdate, UserActionType } from '../shared/context';
 import { saveDebugTrace, DebugTrace } from './debug-trace';
+import { MachineManager } from './machine-manager';
 
 // File entry type for directory listing
 interface FileEntry {
@@ -28,6 +29,7 @@ import { windowRegistry } from './window-registry';
 let ptyManager: PTYManager;
 let apiServer: APIServer;
 let browserManager: BrowserManager;
+let machineManager: MachineManager;
 
 // Check if we're in development mode (explicitly set or running with vite dev server)
 const isDev = process.env.NODE_ENV === 'development';
@@ -106,6 +108,9 @@ function createWindow(workspace?: string): BrowserWindow {
   // Register with WindowRegistry
   windowRegistry.register(bw, workspace || null, contextBridge);
 
+  // Rebuild menu to show new window in workspace list
+  setupApplicationMenu();
+
   // Wire context changes to API server broadcasting
   contextBridge.on('change', (ctx: any) => {
     apiServer?.broadcastContext(bw.id, ctx);
@@ -149,6 +154,11 @@ function createWindow(workspace?: string): BrowserWindow {
     });
   }
 
+  // Update menu checkmarks when this window gains focus
+  bw.on('focus', () => {
+    setupApplicationMenu();
+  });
+
   bw.on('closed', () => {
     // Remove event listeners
     ptyManager.removeListener('state', onPtyState);
@@ -161,6 +171,9 @@ function createWindow(workspace?: string): BrowserWindow {
     windowRegistry.unregister(bw.id);
     closeConfirmedWindows.delete(bw.id);
     reloadConfirmedWindows.delete(bw.id);
+
+    // Rebuild menu to update workspace window list
+    setupApplicationMenu();
   });
 
   // Handle window close with confirmation dialog
@@ -234,6 +247,20 @@ function setupApplicationMenu(): void {
       label: app.name,
       submenu: [
         { role: 'about' as const },
+        { type: 'separator' as const },
+        {
+          label: 'Edit Config...',
+          accelerator: 'CmdOrCtrl+,' as string,
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('menu:edit-config');
+          },
+        },
+        {
+          label: 'Switch Workspace...',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('menu:switch-workspace');
+          },
+        },
         { type: 'separator' as const },
         { role: 'services' as const },
         { type: 'separator' as const },
@@ -378,11 +405,32 @@ function setupApplicationMenu(): void {
         ...(isMac ? [
           { type: 'separator' as const },
           { role: 'front' as const },
-          { type: 'separator' as const },
-          { role: 'window' as const },
         ] : [
           { role: 'close' as const },
         ]),
+        // Dynamic workspace window list
+        ...(() => {
+          const windows = windowRegistry.getAll();
+          if (windows.size < 2) return [];
+          const items: Electron.MenuItemConstructorOptions[] = [
+            { type: 'separator' as const },
+          ];
+          for (const [, state] of windows) {
+            const workspace = state.workspace;
+            const label = workspace ? path.basename(workspace) : 'Untitled';
+            const isFocused = state.browserWindow === BrowserWindow.getFocusedWindow();
+            items.push({
+              label,
+              type: 'checkbox' as const,
+              checked: isFocused,
+              click: () => {
+                if (state.browserWindow.isMinimized()) state.browserWindow.restore();
+                state.browserWindow.focus();
+              },
+            });
+          }
+          return items;
+        })(),
       ],
     },
 
@@ -390,6 +438,14 @@ function setupApplicationMenu(): void {
     {
       role: 'help' as const,
       submenu: [
+        {
+          label: 'Ask Hester...',
+          accelerator: 'CmdOrCtrl+/',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('command-palette:open');
+          },
+        },
+        { type: 'separator' as const },
         {
           label: 'Learn More',
           click: async () => {
@@ -591,6 +647,7 @@ function setupIPC(): void {
     // Update window workspace in registry
     if (windowId != null) {
       windowRegistry.setWorkspace(windowId, workspace);
+      setupApplicationMenu(); // Rebuild menu to update workspace window list
     }
 
     // Bootstrap hester venv before starting TUIs/daemon that depend on it
@@ -1102,6 +1159,28 @@ function setupIPC(): void {
       };
     }
   });
+
+  // ============================================
+  // Machine management for Spyglass/Bridge
+  // ============================================
+
+  ipcMain.handle('machines:getAll', async () => {
+    return machineManager.getStates();
+  });
+
+  ipcMain.handle('machines:reload', async () => {
+    await machineManager.loadConfig();
+    await machineManager.pingAll();
+    return machineManager.getStates();
+  });
+
+  ipcMain.handle('machines:fetchContext', async (_event, machineConfig: any) => {
+    try {
+      return await machineManager.fetchRemoteContext(machineConfig);
+    } catch (err: any) {
+      return { error: err.message };
+    }
+  });
 }
 
 // App lifecycle
@@ -1133,6 +1212,16 @@ app.whenReady().then(() => {
     windowRegistry,
   });
   apiServer.start();
+
+  // Initialize machine manager for Lee-to-Lee connectivity
+  machineManager = new MachineManager();
+  machineManager.init().catch(err => console.error('[Lee] MachineManager init failed:', err));
+
+  machineManager.on('change', (states: any[]) => {
+    for (const ws of windowRegistry.getAll().values()) {
+      ws.browserWindow.webContents.send('machines:change', states);
+    }
+  });
 
   // Setup application menu
   setupApplicationMenu();

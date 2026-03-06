@@ -176,6 +176,12 @@ export interface LeeAPI {
   hester: {
     getSession: (sessionId: string, userId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
   };
+  machines: {
+    getAll: () => Promise<any[]>;
+    reload: () => Promise<any[]>;
+    fetchContext: (machineConfig: any) => Promise<any>;
+    onChange: (callback: (machines: any[]) => void) => () => void;
+  };
 }
 
 // Status message from Hester
@@ -293,6 +299,23 @@ contextBridge.exposeInMainWorld('lee', {
       ipcRenderer.removeAllListeners('folder:open');
       ipcRenderer.removeAllListeners('file:save');
       ipcRenderer.removeAllListeners('file:save-as');
+    },
+  },
+
+  menu: {
+    onCommandPalette: (callback: () => void) => {
+      ipcRenderer.on('command-palette:open', () => callback());
+    },
+    onEditConfig: (callback: () => void) => {
+      ipcRenderer.on('menu:edit-config', () => callback());
+    },
+    onSwitchWorkspace: (callback: () => void) => {
+      ipcRenderer.on('menu:switch-workspace', () => callback());
+    },
+    removeAllListeners: () => {
+      ipcRenderer.removeAllListeners('command-palette:open');
+      ipcRenderer.removeAllListeners('menu:edit-config');
+      ipcRenderer.removeAllListeners('menu:switch-workspace');
     },
   },
 
@@ -526,5 +549,16 @@ contextBridge.exposeInMainWorld('lee', {
   hester: {
     getSession: (sessionId: string, userId: string) =>
       ipcRenderer.invoke('hester:get-session', sessionId, userId),
+  },
+
+  machines: {
+    getAll: () => ipcRenderer.invoke('machines:getAll'),
+    reload: () => ipcRenderer.invoke('machines:reload'),
+    fetchContext: (machineConfig: any) => ipcRenderer.invoke('machines:fetchContext', machineConfig),
+    onChange: (callback: (machines: any[]) => void) => {
+      const listener = (_event: any, machines: any[]) => callback(machines);
+      ipcRenderer.on('machines:change', listener);
+      return () => ipcRenderer.removeListener('machines:change', listener);
+    },
   },
 } as LeeAPI);
