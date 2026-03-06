@@ -5500,6 +5500,67 @@ body {
   border-top: 1px solid #21262d;
 }
 
+.spyglass-tab-add {
+  border: 1px dashed #30363d !important;
+  background: transparent !important;
+  justify-content: center;
+}
+
+.spyglass-tab-add .spyglass-tab-icon {
+  font-size: 16px;
+  color: #8b949e;
+}
+
+.spyglass-tab-add:hover {
+  border-color: #3fb950 !important;
+}
+
+.spyglass-tab-add:hover .spyglass-tab-icon {
+  color: #3fb950;
+}
+
+.spyglass-tui-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid #21262d;
+}
+
+.spyglass-tui-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border-radius: 6px;
+  background: #161b22;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.spyglass-tui-option:hover {
+  background: #21262d;
+}
+
+.spyglass-tui-icon {
+  font-size: 18px;
+}
+
+.spyglass-tui-name {
+  font-size: 10px;
+  color: #8b949e;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.spyglass-tui-option:hover .spyglass-tui-name {
+  color: #e6edf3;
+}
+
 /* Bridge picker modal */
 .bridge-picker-overlay {
   position: fixed;

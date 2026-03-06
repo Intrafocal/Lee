@@ -1295,9 +1295,10 @@ const App: React.FC = () => {
     if (!isElectron) return;
 
     const port = machineConfig.ssh_port || 22;
+    const tuiCmd = `${tui.command}${tui.args ? ' ' + tui.args.join(' ') : ''}`;
     const remoteCmd = tui.key === 'terminal'
       ? `cd ${workspace} && exec $SHELL -l`
-      : `cd ${workspace} && ${tui.command}${tui.args ? ' ' + tui.args.join(' ') : ''}`;
+      : `$SHELL -lc 'cd ${workspace} && exec ${tuiCmd.replace(/'/g, "'\\''")}'`;
 
     const sshArgs = ['-t'];
     if (port !== 22) {

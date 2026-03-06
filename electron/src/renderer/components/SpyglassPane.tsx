@@ -8,6 +8,13 @@
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 
+interface AvailableTui {
+  command: string;
+  name: string;
+  icon?: string;
+  shortcut?: string;
+}
+
 interface RemoteContext {
   workspace: string;
   tabs: Array<{
@@ -28,6 +35,7 @@ interface RemoteContext {
     sessionDuration: number;
     recentActions: Array<{ type: string; target: string; timestamp: number }>;
   };
+  availableTuis?: Record<string, AvailableTui>;
   timestamp: number;
 }
 
@@ -62,6 +70,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
   const [context, setContext] = useState<RemoteContext | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showTuiPicker, setShowTuiPicker] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -132,6 +141,11 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
     sendCommand('system', 'focus_tab', { tab_id: tabId });
   }, [sendCommand]);
 
+  const spawnRemoteTui = useCallback((tuiKey: string) => {
+    sendCommand('tui', tuiKey, {});
+    setShowTuiPicker(false);
+  }, [sendCommand]);
+
   const formatDuration = (seconds: number): string => {
     if (seconds < 60) return `${Math.floor(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
@@ -180,7 +194,36 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
                 <span className="spyglass-tab-label">{tab.label}</span>
               </div>
             ))}
+            <div
+              className="spyglass-tab spyglass-tab-add"
+              onClick={() => setShowTuiPicker(!showTuiPicker)}
+              title="Spawn new tab"
+            >
+              <span className="spyglass-tab-icon">+</span>
+            </div>
           </div>
+
+          {showTuiPicker && context.availableTuis && (
+            <div className="spyglass-tui-picker">
+              <div
+                className="spyglass-tui-option"
+                onClick={() => spawnRemoteTui('terminal')}
+              >
+                <span className="spyglass-tui-icon">💻</span>
+                <span className="spyglass-tui-name">Terminal</span>
+              </div>
+              {Object.entries(context.availableTuis).map(([key, tui]) => (
+                <div
+                  key={key}
+                  className="spyglass-tui-option"
+                  onClick={() => spawnRemoteTui(key)}
+                >
+                  <span className="spyglass-tui-icon">{tui.icon || TAB_TYPE_ICONS[key] || '🔧'}</span>
+                  <span className="spyglass-tui-name">{tui.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {context.editor?.file && (
             <div className="spyglass-editor">

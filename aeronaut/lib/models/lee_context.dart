@@ -204,6 +204,36 @@ class BrowserContext extends Equatable {
   List<Object?> get props => [url, title, loading];
 }
 
+/// A TUI definition from Lee's availableTuis context.
+class AvailableTui extends Equatable {
+  final String key;
+  final String command;
+  final String name;
+  final String? icon;
+  final String? shortcut;
+
+  const AvailableTui({
+    required this.key,
+    required this.command,
+    required this.name,
+    this.icon,
+    this.shortcut,
+  });
+
+  factory AvailableTui.fromJson(String key, Map<String, dynamic> json) {
+    return AvailableTui(
+      key: key,
+      command: json['command'] as String? ?? '',
+      name: json['name'] as String? ?? key,
+      icon: json['icon'] as String?,
+      shortcut: json['shortcut'] as String?,
+    );
+  }
+
+  @override
+  List<Object?> get props => [key, command, name, icon, shortcut];
+}
+
 /// Full Lee context - complete IDE state snapshot
 class LeeContext extends Equatable {
   final String workspace;
@@ -213,6 +243,7 @@ class LeeContext extends Equatable {
   final EditorContext? editor;
   final Map<int, BrowserContext>? browsers;
   final ActivityContext activity;
+  final List<AvailableTui> availableTuis;
   final int timestamp;
 
   const LeeContext({
@@ -223,6 +254,7 @@ class LeeContext extends Equatable {
     this.editor,
     this.browsers,
     this.activity = const ActivityContext(),
+    this.availableTuis = const [],
     this.timestamp = 0,
   });
 
@@ -265,6 +297,18 @@ class LeeContext extends Equatable {
           ));
     }
 
+    // Parse availableTuis
+    final availableTuis = <AvailableTui>[];
+    final tuisJson = json['availableTuis'] as Map<String, dynamic>?;
+    if (tuisJson != null) {
+      for (final entry in tuisJson.entries) {
+        availableTuis.add(AvailableTui.fromJson(
+          entry.key,
+          entry.value as Map<String, dynamic>,
+        ));
+      }
+    }
+
     return LeeContext(
       workspace: json['workspace'] as String? ?? '',
       panels: panels,
@@ -280,6 +324,7 @@ class LeeContext extends Equatable {
       activity: json['activity'] != null
           ? ActivityContext.fromJson(json['activity'] as Map<String, dynamic>)
           : const ActivityContext(),
+      availableTuis: availableTuis,
       timestamp: (json['timestamp'] as num?)?.toInt() ?? 0,
     );
   }
@@ -293,6 +338,7 @@ class LeeContext extends Equatable {
         editor,
         browsers,
         activity,
+        availableTuis,
         timestamp,
       ];
 }

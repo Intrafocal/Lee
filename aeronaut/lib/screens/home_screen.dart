@@ -159,10 +159,13 @@ class HomeScreen extends ConsumerWidget {
     WidgetRef ref,
     Machine machine,
   ) async {
+    final leeCtx = ref.read(leeContextProvider).valueOrNull;
     final action = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => const NewTabSheet(),
+      builder: (_) => NewTabSheet(
+        availableTuis: leeCtx?.availableTuis ?? const [],
+      ),
     );
 
     if (action != null) {
