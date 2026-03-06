@@ -2,11 +2,15 @@
  * SpyglassPane - View and control a remote Lee instance.
  *
  * Connects via WebSocket to remote Lee's /context/stream.
- * Renders remote tabs, editor state, and activity.
- * Click remote tabs to focus them on the remote machine.
+ * Renders remote tabs as a tab row; clicking a tab shows its PTY output
+ * via /pty/:id/stream WebSocket. Dashboard shown when no tab is selected.
  */
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import '@xterm/xterm/css/xterm.css';
 
 interface AvailableTui {
   command: string;
@@ -15,14 +19,16 @@ interface AvailableTui {
   shortcut?: string;
 }
 
+interface RemoteTab {
+  id: number;
+  type: string;
+  label: string;
+  state: string;
+}
+
 interface RemoteContext {
   workspace: string;
-  tabs: Array<{
-    id: number;
-    type: string;
-    label: string;
-    state: string;
-  }>;
+  tabs: RemoteTab[];
   focusedPanel: string;
   editor: {
     file: string | null;
@@ -66,11 +72,169 @@ const TAB_TYPE_ICONS: Record<string, string> = {
   bridge: '🌉',
 };
 
+/**
+ * Inline terminal component that connects to a remote PTY via WebSocket.
+ */
+const SpyglassTerminal: React.FC<{
+  host: string;
+  port: number;
+  ptyId: number;
+  active: boolean;
+}> = ({ host, port, ptyId, active }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Initialize terminal and WebSocket
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'block',
+      fontSize: 14,
+      fontFamily: 'JetBrains Mono, Menlo, Monaco, Courier New, monospace',
+      theme: {
+        background: '#0d1a14',
+        foreground: '#eee',
+        cursor: '#4a9',
+        cursorAccent: '#0d1a14',
+        selectionBackground: '#1a3028',
+        black: '#0d1a14',
+        red: '#e55',
+        green: '#4a9',
+        yellow: '#da3',
+        blue: '#5ad',
+        magenta: '#a6d',
+        cyan: '#5bc',
+        white: '#ddd',
+        brightBlack: '#456',
+        brightRed: '#f66',
+        brightGreen: '#5ca',
+        brightYellow: '#eb4',
+        brightBlue: '#6be',
+        brightMagenta: '#b7e',
+        brightCyan: '#6cd',
+        brightWhite: '#fff',
+      },
+      allowTransparency: false,
+      scrollback: 10000,
+      scrollOnUserInput: true,
+    });
+
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(containerRef.current);
+
+    try {
+      const webglAddon = new WebglAddon();
+      terminal.loadAddon(webglAddon);
+      webglAddon.onContextLoss(() => webglAddon.dispose());
+    } catch {
+      // WebGL not available, canvas fallback
+    }
+
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    // Connect WebSocket to remote PTY
+    const url = `ws://${host}:${port}/pty/${ptyId}/stream`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      // Fit after connection so we can send initial resize
+      requestAnimationFrame(() => {
+        fitAddon.fit();
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+        }
+      });
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'data') {
+          terminal.write(msg.data);
+        } else if (msg.type === 'exit') {
+          terminal.write(`\r\n\x1b[90m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    ws.onclose = () => {
+      terminal.write('\r\n\x1b[90m[Disconnected]\x1b[0m\r\n');
+    };
+
+    // Forward terminal input to remote PTY
+    const inputDisposable = terminal.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    // Handle resizes
+    let resizeTimeout: ReturnType<typeof setTimeout>;
+    const handleResize = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        if (!fitAddonRef.current || !terminalRef.current) return;
+        fitAddonRef.current.fit();
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'resize',
+            cols: terminalRef.current.cols,
+            rows: terminalRef.current.rows,
+          }));
+        }
+      }, 50);
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(containerRef.current);
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
+      clearTimeout(resizeTimeout);
+      inputDisposable.dispose();
+      ws.close();
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      wsRef.current = null;
+    };
+  }, [host, port, ptyId]);
+
+  // Focus terminal when active
+  useEffect(() => {
+    if (active && terminalRef.current) {
+      setTimeout(() => {
+        fitAddonRef.current?.fit();
+        terminalRef.current?.focus();
+      }, 50);
+    }
+  }, [active]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="spyglass-terminal"
+    />
+  );
+};
+
 export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfig }) => {
   const [context, setContext] = useState<RemoteContext | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showTuiPicker, setShowTuiPicker] = useState(false);
+  const [selectedTabId, setSelectedTabId] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -137,14 +301,43 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
     }
   }, [machineConfig]);
 
-  const focusRemoteTab = useCallback((tabId: number) => {
-    sendCommand('system', 'focus_tab', { tab_id: tabId });
-  }, [sendCommand]);
+  const handleTabClick = useCallback((tabId: number) => {
+    // Toggle: click active tab again to deselect
+    setSelectedTabId(prev => prev === tabId ? null : tabId);
+    setShowTuiPicker(false);
+  }, []);
 
   const spawnRemoteTui = useCallback((tuiKey: string) => {
     sendCommand('tui', tuiKey, {});
     setShowTuiPicker(false);
+    // Auto-select will happen when the new tab appears in the next context update
+    // We track the current tab count to detect the new tab
   }, [sendCommand]);
+
+  // Auto-select newly spawned tabs
+  const prevTabCountRef = useRef<number>(0);
+  useEffect(() => {
+    if (!context) return;
+    const currentCount = context.tabs.length;
+    if (currentCount > prevTabCountRef.current && prevTabCountRef.current > 0) {
+      // A new tab appeared — select it
+      const newTab = context.tabs[context.tabs.length - 1];
+      if (newTab) {
+        setSelectedTabId(newTab.id);
+      }
+    }
+    prevTabCountRef.current = currentCount;
+  }, [context?.tabs.length]);
+
+  // Clear selection if the selected tab disappears
+  useEffect(() => {
+    if (selectedTabId !== null && context) {
+      const exists = context.tabs.some(t => t.id === selectedTabId);
+      if (!exists) {
+        setSelectedTabId(null);
+      }
+    }
+  }, [context, selectedTabId]);
 
   const formatDuration = (seconds: number): string => {
     if (seconds < 60) return `${Math.floor(seconds)}s`;
@@ -157,8 +350,11 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
     return `idle ${formatDuration(seconds)}`;
   };
 
+  const selectedTab = context?.tabs.find(t => t.id === selectedTabId) || null;
+
   return (
     <div className="spyglass-pane" style={{ display: active ? 'flex' : 'none' }}>
+      {/* Header row: machine info + tabs */}
       <div className="spyglass-header">
         <span className="spyglass-machine-emoji">{machineConfig.emoji}</span>
         <span className="spyglass-machine-name">{machineConfig.name}</span>
@@ -180,13 +376,14 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
             {context.workspace.split('/').pop()}
           </div>
 
+          {/* Tab row - always visible */}
           <div className="spyglass-tabs">
             {context.tabs.map(tab => (
               <div
                 key={tab.id}
-                className={`spyglass-tab ${tab.state === 'active' ? 'active' : ''}`}
-                onClick={() => focusRemoteTab(tab.id)}
-                title={`Click to focus on ${machineConfig.name}`}
+                className={`spyglass-tab ${selectedTabId === tab.id ? 'selected' : ''} ${tab.state === 'active' ? 'active' : ''}`}
+                onClick={() => handleTabClick(tab.id)}
+                title={tab.label}
               >
                 <span className="spyglass-tab-icon">
                   {TAB_TYPE_ICONS[tab.type] || '🔧'}
@@ -225,34 +422,47 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
             </div>
           )}
 
-          {context.editor?.file && (
-            <div className="spyglass-editor">
-              <div className="spyglass-editor-file">
-                {context.editor.file.split('/').pop()}
-                {context.editor.modified && <span className="spyglass-modified"> ●</span>}
+          {/* Content area: terminal or dashboard */}
+          {selectedTab ? (
+            <SpyglassTerminal
+              key={selectedTabId}
+              host={machineConfig.host}
+              port={machineConfig.lee_port}
+              ptyId={selectedTab.id}
+              active={active}
+            />
+          ) : (
+            <div className="spyglass-dashboard">
+              {context.editor?.file && (
+                <div className="spyglass-editor">
+                  <div className="spyglass-editor-file">
+                    {context.editor.file.split('/').pop()}
+                    {context.editor.modified && <span className="spyglass-modified"> ●</span>}
+                  </div>
+                  <div className="spyglass-editor-meta">
+                    {context.editor.language} — Ln {context.editor.cursor.line}, Col {context.editor.cursor.column}
+                  </div>
+                </div>
+              )}
+
+              <div className="spyglass-activity">
+                <div className="spyglass-section-label">Recent Activity</div>
+                {context.activity.recentActions.slice(-5).reverse().map((action, i) => (
+                  <div key={i} className="spyglass-action">
+                    <span className="spyglass-action-type">{action.type}</span>
+                    <span className="spyglass-action-target">{action.target}</span>
+                  </div>
+                ))}
+                {context.activity.recentActions.length === 0 && (
+                  <div className="spyglass-action spyglass-no-activity">No recent activity</div>
+                )}
               </div>
-              <div className="spyglass-editor-meta">
-                {context.editor.language} — Ln {context.editor.cursor.line}, Col {context.editor.cursor.column}
+
+              <div className="spyglass-session">
+                Session: {formatDuration(context.activity.sessionDuration)}
               </div>
             </div>
           )}
-
-          <div className="spyglass-activity">
-            <div className="spyglass-section-label">Recent Activity</div>
-            {context.activity.recentActions.slice(-5).reverse().map((action, i) => (
-              <div key={i} className="spyglass-action">
-                <span className="spyglass-action-type">{action.type}</span>
-                <span className="spyglass-action-target">{action.target}</span>
-              </div>
-            ))}
-            {context.activity.recentActions.length === 0 && (
-              <div className="spyglass-action spyglass-no-activity">No recent activity</div>
-            )}
-          </div>
-
-          <div className="spyglass-session">
-            Session: {formatDuration(context.activity.sessionDuration)}
-          </div>
         </>
       )}
 

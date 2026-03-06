@@ -5334,10 +5334,24 @@ body {
 .spyglass-pane {
   flex-direction: column;
   height: 100%;
-  padding: 16px;
-  overflow-y: auto;
+  padding: 0;
+  overflow: hidden;
   color: #e6edf3;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+}
+
+.spyglass-pane > .spyglass-header,
+.spyglass-pane > .spyglass-workspace,
+.spyglass-pane > .spyglass-error,
+.spyglass-pane > .spyglass-tabs,
+.spyglass-pane > .spyglass-tui-picker,
+.spyglass-pane > .spyglass-loading {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.spyglass-pane > .spyglass-header {
+  padding-top: 16px;
 }
 
 .spyglass-header {
@@ -5424,6 +5438,12 @@ body {
 .spyglass-tab.active {
   background: #30363d;
   border: 1px solid #3fb950;
+}
+
+.spyglass-tab.selected {
+  background: #1a3028;
+  border: 1px solid #4a9;
+  box-shadow: 0 0 4px rgba(68, 170, 153, 0.3);
 }
 
 .spyglass-tab-icon {
@@ -5559,6 +5579,18 @@ body {
 
 .spyglass-tui-option:hover .spyglass-tui-name {
   color: #e6edf3;
+}
+
+.spyglass-terminal {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.spyglass-dashboard {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 16px;
 }
 
 /* Bridge picker modal */
