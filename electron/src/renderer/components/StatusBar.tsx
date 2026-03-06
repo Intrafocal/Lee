@@ -10,6 +10,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react';
+import { MachineStatus } from './MachineStatus';
 
 const lee = (window as any).lee;
 
@@ -35,6 +36,8 @@ interface StatusBarProps {
   onMessageClick?: (message: StatusMessage) => void;
   onClearMessage?: (id: string) => void;
   onDaemonAction?: (action: 'start' | 'stop' | 'restart') => void;
+  onSpyglass?: (machine: any) => void;
+  onBridge?: (machine: any) => void;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -48,6 +51,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onMessageClick,
   onClearMessage,
   onDaemonAction,
+  onSpyglass,
+  onBridge,
 }) => {
   const [time, setTime] = useState(new Date());
   const [flyoutOpen, setFlyoutOpen] = useState(false);
@@ -355,6 +360,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-right">
+        {onSpyglass && onBridge && (
+          <MachineStatus onSpyglass={onSpyglass} onBridge={onBridge} />
+        )}
         <span className="status-item">
           <span className="status-text">{formatTime(time)}</span>
         </span>
