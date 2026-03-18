@@ -23,6 +23,7 @@ interface RemoteTab {
   id: number;
   type: string;
   label: string;
+  ptyId: number | null;
   state: string;
 }
 
@@ -229,6 +230,223 @@ const SpyglassTerminal: React.FC<{
   );
 };
 
+/** Tab types that have no PTY and no special viewer — show a summary instead. */
+const NON_RENDERABLE_TABS = new Set(['files', 'editor-panel', 'library', 'workstream']);
+
+/**
+ * Inline browser viewer that connects to a remote browser tab's CDP screencast
+ * via /browser/:tabId/cast WebSocket (same protocol Aeronaut uses).
+ */
+const SpyglassBrowserViewer: React.FC<{
+  host: string;
+  port: number;
+  tabId: number;
+}> = ({ host, port, tabId }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
+  const [browserMeta, setBrowserMeta] = useState<{ url?: string; title?: string } | null>(null);
+  const [connected, setConnected] = useState(false);
+  const viewportRef = useRef({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const url = `ws://${host}:${port}/browser/${tabId}/cast`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      setConnected(true);
+      // Send init with container dimensions
+      const rect = containerRef.current!.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      viewportRef.current = { width, height };
+      ws.send(JSON.stringify({
+        type: 'init',
+        width,
+        height,
+        pixelRatio: window.devicePixelRatio || 2,
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        // Binary JPEG frame
+        const blob = new Blob([event.data], { type: 'image/jpeg' });
+        const newUrl = URL.createObjectURL(blob);
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+        }
+        blobUrlRef.current = newUrl;
+        if (imgRef.current) {
+          imgRef.current.src = newUrl;
+        }
+      } else {
+        // JSON metadata
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'metadata') {
+            setBrowserMeta({ url: msg.url, title: msg.title });
+            if (msg.viewportWidth && msg.viewportHeight) {
+              viewportRef.current = { width: msg.viewportWidth, height: msg.viewportHeight };
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    ws.onclose = () => setConnected(false);
+    ws.onerror = () => setConnected(false);
+
+    // Handle resize
+    const handleResize = () => {
+      if (!containerRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      viewportRef.current = { width, height };
+      wsRef.current.send(JSON.stringify({
+        type: 'resize',
+        width,
+        height,
+        pixelRatio: window.devicePixelRatio || 2,
+      }));
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      ws.close();
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+      wsRef.current = null;
+    };
+  }, [host, port, tabId]);
+
+  // Click handler — normalize to 0-1 coords
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    if (!imgRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    wsRef.current.send(JSON.stringify({ type: 'tap', x, y }));
+  }, []);
+
+  // Scroll handler
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!imgRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    wsRef.current.send(JSON.stringify({
+      type: 'scroll',
+      x,
+      y,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+    }));
+  }, []);
+
+  // Keyboard handler
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    e.preventDefault();
+    if (e.key.length === 1) {
+      wsRef.current.send(JSON.stringify({ type: 'key', text: e.key }));
+    } else {
+      wsRef.current.send(JSON.stringify({ type: 'key', key: e.key, code: e.code }));
+    }
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className="spyglass-browser-viewer"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+    >
+      {browserMeta?.url && (
+        <div className="spyglass-browser-url-bar">
+          <span className={`spyglass-browser-status ${connected ? 'connected' : 'disconnected'}`}>
+            {connected ? '●' : '○'}
+          </span>
+          <span className="spyglass-browser-url">{browserMeta.url}</span>
+        </div>
+      )}
+      <img
+        ref={imgRef}
+        className="spyglass-browser-frame"
+        onClick={handleClick}
+        onWheel={handleWheel}
+        draggable={false}
+        alt={browserMeta?.title || 'Remote browser'}
+      />
+      {!connected && (
+        <div className="spyglass-browser-disconnected">
+          Browser tab not available for casting
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Summary view for tabs that can't be rendered remotely
+ * (files, editor-panel, spyglass-of-spyglass, etc.)
+ */
+const SpyglassTabSummary: React.FC<{
+  tab: RemoteTab;
+  context: RemoteContext;
+}> = ({ tab, context }) => {
+  if (tab.type === 'spyglass') {
+    return (
+      <div className="spyglass-tab-summary">
+        <div className="spyglass-tab-summary-icon">🔭</div>
+        <div className="spyglass-tab-summary-title">Spyglass: {tab.label}</div>
+        <div className="spyglass-tab-summary-desc">
+          This tab is viewing another machine. Open a direct Spyglass tab to view that machine.
+        </div>
+      </div>
+    );
+  }
+
+  if (tab.type === 'editor-panel' && context.editor?.file) {
+    return (
+      <div className="spyglass-tab-summary">
+        <div className="spyglass-tab-summary-icon">📝</div>
+        <div className="spyglass-tab-summary-title">
+          {context.editor.file.split('/').pop()}
+          {context.editor.modified && <span className="spyglass-modified"> ●</span>}
+        </div>
+        <div className="spyglass-tab-summary-desc">
+          {context.editor.language} — Ln {context.editor.cursor.line}, Col {context.editor.cursor.column}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="spyglass-tab-summary">
+      <div className="spyglass-tab-summary-icon">{TAB_TYPE_ICONS[tab.type] || '🔧'}</div>
+      <div className="spyglass-tab-summary-title">{tab.label}</div>
+      <div className="spyglass-tab-summary-desc">
+        This tab type cannot be viewed remotely.
+      </div>
+    </div>
+  );
+};
+
 export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfig }) => {
   const [context, setContext] = useState<RemoteContext | null>(null);
   const [connected, setConnected] = useState(false);
@@ -422,14 +640,33 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
             </div>
           )}
 
-          {/* Content area: terminal or dashboard */}
-          {selectedTab ? (
+          {/* Content area: terminal, browser, summary, or dashboard */}
+          {selectedTab && selectedTab.type === 'browser' ? (
+            <SpyglassBrowserViewer
+              key={selectedTabId}
+              host={machineConfig.host}
+              port={machineConfig.lee_port}
+              tabId={selectedTab.id}
+            />
+          ) : selectedTab && (selectedTab.type === 'spyglass' || NON_RENDERABLE_TABS.has(selectedTab.type)) ? (
+            <SpyglassTabSummary
+              key={selectedTabId}
+              tab={selectedTab}
+              context={context}
+            />
+          ) : selectedTab && selectedTab.ptyId != null ? (
             <SpyglassTerminal
               key={selectedTabId}
               host={machineConfig.host}
               port={machineConfig.lee_port}
-              ptyId={selectedTab.id}
+              ptyId={selectedTab.ptyId}
               active={active}
+            />
+          ) : selectedTab ? (
+            <SpyglassTabSummary
+              key={selectedTabId}
+              tab={selectedTab}
+              context={context}
             />
           ) : (
             <div className="spyglass-dashboard">

@@ -5593,6 +5593,87 @@ body {
   padding: 0 16px 16px;
 }
 
+/* Browser viewer in Spyglass */
+.spyglass-browser-viewer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  outline: none;
+}
+
+.spyglass-browser-url-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  font-size: 12px;
+  color: #8b949e;
+  flex-shrink: 0;
+}
+
+.spyglass-browser-status.connected { color: #3fb950; }
+.spyglass-browser-status.disconnected { color: #f85149; }
+
+.spyglass-browser-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spyglass-browser-frame {
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
+  width: 100%;
+  cursor: pointer;
+  background: #0d1117;
+}
+
+.spyglass-browser-disconnected {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b949e;
+  font-size: 14px;
+  background: rgba(13, 17, 23, 0.9);
+}
+
+/* Tab summary view in Spyglass */
+.spyglass-tab-summary {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: #8b949e;
+  text-align: center;
+}
+
+.spyglass-tab-summary-icon {
+  font-size: 48px;
+}
+
+.spyglass-tab-summary-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #c9d1d9;
+}
+
+.spyglass-tab-summary-desc {
+  font-size: 13px;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
 /* Bridge picker modal */
 .bridge-picker-overlay {
   position: fixed;

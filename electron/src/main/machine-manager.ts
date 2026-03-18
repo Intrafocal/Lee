@@ -41,13 +41,18 @@ export class MachineManager extends EventEmitter {
     try {
       const content = await fs.promises.readFile(this.configPath, 'utf-8');
       const config = yaml.load(content) as any;
-      const machineConfigs: MachineConfig[] = config?.machines || [];
+      const rawMachines: any[] = config?.machines || [];
+      // Filter out malformed entries (null, missing required fields)
+      const machineConfigs: MachineConfig[] = rawMachines.filter(
+        (cfg): cfg is MachineConfig => cfg != null && typeof cfg === 'object' && typeof cfg.host === 'string' && typeof cfg.name === 'string'
+      );
 
       const oldStatus = new Map(this.machines.map(m => [`${m.config.host}:${m.config.lee_port || 9001}`, m.online]));
 
       this.machines = machineConfigs.map(cfg => ({
         config: {
           ...cfg,
+          emoji: cfg.emoji || '🖥️',
           ssh_port: cfg.ssh_port ?? 22,
           lee_port: cfg.lee_port ?? 9001,
           hester_port: cfg.hester_port ?? 9000,

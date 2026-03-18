@@ -37,9 +37,11 @@ export const MachineStatus: React.FC<MachineStatusProps> = ({ onSpyglass, onBrid
   useEffect(() => {
     if (!lee?.machines) return;
 
-    lee.machines.getAll().then((states: MachineState[]) => setMachines(states));
+    const validStates = (states: MachineState[]) => states.filter(m => m?.config?.host);
 
-    const cleanup = lee.machines.onChange((states: MachineState[]) => setMachines(states));
+    lee.machines.getAll().then((states: MachineState[]) => setMachines(validStates(states)));
+
+    const cleanup = lee.machines.onChange((states: MachineState[]) => setMachines(validStates(states)));
     return cleanup;
   }, []);
 
