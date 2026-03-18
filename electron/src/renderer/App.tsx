@@ -980,11 +980,14 @@ const App: React.FC = () => {
 
     if (tab.type === 'spyglass') {
       const tabData = tab as TabData;
+      if (!tabData.machineConfig) {
+        return <div key={tab.id} className="spyglass-error">Missing machine config — close and reopen this tab.</div>;
+      }
       return (
         <SpyglassPane
           key={tab.id}
           active={active}
-          machineConfig={tabData.machineConfig!}
+          machineConfig={tabData.machineConfig}
         />
       );
     }
@@ -1345,6 +1348,8 @@ const App: React.FC = () => {
       const workspaceName = workspace.split('/').pop() || 'Files';
       (async () => {
         for (const sessionTab of savedSession) {
+          // Skip tabs that require runtime state not persisted in sessions
+          if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
           // Files tabs should always use workspace name as label
           const label = sessionTab.type === 'files' ? workspaceName : sessionTab.label;
           await createTab(sessionTab.type, sessionTab.dockPosition, label);
