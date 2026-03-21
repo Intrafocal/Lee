@@ -132,18 +132,18 @@ class HesterDaemonSettings(BaseSettings):
     # Local model configuration for OBSERVE phase
     gemma3n_enabled: bool = Field(
         default=True,
-        description="Enable Gemma 3n models for local inference"
+        description="Enable Gemma 3 models for local inference"
     )
     gemma3n_model_observe: str = Field(
-        default="gemma3n:e2b",
+        default="gemma3:4b",
         description="Ollama model name for OBSERVE phase (fastest)"
     )
     gemma3n_model_think: str = Field(
-        default="gemma3n:e4b",
+        default="gemma3:4b",
         description="Ollama model name for simple THINK phase"
     )
     gemma3_model_standard: str = Field(
-        default="gemma3:4b",
+        default="gemma3:12b",
         description="Ollama Gemma 3 model for moderate complexity tasks"
     )
 

@@ -175,8 +175,8 @@ logger = logging.getLogger("hester.daemon.agent")
 # Simplified to 6 clear tiers: 2 local + 4 cloud
 DEPTH_COMMANDS = {
     # Local tiers (Ollama)
-    "/local": ThinkingDepth.LOCAL,        # gemma3n - fast local
-    "/deeplocal": ThinkingDepth.DEEPLOCAL,  # gemma3 - complex local
+    "/local": ThinkingDepth.LOCAL,        # gemma3:4b - fast local
+    "/deeplocal": ThinkingDepth.DEEPLOCAL,  # gemma3:12b - complex local
     # Cloud tiers (Gemini)
     "/quick": ThinkingDepth.QUICK,        # gemini-2.5-flash - fast cloud
     "/standard": ThinkingDepth.STANDARD,  # gemini-2.5-flash - balanced
@@ -995,7 +995,7 @@ You are operating in: {working_dir}
             # Ensure warm context if enabled
             if self._warm_context and self._local_client and prepare_result:
                 # Get observe model from prepare result for warm-up
-                observe_model = prepare_result.observe_model or "gemma3n-e2b"
+                observe_model = prepare_result.observe_model or "gemma3-4b"
                 await self._warm_context.ensure_warm(
                     model_key=observe_model,
                     system_prompt=system_prompt[:1500],  # Truncate for efficiency
@@ -1629,8 +1629,8 @@ You are operating in: {working_dir}
   /agents    - List available agent overrides
 
 Model selection (prefix your message):
-  /local     - Local fast (gemma3n)
-  /deeplocal - Local complex (gemma3)
+  /local     - Local fast (gemma3:4b)
+  /deeplocal - Local complex (gemma3:12b)
   /quick     - Cloud fast (gemini-2.5-flash)
   /standard  - Cloud balanced (gemini-2.5-flash)
   /deep      - Cloud complex (gemini-3-flash)

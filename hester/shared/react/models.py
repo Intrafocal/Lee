@@ -29,7 +29,7 @@ class PhaseUpdate:
     prepare_time_ms: Optional[float] = None  # Time for prepare step
     # Hybrid routing fields
     is_local: bool = False  # Whether using local model
-    precision: Optional[str] = None  # "e2b", "e4b", "full"
+    precision: Optional[str] = None  # "4b", "12b", "full"
     cloud_calls_remaining: Optional[int] = None  # Budget tracking
     local_calls_remaining: Optional[int] = None  # Budget tracking
     # Semantic routing fields (bespoke agent selection)

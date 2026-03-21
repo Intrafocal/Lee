@@ -390,7 +390,7 @@ class ObservationResult:
     # Metadata
     confidence: float  # 0.0-1.0
     parse_time_ms: float
-    model_used: str  # "gemma3n-e2b", "gemma3n-e4b", "gemma3", "fallback"
+    model_used: str  # "gemma3-4b", "gemma3-12b", "fallback"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -415,8 +415,8 @@ class ModelRoutingDecision:
     """
 
     use_local: bool
-    model_name: str  # "gemma3n-e2b", "gemma3n-e4b", "gemma3", or "gemini-*"
-    precision: str  # "e2b", "e4b", "full"
+    model_name: str  # "gemma3-4b", "gemma3-12b", or "gemini-*"
+    precision: str  # "4b", "12b", "full"
     reason: str
     estimated_time_ms: float = 0.0
     fallback_model: Optional[str] = None

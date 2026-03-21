@@ -508,7 +508,7 @@ class PrepareResult:
 
     # Hybrid routing fields (from FunctionGemma)
     use_local_think: bool = False  # Whether to use local model for THINK phase
-    think_model: Optional[str] = None  # "gemma3n-e2b", "gemma3n-e4b", "gemma3", or None (cloud)
+    think_model: Optional[str] = None  # "gemma3-4b", "gemma3-12b", or None (cloud)
 
     # Bespoke agent routing fields
     prompt_id: str = "general"  # Selected prompt from registry
@@ -516,7 +516,7 @@ class PrepareResult:
     toolset_id: Optional[str] = None  # Named toolset (if agent matched)
     prompt_match: Optional[Any] = None  # PromptMatch details
     agent_match: Optional[Any] = None  # AgentMatch details
-    observe_model: Optional[str] = None  # Model for OBSERVE phase, defaults to "gemma3n-e2b"
+    observe_model: Optional[str] = None  # Model for OBSERVE phase, defaults to "gemma3-4b"
     routing_reason: str = ""  # Why this routing was chosen
 
     # Explicit routing overrides (from #prompt and @agent syntax)
@@ -765,12 +765,12 @@ PREPARE_REQUEST_TOOL: Dict[str, Any] = {
                 "think_model": {
                     "type": "string",
                     "description": "Local model for thinking phase.",
-                    "enum": ["gemma3n-e2b", "gemma3n-e4b", "gemma3", "none"],
+                    "enum": ["gemma3-4b", "gemma3-12b", "none"],
                 },
                 "observe_model": {
                     "type": "string",
                     "description": "Local model for observing tool results.",
-                    "enum": ["gemma3n-e2b", "gemma3n-e4b", "gemma3"],
+                    "enum": ["gemma3-4b", "gemma3-12b"],
                 },
             },
             "required": ["depth", "tools"],
@@ -892,15 +892,13 @@ Routing rules (use_local):
 - false: Multi-step reasoning, debugging, architecture, 3+ tools, complex synthesis
 
 Model selection (for think_model and observe_model):
-- gemma3n-e2b: Fastest (~100ms), simple parsing, basic tasks
-- gemma3n-e4b: Medium (~200ms), moderate complexity, better quality
-- gemma3: Best quality (~400ms), complex output parsing, multi-file reasoning
+- gemma3-4b: Fast (~100-200ms), simple parsing, basic tasks, short outputs
+- gemma3-12b: Best quality (~300-500ms), complex output parsing, multi-file reasoning
 - none: (think_model only) Use cloud Gemini
 
 Observe model hints:
-- gemma3n-e2b: Simple file reads, short outputs, single results
-- gemma3n-e4b: Multiple matches, structured data, medium outputs
-- gemma3: Large diffs, stack traces, complex JSON, multi-file outputs
+- gemma3-4b: Simple file reads, short outputs, single results, structured data
+- gemma3-12b: Large diffs, stack traces, complex JSON, multi-file outputs
 """
 
     return f"""Analyze this user query and determine:
@@ -1390,7 +1388,7 @@ async def prepare_request(
                 # Parse routing fields (hybrid mode)
                 use_local_think = False
                 think_model: Optional[str] = None
-                observe_model: Optional[str] = "gemma3n-e2b"  # Default
+                observe_model: Optional[str] = "gemma3-4b"  # Default
                 routing_reason = ""
 
                 if hybrid_routing_enabled:
@@ -1400,7 +1398,7 @@ async def prepare_request(
                     think_model_raw = parsed.get("think_model", "")
                     if think_model_raw and think_model_raw.lower() != "none":
                         # Validate model name
-                        valid_models = {"gemma3n-e2b", "gemma3n-e4b", "gemma3"}
+                        valid_models = {"gemma3-4b", "gemma3-12b"}
                         if think_model_raw in valid_models:
                             think_model = think_model_raw
                         else:
@@ -1410,12 +1408,12 @@ async def prepare_request(
                                     think_model = vm
                                     break
 
-                    observe_model_raw = parsed.get("observe_model", "gemma3n-e2b")
-                    valid_observe = {"gemma3n-e2b", "gemma3n-e4b", "gemma3"}
+                    observe_model_raw = parsed.get("observe_model", "gemma3-4b")
+                    valid_observe = {"gemma3-4b", "gemma3-12b"}
                     if observe_model_raw in valid_observe:
                         observe_model = observe_model_raw
                     else:
-                        observe_model = "gemma3n-e2b"  # Default
+                        observe_model = "gemma3-4b"  # Default
 
                     hybrid_routing_reason = f"FunctionGemma: local={use_local_think}, think={think_model}, observe={observe_model}"
                     # Combine with bespoke routing reason if present
@@ -1496,7 +1494,7 @@ async def prepare_request(
         fallback_routing = f"Explicit local tier: {depth.name}"
     elif use_local_fallback:
         # QUICK tier with hybrid routing - use fast local model
-        think_model_fallback = "gemma3n-e4b"
+        think_model_fallback = "gemma3-4b"
         fallback_routing = "Fallback: heuristic routing based on depth"
     else:
         think_model_fallback = None
@@ -1517,7 +1515,7 @@ async def prepare_request(
         prepare_time_ms=elapsed_ms + semantic_time_ms,  # Include semantic time
         use_local_think=use_local_fallback,
         think_model=think_model_fallback,
-        observe_model="gemma3n-e2b" if hybrid_routing_enabled else None,
+        observe_model="gemma3-4b" if hybrid_routing_enabled else None,
         routing_reason=full_routing_reason,
         # Bespoke agent fields
         prompt_id=prompt_id,
@@ -1982,32 +1980,25 @@ class OllamaGemmaClient:
     Client for multiple Gemma variants via Ollama for hybrid ReAct loop.
 
     Supports:
-    - gemma3n:e2b - Fast (~50-100ms), simple parsing/tasks (OBSERVE phase)
-    - gemma3n:e4b - Medium (~150-200ms), moderate complexity (simple THINK)
-    - gemma3:4b - Best quality (~300-500ms), complex parsing/reasoning
+    - gemma3:4b - Fast (~100-200ms), simple parsing/tasks (OBSERVE, simple THINK)
+    - gemma3:12b - Best quality (~300-500ms), complex parsing/reasoning (THINK)
     - functiongemma - Prepare step (existing functionality)
 
     Uses Ollama's keep_alive for KV cache warming.
     """
 
     MODEL_CONFIGS: Dict[str, Dict[str, Any]] = {
-        "gemma3n-e2b": {
-            "ollama_name": "gemma3n:latest",  # Use latest (e2b/e4b variants not available)
-            "timeout": 1.5,
+        "gemma3-4b": {
+            "ollama_name": "gemma3:4b",
+            "timeout": 2.0,
             "use_case": "observe",
-            "precision": "e2b",
+            "precision": "4b",
         },
-        "gemma3n-e4b": {
-            "ollama_name": "gemma3n:latest",  # Use latest (e2b/e4b variants not available)
-            "timeout": 3.0,
-            "use_case": "think-simple",
-            "precision": "e4b",
-        },
-        "gemma3": {
-            "ollama_name": "gemma3:latest",  # Use latest (4b variant not available)
+        "gemma3-12b": {
+            "ollama_name": "gemma3:12b",
             "timeout": 4.0,
             "use_case": "think-standard",
-            "precision": "full",
+            "precision": "12b",
         },
         "functiongemma": {
             "ollama_name": "functiongemma:latest",
@@ -2085,7 +2076,7 @@ class OllamaGemmaClient:
 
         Args:
             prompt: The user prompt
-            model_key: One of "gemma3n-e2b", "gemma3n-e4b", "gemma3", "functiongemma"
+            model_key: One of "gemma3-4b", "gemma3-12b", "functiongemma"
             system: Optional system prompt
             keep_alive: Ollama keep_alive parameter (e.g., "5m" for KV cache)
             timeout_ms: Timeout in milliseconds (uses model default if not specified)
@@ -2150,7 +2141,7 @@ class OllamaGemmaClient:
             tool_name: Name of the tool that was executed
             tool_output: Raw output from the tool
             context: Truncated system context for understanding
-            model_key: Model to use (defaults to gemma3n-e2b)
+            model_key: Model to use (defaults to gemma3-4b)
 
         Returns:
             ObservationResult with extracted information and sufficiency decision
@@ -2158,7 +2149,7 @@ class OllamaGemmaClient:
         from .models import ObservationResult
 
         start_time = time.perf_counter()
-        model = model_key or "gemma3n-e2b"
+        model = model_key or "gemma3-4b"
 
         # Truncate output if too long
         output_str = str(tool_output)
@@ -2286,12 +2277,12 @@ CONFIDENCE: [0.0-1.0] (How confident are you in this interpretation?)
             current_state: Current conversation/tool state
             available_tools: List of available tool names
             user_query: The user's original query
-            model_key: Model to use (defaults to gemma3n-e4b)
+            model_key: Model to use (defaults to gemma3-4b)
 
         Returns:
             Dict with 'response' or 'tool_call' or None if should escalate to cloud
         """
-        model = model_key or "gemma3n-e4b"
+        model = model_key or "gemma3-4b"
 
         tools_str = ", ".join(available_tools[:15])  # Limit tools in prompt
 

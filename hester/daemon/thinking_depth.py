@@ -19,8 +19,8 @@ class ThinkingDepth(Enum):
     Thinking depth tiers for model selection.
 
     Local tiers (Ollama):
-    - LOCAL: gemma3n (fast, ~50-100ms) - simple parsing, quick lookups
-    - DEEPLOCAL: gemma3 (slower, ~300-500ms) - complex local reasoning
+    - LOCAL: gemma3:4b (fast, ~100-200ms) - simple parsing, quick lookups
+    - DEEPLOCAL: gemma3:12b (slower, ~300-500ms) - complex local reasoning
 
     Cloud tiers (Gemini):
     - QUICK: gemini-2.5-flash - fast cloud, simple questions
@@ -28,8 +28,8 @@ class ThinkingDepth(Enum):
     - DEEP: gemini-3-flash - complex analysis, multi-file reasoning
     - PRO: gemini-3.1-pro - high-stakes decisions, deep reasoning
     """
-    LOCAL = -2       # Local fast - gemma3n for quick parsing
-    DEEPLOCAL = -1   # Local deep - gemma3 for complex local reasoning
+    LOCAL = -2       # Local fast - gemma3:4b for quick parsing
+    DEEPLOCAL = -1   # Local deep - gemma3:12b for complex local reasoning
     QUICK = 0        # Cloud fast - greetings, yes/no, simple clarifications
     STANDARD = 1     # Cloud balanced - file reads, searches, basic questions
     DEEP = 2         # Cloud complex - multi-file analysis, architecture
@@ -325,8 +325,8 @@ def get_model_for_depth(
         Model name string
     """
     model_map = {
-        ThinkingDepth.LOCAL: models.get("local", "gemma3n-e4b"),
-        ThinkingDepth.DEEPLOCAL: models.get("deeplocal", "gemma3"),
+        ThinkingDepth.LOCAL: models.get("local", "gemma3-4b"),
+        ThinkingDepth.DEEPLOCAL: models.get("deeplocal", "gemma3-12b"),
         ThinkingDepth.QUICK: models.get("quick", "gemini-2.5-flash"),
         ThinkingDepth.STANDARD: models.get("standard", "gemini-2.5-flash"),
         ThinkingDepth.DEEP: models.get("deep", "gemini-3-flash-preview"),
@@ -366,8 +366,8 @@ def get_local_model_for_depth(depth: ThinkingDepth) -> Optional[str]:
     The OllamaGemmaClient.MODEL_CONFIGS maps these to actual Ollama model names.
     """
     local_models = {
-        ThinkingDepth.LOCAL: "gemma3n-e4b",      # Maps to ollama gemma3n:e4b
-        ThinkingDepth.DEEPLOCAL: "gemma3",       # Maps to ollama gemma3:4b
+        ThinkingDepth.LOCAL: "gemma3-4b",       # Maps to ollama gemma3:4b
+        ThinkingDepth.DEEPLOCAL: "gemma3-12b",   # Maps to ollama gemma3:12b
     }
     return local_models.get(depth)
 
@@ -408,7 +408,7 @@ def refine_routing_decision(
     # Start with prepare's recommendation
     use_local = prepare_result.use_local_think
     model = prepare_result.think_model
-    precision = "e4b" if model and "e4b" in model else ("e2b" if model and "e2b" in model else "full")
+    precision = "12b" if model and "12b" in model else ("4b" if model and "4b" in model else "full")
     reason = prepare_result.routing_reason
 
     # Check if user explicitly requested a local tier (LOCAL or DEEPLOCAL)
@@ -426,8 +426,8 @@ def refine_routing_decision(
     # Override: if budget exhausted, try local regardless of prepare
     if not budget.can_use_cloud() and budget.can_use_local():
         use_local = True
-        model = model or "gemma3n-e4b"
-        precision = "e4b" if "e4b" in model else "e2b"
+        model = model or "gemma3-4b"
+        precision = "12b" if "12b" in model else "4b"
         reason = f"Budget override: cloud exhausted, using local (was: {reason})"
 
     # Override: later iterations may need cloud for synthesis
@@ -442,7 +442,7 @@ def refine_routing_decision(
         model_name = model
     elif use_local and explicit_local:
         # User explicitly requested local, use local model even if prepare didn't set one
-        model_name = get_local_model_for_depth(prepare_result.thinking_depth) or "gemma3n-e4b"
+        model_name = get_local_model_for_depth(prepare_result.thinking_depth) or "gemma3-4b"
     else:
         model_name = get_cloud_model_for_depth(prepare_result.thinking_depth)
 

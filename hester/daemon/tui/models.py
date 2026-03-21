@@ -52,7 +52,7 @@ class TUIChatState:
     # Hybrid routing tracking
     is_local: bool = False  # Whether current phase uses local model
     has_phase_info: bool = False  # Whether we've received any phase updates (don't show LOCAL/CLOUD until we have info)
-    precision: Optional[str] = None  # "e2b", "e4b", "full"
+    precision: Optional[str] = None  # "4b", "12b", "full"
     cloud_calls_remaining: Optional[int] = None
     local_calls_remaining: Optional[int] = None
     # Semantic routing tracking (bespoke agent selection)
