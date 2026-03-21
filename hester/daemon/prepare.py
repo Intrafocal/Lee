@@ -552,6 +552,11 @@ class OllamaFunctionGemma:
 
     FunctionGemma is a 270M parameter model fine-tuned for function calling.
     It runs locally via Ollama for fast (<100ms) inference.
+
+    Uses /api/chat with tools parameter instead of /api/generate, because
+    FunctionGemma's Modelfile has RENDERER/PARSER directives that intercept
+    raw text output — /api/generate always returns empty response fields.
+    The /api/chat endpoint returns proper tool_calls instead.
     """
 
     DEFAULT_OLLAMA_URL = "http://localhost:11434"
@@ -588,42 +593,96 @@ class OllamaFunctionGemma:
 
         return self._available
 
-    async def generate(
+    async def chat_with_tools(
         self,
-        prompt: str,
-        system: Optional[str] = None,
-    ) -> Optional[str]:
+        messages: List[Dict[str, str]],
+        tools: List[Dict[str, Any]],
+        temperature: float = 0.1,
+    ) -> Optional[Dict[str, Any]]:
         """
-        Generate response from FunctionGemma.
+        Call FunctionGemma via /api/chat with tool definitions.
 
-        Returns None if generation fails or times out.
+        Returns the first tool_call from the response, or None if the model
+        didn't call a tool or the request failed.
+
+        Returns:
+            Dict with 'name' and 'arguments' keys, or None
         """
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 payload = {
                     "model": self.MODEL_NAME,
-                    "prompt": prompt,
+                    "messages": messages,
+                    "tools": tools,
                     "stream": False,
                     "options": {
-                        "temperature": 0.1,  # Low temperature for deterministic selection
-                        "num_predict": 256,  # Limit output tokens
+                        "temperature": temperature,
+                        "num_predict": 256,
                     }
                 }
-                if system:
-                    payload["system"] = system
 
                 response = await client.post(
-                    f"{self.ollama_url}/api/generate",
+                    f"{self.ollama_url}/api/chat",
                     json=payload,
                 )
 
                 if response.status_code == 200:
-                    return response.json().get("response", "")
+                    data = response.json()
+                    msg = data.get("message", {})
+                    tool_calls = msg.get("tool_calls", [])
+                    if tool_calls:
+                        call = tool_calls[0]
+                        fn = call.get("function", {})
+                        return {
+                            "name": fn.get("name", ""),
+                            "arguments": fn.get("arguments", {}),
+                        }
+                    # No tool call — check if there's text content as fallback
+                    content = msg.get("content", "").strip()
+                    if content:
+                        logger.debug(f"FunctionGemma returned text instead of tool_call: {content[:100]}")
 
         except asyncio.TimeoutError:
             logger.debug("FunctionGemma timed out")
         except Exception as e:
             logger.debug(f"FunctionGemma error: {e}")
+
+        return None
+
+    async def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[str]:
+        """
+        Generate response from FunctionGemma using /api/chat with tools.
+
+        For backwards compatibility, returns a synthetic function call string
+        that parse_function_call() can parse. If tools are provided, uses
+        chat_with_tools and converts the result.
+
+        Returns None if generation fails or times out.
+        """
+        if not tools:
+            # Build default prepare_request tool
+            tools = [PREPARE_REQUEST_TOOL]
+
+        messages = [{"role": "user", "content": prompt}]
+        if system:
+            messages.insert(0, {"role": "system", "content": system})
+
+        result = await self.chat_with_tools(messages, tools, temperature=0.1)
+        if result:
+            # Convert tool_call back to the function call format for parse_function_call()
+            name = result["name"]
+            args = result["arguments"]
+            # Build key-value string: key:<escape>value<escape>
+            kv_parts = []
+            for k, v in args.items():
+                kv_parts.append(f"{k}:<escape>{v}<escape>")
+            args_str = ",".join(kv_parts)
+            return f"<start_function_call>call:{name}{{{args_str}}}<end_function_call>"
 
         return None
 
@@ -636,58 +695,144 @@ class OllamaFunctionGemma:
         """
         Classify input into one of the given options.
 
-        Uses FunctionGemma to select the best matching option.
+        Uses FunctionGemma with a classify tool that has an enum parameter.
         Returns None if classification fails or response doesn't match options.
-
-        Args:
-            prompt: Classification prompt (should end with instruction to output only option name)
-            options: List of valid option strings
-            timeout: Timeout in seconds
-
-        Returns:
-            The selected option, or None if classification fails
         """
+        classify_tool = {
+            "type": "function",
+            "function": {
+                "name": "classify",
+                "description": "Classify the input into one of the given categories.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "The selected category",
+                            "enum": options,
+                        }
+                    },
+                    "required": ["category"],
+                },
+            },
+        }
+
+        messages = [{"role": "user", "content": prompt}]
+
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                payload = {
-                    "model": self.MODEL_NAME,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.0,  # Zero temperature for deterministic classification
-                        "num_predict": 64,  # Short output for classification
-                    }
-                }
+            old_timeout = self.timeout
+            self.timeout = timeout
+            result = await self.chat_with_tools(messages, [classify_tool], temperature=0.0)
+            self.timeout = old_timeout
 
-                response = await client.post(
-                    f"{self.ollama_url}/api/generate",
-                    json=payload,
-                )
+            if result and result["name"] == "classify":
+                category = result["arguments"].get("category", "")
+                # Validate against options
+                for option in options:
+                    if category.lower() == option.lower():
+                        return option
+                logger.debug(f"FunctionGemma classification result '{category}' not in options {options}")
 
-                if response.status_code == 200:
-                    result = response.json().get("response", "").strip()
-                    # Clean up response - extract first word/line
-                    result = result.split('\n')[0].strip()
-                    result = result.strip('"\'')
-
-                    # Check if result matches any option (case-insensitive)
-                    for option in options:
-                        if result.lower() == option.lower():
-                            return option
-
-                    # Try partial match (result contains option)
-                    for option in options:
-                        if option.lower() in result.lower():
-                            return option
-
-                    logger.debug(f"FunctionGemma classification result '{result}' not in options {options}")
-
-        except asyncio.TimeoutError:
-            logger.debug("FunctionGemma classification timed out")
         except Exception as e:
             logger.debug(f"FunctionGemma classification error: {e}")
 
         return None
+
+
+# Ollama tool definitions for FunctionGemma /api/chat
+PREPARE_REQUEST_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "prepare_request",
+        "description": "Classify the thinking depth and select relevant tools for a user query.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "depth": {
+                    "type": "string",
+                    "description": "Thinking depth needed: QUICK for greetings/simple, STANDARD for single-file reads, DEEP for multi-file analysis, REASONING for debugging/design.",
+                    "enum": ["QUICK", "STANDARD", "DEEP", "REASONING"],
+                },
+                "tools": {
+                    "type": "string",
+                    "description": "Comma-separated list of relevant tool names, or NONE for simple greetings.",
+                },
+                "use_local": {
+                    "type": "string",
+                    "description": "Whether local models can handle initial reasoning. true for simple lookups, false for complex multi-step tasks.",
+                    "enum": ["true", "false"],
+                },
+                "think_model": {
+                    "type": "string",
+                    "description": "Local model for thinking phase.",
+                    "enum": ["gemma3n-e2b", "gemma3n-e4b", "gemma3", "none"],
+                },
+                "observe_model": {
+                    "type": "string",
+                    "description": "Local model for observing tool results.",
+                    "enum": ["gemma3n-e2b", "gemma3n-e4b", "gemma3"],
+                },
+            },
+            "required": ["depth", "tools"],
+        },
+    },
+}
+
+PREPARE_BATCH_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "prepare_batch",
+        "description": "Classify the thinking depth, select tools, and estimate complexity for a task batch.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "depth": {
+                    "type": "string",
+                    "description": "Thinking depth needed.",
+                    "enum": ["QUICK", "STANDARD", "DEEP", "REASONING"],
+                },
+                "tools": {
+                    "type": "string",
+                    "description": "Comma-separated list of relevant tool names.",
+                },
+                "complexity": {
+                    "type": "string",
+                    "description": "Estimated complexity of the batch.",
+                    "enum": ["simple", "moderate", "complex"],
+                },
+                "hints": {
+                    "type": "string",
+                    "description": "Brief natural language hints for the executor (max 100 chars).",
+                },
+            },
+            "required": ["depth", "tools", "complexity"],
+        },
+    },
+}
+
+DETECT_TASK_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "detect_task",
+        "description": "Classify whether the user request is a question or a task, and identify the task type.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_type": {
+                    "type": "string",
+                    "description": "QUESTION for direct answers, TASK for multi-step work.",
+                    "enum": ["question", "task"],
+                },
+                "task_type": {
+                    "type": "string",
+                    "description": "Type of task, or NONE if this is a question.",
+                    "enum": ["feature", "bugfix", "refactor", "test", "research", "docs", "config", "NONE"],
+                },
+            },
+            "required": ["request_type", "task_type"],
+        },
+    },
+}
 
 
 def get_tool_summaries(environment: str = "daemon") -> str:
@@ -1207,7 +1352,7 @@ async def prepare_request(
 
     if await client.is_available():
         prompt = build_prepare_prompt(message, file_context, hybrid_routing_enabled, environment)
-        response = await client.generate(prompt)
+        response = await client.generate(prompt, tools=[PREPARE_REQUEST_TOOL])
 
         if response:
             parsed = parse_function_call(response)
@@ -1581,7 +1726,7 @@ async def detect_task(
 
     if await client.is_available():
         prompt = build_task_detection_prompt(message)
-        response = await client.generate(prompt)
+        response = await client.generate(prompt, tools=[DETECT_TASK_TOOL])
 
         if response:
             parsed = parse_task_detection(response)
@@ -1766,7 +1911,7 @@ async def prepare_batch(
 
     if await client.is_available():
         prompt = build_batch_prepare_prompt(batch_description, batch_files, task_context)
-        response = await client.generate(prompt)
+        response = await client.generate(prompt, tools=[PREPARE_BATCH_TOOL])
 
         if response:
             parsed = parse_batch_prepare(response)
