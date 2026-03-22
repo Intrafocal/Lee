@@ -820,7 +820,29 @@ export class PTYManager extends EventEmitter {
       env.HESTER_RESOURCES_PATH = path.join(app.getAppPath(), 'resources');
     }
 
-    const hesterConfig = this.workspaceConfig?.hester;
+    let hesterConfig = this.workspaceConfig?.hester;
+
+    // If workspace config isn't loaded yet (prewarm), try global config files
+    if (!hesterConfig) {
+      const globalConfigPaths = [
+        path.join(app.getPath('home'), '.lee', 'config.yaml'),
+        path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
+      ];
+      for (const configPath of globalConfigPaths) {
+        try {
+          const content = fs.readFileSync(configPath, 'utf-8');
+          // Simple YAML extraction for google_api_key (avoid full parser dependency)
+          const match = content.match(/google_api_key:\s*(.+)/);
+          if (match) {
+            hesterConfig = { google_api_key: match[1].trim() };
+            break;
+          }
+        } catch {
+          // File doesn't exist, try next
+        }
+      }
+    }
+
     if (!hesterConfig) return env;
 
     if (hesterConfig.google_api_key) {
@@ -839,12 +861,25 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
-   * Check if GOOGLE_API_KEY is available from workspace config or process environment.
+   * Check if GOOGLE_API_KEY is available from workspace config, global config, or process environment.
    * Returns the source if found, or null if missing.
    */
-  private getGoogleApiKeySource(): 'config' | 'env' | null {
+  private getGoogleApiKeySource(): 'config' | 'global-config' | 'env' | null {
     if (this.workspaceConfig?.hester?.google_api_key) return 'config';
     if (process.env.GOOGLE_API_KEY) return 'env';
+    // Check global config files directly (for prewarm before workspace config is loaded)
+    const globalConfigPaths = [
+      path.join(app.getPath('home'), '.lee', 'config.yaml'),
+      path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
+    ];
+    for (const configPath of globalConfigPaths) {
+      try {
+        const content = fs.readFileSync(configPath, 'utf-8');
+        if (content.includes('google_api_key')) return 'global-config';
+      } catch {
+        // File doesn't exist, try next
+      }
+    }
     return null;
   }
 
