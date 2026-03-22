@@ -95,7 +95,7 @@ const SpyglassTerminal: React.FC<{
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: 'JetBrains Mono, Menlo, Monaco, Courier New, monospace',
+      fontFamily: 'JetBrains Mono, Noto Color Emoji, Menlo, Monaco, Courier New, monospace',
       theme: {
         background: '#0d1a14',
         foreground: '#eee',

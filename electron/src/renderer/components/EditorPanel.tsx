@@ -228,7 +228,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         },
         '.cm-scroller': {
           overflow: 'auto',
-          fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
+          fontFamily: 'JetBrains Mono, Noto Color Emoji, Menlo, Monaco, monospace',
         },
         '.cm-content': {
           caretColor: '#528bff',

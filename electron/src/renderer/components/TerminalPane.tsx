@@ -157,7 +157,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ ptyId, active, label
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: 'JetBrains Mono, Menlo, Monaco, Courier New, monospace',
+      fontFamily: 'JetBrains Mono, Noto Color Emoji, Menlo, Monaco, Courier New, monospace',
       theme: {
         background: '#0d1a14',
         foreground: '#eee',
@@ -209,6 +209,44 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ ptyId, active, label
     } catch (e) {
       console.warn('WebGL addon not available, falling back to canvas renderer');
     }
+
+    // Linux copy/paste: Ctrl+Shift+C to copy, Ctrl+Shift+V to paste
+    // Also enable copy-on-select on Linux (standard terminal behavior)
+    const isLinux = navigator.platform.startsWith('Linux');
+
+    if (isLinux) {
+      terminal.onSelectionChange(() => {
+        const selection = terminal.getSelection();
+        if (selection) {
+          lee.clipboard.writeText(selection);
+        }
+      });
+    }
+
+    terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (!isLinux) return true;
+
+      // Ctrl+Shift+C: copy selection
+      if (e.ctrlKey && e.shiftKey && e.key === 'C' && e.type === 'keydown') {
+        const selection = terminal.getSelection();
+        if (selection) {
+          lee.clipboard.writeText(selection);
+        }
+        return false; // Prevent terminal from handling it
+      }
+
+      // Ctrl+Shift+V: paste from clipboard
+      if (e.ctrlKey && e.shiftKey && e.key === 'V' && e.type === 'keydown') {
+        lee.clipboard.readText().then((text: string) => {
+          if (text && ptyIdRef.current !== null) {
+            lee.pty.write(ptyIdRef.current, text);
+          }
+        });
+        return false;
+      }
+
+      return true; // Let all other keys through
+    });
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;

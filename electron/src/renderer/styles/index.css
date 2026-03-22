@@ -387,7 +387,7 @@ body {
 .terminal-loading .loading-text {
   color: var(--text-secondary);
   font-size: 14px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Color Emoji', monospace;
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -1342,7 +1342,7 @@ body {
 .devops-service-port {
   font-size: 11px;
   color: var(--text-muted);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, 'Noto Color Emoji', monospace;
 }
 
 .devops-service-actions {
@@ -1408,7 +1408,7 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   font-size: 12px;
   line-height: 1.6;
   background: var(--bg-secondary);
@@ -1866,7 +1866,7 @@ body {
   padding: 2px 6px;
   background: rgba(255, 170, 0, 0.15);
   border-radius: 4px;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   font-size: 12px;
 }
 
@@ -1906,7 +1906,7 @@ body {
   padding: 2px 6px;
   background: var(--bg-tertiary);
   border-radius: 4px;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   font-size: 11px;
   color: var(--accent);
 }
@@ -2462,7 +2462,7 @@ body {
 
 .config-secret-input input {
   width: 100%;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   letter-spacing: 1px;
 }
 
@@ -2479,7 +2479,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-primary);
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   font-size: 13px;
   line-height: 1.5;
   resize: none;
@@ -2862,7 +2862,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, 'Noto Color Emoji', monospace;
 }
 
 .status-modified {
@@ -3000,7 +3000,7 @@ body {
   border-radius: 6px;
   color: var(--text-primary);
   font-size: 13px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, 'Noto Color Emoji', monospace;
   outline: none;
   transition: border-color 0.15s ease;
 }
@@ -3129,7 +3129,7 @@ body {
   padding: 0.2em 0.4em;
   margin: 0 0.2em;
   font-size: 85%;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   background: var(--bg-tertiary);
   border-radius: 4px;
   color: var(--accent);
@@ -3147,7 +3147,7 @@ body {
   right: 0;
   padding: 4px 10px;
   font-size: 11px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, 'Noto Color Emoji', monospace;
   color: var(--text-muted);
   background: var(--bg-secondary);
   border-radius: 0 8px 0 6px;
@@ -3166,7 +3166,7 @@ body {
 }
 
 .markdown-preview .code-block code {
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, Consolas, 'Noto Color Emoji', monospace;
   color: var(--text-primary);
 }
 
@@ -3431,7 +3431,7 @@ body {
 .console-panel-logs {
   flex: 1;
   overflow-y: auto;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Color Emoji', monospace;
   font-size: 11px;
   padding: 4px 0;
 }
@@ -4002,7 +4002,7 @@ body {
 }
 
 .library-chat-phase-tool {
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: 'SF Mono', 'JetBrains Mono', Monaco, 'Noto Color Emoji', monospace;
   font-size: 11px;
   color: var(--accent);
 }
@@ -5462,7 +5462,7 @@ body {
 }
 
 .spyglass-editor-file {
-  font-family: 'JetBrainsMono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Color Emoji', monospace;
   font-size: 13px;
   color: #e6edf3;
 }
@@ -5803,7 +5803,7 @@ body {
 .bridge-tui-command {
   margin-left: auto;
   color: #484f58;
-  font-family: 'JetBrainsMono', monospace;
+  font-family: 'JetBrains Mono', 'Noto Color Emoji', monospace;
   font-size: 11px;
 }
 
