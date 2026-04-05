@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import * as http from 'http';
+import { execFile } from 'child_process';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { MachineConfig } from '../shared/context';
@@ -25,6 +26,7 @@ export class MachineManager extends EventEmitter {
   private healthTimer: NodeJS.Timeout | null = null;
   private static PING_INTERVAL = 15000;
   private configPath: string;
+  private tokenCache: Map<string, string> = new Map(); // host -> auth token
 
   constructor() {
     super();
@@ -76,18 +78,65 @@ export class MachineManager extends EventEmitter {
     this.emit('change', this.getStates());
   }
 
-  private pingMachine(machine: MachineState): Promise<void> {
+  /**
+   * Fetch the auth token from a remote machine via SSH.
+   * Caches the token per host to avoid repeated SSH calls.
+   */
+  private fetchToken(host: string, sshPort: number = 22): Promise<string | null> {
+    const cacheKey = `${host}:${sshPort}`;
+    const cached = this.tokenCache.get(cacheKey);
+    if (cached) return Promise.resolve(cached);
+
     return new Promise((resolve) => {
-      const port = machine.config.lee_port || 9001;
+      const args = ['-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new'];
+      if (sshPort !== 22) {
+        args.push('-p', String(sshPort));
+      }
+      args.push(host, 'cat', '~/.lee/api-token');
+
+      execFile('ssh', args, { timeout: 10000 }, (err, stdout) => {
+        if (err) {
+          console.error(`[MachineManager] SSH token fetch failed for ${host}:`, err.message);
+          resolve(null);
+          return;
+        }
+        const token = stdout.trim();
+        if (token) {
+          this.tokenCache.set(cacheKey, token);
+        }
+        resolve(token || null);
+      });
+    });
+  }
+
+  /** Clear cached token for a host (e.g., after auth failure). */
+  clearTokenCache(host: string, sshPort: number = 22): void {
+    this.tokenCache.delete(`${host}:${sshPort}`);
+  }
+
+  private async pingMachine(machine: MachineState): Promise<void> {
+    const port = machine.config.lee_port || 9001;
+    const token = await this.fetchToken(machine.config.host, machine.config.ssh_port);
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    return new Promise((resolve) => {
       const req = http.request({
         hostname: machine.config.host,
         port,
         path: '/health',
         method: 'GET',
+        headers,
         timeout: 3000,
       }, (res) => {
         machine.online = res.statusCode === 200;
         machine.lastPing = Date.now();
+        // If we get 401, clear cached token so next ping re-fetches
+        if (res.statusCode === 401) {
+          this.clearTokenCache(machine.config.host, machine.config.ssh_port);
+        }
         resolve();
       });
       req.on('error', () => {
@@ -106,15 +155,27 @@ export class MachineManager extends EventEmitter {
   }
 
   async fetchRemoteContext(machine: MachineConfig): Promise<any> {
+    const port = machine.lee_port || 9001;
+    const token = await this.fetchToken(machine.host, machine.ssh_port);
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     return new Promise((resolve, reject) => {
-      const port = machine.lee_port || 9001;
       const req = http.request({
         hostname: machine.host,
         port,
         path: '/context',
         method: 'GET',
+        headers,
         timeout: 5000,
       }, (res) => {
+        if (res.statusCode === 401) {
+          this.clearTokenCache(machine.host, machine.ssh_port);
+          reject(new Error('Unauthorized: invalid or expired token'));
+          return;
+        }
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {

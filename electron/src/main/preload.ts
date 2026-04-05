@@ -188,6 +188,10 @@ export interface LeeAPI {
     fetchContext: (machineConfig: any) => Promise<any>;
     onChange: (callback: (machines: any[]) => void) => () => void;
   };
+  aeronaut: {
+    getPairingQR: () => Promise<{ qrDataUrl: string; pairingInfo: any }>;
+    onShowPairing: (callback: () => void) => () => void;
+  };
 }
 
 // Status message from Hester
@@ -576,6 +580,15 @@ contextBridge.exposeInMainWorld('lee', {
       const listener = (_event: any, machines: any[]) => callback(machines);
       ipcRenderer.on('machines:change', listener);
       return () => ipcRenderer.removeListener('machines:change', listener);
+    },
+  },
+
+  aeronaut: {
+    getPairingQR: () => ipcRenderer.invoke('aeronaut:get-pairing-qr'),
+    onShowPairing: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('aeronaut:show-pairing', listener);
+      return () => ipcRenderer.removeListener('aeronaut:show-pairing', listener);
     },
   },
 } as LeeAPI);

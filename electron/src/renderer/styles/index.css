@@ -5822,3 +5822,135 @@ body {
   background: rgba(248, 81, 73, 0.1);
   border-radius: 6px;
 }
+
+/* Pairing dialog (Aeronaut QR code) */
+.pairing-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.pairing-dialog {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  width: 360px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.pairing-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #30363d;
+}
+
+.pairing-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.pairing-dialog-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.pairing-dialog-close:hover {
+  color: #e6edf3;
+}
+
+.pairing-dialog-body {
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pairing-dialog-loading {
+  color: #8b949e;
+  font-size: 13px;
+  padding: 40px 0;
+}
+
+.pairing-dialog-error {
+  color: #f85149;
+  font-size: 13px;
+  padding: 8px 12px;
+  background: rgba(248, 81, 73, 0.1);
+  border-radius: 6px;
+  width: 100%;
+  text-align: center;
+}
+
+.pairing-dialog-qr {
+  margin-bottom: 16px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pairing-dialog-qr img {
+  display: block;
+}
+
+.pairing-dialog-info {
+  width: 100%;
+}
+
+.pairing-dialog-hint {
+  font-size: 12px;
+  color: #8b949e;
+  text-align: center;
+  margin: 0 0 12px;
+}
+
+.pairing-dialog-details {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.pairing-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.pairing-detail-row + .pairing-detail-row {
+  border-top: 1px solid #21262d;
+}
+
+.pairing-detail-label {
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.pairing-detail-value {
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #e6edf3;
+}
+
+.pairing-detail-token {
+  font-size: 10px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

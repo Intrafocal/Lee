@@ -7,6 +7,7 @@ import '../theme/aeronaut_theme.dart';
 import '../widgets/machine_card.dart';
 import 'add_machine_screen.dart';
 import 'home_screen.dart';
+import 'qr_scanner_screen.dart';
 
 /// List of saved machines with online/offline status.
 ///
@@ -23,6 +24,11 @@ class MachinesScreen extends ConsumerWidget {
         title: const Text('Machines'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: 'Scan QR',
+            onPressed: () => _navigateToScan(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Ping all',
             onPressed: () =>
@@ -33,6 +39,7 @@ class MachinesScreen extends ConsumerWidget {
       body: machinesState.machines.isEmpty
           ? _EmptyState(
               onAdd: () => _navigateToAdd(context),
+              onScan: () => _navigateToScan(context),
             )
           : RefreshIndicator(
               color: AeronautColors.accent,
@@ -73,6 +80,14 @@ class MachinesScreen extends ConsumerWidget {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => const AddMachineScreen(),
+      ),
+    );
+  }
+
+  void _navigateToScan(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<bool>(
+        builder: (_) => const QrScannerScreen(),
       ),
     );
   }
@@ -128,8 +143,9 @@ class MachinesScreen extends ConsumerWidget {
 
 class _EmptyState extends StatelessWidget {
   final VoidCallback onAdd;
+  final VoidCallback onScan;
 
-  const _EmptyState({required this.onAdd});
+  const _EmptyState({required this.onAdd, required this.onScan});
 
   @override
   Widget build(BuildContext context) {
@@ -161,9 +177,15 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: AeronautTheme.spacingLg),
             ElevatedButton.icon(
+              onPressed: onScan,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan QR Code'),
+            ),
+            const SizedBox(height: AeronautTheme.spacingSm),
+            OutlinedButton.icon(
               onPressed: onAdd,
               icon: const Icon(Icons.add),
-              label: const Text('Add Machine'),
+              label: const Text('Add Manually'),
             ),
           ],
         ),

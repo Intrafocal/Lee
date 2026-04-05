@@ -38,6 +38,9 @@ dependencies:
   uuid: ^4.2.1
   flutter_markdown: ^0.7.7+1
 
+  # QR scanning
+  mobile_scanner: ^6.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

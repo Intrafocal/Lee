@@ -7,7 +7,8 @@
  * - Context retrieval (Lee state)
  */
 
-import express, { Request, Response, Application } from 'express';
+import crypto from 'crypto';
+import express, { Request, Response, NextFunction, Application } from 'express';
 import { Server } from 'http';
 import { MosaicApp } from '../App';
 import { LeeState } from '../pty/manager';
@@ -39,14 +40,36 @@ export class APIServer {
   private mosaicApp: MosaicApp;
   private port: number;
   private hesterPort: number;
+  private authToken: string;
+
+  /** Get the auth token for passing to legitimate clients (e.g., Hester daemon). */
+  getAuthToken(): string {
+    return this.authToken;
+  }
 
   constructor(config: APIServerConfig) {
     this.mosaicApp = config.app;
     this.port = config.port;
     this.hesterPort = config.hesterPort || 9000;
+    this.authToken = crypto.randomUUID();
 
     this.app = express();
     this.app.use(express.json());
+
+    // Auth middleware - require Bearer token on POST and DELETE routes
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method === 'GET' || req.method === 'OPTIONS') {
+        next();
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${this.authToken}`) {
+        res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing token' });
+        return;
+      }
+      next();
+    });
 
     this.setupRoutes();
   }

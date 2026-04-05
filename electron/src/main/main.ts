@@ -4,10 +4,12 @@
  * The "Meta-IDE" - a terminal multiplexer that spawns specialized CLI tools.
  */
 
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, dialog, clipboard, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, dialog, clipboard, nativeImage, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as yaml from 'js-yaml';
+import QRCode from 'qrcode';
 import { PTYManager } from './pty-manager';
 import { APIServer } from './api-server';
 import { ContextBridge } from './context-bridge';
@@ -100,6 +102,24 @@ function createWindow(workspace?: string): BrowserWindow {
       sandbox: false, // Required for node-pty IPC
       webviewTag: true, // Enable <webview> tag for browser tabs
     },
+  });
+
+  // Set Content Security Policy headers for the renderer
+  bw.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; " +
+          "script-src 'self'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob:; " +
+          "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; " +
+          "font-src 'self' data:; " +
+          "frame-src 'self'"
+        ],
+      },
+    });
   });
 
   // Create per-window ContextBridge
@@ -399,6 +419,14 @@ function setupApplicationMenu(): void {
         { role: 'zoomOut' as const },
         { type: 'separator' as const },
         { role: 'togglefullscreen' as const },
+        { type: 'separator' as const },
+        {
+          label: 'Aeronaut Pairing...',
+          accelerator: 'CmdOrCtrl+Shift+A',
+          click: () => {
+            BrowserWindow.getFocusedWindow()?.webContents.send('aeronaut:show-pairing');
+          },
+        },
       ],
     },
 
@@ -1256,6 +1284,41 @@ function setupIPC(): void {
     } catch (err: any) {
       return { error: err.message };
     }
+  });
+
+  // ============================================
+  // Aeronaut pairing
+  // ============================================
+
+  ipcMain.handle('aeronaut:get-pairing-qr', async () => {
+    // Find a non-internal IPv4 address
+    const interfaces = os.networkInterfaces();
+    let localIp = '127.0.0.1';
+    for (const name of Object.keys(interfaces)) {
+      for (const iface of interfaces[name] || []) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          localIp = iface.address;
+          break;
+        }
+      }
+      if (localIp !== '127.0.0.1') break;
+    }
+
+    const pairingInfo = {
+      name: os.hostname(),
+      host: localIp,
+      hostPort: 9001,
+      hesterPort: 9000,
+      token: apiServer.getAuthToken(),
+    };
+
+    const qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairingInfo), {
+      width: 280,
+      margin: 2,
+      color: { dark: '#e6edf3', light: '#0d1117' },
+    });
+
+    return { qrDataUrl, pairingInfo };
   });
 }
 

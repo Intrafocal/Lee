@@ -4,7 +4,11 @@
  * Allows Hester and other tools to control Lee via HTTP.
  */
 
-import express, { Request, Response, Application } from 'express';
+import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import express, { Request, Response, NextFunction, Application } from 'express';
 import { Server, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Socket } from 'net';
@@ -43,22 +47,56 @@ export class APIServer {
   private browserManager?: BrowserManager;
   private port: number;
   private leeState: LeeState = {};
+  private authToken: string;
+
+  /** Get the auth token for passing to legitimate clients (e.g., Hester daemon). */
+  getAuthToken(): string {
+    return this.authToken;
+  }
 
   constructor(config: APIServerConfig) {
     this.ptyManager = config.ptyManager;
     this.browserManager = config.browserManager;
     this.port = config.port;
+    this.authToken = crypto.randomUUID();
 
     this.app = express();
     this.app.use(express.json());
 
-    // CORS - allow Aeronaut (Flutter web) and other local tools
-    this.app.use((_req, res, next) => {
-      res.header('Access-Control-Allow-Origin', '*');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      if (_req.method === 'OPTIONS') {
+    // CORS - only allow localhost origins (Aeronaut, Flutter web, etc.)
+    this.app.use((req, res, next) => {
+      const origin = req.headers.origin;
+      if (origin) {
+        // Allow any localhost origin (any port)
+        try {
+          const url = new URL(origin);
+          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+            res.header('Access-Control-Allow-Origin', origin);
+            res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+          }
+        } catch {
+          // Invalid origin, skip CORS headers
+        }
+      }
+      if (req.method === 'OPTIONS') {
         res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+
+    // Auth middleware - require Bearer token on POST and DELETE routes
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
+      // Skip auth for GET requests (health, context, etc.) and OPTIONS preflight
+      if (req.method === 'GET' || req.method === 'OPTIONS') {
+        next();
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${this.authToken}`) {
+        res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing token' });
         return;
       }
       next();
@@ -130,15 +168,33 @@ export class APIServer {
         this.server = this.app.listen(this.port, () => {
           console.log(`Lee API server listening on port ${this.port}`);
 
+          // Write auth token to ~/.lee/api-token so remote machines can read it via SSH
+          const tokenDir = path.join(os.homedir(), '.lee');
+          const tokenPath = path.join(tokenDir, 'api-token');
+          try {
+            fs.mkdirSync(tokenDir, { recursive: true });
+            fs.writeFileSync(tokenPath, this.authToken, { mode: 0o600 });
+          } catch (err) {
+            console.error('Failed to write api-token file:', err);
+          }
+
           // Create all WebSocket servers in noServer mode
           this.wss = new WebSocketServer({ noServer: true });
           this.ptyWss = new WebSocketServer({ noServer: true });
           this.browserCastWss = new WebSocketServer({ noServer: true });
 
-          // Manual upgrade routing
+          // Manual upgrade routing (with token auth via query parameter)
           this.server!.on('upgrade', (request: IncomingMessage, socket: Socket, head: Buffer) => {
             const url = new URL(request.url || '', `http://localhost:${this.port}`);
             const pathname = url.pathname;
+
+            // Verify auth token on WebSocket upgrade
+            const token = url.searchParams.get('token');
+            if (token !== this.authToken) {
+              socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+              socket.destroy();
+              return;
+            }
 
             if (pathname === '/context/stream') {
               this.wss!.handleUpgrade(request, socket, head, (ws) => {

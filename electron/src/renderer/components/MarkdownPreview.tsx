@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import DOMPurify from 'dompurify';
 
 interface MarkdownPreviewProps {
   content: string;
@@ -83,7 +84,7 @@ const MermaidBlock: React.FC<{ code: string }> = ({ code }) => {
     <div
       ref={containerRef}
       className="mermaid-diagram"
-      dangerouslySetInnerHTML={{ __html: svg }}
+      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }}
     />
   );
 };

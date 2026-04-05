@@ -21,6 +21,7 @@ import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
 import { SpyglassPane } from './components/SpyglassPane';
 import { BridgePicker } from './components/BridgePicker';
+import { PairingDialog } from './components/PairingDialog';
 import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
 import { useHotkeys } from './hooks/useHotkeys';
 import { focusManager } from './hooks/useFocusManager';
@@ -109,6 +110,9 @@ const App: React.FC = () => {
 
   // Bridge picker modal
   const [showBridgePicker, setShowBridgePicker] = useState(false);
+
+  // Aeronaut pairing dialog
+  const [showPairingDialog, setShowPairingDialog] = useState(false);
   const [bridgePreselectedMachine, setBridgePreselectedMachine] = useState<any>(null);
 
   // Helper to convert config keybinding format to useHotkeys format
@@ -1494,7 +1498,13 @@ const App: React.FC = () => {
       setShowWorkspaceModal(true);
     });
 
+    // View > Aeronaut Pairing (Cmd+Shift+A)
+    const cleanupPairing = lee.aeronaut?.onShowPairing?.(() => {
+      setShowPairingDialog(true);
+    });
+
     return () => {
+      cleanupPairing?.();
       lee.file.removeAllListeners();
       lee.menu.removeAllListeners();
     };
@@ -1720,6 +1730,7 @@ const App: React.FC = () => {
     map[getKeybinding('devops', 'meta+shift+o')] = () => getOrCreateTab('devops');
     map[getKeybinding('system', 'meta+shift+m')] = () => getOrCreateTab('system');
     map[getKeybinding('workstream', 'meta+shift+w')] = () => setShowWorkstreamPicker(true);
+    map[getKeybinding('aeronaut_pairing', 'meta+shift+a')] = () => setShowPairingDialog(true);
 
     // Tab switching (Cmd+1-9)
     map[getKeybinding('tab_1', 'meta+1')] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
@@ -2121,6 +2132,9 @@ const App: React.FC = () => {
         onSpyglass={handleSpyglass}
         onBridge={handleBridge}
       />
+      {showPairingDialog && (
+        <PairingDialog onClose={() => setShowPairingDialog(false)} />
+      )}
       {showBridgePicker && (
         <BridgePicker
           preselectedMachine={bridgePreselectedMachine}
