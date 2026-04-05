@@ -86,14 +86,17 @@ async function confirmAndReload(bw: BrowserWindow, forceReload: boolean): Promis
 const closeConfirmedWindows = new Set<number>();
 
 function createWindow(workspace?: string): BrowserWindow {
+  const isMac = process.platform === 'darwin';
   const bw = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
     minHeight: 600,
     title: 'Lee',
-    titleBarStyle: 'hiddenInset', // macOS native title bar
-    trafficLightPosition: { x: 15, y: 10 },
+    ...(isMac ? {
+      titleBarStyle: 'hiddenInset' as const,
+      trafficLightPosition: { x: 15, y: 10 },
+    } : {}),
     backgroundColor: '#0d1a14',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
