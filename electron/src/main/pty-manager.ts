@@ -1326,12 +1326,17 @@ export class PTYManager extends EventEmitter {
     const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
     const wsConfig = winConfig?.config ?? this.workspaceConfig;
     const configTui = wsConfig?.tuis?.[tuiType];
+    const defaultTui = PTYManager.DEFAULT_TUIS[tuiType];
+
+    if (configTui && defaultTui) {
+      // Merge: config overrides defaults, but defaults fill in missing fields
+      return { ...defaultTui, ...configTui };
+    }
+
     if (configTui) {
       return configTui;
     }
 
-    // Fall back to defaults
-    const defaultTui = PTYManager.DEFAULT_TUIS[tuiType];
     if (defaultTui) {
       return defaultTui;
     }
