@@ -92,7 +92,7 @@ class HesterChatTUI:
         Examples:
           Hester is responding (standard-3-flash) [CLOUD] @db_explorer | 1234 tok | read_file, db_query
           Hester is thinking (deep-3-flash) [CLOUD] #code_analysis | 567 tok | search_content
-          Hester is acting (quick-gemma3) [LOCAL 4B] | read_file: main.py
+          Hester is acting (quick-gemma4) [LOCAL E4B] | read_file: main.py
         """
         status = Text()
 
@@ -201,11 +201,11 @@ class HesterChatTUI:
             short = short.replace("-preview", "")
             short = short.replace("flash-lite", "lite")
             return short
-        # Local models: gemma3-4b -> gemma3, functiongemma -> fgemma
+        # Local models: gemma4-e4b -> gemma4, functiongemma -> fgemma
         if model == "functiongemma":
             return "fgemma"
-        if model.startswith("gemma3-"):
-            return "gemma3"
+        if model.startswith("gemma4-"):
+            return "gemma4"
         return model
 
     def _create_messages_panel(self, max_messages: int = 20) -> Panel:
@@ -734,8 +734,8 @@ class HesterChatTUI:
 Prefix your message to control model:
 
 [dim]Local (Ollama):[/dim]
-[cyan]/local[/cyan]         Fast local (gemma3:4b)
-[cyan]/deeplocal[/cyan]     Complex local (gemma3:12b)
+[cyan]/local[/cyan]         Fast local (gemma4:e4b)
+[cyan]/deeplocal[/cyan]     Deep local (gemma4:e4b)
 
 [dim]Cloud (Gemini):[/dim]
 [cyan]/quick[/cyan]         Fast cloud (2.5-flash)

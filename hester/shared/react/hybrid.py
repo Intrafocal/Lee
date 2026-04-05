@@ -25,7 +25,7 @@ class HybridReActCapability(ReActCapability):
     """
     Extension of ReActCapability with hybrid local/cloud ReAct loop.
 
-    Uses local Gemma models (via Ollama) for OBSERVE phase and simple THINK phases,
+    Uses local Gemma 4 E4B (via Ollama) for OBSERVE and THINK phases,
     with cloud Gemini for complex reasoning and RESPOND.
     """
 
@@ -46,7 +46,7 @@ class HybridReActCapability(ReActCapability):
         """
         Generate a response using hybrid local/cloud ReAct loop.
 
-        Uses local Gemma models for OBSERVE phase and simple THINK phases,
+        Uses local Gemma 4 E4B for OBSERVE and THINK phases,
         with cloud Gemini for complex reasoning and RESPOND.
 
         Args:
@@ -143,7 +143,7 @@ class HybridReActCapability(ReActCapability):
 
             if use_local_think and local_client and budget.can_use_local():
                 # Try local THINK
-                local_think_model = routing.model_name if routing else "gemma3-4b"
+                local_think_model = routing.model_name if routing else "gemma4-e4b"
                 await notify_phase(
                     ReActPhase.THINK,
                     is_local=True,
@@ -157,7 +157,7 @@ class HybridReActCapability(ReActCapability):
 
                 think_result = await self._local_think_with_fallback(
                     local_client=local_client,
-                    model_key=routing.model_name if routing else "gemma3-4b",
+                    model_key=routing.model_name if routing else "gemma4-e4b",
                     state_summary=state_summary,
                     user_query=user_query,
                     available_tools=tool_filter or [t["name"] for t in self._tool_definitions],
@@ -187,7 +187,7 @@ class HybridReActCapability(ReActCapability):
                             "text": think_result["response"],
                             "tool_calls": tool_calls_made,
                             "iterations": iterations,
-                            "model_used": "local:" + (routing.model_name if routing else "gemma3-4b"),
+                            "model_used": "local:" + (routing.model_name if routing else "gemma4-e4b"),
                             "prompt_tokens": total_prompt_tokens,
                             "completion_tokens": total_completion_tokens,
                             "routing_used": "local",
@@ -209,7 +209,7 @@ class HybridReActCapability(ReActCapability):
                     tool_calls_made.append(result)
 
                     # OBSERVE with local model
-                    local_observe_model = prepare_result.observe_model if prepare_result else "gemma3-4b"
+                    local_observe_model = prepare_result.observe_model if prepare_result else "gemma4-e4b"
                     last_observation = await self._local_observe(
                         local_client=local_client,
                         tool_name=tool_name,
@@ -234,7 +234,7 @@ class HybridReActCapability(ReActCapability):
                             # Try to get local model to respond directly
                             local_response = await self._local_think_with_fallback(
                                 local_client=local_client,
-                                model_key=routing.model_name if routing else "gemma3-4b",
+                                model_key=routing.model_name if routing else "gemma4-e4b",
                                 state_summary=self._build_state_summary(contents, tool_calls_made),
                                 user_query=messages[-1].get("content", "") if messages else "",
                                 available_tools=[],  # No tools for final response
@@ -248,7 +248,7 @@ class HybridReActCapability(ReActCapability):
                                     "text": local_response["response"],
                                     "tool_calls": tool_calls_made,
                                     "iterations": iterations,
-                                    "model_used": "local:" + (routing.model_name if routing else "gemma3-4b"),
+                                    "model_used": "local:" + (routing.model_name if routing else "gemma4-e4b"),
                                     "prompt_tokens": total_prompt_tokens,
                                     "completion_tokens": total_completion_tokens,
                                     "routing_used": "local",
@@ -337,7 +337,7 @@ class HybridReActCapability(ReActCapability):
 
                     # OBSERVE with local model if available
                     if local_client and budget.can_use_local():
-                        local_observe_model = prepare_result.observe_model if prepare_result else "gemma3-4b"
+                        local_observe_model = prepare_result.observe_model if prepare_result else "gemma4-e4b"
                         last_observation = await self._local_observe(
                             local_client=local_client,
                             tool_name=tool_name,
@@ -399,7 +399,7 @@ class HybridReActCapability(ReActCapability):
                 logger.debug("Force local only mode - attempting local synthesis")
                 local_response = await self._local_think_with_fallback(
                     local_client=local_client,
-                    model_key=routing.model_name if routing else "gemma3-4b",
+                    model_key=routing.model_name if routing else "gemma4-e4b",
                     state_summary=self._build_state_summary(contents, tool_calls_made),
                     user_query=messages[-1].get("content", "") if messages else "",
                     available_tools=[],  # No tools for final response
@@ -413,7 +413,7 @@ class HybridReActCapability(ReActCapability):
                         "text": local_response["response"],
                         "tool_calls": tool_calls_made,
                         "iterations": iterations,
-                        "model_used": "local:" + (routing.model_name if routing else "gemma3-4b"),
+                        "model_used": "local:" + (routing.model_name if routing else "gemma4-e4b"),
                         "prompt_tokens": total_prompt_tokens,
                         "completion_tokens": total_completion_tokens,
                         "routing_used": "local",

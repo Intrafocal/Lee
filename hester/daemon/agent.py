@@ -175,8 +175,8 @@ logger = logging.getLogger("hester.daemon.agent")
 # Simplified to 6 clear tiers: 2 local + 4 cloud
 DEPTH_COMMANDS = {
     # Local tiers (Ollama)
-    "/local": ThinkingDepth.LOCAL,        # gemma3:4b - fast local
-    "/deeplocal": ThinkingDepth.DEEPLOCAL,  # gemma3:12b - complex local
+    "/local": ThinkingDepth.LOCAL,        # gemma4:e4b - fast local
+    "/deeplocal": ThinkingDepth.DEEPLOCAL,  # gemma4:e4b - deep local
     # Cloud tiers (Gemini)
     "/quick": ThinkingDepth.QUICK,        # gemini-2.5-flash - fast cloud
     "/standard": ThinkingDepth.STANDARD,  # gemini-2.5-flash - balanced
@@ -274,7 +274,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
         # Initialize local Gemma client for hybrid ReAct loop
         self._local_client: Optional[OllamaGemmaClient] = None
         self._warm_context: Optional[WarmContextManager] = None
-        if settings.hybrid_routing_enabled and settings.gemma3n_enabled:
+        if settings.hybrid_routing_enabled and settings.local_model_enabled:
             self._local_client = OllamaGemmaClient(
                 ollama_url=settings.ollama_url,
                 default_timeout_ms=settings.local_timeout_ms,
@@ -873,7 +873,7 @@ You are operating in: {working_dir}
             # Update phase callback with prepare result
             if phase_callback:
                 # PREPARE always uses local FunctionGemma (or heuristic fallback which is also local)
-                prepare_model = "functiongemma" if not prepare_result.used_fallback else "heuristic"
+                prepare_model = "functiongemma" if not prepare_result.used_fallback else "heuristic"  # FunctionGemma stays for PREPARE
                 await phase_callback(PhaseUpdate(
                     phase=ReActPhase.PREPARE,
                     iteration=0,
@@ -995,7 +995,7 @@ You are operating in: {working_dir}
             # Ensure warm context if enabled
             if self._warm_context and self._local_client and prepare_result:
                 # Get observe model from prepare result for warm-up
-                observe_model = prepare_result.observe_model or "gemma3-4b"
+                observe_model = prepare_result.observe_model or "gemma4-e4b"
                 await self._warm_context.ensure_warm(
                     model_key=observe_model,
                     system_prompt=system_prompt[:1500],  # Truncate for efficiency
@@ -1629,8 +1629,8 @@ You are operating in: {working_dir}
   /agents    - List available agent overrides
 
 Model selection (prefix your message):
-  /local     - Local fast (gemma3:4b)
-  /deeplocal - Local complex (gemma3:12b)
+  /local     - Local fast (gemma4:e4b)
+  /deeplocal - Local deep (gemma4:e4b)
   /quick     - Cloud fast (gemini-2.5-flash)
   /standard  - Cloud balanced (gemini-2.5-flash)
   /deep      - Cloud complex (gemini-3-flash)

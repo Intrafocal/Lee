@@ -19,8 +19,8 @@ class ThinkingDepth(Enum):
     Thinking depth tiers for model selection.
 
     Local tiers (Ollama):
-    - LOCAL: gemma3:4b (fast, ~100-200ms) - simple parsing, quick lookups
-    - DEEPLOCAL: gemma3:12b (slower, ~300-500ms) - complex local reasoning
+    - LOCAL: gemma4:e4b (fast, ~200-400ms) - simple parsing, quick lookups
+    - DEEPLOCAL: gemma4:e4b (reserved for future larger model, e.g. gemma4:26b on 24GB+)
 
     Cloud tiers (Gemini):
     - QUICK: gemini-2.5-flash - fast cloud, simple questions
@@ -28,8 +28,8 @@ class ThinkingDepth(Enum):
     - DEEP: gemini-3-flash - complex analysis, multi-file reasoning
     - PRO: gemini-3.1-pro - high-stakes decisions, deep reasoning
     """
-    LOCAL = -2       # Local fast - gemma3:4b for quick parsing
-    DEEPLOCAL = -1   # Local deep - gemma3:12b for complex local reasoning
+    LOCAL = -2       # Local fast - gemma4:e4b for quick parsing
+    DEEPLOCAL = -1   # Local deep - gemma4:e4b (or larger model on 24GB+)
     QUICK = 0        # Cloud fast - greetings, yes/no, simple clarifications
     STANDARD = 1     # Cloud balanced - file reads, searches, basic questions
     DEEP = 2         # Cloud complex - multi-file analysis, architecture
@@ -366,8 +366,8 @@ def get_local_model_for_depth(depth: ThinkingDepth) -> Optional[str]:
     The OllamaGemmaClient.MODEL_CONFIGS maps these to actual Ollama model names.
     """
     local_models = {
-        ThinkingDepth.LOCAL: "gemma3-4b",       # Maps to ollama gemma3:4b
-        ThinkingDepth.DEEPLOCAL: "gemma3-12b",   # Maps to ollama gemma3:12b
+        ThinkingDepth.LOCAL: "gemma4-e4b",       # Maps to ollama gemma4:e4b
+        ThinkingDepth.DEEPLOCAL: "gemma4-e4b",   # Maps to ollama gemma4:e4b (or larger model on 24GB+)
     }
     return local_models.get(depth)
 

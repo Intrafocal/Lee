@@ -129,27 +129,23 @@ class HesterDaemonSettings(BaseSettings):
         description="Enable hybrid local/cloud routing in ReAct loop"
     )
 
-    # Local model configuration for OBSERVE phase
-    gemma3n_enabled: bool = Field(
+    # Local model configuration
+    local_model_enabled: bool = Field(
         default=True,
-        description="Enable Gemma 3 models for local inference"
+        description="Enable local Gemma models for inference via Ollama"
     )
-    gemma3n_model_observe: str = Field(
-        default="gemma3:4b",
-        description="Ollama model name for OBSERVE phase (fastest)"
+    local_model: str = Field(
+        default="gemma4:e4b",
+        description="Ollama model for OBSERVE and THINK phases (gemma4:e4b = 4.5B effective, 128K context)"
     )
-    gemma3n_model_think: str = Field(
-        default="gemma3:4b",
-        description="Ollama model name for simple THINK phase"
-    )
-    gemma3_model_standard: str = Field(
-        default="gemma3:12b",
-        description="Ollama Gemma 3 model for moderate complexity tasks"
+    local_model_deeplocal: str = Field(
+        default="gemma4:e4b",
+        description="Ollama model for DEEPLOCAL tier (override with larger model on 24GB+ machines)"
     )
 
     # Local model timeout - falls back to cloud if exceeded
     local_timeout_ms: int = Field(
-        default=500,
+        default=800,
         description="Timeout for local model calls in milliseconds (fallback to cloud)"
     )
 

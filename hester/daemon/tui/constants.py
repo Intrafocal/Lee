@@ -36,8 +36,8 @@ SLASH_COMMANDS = [
     ("/pwd", "Show working directory"),
     ("/session", "Show session ID"),
     # Model selection - local
-    ("/local", "Local fast model (gemma3:4b)"),
-    ("/deeplocal", "Local complex model (gemma3:12b)"),
+    ("/local", "Local fast model (gemma4:e4b)"),
+    ("/deeplocal", "Local deep model (gemma4:e4b)"),
     # Model selection - cloud
     ("/quick", "Cloud fast (gemini-2.5-flash)"),
     ("/standard", "Cloud balanced (gemini-2.5-flash)"),
