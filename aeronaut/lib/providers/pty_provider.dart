@@ -43,7 +43,7 @@ class PtyNotifier extends StateNotifier<PtyState> {
 
   void _connect() {
     try {
-      final uri = Uri.parse('$wsUrl/pty/$ptyId/stream');
+      final uri = Uri.parse(wsUrl);
       _channel = WebSocketChannel.connect(uri);
 
       _subscription = _channel!.stream.listen(
@@ -125,7 +125,7 @@ final ptyProvider = StateNotifierProvider
     .family<PtyNotifier, PtyState, int>((ref, ptyId) {
   final machine = ref.watch(machinesProvider).activeMachine;
   final wsUrl = machine != null
-      ? 'ws://${machine.host}:${machine.hostPort}'
-      : 'ws://localhost:9001';
+      ? machine.wsUrl('/pty/$ptyId/stream')
+      : 'ws://localhost:9001/pty/$ptyId/stream';
   return PtyNotifier(ptyId: ptyId, wsUrl: wsUrl);
 });

@@ -55,7 +55,13 @@ class Machine extends Equatable {
       hesterPort != null ? 'http://$host:$hesterPort' : null;
 
   /// WebSocket URL for context stream
-  String get contextStreamUrl => 'ws://$host:$hostPort/context/stream';
+  String get contextStreamUrl => wsUrl('/context/stream');
+
+  /// Build a WebSocket URL with auth token query param.
+  String wsUrl(String path) {
+    final base = 'ws://$host:$hostPort$path';
+    return token.isNotEmpty ? '$base?token=${Uri.encodeComponent(token)}' : base;
+  }
 
   /// Display label: "name (workspace)" or just "name"
   String get displayLabel =>

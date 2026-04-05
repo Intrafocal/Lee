@@ -80,7 +80,7 @@ class BrowserCastNotifier extends StateNotifier<BrowserCastState> {
     _channel?.sink.close();
 
     try {
-      final uri = Uri.parse('$wsUrl/browser/$tabId/cast');
+      final uri = Uri.parse(wsUrl);
       debugPrint('[BrowserCast] Connecting to $uri');
       _channel = WebSocketChannel.connect(uri);
 
@@ -268,7 +268,7 @@ final browserCastProvider = StateNotifierProvider.autoDispose
     .family<BrowserCastNotifier, BrowserCastState, int>((ref, tabId) {
   final machine = ref.watch(machinesProvider).activeMachine;
   final wsUrl = machine != null
-      ? 'ws://${machine.host}:${machine.hostPort}'
-      : 'ws://localhost:9001';
+      ? machine.wsUrl('/browser/$tabId/cast')
+      : 'ws://localhost:9001/browser/$tabId/cast';
   return BrowserCastNotifier(tabId: tabId, wsUrl: wsUrl);
 });
