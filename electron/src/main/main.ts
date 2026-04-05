@@ -414,19 +414,6 @@ function setupApplicationMenu(): void {
         ] : [
           { role: 'close' as const },
         ]),
-        {
-          label: 'Cycle Window',
-          accelerator: 'Cmd+`',
-          click: () => {
-            const allWindows = BrowserWindow.getAllWindows().filter(w => !w.isDestroyed());
-            if (allWindows.length < 2) return;
-            const focused = BrowserWindow.getFocusedWindow();
-            const idx = focused ? allWindows.indexOf(focused) : -1;
-            const next = allWindows[(idx + 1) % allWindows.length];
-            if (next.isMinimized()) next.restore();
-            next.focus();
-          },
-        },
         // Dynamic workspace window list
         ...(() => {
           const windows = windowRegistry.getAll();
