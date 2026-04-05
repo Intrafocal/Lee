@@ -508,7 +508,7 @@ class PrepareResult:
 
     # Hybrid routing fields (from FunctionGemma)
     use_local_think: bool = False  # Whether to use local model for THINK phase
-    think_model: Optional[str] = None  # "gemma3-4b", "gemma3-12b", or None (cloud)
+    think_model: Optional[str] = None  # "gemma4-e4b" or None (cloud)
 
     # Bespoke agent routing fields
     prompt_id: str = "general"  # Selected prompt from registry
@@ -1393,7 +1393,7 @@ async def prepare_request(
                     think_model_raw = parsed.get("think_model", "")
                     if think_model_raw and think_model_raw.lower() != "none":
                         # Validate model name
-                        valid_models = {"gemma3-4b", "gemma3-12b"}
+                        valid_models = {"gemma4-e4b"}
                         if think_model_raw in valid_models:
                             think_model = think_model_raw
                         else:
@@ -1403,12 +1403,12 @@ async def prepare_request(
                                     think_model = vm
                                     break
 
-                    observe_model_raw = parsed.get("observe_model", "gemma3-4b")
-                    valid_observe = {"gemma3-4b", "gemma3-12b"}
+                    observe_model_raw = parsed.get("observe_model", "gemma4-e4b")
+                    valid_observe = {"gemma4-e4b"}
                     if observe_model_raw in valid_observe:
                         observe_model = observe_model_raw
                     else:
-                        observe_model = "gemma3-4b"  # Default
+                        observe_model = "gemma4-e4b"  # Default
 
                     hybrid_routing_reason = f"FunctionGemma: local={use_local_think}, think={think_model}, observe={observe_model}"
                     # Combine with bespoke routing reason if present
@@ -1489,7 +1489,7 @@ async def prepare_request(
         fallback_routing = f"Explicit local tier: {depth.name}"
     elif use_local_fallback:
         # QUICK tier with hybrid routing - use fast local model
-        think_model_fallback = "gemma3-4b"
+        think_model_fallback = "gemma4-e4b"
         fallback_routing = "Fallback: heuristic routing based on depth"
     else:
         think_model_fallback = None
@@ -1510,7 +1510,7 @@ async def prepare_request(
         prepare_time_ms=elapsed_ms + semantic_time_ms,  # Include semantic time
         use_local_think=use_local_fallback,
         think_model=think_model_fallback,
-        observe_model="gemma3-4b" if hybrid_routing_enabled else None,
+        observe_model="gemma4-e4b" if hybrid_routing_enabled else None,
         routing_reason=full_routing_reason,
         # Bespoke agent fields
         prompt_id=prompt_id,
@@ -2266,12 +2266,12 @@ CONFIDENCE: [0.0-1.0] (How confident are you in this interpretation?)
             current_state: Current conversation/tool state
             available_tools: List of available tool names
             user_query: The user's original query
-            model_key: Model to use (defaults to gemma3-4b)
+            model_key: Model to use (defaults to gemma4-e4b)
 
         Returns:
             Dict with 'response' or 'tool_call' or None if should escalate to cloud
         """
-        model = model_key or "gemma3-4b"
+        model = model_key or "gemma4-e4b"
 
         tools_str = ", ".join(available_tools[:15])  # Limit tools in prompt
 

@@ -325,8 +325,8 @@ def get_model_for_depth(
         Model name string
     """
     model_map = {
-        ThinkingDepth.LOCAL: models.get("local", "gemma3-4b"),
-        ThinkingDepth.DEEPLOCAL: models.get("deeplocal", "gemma3-12b"),
+        ThinkingDepth.LOCAL: models.get("local", "gemma4-e4b"),
+        ThinkingDepth.DEEPLOCAL: models.get("deeplocal", "gemma4-e4b"),
         ThinkingDepth.QUICK: models.get("quick", "gemini-2.5-flash"),
         ThinkingDepth.STANDARD: models.get("standard", "gemini-2.5-flash"),
         ThinkingDepth.DEEP: models.get("deep", "gemini-3-flash-preview"),
@@ -426,8 +426,8 @@ def refine_routing_decision(
     # Override: if budget exhausted, try local regardless of prepare
     if not budget.can_use_cloud() and budget.can_use_local():
         use_local = True
-        model = model or "gemma3-4b"
-        precision = "12b" if "12b" in model else "4b"
+        model = model or "gemma4-e4b"
+        precision = "e4b"
         reason = f"Budget override: cloud exhausted, using local (was: {reason})"
 
     # Override: later iterations may need cloud for synthesis
@@ -442,7 +442,7 @@ def refine_routing_decision(
         model_name = model
     elif use_local and explicit_local:
         # User explicitly requested local, use local model even if prepare didn't set one
-        model_name = get_local_model_for_depth(prepare_result.thinking_depth) or "gemma3-4b"
+        model_name = get_local_model_for_depth(prepare_result.thinking_depth) or "gemma4-e4b"
     else:
         model_name = get_cloud_model_for_depth(prepare_result.thinking_depth)
 

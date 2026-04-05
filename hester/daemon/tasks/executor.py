@@ -117,7 +117,7 @@ class TaskExecutor:
         ollama_client: Optional[OllamaFunctionGemma] = None,
         local_client: Optional[OllamaGemmaClient] = None,
         observation_enabled: bool = True,
-        observation_model: str = "gemma3-4b",
+        observation_model: str = "gemma4-e4b",
     ):
         """
         Initialize the task executor.
@@ -132,7 +132,7 @@ class TaskExecutor:
             ollama_client: Optional Ollama client for prepare (FunctionGemma)
             local_client: Optional OllamaGemmaClient for batch observation parsing
             observation_enabled: Whether to run local observation parsing after batches
-            observation_model: Model to use for observation parsing (default: gemma3-4b)
+            observation_model: Model to use for observation parsing (default: gemma4-e4b)
         """
         self.store = store
         self.working_dir = working_dir or Path.cwd()
