@@ -1219,6 +1219,14 @@ body {
   margin: 4px 0;
 }
 
+.tab-context-menu .context-menu-submenu-label {
+  padding: 6px 12px 2px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  cursor: default;
+}
+
 /* DevOps Pane Styles */
 .devops-pane {
   flex-direction: column;
@@ -5953,4 +5961,72 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Switch Agent Provider modal */
+.switch-provider-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 320px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.switch-provider-modal-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.switch-provider-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.switch-provider-modal-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.switch-provider-modal-subtitle strong {
+  color: var(--text-primary);
+}
+
+.switch-provider-modal-actions {
+  display: flex;
+  gap: 8px;
+  padding: 16px 24px;
+  justify-content: flex-end;
+}
+
+.switch-provider-btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  transition: background 0.1s;
+}
+
+.switch-provider-btn:hover {
+  background: var(--bg-quaternary, var(--bg-primary));
+}
+
+.switch-provider-btn-primary {
+  background: var(--accent, #4a9eff);
+  border-color: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.switch-provider-btn-primary:hover {
+  background: var(--accent-hover, #3a8eef);
+  border-color: var(--accent-hover, #3a8eef);
+}
+
+.switch-provider-btn-cancel {
+  color: var(--text-muted);
 }

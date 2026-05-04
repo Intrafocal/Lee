@@ -15,7 +15,7 @@ import * as path from 'path';
 import * as net from 'net';
 import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
-import { TUIDefinition } from '../shared/context';
+import { TUIDefinition, AgentDefinition } from '../shared/context';
 
 /**
  * Check if a port is available (not in use).
@@ -1233,37 +1233,6 @@ export class PTYManager extends EventEmitter {
    * Users can override these in .lee/config.yaml under the `tuis:` section.
    */
   private static readonly DEFAULT_TUIS: Record<string, TUIDefinition> = {
-    git: {
-      command: 'lazygit',
-      name: 'Git (lazygit)',
-      icon: '🌿',
-      shortcut: '⇧⌘G',
-      cwd_aware: true,
-      path_arg: '-p',  // lazygit uses -p/--path
-    },
-    docker: {
-      command: 'lazydocker',
-      name: 'Docker (lazydocker)',
-      icon: '🐳',
-      shortcut: '⇧⌘D',
-      path_arg: 'cwd',  // lazydocker uses working directory
-    },
-    k8s: {
-      command: 'k9s',
-      name: 'Kubernetes (k9s)',
-      icon: '☸️',
-      shortcut: '⇧⌘K',
-      path_arg: 'cwd',  // k9s uses working directory
-    },
-    flutter: {
-      command: 'flx',
-      name: 'Flutter (flx)',
-      icon: '📱',
-      shortcut: '⇧⌘F',
-      cwd_from_config: 'flutter.path',
-      cwd_aware: true,
-      path_arg: 'cwd',
-    },
     claude: {
       command: 'claude',
       name: 'Claude',
@@ -1293,27 +1262,12 @@ export class PTYManager extends EventEmitter {
       cwd_aware: true,
       path_arg: '--dir',
     },
-    'hester-qa': {
-      command: 'hester',
-      name: 'Hester QA',
-      icon: '🧪',
-      shortcut: '⇧⌘Q',
-      args: ['qa', 'scene', 'welcome', '--tui'],
+    pi: {
+      command: 'pi',
+      name: 'Pi',
+      icon: '🥧',
+      shortcut: '⇧⌘I',
       cwd_aware: true,
-      path_arg: '--dir',
-    },
-    system: {
-      command: 'btop',
-      name: 'System Monitor (btop)',
-      icon: '📊',
-      shortcut: '⇧⌘M',
-      path_arg: 'cwd',
-    },
-    sql: {
-      command: 'pgcli',
-      name: 'SQL (pgcli)',
-      icon: '🗄️',
-      shortcut: '⇧⌘P',
       path_arg: 'cwd',
     },
   };
@@ -1419,6 +1373,87 @@ export class PTYManager extends EventEmitter {
     }
 
     return Array.from(merged.values());
+  }
+
+  // Built-in agent providers. Config `agents:` entries merge with / extend these.
+  private static readonly DEFAULT_AGENTS: Record<string, AgentDefinition> = {
+    hester: {
+      command: 'hester',
+      name: 'Hester',
+      icon: '🐇',
+      args: ['chat', '--daemon-url', 'http://localhost:9000'],
+      cwd_aware: true,
+      prewarm: true,
+      path_arg: '--dir',
+    },
+    claude: {
+      command: 'claude',
+      name: 'Claude',
+      icon: '🤖',
+      env: { DEBUG: 'false' },
+      cwd_aware: true,
+      prewarm: true,
+      path_arg: 'cwd',
+    },
+    pi: {
+      command: 'pi',
+      name: 'Pi',
+      icon: '🥧',
+      cwd_aware: true,
+      path_arg: 'cwd',
+    },
+  };
+
+  /**
+   * Get an agent definition by provider key.
+   * Checks config `agents:` first, then built-in defaults.
+   */
+  getAgentDefinition(provider: string, windowId?: number): AgentDefinition | null {
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const configAgent = (wsConfig as any)?.agents?.[provider] as AgentDefinition | undefined;
+    const defaultAgent = PTYManager.DEFAULT_AGENTS[provider];
+
+    if (configAgent && defaultAgent) {
+      return { ...defaultAgent, ...configAgent };
+    }
+    return configAgent ?? defaultAgent ?? null;
+  }
+
+  /**
+   * Get all available agent providers (built-ins merged with config).
+   */
+  getAllAgentProviders(windowId?: number): Record<string, AgentDefinition> {
+    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
+    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const configAgents = ((wsConfig as any)?.agents ?? {}) as Record<string, AgentDefinition>;
+
+    const merged: Record<string, AgentDefinition> = { ...PTYManager.DEFAULT_AGENTS };
+    for (const [key, def] of Object.entries(configAgents)) {
+      merged[key] = { ...merged[key], ...def };
+    }
+    return merged;
+  }
+
+  /**
+   * Spawn an agent tab for the given provider key.
+   */
+  spawnAgent(provider: string, cwd?: string, windowId?: number): number {
+    const def = this.getAgentDefinition(provider, windowId);
+    if (!def) {
+      throw new Error(`Unknown agent provider: ${provider}`);
+    }
+
+    const args = [...(def.args || [])];
+    let spawnCwd = cwd;
+
+    if (def.path_arg && def.path_arg !== 'cwd' && cwd) {
+      args.push(def.path_arg, cwd);
+    } else if (def.path_arg === 'cwd' && cwd) {
+      spawnCwd = cwd;
+    }
+
+    return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId);
   }
 
   /**

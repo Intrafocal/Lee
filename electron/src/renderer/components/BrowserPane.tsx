@@ -94,6 +94,13 @@ function searchUrlHistory(query: string): UrlHistoryEntry[] {
     .slice(0, 8); // Max 8 suggestions
 }
 
+interface AgentTabInfo {
+  id: number;
+  ptyId: number;
+  label: string;
+  provider?: string;
+}
+
 interface BrowserPaneProps {
   active: boolean;
   tabId: number;
@@ -103,6 +110,8 @@ interface BrowserPaneProps {
   onUrlChange?: (url: string) => void;
   onLoadingChange?: (loading: boolean) => void;
   onAskHester?: (prompt: string, autoSubmit?: boolean) => void;
+  onSendToAgent?: (ptyId: number, text: string) => void;
+  agentTabs?: AgentTabInfo[];
   onConsoleError?: (entry: ConsoleLogEntry) => void;
   onAgentGraphEvent?: (event: AgentGraphEvent) => void;
   onErrorCountChange?: (count: number) => void;
@@ -130,13 +139,15 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
   onUrlChange,
   onLoadingChange,
   onAskHester,
+  onSendToAgent,
+  agentTabs,
   onConsoleError,
   onAgentGraphEvent,
   onErrorCountChange,
   onFrameSnapshotCaptured,
   onCheckpointReadyChange,
 }) => {
-  const webviewRef = useRef<Electron.WebviewTag>(null);
+  const webviewRef = useRef<any>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   // Console log buffer
@@ -155,6 +166,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [showSendToAgentMenu, setShowSendToAgentMenu] = useState(false);
 
   // URL autocomplete state
   const [suggestions, setSuggestions] = useState<UrlHistoryEntry[]>([]);
@@ -167,7 +179,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
 
   // Console panel state
   const [showConsolePanel, setShowConsolePanel] = useState(false);
-  const [logUpdateCounter, setLogUpdateCounter] = useState(0); // Triggers re-render when logs change
+  const [, setLogUpdateCounter] = useState(0); // Triggers re-render when logs change
   const consolePanelRef = useRef<HTMLDivElement>(null);
 
   // Check if this is a Frame URL
@@ -357,6 +369,22 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
       setIsCapturing(false);
     }
   }, [captureSnapshot, onAskHester]);
+
+  // Capture snapshot and send to a specific agent PTY
+  const handleSendToAgent = useCallback(async (ptyId: number) => {
+    if (!onSendToAgent) return;
+    setShowSendToAgentMenu(false);
+    setIsCapturing(true);
+    try {
+      const result = await captureSnapshot();
+      const text = result?.success
+        ? `URL: ${currentUrl}\n#browser_snapshot Folder: ${result.dir} Files: ${result.files?.join(', ')}`
+        : `URL: ${currentUrl}`;
+      onSendToAgent(ptyId, text);
+    } finally {
+      setIsCapturing(false);
+    }
+  }, [captureSnapshot, currentUrl, onSendToAgent]);
 
   // Frame stream end - silently capture and notify via callback
   const handleFrameStreamEnd = useCallback(async () => {
@@ -560,7 +588,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
       setCanGoForward(webview.canGoForward());
     };
 
-    const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
+    const handleDidNavigate = (e: any) => {
       setCurrentUrl(e.url);
       setInputUrl(e.url);
       onUrlChange?.(e.url);
@@ -568,7 +596,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
       setCanGoForward(webview.canGoForward());
     };
 
-    const handleDidNavigateInPage = (e: Electron.DidNavigateInPageEvent) => {
+    const handleDidNavigateInPage = (e: any) => {
       if (e.isMainFrame) {
         setCurrentUrl(e.url);
         setInputUrl(e.url);
@@ -576,14 +604,14 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
       }
     };
 
-    const handlePageTitleUpdated = (e: Electron.PageTitleUpdatedEvent) => {
+    const handlePageTitleUpdated = (e: any) => {
       setTitle(e.title);
       onTitleChange?.(e.title);
       // Save to URL history
       saveUrlToHistory(webview.getURL(), e.title);
     };
 
-    const handleDidFailLoad = (e: Electron.DidFailLoadEvent) => {
+    const handleDidFailLoad = (e: any) => {
       if (e.errorCode !== -3) { // -3 is aborted, which is normal when navigating away
         console.error('Page load failed:', e.errorDescription);
       }
@@ -765,6 +793,27 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
           >
             {isCapturing ? '...' : '🐇'}
           </button>
+        )}
+        {onSendToAgent && agentTabs && agentTabs.length > 0 && (
+          <div className="nav-btn-group" style={{ position: 'relative' }}>
+            <button
+              className={`nav-btn send-agent-btn ${isCapturing ? 'capturing' : ''}`}
+              onClick={() => setShowSendToAgentMenu(v => !v)}
+              disabled={isCapturing}
+              title="Send to Agent"
+            >
+              {isCapturing ? '...' : '📤'}
+            </button>
+            {showSendToAgentMenu && (
+              <div className="send-to-agent-menu" onMouseLeave={() => setShowSendToAgentMenu(false)}>
+                {agentTabs.map(tab => (
+                  <button key={tab.id} onClick={() => handleSendToAgent(tab.ptyId)}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 

@@ -968,6 +968,7 @@ export class APIServer {
       'kubernetes': 'k8s',
       'flx': 'flutter',
       'btop': 'system',
+      'pi': 'pi',
     };
     const tuiType = tuiTypeMap[action] || action;
 

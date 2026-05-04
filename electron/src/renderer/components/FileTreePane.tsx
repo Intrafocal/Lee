@@ -22,11 +22,20 @@ interface FileEntry {
   type: 'file' | 'directory';
 }
 
+interface AgentTabInfo {
+  id: number;
+  ptyId: number;
+  label: string;
+  provider?: string;
+}
+
 interface FileTreePaneProps {
   workspace: string;
   onFileOpen: (filePath: string) => void;
   onNewFile?: (directory?: string) => void;
   onAskHester?: (prompt: string) => void;
+  onSendToAgent?: (ptyId: number, text: string) => void;
+  agentTabs?: AgentTabInfo[];
   active: boolean;
 }
 
@@ -35,6 +44,8 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
   onFileOpen,
   onNewFile,
   onAskHester,
+  onSendToAgent,
+  agentTabs,
   active,
 }) => {
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -170,6 +181,14 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
     onAskHester(`Summarize: ${relativePath}`);
     closeContextMenu();
   }, [contextMenu.entry, getRelativePath, onAskHester, closeContextMenu]);
+
+  // Send file path to a specific agent tab PTY
+  const sendToAgent = useCallback((ptyId: number) => {
+    if (!contextMenu.entry || !onSendToAgent) return;
+    const relativePath = getRelativePath(contextMenu.entry.path);
+    onSendToAgent(ptyId, relativePath);
+    closeContextMenu();
+  }, [contextMenu.entry, getRelativePath, onSendToAgent, closeContextMenu]);
 
   // Index with Hester
   const indexWithHester = useCallback(() => {
@@ -351,6 +370,21 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
               <div className="context-menu-item" onClick={indexWithHester}>
                 Index
               </div>
+            </>
+          )}
+          {onSendToAgent && agentTabs && agentTabs.length > 0 && (
+            <>
+              <div className="context-menu-divider" />
+              <div className="context-menu-label">Send to Agent</div>
+              {agentTabs.map(tab => (
+                <div
+                  key={tab.id}
+                  className="context-menu-item context-menu-item-indented"
+                  onClick={() => sendToAgent(tab.ptyId)}
+                >
+                  {tab.label}
+                </div>
+              ))}
             </>
           )}
         </div>

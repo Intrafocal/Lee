@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { TabBar, Tab, DockPosition, NewTabOption, getFileTabIcon } from './components/TabBar';
+import { TabBar, Tab, DockPosition, NewTabOption } from './components/TabBar';
 import { TerminalPane } from './components/TerminalPane';
 import { TitleBar } from './components/TitleBar';
 import { WorkspaceModal } from './components/WorkspaceModal';
@@ -33,8 +33,6 @@ const lee = (window as any).lee;
 // Check if we're running inside Electron
 const isElectron = !!lee;
 
-// Editor daemon port (set when editor reports ready via state)
-const EDITOR_DAEMON_PORT = 9002;
 
 export interface TabData extends Tab {
   ptyId: number | null;
@@ -104,6 +102,15 @@ const App: React.FC = () => {
 
   // TUI options for the new-tab dropdown (fetched from main process)
   const [tuiOptions, setTuiOptions] = useState<NewTabOption[]>([]);
+
+  // Agent providers (fetched from main process, includes config-defined providers)
+  const [agentProviders, setAgentProviders] = useState<Record<string, { name: string; icon?: string; command: string }>>({});
+
+  // Provider switcher dialog for agent tabs
+  const [switchProviderDialog, setSwitchProviderDialog] = useState<{
+    tabId: number;
+    newProvider: string;
+  } | null>(null);
 
   // Workstream picker modal
   const [showWorkstreamPicker, setShowWorkstreamPicker] = useState<boolean>(false);
@@ -219,29 +226,6 @@ const App: React.FC = () => {
     return null;
   }, [getSessionStorageKey]);
 
-  // Send a command to the editor daemon via HTTP
-  const sendEditorCommand = useCallback(async (
-    endpoint: string,
-    body: Record<string, unknown> = {}
-  ): Promise<boolean> => {
-    const port = editorDaemonPort || EDITOR_DAEMON_PORT;
-
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      const result = await response.json();
-      console.log(`Editor command ${endpoint}:`, result);
-      return result.success;
-    } catch (error) {
-      console.error(`Failed to send editor command ${endpoint}:`, error);
-      return false;
-    }
-  }, [editorDaemonPort]);
-
   // Create a new tab - defined BEFORE useEffects that depend on it
   const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string) => {
     // Bridge type opens the picker instead of creating a tab directly
@@ -305,6 +289,12 @@ const App: React.FC = () => {
           case 'sql':
             ptyId = await lee.pty.spawnTUI('sql', workspace);
             break;
+          case 'agent': {
+            // label is used as the provider key when creating agent tabs
+            const provider = label || 'hester';
+            ptyId = await lee.pty.spawnAgent(provider, workspace);
+            break;
+          }
         }
         // Mark this PTY as expected so data is buffered until handler registers
         if (ptyId !== null) {
@@ -319,13 +309,20 @@ const App: React.FC = () => {
     // Use provided dock position or default to center
     const finalDockPosition = dockPosition ?? 'center';
 
+    // For agent tabs, use the provider key as label during creation, then set display label
+    const agentProvider = type === 'agent' ? (label || 'hester') : undefined;
+    const displayLabel = type === 'agent'
+      ? (agentProviders[agentProvider!]?.name ?? agentProvider!)
+      : tabLabel;
+
     const newTab: TabData = {
       id: tabId,
       type,
-      label: tabLabel,
+      label: displayLabel,
       closable: true, // All tabs are closable
       ptyId,
       dockPosition: finalDockPosition,
+      ...(agentProvider ? { provider: agentProvider } : {}),
     };
 
     // Record action for activity tracking
@@ -530,12 +527,50 @@ const App: React.FC = () => {
     ));
   }, []);
 
-  // Toggle watch state for a tab (idle detection)
+  // Toggle watch state for agent tabs only
   const toggleWatch = useCallback((tabId: number) => {
     setTabs(prev => prev.map(tab =>
-      tab.id === tabId ? { ...tab, watched: !tab.watched, isIdle: false } : tab
+      tab.id === tabId && tab.type === 'agent' ? { ...tab, watched: !tab.watched, isIdle: false } : tab
     ));
   }, []);
+
+  // Handle provider switch request from tab context menu
+  const handleSwitchAgentProvider = useCallback((tabId: number, newProvider: string) => {
+    setSwitchProviderDialog({ tabId, newProvider });
+  }, []);
+
+  // Confirm provider switch — either respawn in-place or open new tab
+  const confirmSwitchProvider = useCallback(async (mode: 'reload' | 'new-tab') => {
+    if (!switchProviderDialog) return;
+    const { tabId, newProvider } = switchProviderDialog;
+    setSwitchProviderDialog(null);
+
+    if (mode === 'new-tab') {
+      createTab('agent' as Tab['type'], undefined, newProvider);
+      return;
+    }
+
+    // Reload in-place: kill old PTY and respawn with new provider
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab) return;
+
+    if (tab.ptyId !== null && isElectron) {
+      try { await lee.pty.kill(tab.ptyId); } catch {}
+    }
+
+    try {
+      const ptyId = await lee.pty.spawnAgent(newProvider, workspace);
+      ptyEventManager.expect(ptyId);
+      const providerDef = agentProviders[newProvider];
+      setTabs(prev => prev.map(t =>
+        t.id === tabId
+          ? { ...t, ptyId, provider: newProvider, label: providerDef?.name ?? newProvider }
+          : t
+      ));
+    } catch (error) {
+      console.error('Failed to switch agent provider:', error);
+    }
+  }, [switchProviderDialog, workspace, agentProviders]);
 
   // Handle idle state change from TerminalPane
   const handleIdleChange = useCallback((ptyId: number, isIdle: boolean) => {
@@ -780,7 +815,7 @@ const App: React.FC = () => {
   }, [tabs, statusMessages]);
 
   // Handle Frame snapshot captured (stream end auto-capture)
-  const handleFrameSnapshotCaptured = useCallback((tabId: number, dir: string) => {
+  const handleFrameSnapshotCaptured = useCallback((_tabId: number, dir: string) => {
     const messageId = `frame-snapshot-${Date.now()}`;
     const ttl = 15; // Auto-dismiss after 15 seconds
 
@@ -832,11 +867,12 @@ const App: React.FC = () => {
         const tabId = nextTabIdRef.current++;
         const newTab: TabData = {
           id: tabId,
-          type: 'hester',
+          type: 'agent',
           label: 'Hester',
           closable: true,
           ptyId,
           dockPosition: 'center',
+          provider: 'hester',
         };
 
         lee.context.recordAction('tab_create', `${tabId}:hester:${sessionId}`);
@@ -856,6 +892,24 @@ const App: React.FC = () => {
     setAutoSubmitPrompt(autoSubmit);
     setShowCommandPalette(true);
   }, []);
+
+  // Paste text into an agent tab's PTY without sending (no newline)
+  const handleSendToAgent = useCallback(async (ptyId: number, text: string) => {
+    if (!isElectron) return;
+    try {
+      await lee.pty.write(ptyId, text);
+    } catch (error) {
+      console.error('Failed to send to agent:', error);
+    }
+  }, []);
+
+  // Derived list of open agent tabs for "Send to Agent" menus
+  const agentTabsForUI = useMemo(() =>
+    tabs
+      .filter(t => t.type === 'agent' && t.ptyId !== null)
+      .map(t => ({ id: t.id, ptyId: t.ptyId!, label: t.label, provider: t.provider })),
+    [tabs]
+  );
 
   // Handle status message click - if has prompt, send immediately
   const handleStatusMessageClick = useCallback((message: StatusMessage) => {
@@ -907,6 +961,8 @@ const App: React.FC = () => {
           onFileOpen={handleFileOpen}
           onNewFile={handleNewFile}
           onAskHester={handleAskHester}
+          onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+          agentTabs={agentTabsForUI}
           active={active}
         />
       );
@@ -953,6 +1009,8 @@ const App: React.FC = () => {
           onUrlChange={(url) => handleBrowserUrlChange(tab.id, url)}
           onLoadingChange={(loading) => handleBrowserLoadingChange(tab.id, loading)}
           onAskHester={handleAskHester}
+          onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+          agentTabs={agentTabsForUI}
           onErrorCountChange={(count) => handleBrowserErrorCountChange(tab.id, count)}
           onFrameSnapshotCaptured={(dir) => handleFrameSnapshotCaptured(tab.id, dir)}
           onCheckpointReadyChange={(ready) => handleBrowserCheckpointReadyChange(tab.id, ready)}
@@ -1131,7 +1189,7 @@ const App: React.FC = () => {
     init();
 
     // Listen for state updates (including daemon port)
-    const cleanupState = lee.pty.onState((id: number, state: any) => {
+    const cleanupState = lee.pty.onState((_id: number, state: any) => {
       if (state.daemonPort) {
         console.log(`Editor daemon ready on port ${state.daemonPort}`);
         setEditorDaemonPort(state.daemonPort);
@@ -1202,10 +1260,22 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Refetch TUI options whenever config changes
+  // Fetch agent providers from main process (after config loads)
+  const fetchAgentProviders = useCallback(async () => {
+    if (!isElectron) return;
+    try {
+      const providers = await lee.pty.getAgentProviders();
+      setAgentProviders(providers);
+    } catch (error) {
+      console.error('Failed to fetch agent providers:', error);
+    }
+  }, []);
+
+  // Refetch TUI options and agent providers whenever config changes
   useEffect(() => {
     fetchTuiOptions();
-  }, [config, fetchTuiOptions]);
+    fetchAgentProviders();
+  }, [config, fetchTuiOptions, fetchAgentProviders]);
 
   // Handle config save from editor
   const handleConfigSave = useCallback((newConfig: any) => {
@@ -1354,6 +1424,19 @@ const App: React.FC = () => {
         for (const sessionTab of savedSession) {
           // Skip tabs that require runtime state not persisted in sessions
           if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
+          // Migrate legacy agent tab types to the unified 'agent' type
+          if (sessionTab.type === ('hester' as any)) {
+            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'hester');
+            continue;
+          }
+          if (sessionTab.type === ('claude' as any)) {
+            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'claude');
+            continue;
+          }
+          if (sessionTab.type === ('pi' as any)) {
+            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'pi');
+            continue;
+          }
           // Files tabs should always use workspace name as label
           const label = sessionTab.type === 'files' ? workspaceName : sessionTab.label;
           await createTab(sessionTab.type, sessionTab.dockPosition, label);
@@ -1718,8 +1801,12 @@ const App: React.FC = () => {
     map[getKeybinding('terminal', 'meta+shift+t')] = () => createTab('terminal');
     map[getKeybinding('browser', 'meta+shift+b')] = () => createTab('browser');
     map[getKeybinding('files', 'meta+shift+e')] = () => getOrCreateTab('files', undefined, workspace.split('/').pop() || 'Files');
-    map[getKeybinding('hester', 'meta+shift+h')] = () => createTab('hester');
-    map[getKeybinding('claude', 'meta+shift+c')] = () => createTab('claude');
+    // Agent tab launchers
+    map[getKeybinding('hester', 'meta+shift+h')] = () => createTab('agent' as Tab['type'], undefined, 'hester');
+    map[getKeybinding('claude', 'meta+shift+c')] = () => createTab('agent' as Tab['type'], undefined, 'claude');
+    map[getKeybinding('pi', 'meta+shift+i')] = () => createTab('agent' as Tab['type'], undefined, 'pi');
+    map[getKeybinding('devops', 'meta+shift+o')] = () => getOrCreateTab('devops');
+    // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
     map[getKeybinding('git', 'meta+shift+g')] = () => createTab('git');
     map[getKeybinding('docker', 'meta+shift+d')] = () => createTab('docker');
     map[getKeybinding('flutter', 'meta+shift+f')] = () => createTab('flutter');
@@ -1727,7 +1814,6 @@ const App: React.FC = () => {
     map[getKeybinding('sql', 'meta+shift+p')] = () => createTab('sql');
     map[getKeybinding('hester_qa', 'meta+shift+q')] = () => createTab('hester-qa');
     map[getKeybinding('library', 'meta+shift+y')] = () => getOrCreateTab('library');
-    map[getKeybinding('devops', 'meta+shift+o')] = () => getOrCreateTab('devops');
     map[getKeybinding('system', 'meta+shift+m')] = () => getOrCreateTab('system');
     map[getKeybinding('workstream', 'meta+shift+w')] = () => setShowWorkstreamPicker(true);
     map[getKeybinding('aeronaut_pairing', 'meta+shift+a')] = () => setShowPairingDialog(true);
@@ -1761,10 +1847,13 @@ const App: React.FC = () => {
       }
     };
 
-    // Watch/Idle system
-    map[getKeybinding('toggle_watch', 'meta+w')] = () => activeTabId && toggleWatch(activeTabId);
+    // Watch/Idle system (agent tabs only)
+    map[getKeybinding('toggle_watch', 'meta+w')] = () => {
+      const activeTab = tabs.find(t => t.id === activeTabId);
+      if (activeTab?.type === 'agent') toggleWatch(activeTabId!);
+    };
     map[getKeybinding('cycle_idle', 'meta+i')] = () => {
-      const idleTabs = tabs.filter(t => t.watched && t.isIdle);
+      const idleTabs = tabs.filter(t => t.type === 'agent' && t.watched && t.isIdle);
       if (idleTabs.length === 0) return;
 
       const currentTab = tabs.find(t => {
@@ -1884,7 +1973,7 @@ const App: React.FC = () => {
           setFocusedPanel('center');
         }}
         onCloseTab={closeTab}
-        onNewTab={(type, dockPosition) => createTab(type, dockPosition)}
+        onNewTab={(type, dockPosition, provider) => createTab(type, dockPosition, provider)}
         onDockTab={dockTab}
         onRenameTab={renameTab}
         onToggleWatch={toggleWatch}
@@ -1893,6 +1982,8 @@ const App: React.FC = () => {
           setConfigEditorInitialSection('tuis');
           setShowConfigEditor(true);
         }}
+        onSwitchAgentProvider={handleSwitchAgentProvider}
+        agentProviders={agentProviders}
       />
       <div className="main-content">
         <PanelLayout
@@ -1921,6 +2012,8 @@ const App: React.FC = () => {
                   onFileOpen={handleFileOpen}
                   onNewFile={handleNewFile}
                   onAskHester={handleAskHester}
+                  onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+                  agentTabs={agentTabsForUI}
                   active={isActive}
                 />
               );
@@ -1966,6 +2059,8 @@ const App: React.FC = () => {
                   onUrlChange={(url) => handleBrowserUrlChange(tab.id, url)}
                   onLoadingChange={(loading) => handleBrowserLoadingChange(tab.id, loading)}
                   onAskHester={handleAskHester}
+                  onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+                  agentTabs={agentTabsForUI}
                   onErrorCountChange={(count) => handleBrowserErrorCountChange(tab.id, count)}
                   onFrameSnapshotCaptured={(dir) => handleFrameSnapshotCaptured(tab.id, dir)}
                 />
@@ -2145,6 +2240,29 @@ const App: React.FC = () => {
           }}
         />
       )}
+      {switchProviderDialog && (
+        <div className="workspace-modal-overlay" onClick={() => setSwitchProviderDialog(null)}>
+          <div className="switch-provider-modal" onClick={e => e.stopPropagation()}>
+            <div className="switch-provider-modal-header">
+              <div className="switch-provider-modal-title">Switch Agent Provider</div>
+              <div className="switch-provider-modal-subtitle">
+                Switch to <strong>{agentProviders[switchProviderDialog.newProvider]?.name ?? switchProviderDialog.newProvider}</strong>?
+              </div>
+            </div>
+            <div className="switch-provider-modal-actions">
+              <button className="switch-provider-btn switch-provider-btn-primary" onClick={() => confirmSwitchProvider('reload')}>
+                Reload Tab
+              </button>
+              <button className="switch-provider-btn" onClick={() => confirmSwitchProvider('new-tab')}>
+                New Tab
+              </button>
+              <button className="switch-provider-btn switch-provider-btn-cancel" onClick={() => setSwitchProviderDialog(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -2195,6 +2313,8 @@ function getDefaultLabel(type: Tab['type']): string {
       return 'Spyglass';
     case 'bridge':
       return 'Bridge';
+    case 'agent':
+      return 'Agent';
     default:
       return 'Tab';
   }

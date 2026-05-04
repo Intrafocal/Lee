@@ -8,12 +8,14 @@ export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
 
 export interface Tab {
   id: number;
-  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'spyglass' | 'bridge' | 'custom';
+  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'spyglass' | 'bridge' | 'custom' | 'agent';
   label: string;
   closable: boolean;
-  watched?: boolean; // Whether this tab is being watched for idle state
+  watched?: boolean; // Whether this tab is being watched for idle state (agent tabs only)
   isIdle?: boolean; // Whether this tab is currently idle (no output for 10s)
   remoteCast?: boolean; // Whether this tab is being cast to a remote client (Aeronaut)
+  // Agent-specific metadata (only for type='agent')
+  provider?: string; // e.g. 'hester', 'claude', 'pi', 'codex'
   // File-specific metadata (only for type='file')
   filePath?: string;
   fileModified?: boolean;
@@ -31,6 +33,7 @@ export interface NewTabOption {
   icon: string;
   shortcut?: string;
   defaultDock?: DockPosition;
+  provider?: string; // For agent tabs — which provider to spawn
 }
 
 /** Core tabs — always shown, fundamental IDE features */
@@ -38,7 +41,9 @@ export const CORE_TAB_OPTIONS: NewTabOption[] = [
   { type: 'files', label: 'Files', icon: '📂', shortcut: '⇧⌘E' },
   { type: 'terminal', label: 'Terminal', icon: '💻', shortcut: '⇧⌘T' },
   { type: 'browser', label: 'Browser', icon: '🌐', shortcut: '⇧⌘B' },
-  { type: 'hester', label: 'Hester', icon: '🐇', shortcut: '⇧⌘H' },
+  { type: 'agent', label: 'Hester', icon: '🐇', shortcut: '⇧⌘H', provider: 'hester' },
+  { type: 'agent', label: 'Claude', icon: '🤖', shortcut: '⇧⌘C', provider: 'claude' },
+  { type: 'agent', label: 'Pi', icon: '🥧', shortcut: '⇧⌘I', provider: 'pi' },
   { type: 'bridge', label: 'Bridge', icon: '🌉' },
 ];
 
@@ -55,12 +60,14 @@ interface TabBarProps {
   tuiOptions?: NewTabOption[];
   onSelectTab: (id: number) => void;
   onCloseTab: (id: number) => void;
-  onNewTab: (type: Tab['type'], dockPosition?: DockPosition) => void;
+  onNewTab: (type: Tab['type'], dockPosition?: DockPosition, provider?: string) => void;
   onDockTab?: (id: number, position: DockPosition) => void;
   onRenameTab?: (id: number, newLabel: string) => void;
-  onToggleWatch?: (id: number) => void; // Toggle watch state for idle detection
+  onToggleWatch?: (id: number) => void; // Toggle watch state for agent tabs
   onRefocus?: () => void; // Called when clicking empty area to refocus terminal
   onConfigureTUIs?: () => void; // Open TUI config editor
+  onSwitchAgentProvider?: (tabId: number, provider: string) => void; // Switch provider for agent tab
+  agentProviders?: Record<string, { name: string; icon?: string }>; // Available providers for switcher
 }
 
 export const TAB_ICONS: Record<Tab['type'], string> = {
@@ -85,6 +92,17 @@ export const TAB_ICONS: Record<Tab['type'], string> = {
   spyglass: '🔭',
   bridge: '🌉',
   custom: '🔧',
+  agent: '🤖',
+};
+
+// Default icons per known agent provider key
+const AGENT_PROVIDER_ICONS: Record<string, string> = {
+  hester: '🐇',
+  claude: '🤖',
+  pi: '🥧',
+  devops: '🚀',
+  codex: '🧠',
+  gemini: '♊',
 };
 
 // File icon mapper based on extension (for file tabs)
@@ -151,6 +169,10 @@ function getTabDisplayIcon(tab: Tab): string {
   if (tab.type === 'file' && tab.label) {
     return getFileTabIcon(tab.label);
   }
+  // For agent tabs, use provider-specific icon
+  if (tab.type === 'agent' && tab.provider) {
+    return AGENT_PROVIDER_ICONS[tab.provider] ?? TAB_ICONS.agent;
+  }
   return TAB_ICONS[tab.type];
 }
 
@@ -166,6 +188,8 @@ export const TabBar: React.FC<TabBarProps> = ({
   onToggleWatch,
   onRefocus,
   onConfigureTUIs,
+  onSwitchAgentProvider,
+  agentProviders,
 }) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -256,7 +280,7 @@ export const TabBar: React.FC<TabBarProps> = ({
   };
 
   const handleNewTab = (option: NewTabOption) => {
-    onNewTab(option.type, option.defaultDock);
+    onNewTab(option.type, option.defaultDock, option.provider);
     setShowDropdown(false);
   };
 
@@ -429,23 +453,47 @@ export const TabBar: React.FC<TabBarProps> = ({
               <hr />
             </>
           )}
-          {onToggleWatch && (() => {
+          {(() => {
             const tab = tabs.find(t => t.id === contextMenu.tabId);
-            // Only show Watch option for PTY-based tabs (not files)
-            if (tab && tab.type !== 'files') {
-              return (
-                <>
-                  <button onClick={() => {
-                    onToggleWatch(contextMenu.tabId);
-                    setContextMenu(null);
-                  }}>
-                    {tab.watched ? '✓ Watching' : 'Watch'}
-                  </button>
-                  <hr />
-                </>
-              );
-            }
-            return null;
+            if (!tab) return null;
+
+            return (
+              <>
+                {/* Watch — agent tabs only */}
+                {onToggleWatch && tab.type === 'agent' && (
+                  <>
+                    <button onClick={() => {
+                      onToggleWatch(contextMenu.tabId);
+                      setContextMenu(null);
+                    }}>
+                      {tab.watched ? '✓ Watching' : 'Watch'}
+                    </button>
+                    <hr />
+                  </>
+                )}
+
+                {/* Provider switcher — agent tabs only */}
+                {tab.type === 'agent' && onSwitchAgentProvider && agentProviders && (
+                  <>
+                    <div className="context-menu-submenu-label">Switch Provider</div>
+                    {Object.entries(agentProviders).map(([key, def]) => (
+                      <button
+                        key={key}
+                        className={tab.provider === key ? 'context-menu-item-active' : ''}
+                        onClick={() => {
+                          onSwitchAgentProvider(contextMenu.tabId, key);
+                          setContextMenu(null);
+                        }}
+                      >
+                        {AGENT_PROVIDER_ICONS[key] ?? def.icon ?? '🤖'} {def.name}
+                        {tab.provider === key && ' ✓'}
+                      </button>
+                    ))}
+                    <hr />
+                  </>
+                )}
+              </>
+            );
           })()}
           <button onClick={() => {
             onCloseTab(contextMenu.tabId);

@@ -55,7 +55,7 @@ interface NodeChatProps {
 
 export const NodeChat: React.FC<NodeChatProps> = ({
   session,
-  sessionId,
+  sessionId: _sessionId,
   node,
   isRootNode,
   isStreaming,

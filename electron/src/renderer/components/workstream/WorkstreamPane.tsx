@@ -39,7 +39,7 @@ interface WorkstreamPaneProps {
 
 export const WorkstreamPane: React.FC<WorkstreamPaneProps> = ({
   active,
-  workspace,
+  workspace: _workspace,
   workstreamId,
 }) => {
   const [workstream, setWorkstream] = useState<WorkstreamResponse | null>(null);
@@ -47,7 +47,7 @@ export const WorkstreamPane: React.FC<WorkstreamPaneProps> = ({
   const [agentSessions, setAgentSessions] = useState<AgentSession[]>([]);
   const [resolvedTasks, setResolvedTasks] = useState<ResolvedTask[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+
   const pollRef = useRef<number | null>(null);
 
   // Fetch workstream data

@@ -19,7 +19,6 @@ import { NodeChat } from './library/NodeChat';
 import { InputBar } from './library/InputBar';
 import {
   ExplorationSession,
-  ExplorationNode,
   SessionSummary,
   AgentMode,
   AGENT_MODE_CONFIG,
@@ -41,7 +40,7 @@ interface LibraryPaneProps {
 export const LibraryPane: React.FC<LibraryPaneProps> = ({
   active,
   workspace,
-  onOpenFile,
+  onOpenFile: _onOpenFile,
 }) => {
   // Session state
   const [session, setSession] = useState<ExplorationSession | null>(null);
@@ -375,7 +374,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
   }, []);
 
   // Ensure a session exists — auto-creates one if needed, returns { sessionId, parentNodeId }
-  const ensureSession = useCallback(async (seedTitle: string): Promise<{ sessionId: string; parentNodeId: string } | null> => {
+  const ensureSession = useCallback(async (_seedTitle: string): Promise<{ sessionId: string; parentNodeId: string } | null> => {
     if (session && activeNodeId) {
       return { sessionId: session.session_id, parentNodeId: activeNodeId };
     }
@@ -590,8 +589,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const data = await res.json();
       // Open workstream tab via Lee API
-      if (window.lee?.sendCommand) {
-        window.lee.sendCommand({
+      if ((window as any).lee?.sendCommand) {
+        (window as any).lee.sendCommand({
           domain: 'system',
           action: 'create_tab',
           params: { type: 'workstream', id: data.workstream_id, title: data.title },

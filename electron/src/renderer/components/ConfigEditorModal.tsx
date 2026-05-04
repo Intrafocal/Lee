@@ -11,25 +11,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 const lee = (window as any).lee;
 
-interface TUIConfig {
-  command: string;
-  name: string;
-  icon?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd_aware?: boolean;
-  cwd_from_config?: string;
-  prewarm?: boolean;
-  path_arg?: string;
-  connection?: {
-    host: string;
-    port?: number;
-    database: string;
-    user: string;
-    password?: string;
-    ssl?: boolean;
-  };
-}
 
 interface ConfigEditorModalProps {
   isOpen: boolean;

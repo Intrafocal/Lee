@@ -461,7 +461,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const modeConfig = AGENT_MODE_CONFIG[node.agent_mode as AgentMode];
   const hasConversation = node.conversation_history.length > 0;
 
-  const handleClick = useCallback((e: React.MouseEvent) => {
+  const handleClick = useCallback((_e: React.MouseEvent) => {
     if (isRenaming) return;
     if (selectionMode) {
       onToggleSelect(node.id);

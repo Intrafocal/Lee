@@ -559,6 +559,30 @@ function setupIPC(): void {
     return ptyManager.spawnConfiguredTUI(tuiType, cwd, options, windowId);
   });
 
+  ipcMain.handle('pty:spawn-agent', async (event, provider: string, cwd?: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    const def = ptyManager.getAgentDefinition(provider, windowId);
+    if (!def) {
+      throw new Error(`Unknown agent provider: ${provider}`);
+    }
+    if (def.prewarm) {
+      return ptyManager.getOrSpawnTUI(
+        provider,
+        () => ptyManager.spawnAgent(provider, cwd, windowId),
+        cwd,
+        windowId
+      );
+    }
+    return ptyManager.spawnAgent(provider, cwd, windowId);
+  });
+
+  ipcMain.handle('pty:get-agent-providers', (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const windowId = bw?.id;
+    return ptyManager.getAllAgentProviders(windowId);
+  });
+
   ipcMain.handle('pty:getAvailableTUIs', (event) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
     return ptyManager.getAvailableTUIsWithMeta(bw?.id);

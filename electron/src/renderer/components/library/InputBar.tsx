@@ -54,7 +54,7 @@ export const InputBar: React.FC<InputBarProps> = ({
     const chain: ExplorationNode[] = [];
     let currentId: string | null = activeNode.id;
     while (currentId) {
-      const node = session.nodes[currentId];
+      const node: ExplorationNode | undefined = session.nodes[currentId];
       if (!node) break;
       chain.unshift(node);
       currentId = node.parent_id;

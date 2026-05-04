@@ -24,7 +24,8 @@ export type TabType =
   | 'library'
   | 'workstream'
   | 'spyglass'
-  | 'bridge';
+  | 'bridge'
+  | 'agent';
 
 // Dock positions for multi-panel layout
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
@@ -63,6 +64,8 @@ export interface TabContext {
   ptyId: number | null;
   dockPosition: DockPosition;
   state: TabState;
+  /** For agent tabs: which provider is running (e.g. 'hester', 'claude', 'pi') */
+  provider?: string;
 }
 
 /**
@@ -219,6 +222,31 @@ export interface TUIDefinition {
 }
 
 /**
+ * Agent provider definition for agent tabs.
+ *
+ * Built-in providers (hester, claude, pi, devops) are defined in PTYManager.
+ * Additional providers can be added in .lee/config.yaml under `agents:`.
+ */
+export interface AgentDefinition {
+  /** Command to execute (e.g., 'codex', 'gemini') */
+  command: string;
+  /** Display name shown in provider switcher */
+  name: string;
+  /** Default arguments to pass to the command */
+  args?: string[];
+  /** Environment variables to set */
+  env?: Record<string, string>;
+  /** If true, use workspace directory as cwd */
+  cwd_aware?: boolean;
+  /** Argument name for passing path. If 'cwd', sets working directory instead. */
+  path_arg?: string;
+  /** If true, prewarm for instant startup */
+  prewarm?: boolean;
+  /** Icon shown in tab and provider switcher */
+  icon?: string;
+}
+
+/**
  * Workspace config from .lee/config.yaml
  */
 export interface WorkspaceConfig {
@@ -232,6 +260,8 @@ export interface WorkspaceConfig {
   }>;
   /** Config-driven TUI definitions */
   tuis?: Record<string, TUIDefinition>;
+  /** Additional agent provider definitions */
+  agents?: Record<string, AgentDefinition>;
   [key: string]: unknown;
 }
 

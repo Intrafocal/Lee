@@ -12,7 +12,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { MachineStatus } from './MachineStatus';
 
-const lee = (window as any).lee;
 
 export interface StatusMessage {
   id: string;
