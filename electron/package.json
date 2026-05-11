@@ -111,7 +111,10 @@
         "from": "resources/python-standalone",
         "to": "python",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/*.exe",
+          "!**/*.dll",
+          "!**/*.pdb"
         ]
       },
       {
@@ -128,6 +131,11 @@
       "target": [
         "dmg",
         "zip"
+      ],
+      "signIgnore": [
+        "\\.exe$",
+        "\\.dll$",
+        "\\.pdb$"
       ]
     },
     "win": {
