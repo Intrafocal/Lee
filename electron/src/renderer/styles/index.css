@@ -1183,6 +1183,20 @@ body {
   margin: 4px 0;
 }
 
+.file-tree-context-menu .context-menu-label {
+  padding: 5px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.file-tree-context-menu .context-menu-item-indented {
+  padding-left: 20px;
+}
+
 /* Tab Context Menu */
 .tab-context-menu {
   position: fixed;
@@ -2917,6 +2931,19 @@ body {
   margin: 4px 0;
 }
 
+.editor-context-menu .context-menu-section-label {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.editor-context-menu .context-menu-label-indented {
+  padding-left: 8px;
+}
+
 .context-menu-icon {
   font-size: 14px;
   flex-shrink: 0;
@@ -2927,6 +2954,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cm-agent-highlight {
+  background-color: rgba(255, 213, 0, 0.28);
+  border-radius: 2px;
+  outline: 1px solid rgba(255, 213, 0, 0.5);
 }
 
 /* ========================================================================
