@@ -36,7 +36,16 @@ export interface EditorContextUpdate {
   language: string | null;
   cursor: { line: number; column: number };
   selection: string | null;
+  selectedRange: { from: { line: number; column: number }; to: { line: number; column: number } } | null;
   modified: boolean;
+}
+
+// Range used by editor highlight/select commands
+export interface EditorRange {
+  fromLine: number;
+  fromCol: number;
+  toLine: number;
+  toCol: number;
 }
 
 // Type definitions for the exposed API
@@ -111,14 +120,28 @@ export interface LeeAPI {
     updateEditor: (ctx: EditorContextUpdate) => void;
   };
   editor: {
-    // Commands to send to EditorPanel
+    // Commands to send to EditorPanel (renderer → main)
     open: (filePath: string) => void;
     save: () => void;
     close: () => void;
-    // Listeners for EditorPanel to receive commands
-    onOpen: (callback: (filePath: string) => void) => () => void;
-    onSave: (callback: () => void) => () => void;
-    onClose: (callback: () => void) => () => void;
+    gotoLine: (line: number, column?: number) => void;
+    select: (fromLine: number, fromCol: number, toLine: number, toCol: number) => void;
+    highlight: (ranges: EditorRange[], durationMs?: number) => void;
+    insert: (line: number, column: number, text: string) => void;
+    replace: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string) => void;
+    // Report the result of an editor:open IPC back to the main process so the
+    // HTTP /command response can include the resolved tab_id.
+    reportOpenResult: (requestId: string, tabId: number | null) => void;
+    // Listeners for EditorPanel to receive commands (main → renderer).
+    // Each callback receives an optional `tabId` so panels can filter for messages targeted at them.
+    onOpen: (callback: (filePath: string, tabId: number | undefined, requestId: string | undefined) => void) => () => void;
+    onSave: (callback: (tabId: number | undefined) => void) => () => void;
+    onClose: (callback: (tabId: number | undefined) => void) => () => void;
+    onGotoLine: (callback: (line: number, column: number | undefined, tabId: number | undefined) => void) => () => void;
+    onSelect: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, tabId: number | undefined) => void) => () => void;
+    onHighlight: (callback: (ranges: EditorRange[], durationMs: number | undefined, tabId: number | undefined) => void) => () => void;
+    onInsert: (callback: (line: number, column: number, text: string, tabId: number | undefined) => void) => () => void;
+    onReplace: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string, tabId: number | undefined) => void) => () => void;
     removeAllListeners: () => void;
   };
   system: {
@@ -377,30 +400,84 @@ contextBridge.exposeInMainWorld('lee', {
   },
 
   editor: {
-    // Commands to send to EditorPanel (renderer-to-renderer via main process)
+    // Commands to send to EditorPanel (renderer → main)
     open: (filePath: string) => ipcRenderer.send('editor:open-file', filePath),
     save: () => ipcRenderer.send('editor:save-file'),
     close: () => ipcRenderer.send('editor:close-file'),
-    // Listeners for EditorPanel to receive commands
-    onOpen: (callback: (filePath: string) => void) => {
-      const listener = (_event: any, filePath: string) => callback(filePath);
+    gotoLine: (line: number, column?: number) => ipcRenderer.send('editor:goto-line', { line, column }),
+    select: (fromLine: number, fromCol: number, toLine: number, toCol: number) =>
+      ipcRenderer.send('editor:select', { fromLine, fromCol, toLine, toCol }),
+    highlight: (ranges: any[], durationMs?: number) =>
+      ipcRenderer.send('editor:highlight', { ranges, durationMs }),
+    insert: (line: number, column: number, text: string) =>
+      ipcRenderer.send('editor:insert', { line, column, text }),
+    replace: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string) =>
+      ipcRenderer.send('editor:replace', { fromLine, fromCol, toLine, toCol, text }),
+    reportOpenResult: (requestId: string, tabId: number | null) =>
+      ipcRenderer.send('editor:open-result', { requestId, tabId }),
+    // Listeners (main → renderer). Each forwards an optional tabId so the
+    // receiving panel can filter for messages targeted at it.
+    onOpen: (callback: (filePath: string, tabId: number | undefined, requestId: string | undefined) => void) => {
+      const listener = (_event: any, payload: any) => {
+        // Backwards compat: old shape sent a bare string.
+        if (typeof payload === 'string') {
+          callback(payload, undefined, undefined);
+        } else {
+          callback(payload?.file, payload?.tabId, payload?.requestId);
+        }
+      };
       ipcRenderer.on('editor:open', listener);
       return () => ipcRenderer.removeListener('editor:open', listener);
     },
-    onSave: (callback: () => void) => {
-      const listener = () => callback();
+    onSave: (callback: (tabId: number | undefined) => void) => {
+      const listener = (_event: any, payload?: { tabId?: number }) => callback(payload?.tabId);
       ipcRenderer.on('editor:save', listener);
       return () => ipcRenderer.removeListener('editor:save', listener);
     },
-    onClose: (callback: () => void) => {
-      const listener = () => callback();
+    onClose: (callback: (tabId: number | undefined) => void) => {
+      const listener = (_event: any, payload?: { tabId?: number }) => callback(payload?.tabId);
       ipcRenderer.on('editor:close', listener);
       return () => ipcRenderer.removeListener('editor:close', listener);
+    },
+    onGotoLine: (callback: (line: number, column: number | undefined, tabId: number | undefined) => void) => {
+      const listener = (_event: any, params: { line: number; column?: number; tabId?: number }) =>
+        callback(params.line, params.column, params.tabId);
+      ipcRenderer.on('editor:goto-line', listener);
+      return () => ipcRenderer.removeListener('editor:goto-line', listener);
+    },
+    onSelect: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, tabId: number | undefined) => void) => {
+      const listener = (_event: any, p: { fromLine: number; fromCol: number; toLine: number; toCol: number; tabId?: number }) =>
+        callback(p.fromLine, p.fromCol, p.toLine, p.toCol, p.tabId);
+      ipcRenderer.on('editor:select', listener);
+      return () => ipcRenderer.removeListener('editor:select', listener);
+    },
+    onHighlight: (callback: (ranges: any[], durationMs: number | undefined, tabId: number | undefined) => void) => {
+      const listener = (_event: any, params: { ranges: any[]; durationMs?: number; tabId?: number }) =>
+        callback(params.ranges, params.durationMs, params.tabId);
+      ipcRenderer.on('editor:highlight', listener);
+      return () => ipcRenderer.removeListener('editor:highlight', listener);
+    },
+    onInsert: (callback: (line: number, column: number, text: string, tabId: number | undefined) => void) => {
+      const listener = (_event: any, p: { line: number; column: number; text: string; tabId?: number }) =>
+        callback(p.line, p.column, p.text, p.tabId);
+      ipcRenderer.on('editor:insert', listener);
+      return () => ipcRenderer.removeListener('editor:insert', listener);
+    },
+    onReplace: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string, tabId: number | undefined) => void) => {
+      const listener = (_event: any, p: { fromLine: number; fromCol: number; toLine: number; toCol: number; text: string; tabId?: number }) =>
+        callback(p.fromLine, p.fromCol, p.toLine, p.toCol, p.text, p.tabId);
+      ipcRenderer.on('editor:replace', listener);
+      return () => ipcRenderer.removeListener('editor:replace', listener);
     },
     removeAllListeners: () => {
       ipcRenderer.removeAllListeners('editor:open');
       ipcRenderer.removeAllListeners('editor:save');
       ipcRenderer.removeAllListeners('editor:close');
+      ipcRenderer.removeAllListeners('editor:goto-line');
+      ipcRenderer.removeAllListeners('editor:select');
+      ipcRenderer.removeAllListeners('editor:highlight');
+      ipcRenderer.removeAllListeners('editor:insert');
+      ipcRenderer.removeAllListeners('editor:replace');
     },
   },
 

@@ -80,10 +80,14 @@ export interface CursorPosition {
  * Editor context - state from the Lee editor TUI (via OSC sequences)
  */
 export interface EditorContext {
+  /** Tab ID of the EditorPanel that produced this context (null for legacy/OSC paths) */
+  tabId: number | null;
   file: string | null;
   language: string | null;
   cursor: CursorPosition;
   selection: string | null;
+  /** Exact byte-range of the current selection (null when no selection) */
+  selectedRange: { from: CursorPosition; to: CursorPosition } | null;
   modified: boolean;
   daemonPort: number | null;
 }
@@ -299,8 +303,11 @@ export interface LeeContext {
   // All tabs
   tabs: TabContext[];
 
-  // Editor state (from OSC)
+  // Editor state — the "current" editor (last focused EditorPanel that pushed context)
   editor: EditorContext | null;
+
+  // All open editor panels keyed by their tab id
+  editors?: Record<number, EditorContext>;
 
   // Browser tabs (by tab ID)
   browsers?: Record<number, BrowserContext>;

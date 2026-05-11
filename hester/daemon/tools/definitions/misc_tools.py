@@ -79,40 +79,88 @@ Examples:
 
 UI_CONTROL_TOOL = ToolDefinition(
     name="ui_control",
-    description="""Control the Lee IDE interface.
-Use this to interact with tabs, the editor, and TUI applications.
+    description="""Lee IDE control: highlight editor lines, open/close files, manage tabs, open TUI apps.
 
-Available actions:
-- Create terminal tab: ui_control(command_type="system", action="new_tab", params={"tab_type": "terminal"})
-- Open file: ui_control(command_type="editor", action="open_file", params={"path": "/path/to/file.py"})
-- Open file at line: ui_control(command_type="editor", action="open_file", params={"path": "/path/to/file.py", "line": 42})
-- Focus tab: ui_control(command_type="system", action="focus_tab", params={"tab_id": 1})
-- Close tab: ui_control(command_type="system", action="close_tab", params={"tab_id": 2})
-- Open lazygit: ui_control(command_type="tui", action="open", params={"tui": "git"})
-- Open lazydocker: ui_control(command_type="tui", action="open", params={"tui": "docker"})
-- Open k9s: ui_control(command_type="tui", action="open", params={"tui": "k8s"})
-- Open flx: ui_control(command_type="tui", action="open", params={"tui": "flutter"})
-- Open custom TUI: ui_control(command_type="tui", action="open", params={"tui": "custom", "command": "htop", "label": "System"})
+Use this tool (NOT read_file) when asked to highlight, scroll to, or navigate to lines in the editor.
+
+IMPORTANT: When the user asks you to highlight, point to, scroll to, or visually mark lines in the editor,
+use this tool with domain="editor". Do NOT read the file content instead — use ui_control to manipulate
+the live editor view directly.
+
+EDITOR TAB ROUTING (READ THIS BEFORE ANY EDITOR ACTION):
+The Lee window can have multiple editor panels mounted at once (e.g. one in the
+center panel, one in a side panel). Editor commands MUST be addressed to a
+specific tab_id, otherwise the wrong panel — or none — will respond. The
+workflow is:
+
+  1. Call action="status" first. The response has the shape:
+       {
+         "active_tab_id": <int|null>,   # the editor in the focused panel
+         "editors": [                   # all mounted editor panels
+           {"tab_id": 12, "file": "/path/foo.py", "language": "python", ...},
+           ...
+         ]
+       }
+  2. Pick the right tab_id (usually `active_tab_id`, or match by file path
+     from `editors`).
+  3. Pass that tab_id on EVERY subsequent editor command in this turn:
+       params={"tab_id": 12, ...}
+
+If `editors` is empty (no editor is open) and you need to act on a file:
+  a. Call action="open" with the file path. The response includes the new
+     tab_id: {"action": "open", "file": "...", "tab_id": 17}.
+  b. Use that tab_id for follow-up commands (goto_line, highlight, select, ...).
+
+Calling editor actions WITHOUT tab_id will silently no-op when the editor
+tab isn't the currently-selected tab in its panel. Always pass tab_id.
+
+EDITOR actions (domain="editor"):
+- Get editor status (CALL THIS FIRST): action="status", params={}
+- Open file: action="open", params={"file": "/path/to/file.py"}  → response includes tab_id
+- Open file at line: action="open", params={"file": "/path/to/file.py", "line": 42}
+- Save a specific editor: action="save", params={"tab_id": 12}
+- Close a specific editor: action="close", params={"tab_id": 12}
+- Jump cursor to line + scroll into view: action="goto_line", params={"tab_id": 12, "line": 42, "column": 1}
+- Visually highlight lines in the editor (yellow glow, auto-clears): action="highlight", params={"tab_id": 12, "ranges": [{"fromLine": 5, "fromCol": 1, "toLine": 10, "toCol": 999}], "duration_ms": 4000}
+- Select a range of text (like a click-drag): action="select", params={"tab_id": 12, "from_line": 10, "from_col": 1, "to_line": 15, "to_col": 40}
+- Insert text at position: action="insert", params={"tab_id": 12, "line": 5, "column": 1, "text": "# TODO\\n"}
+- Replace range with text: action="replace", params={"tab_id": 12, "from_line": 3, "from_col": 1, "to_line": 3, "to_col": 20, "text": "new content"}
+
+SYSTEM actions (domain="system"):
+- Create terminal tab: action="create_tab", params={"type": "terminal"}
+- Focus tab: action="focus_tab", params={"tab_id": 1}
+- Close tab: action="close_tab", params={"tab_id": 2}
+
+TUI actions (domain="tui"):
+- Open lazygit: action="open", params={"tui": "git"}
+- Open lazydocker: action="open", params={"tui": "docker"}
+- Open k9s: action="open", params={"tui": "k8s"}
+- Open Flutter tools: action="open", params={"tui": "flutter"}
+- Open custom TUI: action="open", params={"tui": "custom", "command": "htop", "label": "System"}
+
+PANEL actions (domain="panel"):
+- Focus panel: action="focus", params={"panel": "left"}
+- Toggle panel: action="toggle", params={"panel": "right"}
 
 Note: Only works when Hester is running inside Lee IDE (port 9001).""",
     parameters={
         "type": "object",
         "properties": {
-            "command_type": {
+            "domain": {
                 "type": "string",
-                "enum": ["system", "editor", "tui"],
-                "description": "Type: 'system' for tabs, 'editor' for file ops, 'tui' for TUI apps",
+                "enum": ["system", "editor", "tui", "panel"],
+                "description": "Domain: 'editor' for file/cursor ops, 'system' for tabs, 'tui' for TUI apps, 'panel' for panels",
             },
             "action": {
                 "type": "string",
-                "description": "Action to perform (new_tab, open_file, focus_tab, close_tab, open)",
+                "description": "Action to perform. Editor: open, save, close, goto_line, select, highlight, insert, replace, status. System: create_tab, focus_tab, close_tab. TUI: open. Panel: focus, toggle.",
             },
             "params": {
                 "type": "object",
-                "description": "Additional parameters for the action",
+                "description": "Parameters for the action. See description for per-action parameter details.",
             },
         },
-        "required": ["command_type", "action"],
+        "required": ["domain", "action"],
     },
     environments={"daemon"},  # Lee only
 )

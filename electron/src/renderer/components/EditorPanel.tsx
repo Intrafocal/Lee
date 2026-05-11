@@ -11,8 +11,8 @@
  */
 
 import React, { useEffect, useCallback, useRef, useMemo } from 'react';
-import { EditorState, Extension } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
+import { EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine, Decoration, DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
@@ -37,9 +37,43 @@ import { MarkdownPreview } from './MarkdownPreview';
 
 const lee = (window as any).lee;
 
+// --- Agent highlight decoration ---
+const addHighlight = StateEffect.define<{ from: number; to: number }[]>();
+const clearHighlights = StateEffect.define<null>();
+
+const agentHighlightField = StateField.define<DecorationSet>({
+  create() { return Decoration.none; },
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(addHighlight)) {
+        const marks = e.value.map(({ from, to }) =>
+          Decoration.mark({ class: 'cm-agent-highlight' }).range(from, to)
+        );
+        deco = deco.update({ add: marks, sort: true });
+      } else if (e.is(clearHighlights)) {
+        deco = Decoration.none;
+      }
+    }
+    return deco;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
+
+interface AgentTabInfo {
+  id: number;
+  ptyId: number;
+  label: string;
+  provider?: string;
+}
+
 interface EditorPanelProps {
   workspace: string;
   active: boolean;
+  /** ID of the tab hosting this panel — used so external IPC commands can
+   *  route to a specific panel even when multiple are mounted (e.g. across
+   *  docked panels). When absent the panel only acts on broadcast commands. */
+  tabId?: number;
   // File-specific props (for file tabs)
   filePath?: string;
   fileContent?: string;
@@ -49,6 +83,8 @@ interface EditorPanelProps {
   onSave?: () => void;
   onAskHester?: (prompt: string) => void;
   onOpenFile?: (filePath: string) => void;
+  onSendToAgent?: (ptyId: number, text: string) => void;
+  agentTabs?: AgentTabInfo[];
 }
 
 interface ContextMenuState {
@@ -94,6 +130,7 @@ const LANGUAGE_MAP: Record<string, () => Extension> = {
 export const EditorPanel: React.FC<EditorPanelProps> = ({
   workspace,
   active,
+  tabId,
   filePath,
   fileContent,
   fileLanguage,
@@ -102,6 +139,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   onSave,
   onAskHester,
   onOpenFile,
+  onSendToAgent,
+  agentTabs,
 }) => {
   // State for preview mode (markdown only)
   const [previewMode, setPreviewMode] = React.useState(false);
@@ -138,32 +177,45 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
     const view = editorViewRef.current;
     if (!view) {
-      // No editor view (e.g., in preview mode)
       lee.context.updateEditor({
+        tabId: tabId ?? null,
         file: filePath,
         language: fileLanguage || 'text',
         cursor: { line: 1, column: 1 },
         selection: null,
+        selectedRange: null,
         modified: fileModified || false,
       });
       return;
     }
 
     const state = view.state;
-    const selection = state.selection.main;
-    const line = state.doc.lineAt(selection.head);
+    const sel = state.selection.main;
+    const cursorLine = state.doc.lineAt(sel.head);
+
+    let selectedRange = null;
+    if (!sel.empty) {
+      const fromLine = state.doc.lineAt(sel.from);
+      const toLine = state.doc.lineAt(sel.to);
+      selectedRange = {
+        from: { line: fromLine.number, column: sel.from - fromLine.from + 1 },
+        to: { line: toLine.number, column: sel.to - toLine.from + 1 },
+      };
+    }
 
     lee.context.updateEditor({
+      tabId: tabId ?? null,
       file: filePath,
       language: fileLanguage || 'text',
       cursor: {
-        line: line.number,
-        column: selection.head - line.from + 1,
+        line: cursorLine.number,
+        column: sel.head - cursorLine.from + 1,
       },
-      selection: selection.empty ? null : state.sliceDoc(selection.from, selection.to),
+      selection: sel.empty ? null : state.sliceDoc(sel.from, sel.to),
+      selectedRange,
       modified: fileModified || false,
     });
-  }, [filePath, fileLanguage, fileModified]);
+  }, [tabId, filePath, fileLanguage, fileModified]);
 
   // Debounced context push
   const debouncedContextPush = useCallback(() => {
@@ -187,6 +239,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   // Create CodeMirror extensions
   const createExtensions = useCallback((path: string): Extension[] => {
     return [
+      agentHighlightField,
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
@@ -308,6 +361,90 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     };
   }, []);
 
+  // Wire IPC editor commands from Hester / agents.
+  //
+  // Listeners are registered unconditionally — gating them on `active` meant
+  // editor commands silently no-op'd whenever the editor tab wasn't the
+  // currently selected tab in its panel (e.g. when Hester is in a side panel
+  // and the editor is in center). Routing is by `tabId` instead: each panel
+  // ignores messages whose `tabId` doesn't match its own. Messages sent
+  // without a `tabId` (broadcast) are handled only by the active panel so
+  // there's still a sane fallback for callers that don't pass one.
+  useEffect(() => {
+    if (!lee?.editor) return;
+
+    const isForMe = (msgTabId: number | undefined) => {
+      if (msgTabId == null) return active; // broadcast → only active panel responds
+      return tabId != null && msgTabId === tabId;
+    };
+
+    // Helper: convert 1-based line/col to a document offset, clamped to valid range
+    const toPos = (view: EditorView, line: number, col: number): number => {
+      const lineObj = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)));
+      return Math.min(lineObj.from + Math.max(0, col - 1), lineObj.to);
+    };
+
+    const cleanupGotoLine = lee.editor.onGotoLine((line: number, column: number | undefined, msgTabId: number | undefined) => {
+      if (!isForMe(msgTabId)) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const pos = toPos(view, line, column ?? 1);
+      view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+      view.focus();
+    });
+
+    const cleanupSelect = lee.editor.onSelect((fromLine: number, fromCol: number, toLine: number, toCol: number, msgTabId: number | undefined) => {
+      if (!isForMe(msgTabId)) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const from = toPos(view, fromLine, fromCol);
+      const to = toPos(view, toLine, toCol);
+      view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+      view.focus();
+    });
+
+    const cleanupHighlight = lee.editor.onHighlight((ranges: any[], durationMs: number | undefined, msgTabId: number | undefined) => {
+      if (!isForMe(msgTabId)) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const positions = (ranges as Array<{ fromLine: number; fromCol: number; toLine: number; toCol: number }>).map(r => ({
+        from: toPos(view, r.fromLine, r.fromCol),
+        to: toPos(view, r.toLine, r.toCol),
+      }));
+      view.dispatch({ effects: addHighlight.of(positions) });
+      if (durationMs && durationMs > 0) {
+        setTimeout(() => {
+          editorViewRef.current?.dispatch({ effects: clearHighlights.of(null) });
+        }, durationMs);
+      }
+    });
+
+    const cleanupInsert = lee.editor.onInsert((line: number, column: number, text: string, msgTabId: number | undefined) => {
+      if (!isForMe(msgTabId)) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const pos = toPos(view, line, column);
+      view.dispatch({ changes: { from: pos, insert: text } });
+    });
+
+    const cleanupReplace = lee.editor.onReplace((fromLine: number, fromCol: number, toLine: number, toCol: number, text: string, msgTabId: number | undefined) => {
+      if (!isForMe(msgTabId)) return;
+      const view = editorViewRef.current;
+      if (!view) return;
+      const from = toPos(view, fromLine, fromCol);
+      const to = toPos(view, toLine, toCol);
+      view.dispatch({ changes: { from, to, insert: text } });
+    });
+
+    return () => {
+      cleanupGotoLine();
+      cleanupSelect();
+      cleanupHighlight();
+      cleanupInsert();
+      cleanupReplace();
+    };
+  }, [tabId, active]);
+
   // Handle keyboard shortcuts
   useEffect(() => {
     if (!active) return;
@@ -384,6 +521,18 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     onAskHester(prompt);
     setContextMenu(null);
   }, [contextMenu, fileName, onAskHester]);
+
+  const handleSendToAgentTab = useCallback((ptyId: number) => {
+    if (!contextMenu || !onSendToAgent) return;
+
+    const { selectedText, lineNumber } = contextMenu;
+    const text = selectedText
+      ? `Review ${fileName} line ${lineNumber}:\n\`\`\`\n${selectedText}\n\`\`\``
+      : `Review ${fileName} at line ${lineNumber}`;
+
+    onSendToAgent(ptyId, text);
+    setContextMenu(null);
+  }, [contextMenu, fileName, onSendToAgent]);
 
   const handleSearchDocs = useCallback(() => {
     if (!contextMenu?.selectedText || !onAskHester) return;
@@ -476,14 +625,25 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button onClick={handleSendToHester}>
-            <span className="context-menu-icon">🐇</span>
-            <span className="context-menu-label">
-              {contextMenu.selectedText
-                ? `Send to Hester`
-                : `Ask Hester about line ${contextMenu.lineNumber}`}
-            </span>
-          </button>
+          {onSendToAgent && agentTabs && agentTabs.length > 0 ? (
+            <>
+              <div className="context-menu-section-label">Send to Agent</div>
+              {agentTabs.map(tab => (
+                <button key={tab.id} onClick={() => handleSendToAgentTab(tab.ptyId)}>
+                  <span className="context-menu-label context-menu-label-indented">{tab.label}</span>
+                </button>
+              ))}
+            </>
+          ) : (
+            <button onClick={handleSendToHester}>
+              <span className="context-menu-icon">🐇</span>
+              <span className="context-menu-label">
+                {contextMenu.selectedText
+                  ? `Send to Hester`
+                  : `Ask Hester about line ${contextMenu.lineNumber}`}
+              </span>
+            </button>
+          )}
           {contextMenu.selectedText && (
             <button onClick={handleSearchDocs}>
               <span className="context-menu-icon">📚</span>

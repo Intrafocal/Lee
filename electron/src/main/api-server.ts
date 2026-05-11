@@ -12,6 +12,7 @@ import express, { Request, Response, NextFunction, Application } from 'express';
 import { Server, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Socket } from 'net';
+import { ipcMain } from 'electron';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -48,6 +49,8 @@ export class APIServer {
   private port: number;
   private leeState: LeeState = {};
   private authToken: string;
+  /** Pending editor.open requests awaiting the renderer's tab_id reply. */
+  private pendingOpenResolvers: Map<string, (tabId: number | null) => void> = new Map();
 
   /** Get the auth token for passing to legitimate clients (e.g., Hester daemon). */
   getAuthToken(): string {
@@ -107,7 +110,34 @@ export class APIServer {
       this.leeState = { ...this.leeState, ...state };
     });
 
+    // Renderer's reply to an editor:open IPC — wakes up awaitOpenResult.
+    ipcMain.on('editor:open-result', (_event, payload: { requestId: string; tabId: number | null }) => {
+      const resolver = this.pendingOpenResolvers.get(payload?.requestId);
+      if (resolver) {
+        this.pendingOpenResolvers.delete(payload.requestId);
+        resolver(payload.tabId);
+      }
+    });
+
     this.setupRoutes();
+  }
+
+  /**
+   * Wait for the renderer to acknowledge an editor:open request and report
+   * back which tab it opened (existing or freshly created). Resolves to null
+   * on timeout or if the renderer can't open the file.
+   */
+  private awaitOpenResult(requestId: string, timeoutMs: number = 5000): Promise<number | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingOpenResolvers.delete(requestId);
+        resolve(null);
+      }, timeoutMs);
+      this.pendingOpenResolvers.set(requestId, (tabId) => {
+        clearTimeout(timer);
+        resolve(tabId);
+      });
+    });
   }
 
   /**
@@ -122,11 +152,29 @@ export class APIServer {
   }
 
   /**
+   * Tell the renderer to focus a specific tab.
+   *
+   * Used after editor commands that target a `tab_id`: if the targeted tab
+   * isn't the active one in its panel, the user wouldn't see the highlight /
+   * goto / edit happen. Auto-focusing the tab makes the action visible.
+   */
+  private focusTabInWindow(tabId: number, params?: Record<string, unknown>): void {
+    const ws = this.getWindowForCommand(params);
+    const mainWindow = ws?.browserWindow;
+    if (!mainWindow) return;
+    mainWindow.webContents.send('system:focus-tab', String(tabId));
+  }
+
+  /**
    * Send a command to the EditorPanel via IPC.
-   * The EditorPanel listens for these commands in the renderer process.
+   *
+   * EditorPanels are mounted per-tab. Every IPC payload carries `tabId` so the
+   * receiving panel can decide whether the message is for it. If `tab_id` is
+   * omitted by the caller, the command is broadcast and any panel listening
+   * (typically the active one) will act.
    */
   private sendEditorPanelCommand(
-    action: 'open' | 'save' | 'close',
+    action: 'open' | 'save' | 'close' | 'goto-line' | 'select' | 'highlight' | 'insert' | 'replace',
     params?: Record<string, unknown>
   ): { success: boolean; error?: string } {
     const ws = this.getWindowForCommand(params);
@@ -135,18 +183,35 @@ export class APIServer {
       return { success: false, error: 'No window available' };
     }
 
+    const tabId = (params?.tab_id ?? params?.tabId) as number | undefined;
+
     try {
       switch (action) {
         case 'open':
           if (params?.file) {
-            mainWindow.webContents.send('editor:open', params.file);
+            mainWindow.webContents.send('editor:open', { file: params.file, tabId, requestId: params?.requestId });
           }
           break;
         case 'save':
-          mainWindow.webContents.send('editor:save');
+          mainWindow.webContents.send('editor:save', { tabId });
           break;
         case 'close':
-          mainWindow.webContents.send('editor:close');
+          mainWindow.webContents.send('editor:close', { tabId });
+          break;
+        case 'goto-line':
+          mainWindow.webContents.send('editor:goto-line', { tabId, line: params?.line, column: params?.column });
+          break;
+        case 'select':
+          mainWindow.webContents.send('editor:select', { ...params, tabId });
+          break;
+        case 'highlight':
+          mainWindow.webContents.send('editor:highlight', { tabId, ranges: params?.ranges, durationMs: params?.durationMs });
+          break;
+        case 'insert':
+          mainWindow.webContents.send('editor:insert', { tabId, line: params?.line, column: params?.column, text: params?.text });
+          break;
+        case 'replace':
+          mainWindow.webContents.send('editor:replace', { ...params, tabId });
           break;
       }
       return { success: true };
@@ -883,30 +948,65 @@ export class APIServer {
     params: Record<string, unknown>,
     res: Response
   ): Promise<void> {
+    // tab_id, if provided, routes the IPC to a specific EditorPanel. When
+    // omitted, the message is broadcast and only the active panel will act.
+    const tabId = params.tab_id;
+
     switch (action) {
       case 'open':
-      case 'open_file':
+      case 'open_file': {
         if (!params.file) {
           res.status(400).json({ success: false, error: 'Missing file parameter' });
           return;
         }
-        // Use new IPC-based EditorPanel
-        const openResult = this.sendEditorPanelCommand('open', { file: params.file });
-        if (openResult.success) {
-          res.json({ success: true, data: { action: 'open', file: params.file } });
-        } else {
-          res.status(503).json(openResult);
+        // Resolve relative paths against the target window's workspace —
+        // callers like Hester routinely pass workspace-relative paths
+        // (e.g. "CLAUDE.md"), but the renderer's fs:readFile uses the
+        // main process cwd (Electron's launch dir), so a bare relative
+        // path silently fails to open.
+        let resolvedFile = params.file as string;
+        if (!path.isAbsolute(resolvedFile)) {
+          const targetWs = this.getWindowForCommand(params);
+          const workspace = targetWs?.workspace;
+          if (workspace) {
+            resolvedFile = path.resolve(workspace, resolvedFile);
+          }
         }
+        // Generate a request id so the renderer can report back which tab it
+        // opened (existing one matching the file, or newly created).
+        const requestId = `open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const openResult = this.sendEditorPanelCommand('open', {
+          file: resolvedFile,
+          tab_id: tabId,
+          requestId,
+        });
+        if (!openResult.success) {
+          res.status(503).json(openResult);
+          return;
+        }
+        const resolvedTabId = await this.awaitOpenResult(requestId);
+        // Make sure the user actually sees the file that just opened — the
+        // tab may be created in a non-focused panel, or an existing tab in a
+        // side panel could have matched.
+        if (resolvedTabId != null) {
+          this.focusTabInWindow(resolvedTabId, params);
+        }
+        res.json({
+          success: true,
+          data: { action: 'open', file: resolvedFile, tab_id: resolvedTabId },
+        });
         break;
+      }
 
-      case 'save':
-        const saveResult = this.sendEditorPanelCommand('save');
+      case 'save': {
+        const saveResult = this.sendEditorPanelCommand('save', { tab_id: tabId });
         if (saveResult.success) {
-          res.json({ success: true, data: { action: 'save' } });
+          res.json({ success: true, data: { action: 'save', tab_id: tabId ?? null } });
         } else {
           res.status(503).json(saveResult);
         }
         break;
+      }
 
       case 'save_as':
         // save_as not yet supported in new editor, return error
@@ -916,33 +1016,158 @@ export class APIServer {
         });
         break;
 
-      case 'close':
-        const closeResult = this.sendEditorPanelCommand('close');
+      case 'close': {
+        const closeResult = this.sendEditorPanelCommand('close', { tab_id: tabId });
         if (closeResult.success) {
-          res.json({ success: true, data: { action: 'close' } });
+          res.json({ success: true, data: { action: 'close', tab_id: tabId ?? null } });
         } else {
           res.status(503).json(closeResult);
         }
         break;
+      }
 
-      case 'status':
-        // EditorPanel doesn't have a separate daemon - just report context
+      case 'goto_line': {
+        if (!params.line) {
+          res.status(400).json({ success: false, error: 'Missing line parameter' });
+          return;
+        }
+        const gotoResult = this.sendEditorPanelCommand('goto-line', {
+          tab_id: tabId,
+          line: params.line,
+          column: params.column,
+        });
+        if (gotoResult.success) {
+          if (typeof tabId === 'number') this.focusTabInWindow(tabId, params);
+          res.json({ success: true, data: { action: 'goto_line', line: params.line, column: params.column ?? 1, tab_id: tabId ?? null } });
+        } else {
+          res.status(503).json(gotoResult);
+        }
+        break;
+      }
+
+      case 'select': {
+        const { from_line, from_col, to_line, to_col } = params;
+        if (from_line === undefined || to_line === undefined) {
+          res.status(400).json({ success: false, error: 'Missing from_line/to_line parameters' });
+          return;
+        }
+        const selectResult = this.sendEditorPanelCommand('select', {
+          tab_id: tabId,
+          fromLine: from_line,
+          fromCol: from_col ?? 1,
+          toLine: to_line,
+          toCol: to_col ?? 1,
+        });
+        if (selectResult.success) {
+          if (typeof tabId === 'number') this.focusTabInWindow(tabId, params);
+          res.json({ success: true, data: { action: 'select', tab_id: tabId ?? null } });
+        } else {
+          res.status(503).json(selectResult);
+        }
+        break;
+      }
+
+      case 'highlight': {
+        if (!params.ranges || !Array.isArray(params.ranges)) {
+          res.status(400).json({ success: false, error: 'Missing ranges array' });
+          return;
+        }
+        const highlightResult = this.sendEditorPanelCommand('highlight', {
+          tab_id: tabId,
+          ranges: params.ranges,
+          durationMs: params.duration_ms ?? 3000,
+        });
+        if (highlightResult.success) {
+          if (typeof tabId === 'number') this.focusTabInWindow(tabId, params);
+          res.json({ success: true, data: { action: 'highlight', count: (params.ranges as any[]).length, tab_id: tabId ?? null } });
+        } else {
+          res.status(503).json(highlightResult);
+        }
+        break;
+      }
+
+      case 'insert': {
+        if (params.line === undefined || params.text === undefined) {
+          res.status(400).json({ success: false, error: 'Missing line/text parameters' });
+          return;
+        }
+        const insertResult = this.sendEditorPanelCommand('insert', {
+          tab_id: tabId,
+          line: params.line,
+          column: params.column ?? 1,
+          text: params.text,
+        });
+        if (insertResult.success) {
+          if (typeof tabId === 'number') this.focusTabInWindow(tabId, params);
+          res.json({ success: true, data: { action: 'insert', tab_id: tabId ?? null } });
+        } else {
+          res.status(503).json(insertResult);
+        }
+        break;
+      }
+
+      case 'replace': {
+        const { from_line: rl_from, from_col: rc_from, to_line: rl_to, to_col: rc_to, text: rText } = params;
+        if (rl_from === undefined || rl_to === undefined || rText === undefined) {
+          res.status(400).json({ success: false, error: 'Missing from_line/to_line/text parameters' });
+          return;
+        }
+        const replaceResult = this.sendEditorPanelCommand('replace', {
+          tab_id: tabId,
+          fromLine: rl_from,
+          fromCol: rc_from ?? 1,
+          toLine: rl_to,
+          toCol: rc_to ?? 1,
+          text: rText,
+        });
+        if (replaceResult.success) {
+          if (typeof tabId === 'number') this.focusTabInWindow(tabId, params);
+          res.json({ success: true, data: { action: 'replace', tab_id: tabId ?? null } });
+        } else {
+          res.status(503).json(replaceResult);
+        }
+        break;
+      }
+
+      case 'status': {
+        // Return both the "current" editor (last-focused panel that pushed
+        // context) and the full list of mounted editor panels. Callers should
+        // typically pick a tab_id from `editors[]` before issuing further
+        // editor commands; if `editors` is empty they should call `open`
+        // first.
         const statusWs = this.getWindowForCommand(params);
         const context = statusWs?.contextBridge.getContext();
+        const editorsMap = context?.editors || {};
+        const editors = Object.values(editorsMap).map((e) => ({
+          tab_id: e.tabId,
+          file: e.file,
+          language: e.language,
+          cursor: e.cursor,
+          modified: e.modified,
+          selection: e.selection,
+          selectedRange: e.selectedRange,
+        }));
         res.json({
           success: true,
           data: {
             connected: true,
             type: 'editor-panel',
+            // The active tab in the focused panel — usually what a caller
+            // means by "the current editor".
+            active_tab_id: context?.editor?.tabId ?? null,
+            // Legacy single-editor field (last panel to push context).
             editor: context?.editor || null,
+            // All mounted EditorPanels in this window.
+            editors,
           },
         });
         break;
+      }
 
       default:
         res.status(400).json({
           success: false,
-          error: `Unknown editor action: ${action}. Use: open, save, save_as, close, status`,
+          error: `Unknown editor action: ${action}. Use: open, save, close, goto_line, select, highlight, insert, replace, status`,
         });
     }
   }

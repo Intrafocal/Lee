@@ -897,6 +897,18 @@ const App: React.FC = () => {
   const handleSendToAgent = useCallback(async (ptyId: number, text: string) => {
     if (!isElectron) return;
     try {
+      // Switch to the agent tab first so the user sees the pasted text
+      const agentTab = tabsRef.current.find(t => t.ptyId === ptyId);
+      if (agentTab) {
+        switch (agentTab.dockPosition) {
+          case 'left': setActiveLeftTabId(agentTab.id); setFocusedPanel('left'); break;
+          case 'right': setActiveRightTabId(agentTab.id); setFocusedPanel('right'); break;
+          case 'bottom': setActiveBottomTabId(agentTab.id); setFocusedPanel('bottom'); break;
+          default: setActiveTabId(agentTab.id); setFocusedPanel('center');
+        }
+      }
+      // Small delay to let the tab render before writing
+      await new Promise(r => setTimeout(r, 50));
       await lee.pty.write(ptyId, text);
     } catch (error) {
       console.error('Failed to send to agent:', error);
@@ -972,6 +984,7 @@ const App: React.FC = () => {
       return (
         <EditorPanel
           key={tab.id}
+          tabId={tab.id}
           workspace={workspace}
           active={active}
           filePath={tabData.filePath}
@@ -982,6 +995,8 @@ const App: React.FC = () => {
           onSave={() => handleFileSave(tab.id)}
           onAskHester={handleAskHester}
           onOpenFile={handleFileOpen}
+          onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+          agentTabs={agentTabsForUI}
         />
       );
     }
@@ -990,9 +1005,12 @@ const App: React.FC = () => {
       return (
         <EditorPanel
           key={tab.id}
+          tabId={tab.id}
           workspace={workspace}
           active={active}
           onAskHester={handleAskHester}
+          onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
+          agentTabs={agentTabsForUI}
         />
       );
     }
@@ -1586,12 +1604,39 @@ const App: React.FC = () => {
       setShowPairingDialog(true);
     });
 
+    // Editor commands from Hester / API server (open, save, close).
+    //
+    // Open returns the resolved tab_id via reportOpenResult so the HTTP
+    // /command response can include it — Hester needs that to address the
+    // newly-opened editor on subsequent commands. Save/close honor the
+    // optional tab_id, falling back to the active tab when omitted.
+    const cleanupEditorOpen = lee.editor?.onOpen?.(async (filePath: string, _msgTabId: number | undefined, requestId: string | undefined) => {
+      const newTabId = await handleFileOpen(filePath);
+      if (requestId) {
+        lee.editor.reportOpenResult(requestId, newTabId ?? null);
+      }
+    });
+    const cleanupEditorSave = lee.editor?.onSave?.((msgTabId: number | undefined) => {
+      handleFileSave(msgTabId);
+    });
+    const cleanupEditorClose = lee.editor?.onClose?.((msgTabId: number | undefined) => {
+      const targetId = msgTabId ?? activeTabId;
+      if (!targetId) return;
+      const tab = tabsRef.current.find(t => t.id === targetId);
+      if (tab && (tab.type === 'file' || tab.type === 'editor-panel')) {
+        closeTab(targetId);
+      }
+    });
+
     return () => {
+      cleanupEditorOpen?.();
+      cleanupEditorSave?.();
+      cleanupEditorClose?.();
       cleanupPairing?.();
       lee.file.removeAllListeners();
       lee.menu.removeAllListeners();
     };
-  }, [handleNewFile, handleFileOpen, handleFileSave, switchWorkspace, tabs, activeTabId, getLanguageName]);
+  }, [handleNewFile, handleFileOpen, handleFileSave, switchWorkspace, tabs, activeTabId, getLanguageName, closeTab]);
 
   // Handle system commands from API server (via IPC from main process)
   useEffect(() => {
@@ -2023,6 +2068,7 @@ const App: React.FC = () => {
               return (
                 <EditorPanel
                   key={tab.id}
+                  tabId={tab.id}
                   workspace={workspace}
                   active={isActive}
                   filePath={tab.filePath}
@@ -2041,6 +2087,7 @@ const App: React.FC = () => {
               return (
                 <EditorPanel
                   key={tab.id}
+                  tabId={tab.id}
                   workspace={workspace}
                   active={isActive}
                   onAskHester={handleAskHester}

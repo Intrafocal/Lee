@@ -1067,16 +1067,21 @@ function setupIPC(): void {
 
   // Editor context from new React-based EditorPanel
   ipcMain.on('context:editor', (event, ctx: {
+    tabId?: number | null;
     file: string | null;
     language: string | null;
     cursor: { line: number; column: number };
     selection: string | null;
+    selectedRange: { from: { line: number; column: number }; to: { line: number; column: number } } | null;
     modified: boolean;
   }) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
     const winState = bw ? windowRegistry.get(bw.id) : undefined;
     winState?.contextBridge.updateEditorContext(ctx);
   });
+
+  // editor:open-result is handled directly in api-server.ts via ipcMain.on
+  // so the request/response pattern can resolve there.
 
   // Editor commands - relay from App.tsx to EditorPanel (within same window)
   ipcMain.on('editor:open-file', (event, filePath: string) => {

@@ -148,25 +148,59 @@ export class ContextBridge extends EventEmitter {
   /**
    * Update editor context directly from EditorPanel (React component).
    * This replaces the OSC sequence path for the new CodeMirror-based editor.
+   *
+   * Each EditorPanel reports its own tabId so callers (e.g. Hester) can route
+   * commands to the correct panel even when multiple editors are mounted in
+   * different docked panels.
    */
   updateEditorContext(ctx: {
+    tabId?: number | null;
     file: string | null;
     language: string | null;
     cursor: { line: number; column: number };
     selection: string | null;
+    selectedRange: { from: { line: number; column: number }; to: { line: number; column: number } } | null;
     modified: boolean;
   }): void {
-    this.context.editor = {
+    const tabId = ctx.tabId ?? null;
+    const entry: EditorContext = {
+      tabId,
       file: ctx.file,
       language: ctx.language || this.detectLanguage(ctx.file || undefined),
       cursor: ctx.cursor,
       selection: ctx.selection,
+      selectedRange: ctx.selectedRange,
       modified: ctx.modified,
-      daemonPort: null, // Not applicable for React-based editor
+      daemonPort: null,
     };
+
+    if (tabId != null) {
+      if (!this.context.editors) {
+        this.context.editors = {};
+      }
+      this.context.editors[tabId] = entry;
+    }
+
+    // Keep .editor as the most recently updated panel for backwards compat.
+    this.context.editor = entry;
 
     this.lastInteraction = Date.now();
     this.emitChange();
+  }
+
+  /**
+   * Remove a tracked editor when its panel unmounts (tab closed).
+   */
+  removeEditorContext(tabId: number): void {
+    if (this.context.editors && tabId in this.context.editors) {
+      delete this.context.editors[tabId];
+      if (this.context.editor?.tabId === tabId) {
+        // Pick any remaining editor as the new "current", else null.
+        const remaining = Object.values(this.context.editors);
+        this.context.editor = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+      }
+      this.emitChange();
+    }
   }
 
   /**
@@ -177,6 +211,7 @@ export class ContextBridge extends EventEmitter {
     // Only update if we have meaningful editor state
     if (state.file || state.line || state.column || state.selection || state.modified !== undefined) {
       this.context.editor = {
+        tabId: this.context.editor?.tabId ?? null,
         file: state.file || this.context.editor?.file || null,
         language: this.detectLanguage(state.file),
         cursor: {
@@ -184,6 +219,7 @@ export class ContextBridge extends EventEmitter {
           column: state.column || this.context.editor?.cursor.column || 1,
         },
         selection: state.selection || null,
+        selectedRange: null,
         modified: state.modified ?? this.context.editor?.modified ?? false,
         daemonPort: state.daemonPort || this.context.editor?.daemonPort || null,
       };
