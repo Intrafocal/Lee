@@ -533,7 +533,39 @@ async def health_check() -> Dict[str, Any]:
             redis_status = f"healthy ({mode})"
         except Exception as e:
             logger.error(f"Redis health check failed: {e}")
-            redis_status = f"unhealthy: {e}"
+            # Attempt reconnection via managed Redis fallback chain
+            if app_state.managed_redis:
+                new_client = await app_state.managed_redis.reconnect(
+                    app_state.settings.redis_url,
+                )
+                if new_client:
+                    app_state.redis_client = new_client
+                    app_state.redis_available = True
+                    # Re-initialize session managers with new client
+                    app_state.session_manager = SessionManager(
+                        redis_client=new_client,
+                        ttl_seconds=app_state.settings.session_ttl_seconds,
+                    )
+                    app_state.exploration_sessions = ExplorationSessionManager(
+                        redis_client=new_client,
+                        ttl_seconds=app_state.settings.session_ttl_seconds * 2,
+                    )
+                    mode = "managed" if app_state.managed_redis.is_managed else "external"
+                    redis_status = f"healthy ({mode}, reconnected)"
+                    logger.info(f"Redis reconnected: {redis_status}")
+                else:
+                    logger.warning("Redis reconnection failed, falling back to in-memory sessions")
+                    app_state.redis_available = False
+                    app_state.redis_client = None
+                    app_state.session_manager = InMemorySessionManager(
+                        ttl_seconds=app_state.settings.session_ttl_seconds,
+                    )
+                    app_state.exploration_sessions = InMemoryExplorationSessionManager(
+                        ttl_seconds=app_state.settings.session_ttl_seconds * 2,
+                    )
+                    redis_status = f"unavailable (was: {e}, now using in-memory sessions)"
+            else:
+                redis_status = f"unhealthy: {e}"
     else:
         redis_status = "unavailable (using in-memory sessions)"
 

@@ -14,6 +14,7 @@ API: Uses unified POST /command endpoint with { domain, action, params }.
 """
 
 import logging
+from pathlib import Path
 from typing import Literal, Optional, Any
 
 import httpx
@@ -24,6 +25,15 @@ logger = logging.getLogger("hester.tools.ui_control")
 
 # Lee IDE API endpoint
 LEE_API_URL = "http://127.0.0.1:9001"
+_TOKEN_PATH = Path.home() / ".lee" / "api-token"
+
+
+def _get_auth_headers() -> dict:
+    try:
+        token = _TOKEN_PATH.read_text().strip()
+        return {"Authorization": f"Bearer {token}"}
+    except Exception:
+        return {}
 
 
 # Tool definition for ReAct
@@ -119,7 +129,7 @@ async def execute_ui_control(
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(endpoint, json=payload)
+            response = await client.post(endpoint, json=payload, headers=_get_auth_headers())
 
             if response.status_code == 200:
                 data = response.json()

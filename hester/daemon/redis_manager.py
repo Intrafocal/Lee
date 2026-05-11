@@ -51,22 +51,26 @@ class ManagedRedis:
         Returns an aioredis.Redis client, or None (triggers in-memory fallback).
         """
         # 1. Try external Redis
+        logger.info(f"Trying external Redis at {redis_url}...")
         client = await self._try_connect(redis_url)
         if client:
             logger.info(f"Using existing Redis at {redis_url}")
             self.is_managed = False
             return client
+        logger.info(f"External Redis at {redis_url} not available")
 
         if not self.enabled:
             logger.info("Managed Redis disabled, no external Redis available")
             return None
 
         # 2. Try reconnecting to existing managed instance
+        logger.info("Trying existing managed Redis instance...")
         client = await self._try_existing_managed()
         if client:
             return client
 
         # 3. Start new managed instance
+        logger.info("Starting new managed Redis instance...")
         return await self._start_managed()
 
     async def _try_connect(self, redis_url: str) -> Optional[aioredis.Redis]:
@@ -202,12 +206,13 @@ class ManagedRedis:
         # 1. System redis-server
         system = shutil.which("redis-server")
         if system:
-            logger.debug(f"Found system redis-server: {system}")
+            logger.info(f"Found system redis-server: {system}")
             return Path(system)
 
         # 2. Bundled binary
         resources_path = os.environ.get("HESTER_RESOURCES_PATH")
         if resources_path:
+            logger.info(f"Searching for bundled redis-server in HESTER_RESOURCES_PATH={resources_path}")
             # Dist mode: extraResources maps redis-standalone/ → redis/
             candidates = [
                 Path(resources_path) / "redis" / "bin" / "redis-server",
@@ -216,10 +221,34 @@ class ManagedRedis:
             ]
             for bundled in candidates:
                 if bundled.is_file() and os.access(bundled, os.X_OK):
-                    logger.debug(f"Found bundled redis-server: {bundled}")
+                    logger.info(f"Found bundled redis-server: {bundled}")
                     return bundled
+                else:
+                    logger.debug(f"Candidate not found or not executable: {bundled}")
+        else:
+            logger.warning("HESTER_RESOURCES_PATH not set, cannot search for bundled redis-server")
 
+        logger.warning("No redis-server binary found anywhere")
         return None
+
+    async def reconnect(self, redis_url: str) -> Optional[aioredis.Redis]:
+        """
+        Attempt to re-establish a Redis connection after the current one dies.
+        Runs the same fallback chain as acquire().
+        """
+        logger.info("Redis connection lost, attempting reconnection...")
+
+        # If we were managing a Redis process that died, clean up
+        if self.is_managed and self.process and self.process.poll() is not None:
+            logger.warning(f"Managed redis-server exited (code {self.process.returncode})")
+            self.process = None
+            try:
+                self._port_file.unlink(missing_ok=True)
+                self._pid_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        return await self.acquire(redis_url)
 
     def _kill_process(self):
         """Kill the managed redis-server process."""

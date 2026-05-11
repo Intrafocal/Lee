@@ -8,6 +8,8 @@ for real-time context updates, with HTTP fallback for commands.
 import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Callable, Optional
 from contextlib import asynccontextmanager
 
@@ -24,6 +26,17 @@ LEE_API_HOST = "127.0.0.1"
 LEE_API_PORT = 9001
 LEE_API_URL = f"http://{LEE_API_HOST}:{LEE_API_PORT}"
 LEE_WS_URL = f"ws://{LEE_API_HOST}:{LEE_API_PORT}/context/stream"
+LEE_TOKEN_PATH = Path.home() / ".lee" / "api-token"
+
+
+def _read_lee_token() -> Optional[str]:
+    """Read the Lee API auth token from ~/.lee/api-token."""
+    try:
+        if LEE_TOKEN_PATH.exists():
+            return LEE_TOKEN_PATH.read_text().strip()
+    except Exception:
+        pass
+    return None
 
 # Reconnection settings
 RECONNECT_DELAY = 5.0  # seconds
@@ -137,7 +150,11 @@ class LeeContextClient:
         Auto-reconnection runs in background on failure.
         """
         try:
-            self._ws = await websockets.connect(self._ws_url)
+            ws_url = self._ws_url
+            token = _read_lee_token()
+            if token:
+                ws_url = f"{ws_url}?token={token}"
+            self._ws = await websockets.connect(ws_url)
             self._connected = True
             self._current_reconnect_delay = RECONNECT_DELAY
             logger.info(f"Connected to Lee at {self._ws_url}")
