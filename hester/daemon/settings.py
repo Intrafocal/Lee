@@ -46,12 +46,12 @@ class HesterDaemonSettings(BaseSettings):
     # Thinking Depth Model Tiers
     # Quick: Simple greetings, clarifications, trivial lookups
     gemini_model_quick: str = Field(
-        default="gemini-2.5-flash-lite",
-        description="Fastest model for trivial tasks (Tier 0)"
+        default="gemini-3.1-flash-lite",
+        description="Fast model for trivial tasks (Tier 0)"
     )
     # Standard: File reads, searches, basic code questions
     gemini_model_standard: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3-flash-preview",
         description="Balanced model for standard tasks (Tier 1)"
     )
     # Deep: Complex analysis, multi-file reasoning, architecture questions
@@ -67,7 +67,7 @@ class HesterDaemonSettings(BaseSettings):
 
     # Default model (backward compatibility)
     gemini_model: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3-flash-preview",
         description="Default Gemini model (used if thinking depth disabled)"
     )
 

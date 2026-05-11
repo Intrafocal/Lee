@@ -2,8 +2,8 @@
 Thinking Depth - Complexity classification for model selection.
 
 Implements tiered model selection based on task complexity:
-- Quick (Tier 0): gemini-2.5-flash-lite - Greetings, clarifications, trivial lookups
-- Standard (Tier 1): gemini-2.5-flash - File reads, searches, basic questions
+- Quick (Tier 0): gemini-3.1-flash-lite - Greetings, clarifications, trivial lookups
+- Standard (Tier 1): gemini-3-flash-preview - File reads, searches, basic questions
 - Deep (Tier 2): gemini-3-flash-preview - Multi-file analysis, architecture questions
 - Reasoning (Tier 3): gemini-3.1-pro-preview - Complex debugging, high-stakes decisions
 """
@@ -23,10 +23,10 @@ class ThinkingDepth(Enum):
     - DEEPLOCAL: gemma4:e4b (reserved for future larger model, e.g. gemma4:26b on 24GB+)
 
     Cloud tiers (Gemini):
-    - QUICK: gemini-2.5-flash - fast cloud, simple questions
-    - STANDARD: gemini-2.5-flash - balanced speed/quality
-    - DEEP: gemini-3-flash - complex analysis, multi-file reasoning
-    - PRO: gemini-3.1-pro - high-stakes decisions, deep reasoning
+    - QUICK: gemini-3.1-flash-lite - fast cloud, simple questions
+    - STANDARD: gemini-3-flash-preview - balanced speed/quality
+    - DEEP: gemini-3-flash-preview - complex analysis, multi-file reasoning
+    - PRO: gemini-3.1-pro-preview - high-stakes decisions, deep reasoning
     """
     LOCAL = -2       # Local fast - gemma4:e4b for quick parsing
     DEEPLOCAL = -1   # Local deep - gemma4:e4b (or larger model on 24GB+)
@@ -52,7 +52,7 @@ class DepthClassification:
 QUICK_PATTERNS = [
     r"^(hi|hello|hey|thanks|thank you|ok|okay|got it|sure|yes|no|yep|nope)[\s!.?]*$",
     r"^what (is|are) (your|the) (name|version)",
-    r"^(can you|do you|are you)",
+    r"^(are you|do you have|do you know)\s+\w{1,10}[\s!.?]*$",  # Short capability checks only
     r"^how are you",
     r"^(good|great|nice|cool|awesome)[\s!.]*$",
 ]
@@ -342,14 +342,14 @@ def get_cloud_model_for_depth(depth: ThinkingDepth) -> str:
     For local tiers, returns the equivalent cloud model as fallback.
     """
     cloud_models = {
-        ThinkingDepth.LOCAL: "gemini-2.5-flash",  # Fallback for local
-        ThinkingDepth.DEEPLOCAL: "gemini-2.5-flash",  # Fallback for deeplocal
-        ThinkingDepth.QUICK: "gemini-2.5-flash",
-        ThinkingDepth.STANDARD: "gemini-2.5-flash",
+        ThinkingDepth.LOCAL: "gemini-3.1-flash-lite",  # Fallback for local
+        ThinkingDepth.DEEPLOCAL: "gemini-3.1-flash-lite",  # Fallback for deeplocal
+        ThinkingDepth.QUICK: "gemini-3.1-flash-lite",
+        ThinkingDepth.STANDARD: "gemini-3-flash-preview",
         ThinkingDepth.DEEP: "gemini-3-flash-preview",
         ThinkingDepth.PRO: "gemini-3.1-pro-preview",
     }
-    return cloud_models.get(depth, "gemini-2.5-flash")
+    return cloud_models.get(depth, "gemini-3-flash-preview")
 
 
 def is_local_depth(depth: ThinkingDepth) -> bool:

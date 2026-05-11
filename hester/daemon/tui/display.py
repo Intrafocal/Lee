@@ -738,8 +738,8 @@ Prefix your message to control model:
 [cyan]/deeplocal[/cyan]     Deep local (gemma4:e4b)
 
 [dim]Cloud (Gemini):[/dim]
-[cyan]/quick[/cyan]         Fast cloud (2.5-flash)
-[cyan]/standard[/cyan]      Balanced (2.5-flash)
+[cyan]/quick[/cyan]         Fast cloud (3.1-lite)
+[cyan]/standard[/cyan]      Balanced (3-flash)
 [cyan]/deep[/cyan]          Complex (3-flash)
 [cyan]/pro[/cyan]           Reasoning (3-pro)
 

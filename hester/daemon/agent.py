@@ -245,7 +245,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
             "quick": settings.gemini_model_quick,
             "standard": settings.gemini_model_standard,
             "deep": settings.gemini_model_deep,
-            "reasoning": settings.gemini_model_reasoning,
+            "pro": settings.gemini_model_reasoning,
         }
 
         # Build iteration limit map per depth
