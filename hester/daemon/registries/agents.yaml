@@ -56,6 +56,12 @@ toolsets:
       - redis
       - copywriting
 
+  ui_control:
+    description: "Lee IDE editor control - highlight lines, open files, navigate, manage tabs and TUI apps"
+    categories:
+      - ui
+      - observe
+
   copywriting:
     description: "Content analysis and transformation tools"
     categories:
@@ -339,6 +345,28 @@ agents:
       - picture
       - timeline
       - comparison table
+
+  lee:
+    name: "Lee IDE"
+    description: "Control the Lee IDE editor. Highlight lines, open/close files, navigate to line, select text, insert or replace content, manage tabs, open TUI apps like git or docker."
+    prompt: general
+    toolset: ui_control
+    model_tier: STANDARD
+    max_iterations: 5
+    keywords:
+      - highlight lines
+      - highlight in editor
+      - open file
+      - close file
+      - goto line
+      - navigate to line
+      - open git
+      - open docker
+      - open terminal
+      - focus tab
+      - editor control
+      - select text in editor
+      - scroll to line
 
   brainstorm:
     name: "Brainstorm"

@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 import yaml
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
 
 from .models import (
     PromptConfig,
@@ -59,7 +62,7 @@ class PromptRegistry:
         self.registry_dir = registry_dir or REGISTRY_DIR
         self._data: Optional[PromptRegistryData] = None
         self._prompt_cache: Dict[str, str] = {}  # prompt_id -> content
-        self._embeddings: Dict[str, np.ndarray] = {}  # prompt_id -> embedding
+        self._embeddings: Dict[str, Any] = {}  # prompt_id -> embedding
         self._embeddings_initialized = False
 
     @property
@@ -261,7 +264,7 @@ class AgentRegistry:
     def __init__(self, registry_dir: Optional[Path] = None):
         self.registry_dir = registry_dir or REGISTRY_DIR
         self._data: Optional[AgentRegistryData] = None
-        self._embeddings: Dict[str, np.ndarray] = {}  # agent_id -> embedding
+        self._embeddings: Dict[str, Any] = {}  # agent_id -> embedding
         self._embeddings_initialized = False
 
     @property
