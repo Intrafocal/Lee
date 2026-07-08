@@ -6063,3 +6063,184 @@ body {
 .switch-provider-btn-cancel {
   color: var(--text-muted);
 }
+
+/* ========================================================================
+   Viewer panes - KiCad schematic/PCB viewer and 3D model viewer
+   ======================================================================== */
+
+.kicad-pane,
+.model-pane {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.kicad-pane.active,
+.model-pane.active {
+  display: flex;
+}
+
+.viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.viewer-toolbar-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-toolbar-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.viewer-toolbar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.viewer-btn {
+  padding: 4px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.viewer-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.viewer-btn.active {
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-color: var(--accent);
+}
+
+.viewer-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.kicanvas-container,
+.model-canvas-container {
+  width: 100%;
+  height: 100%;
+}
+
+.model-canvas-container canvas {
+  display: block;
+}
+
+.viewer-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  max-width: 520px;
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.viewer-message.viewer-error {
+  border-color: var(--error, #e06c75);
+  color: var(--error, #e06c75);
+}
+
+.viewer-message.fusion-notice {
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.viewer-message.fusion-notice h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.viewer-message.fusion-notice ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.viewer-message.fusion-notice li {
+  margin: 4px 0;
+}
+
+/* Binary file interstitial with hex preview */
+.binary-pane {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.binary-pane.active {
+  display: flex;
+}
+
+.binary-hex-view {
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.binary-hex-note {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-width: 720px;
+}
+
+.binary-hex-table {
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.binary-hex-table td {
+  padding: 0 16px 0 0;
+  vertical-align: top;
+}
+
+.hex-offset {
+  color: var(--text-muted);
+}
+
+.hex-bytes {
+  color: var(--text-primary);
+}
+
+.hex-ascii {
+  color: var(--text-secondary);
+}

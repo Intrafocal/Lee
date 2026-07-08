@@ -31,7 +31,7 @@ interface AgentTabInfo {
 
 interface FileTreePaneProps {
   workspace: string;
-  onFileOpen: (filePath: string) => void;
+  onFileOpen: (filePath: string, opts?: { forceText?: boolean }) => void;
   onNewFile?: (directory?: string) => void;
   onAskHester?: (prompt: string) => void;
   onSendToAgent?: (ptyId: number, text: string) => void;
@@ -170,7 +170,9 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
   // Open file in editor
   const openInEditor = useCallback(() => {
     if (!contextMenu.entry) return;
-    onFileOpen(contextMenu.entry.path);
+    // Explicit "Open in Editor" always means the text editor, even for files
+    // that normally route to a viewer or browser tab (HTML, SVG, KiCad, ...)
+    onFileOpen(contextMenu.entry.path, { forceText: true });
     closeContextMenu();
   }, [contextMenu.entry, onFileOpen, closeContextMenu]);
 

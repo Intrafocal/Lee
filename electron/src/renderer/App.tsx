@@ -20,6 +20,9 @@ import { LibraryPane } from './components/LibraryPane';
 import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
 import { SpyglassPane } from './components/SpyglassPane';
+import { KiCadPane } from './components/KiCadPane';
+import { ModelViewerPane } from './components/ModelViewerPane';
+import { BinaryFilePane } from './components/BinaryFilePane';
 import { BridgePicker } from './components/BridgePicker';
 import { PairingDialog } from './components/PairingDialog';
 import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
@@ -29,6 +32,12 @@ import { ptyEventManager } from './hooks/usePtyEvents';
 
 // Get the Lee API from preload
 const lee = (window as any).lee;
+
+// File extensions routed to dedicated viewer tabs instead of the text editor
+const KICAD_EXTENSIONS = ['kicad_sch', 'kicad_pcb'];
+const MODEL_EXTENSIONS = ['step', 'stp', 'stl', 'obj', '3mf', 'gltf', 'glb', 'iges', 'igs', 'brep', 'f3d', 'f3z'];
+// Extensions Chromium renders natively — opened in a browser tab at a file:// URL
+const BROWSER_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif', 'html', 'htm', 'pdf'];
 
 // Check if we're running inside Electron
 const isElectron = !!lee;
@@ -236,7 +245,7 @@ const App: React.FC = () => {
     }
 
     // Non-PTY tabs that don't need Electron
-    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream', 'spyglass'];
+    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream', 'spyglass', 'kicad', 'model', 'binary'];
 
     if (!isElectron && !nonPtyTabs.includes(type)) {
       console.warn('Cannot create tab - not running in Electron');
@@ -621,11 +630,27 @@ const App: React.FC = () => {
   }, []);
 
   // Handle file selection from file tree - opens as new tab
-  const handleFileOpen = useCallback(async (filePath: string) => {
+  // Routes KiCad and 3D model files to dedicated viewer tabs; everything else
+  // opens in the text editor. Pass forceText to open a viewer-routed file as text.
+  const handleFileOpen = useCallback(async (filePath: string, opts?: { forceText?: boolean }) => {
     console.log('Opening file:', filePath);
 
-    // Check if file is already open
-    const existingTab = tabs.find((t) => t.type === 'file' && t.filePath === filePath);
+    const ext = filePath.split('.').pop()?.toLowerCase() || '';
+    let type: Tab['type'] = 'file';
+    if (!opts?.forceText) {
+      if (KICAD_EXTENSIONS.includes(ext)) type = 'kicad';
+      else if (MODEL_EXTENSIONS.includes(ext)) type = 'model';
+      else if (BROWSER_EXTENSIONS.includes(ext)) type = 'browser';
+    }
+
+    // Check if file is already open. An unknown file may have landed in a
+    // 'binary' tab — clicking it again should refocus that tab, but an
+    // explicit forceText open should still create the text tab.
+    const existingTab = tabs.find(
+      (t) =>
+        t.filePath === filePath &&
+        (t.type === type || (type === 'file' && !opts?.forceText && t.type === 'binary'))
+    );
     if (existingTab) {
       setActiveTabId(existingTab.id);
       setFocusedPanel('center');
@@ -638,24 +663,77 @@ const App: React.FC = () => {
     }
 
     try {
-      const content = await lee.fs.readFile(filePath);
       const fileName = filePath.split('/').pop() || filePath;
-      const language = getLanguageName(filePath);
-
       const tabId = nextTabIdRef.current++;
-      const newTab: TabData = {
-        id: tabId,
-        type: 'file',
-        label: fileName,
-        closable: true,
-        ptyId: null,
-        dockPosition: 'center',
-        filePath,
-        fileLanguage: language,
-        fileModified: false,
-        fileContent: content,
-        fileOriginalContent: content,
-      };
+      let newTab: TabData;
+
+      if (type === 'browser') {
+        // Images, HTML, PDFs — Chromium renders these natively in a browser tab
+        const fileUrl = `file://${filePath.split('/').map(encodeURIComponent).join('/')}`;
+        newTab = {
+          id: tabId,
+          type,
+          label: fileName,
+          closable: true,
+          ptyId: null,
+          dockPosition: 'center',
+          filePath,
+          browserUrl: fileUrl,
+        };
+      } else if (type === 'kicad' || type === 'model') {
+        // Viewer tabs load their own content (model files can be large binaries)
+        newTab = {
+          id: tabId,
+          type,
+          label: fileName,
+          closable: true,
+          ptyId: null,
+          dockPosition: 'center',
+          filePath,
+        };
+      } else {
+        // Binary guard (git's heuristic): a NUL byte in the first 8KB means
+        // this isn't text — show the hex interstitial instead of mojibake.
+        // forceText skips the guard; sniff failures fall through to text.
+        let isBinary = false;
+        if (!opts?.forceText) {
+          try {
+            const chunk = await lee.fs.readFileChunkBase64(filePath, 8192);
+            const bytes = Uint8Array.from(atob(chunk.base64), (c) => c.charCodeAt(0));
+            isBinary = bytes.includes(0);
+          } catch {
+            // unreadable for sniffing — let the text path surface the error
+          }
+        }
+
+        if (isBinary) {
+          newTab = {
+            id: tabId,
+            type: 'binary',
+            label: fileName,
+            closable: true,
+            ptyId: null,
+            dockPosition: 'center',
+            filePath,
+          };
+        } else {
+          const content = await lee.fs.readFile(filePath);
+          const language = getLanguageName(filePath);
+          newTab = {
+            id: tabId,
+            type: 'file',
+            label: fileName,
+            closable: true,
+            ptyId: null,
+            dockPosition: 'center',
+            filePath,
+            fileLanguage: language,
+            fileModified: false,
+            fileContent: content,
+            fileOriginalContent: content,
+          };
+        }
+      }
 
       lee.context.recordAction('file_open', filePath);
       setTabs((prev) => [...prev, newTab]);
@@ -1072,6 +1150,38 @@ const App: React.FC = () => {
       );
     }
 
+    if (tab.type === 'kicad') {
+      return (
+        <KiCadPane
+          key={tab.id}
+          active={active}
+          filePath={tabData.filePath}
+          onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
+        />
+      );
+    }
+
+    if (tab.type === 'model') {
+      return (
+        <ModelViewerPane
+          key={tab.id}
+          active={active}
+          filePath={tabData.filePath}
+        />
+      );
+    }
+
+    if (tab.type === 'binary') {
+      return (
+        <BinaryFilePane
+          key={tab.id}
+          active={active}
+          filePath={tabData.filePath}
+          onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
+        />
+      );
+    }
+
     // All other tabs are PTY-based terminals (including bridge tabs which have a PTY)
     return (
       <TerminalPane
@@ -1442,6 +1552,8 @@ const App: React.FC = () => {
         for (const sessionTab of savedSession) {
           // Skip tabs that require runtime state not persisted in sessions
           if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
+          // Viewer tabs need a filePath which isn't persisted in sessions
+          if (sessionTab.type === ('kicad' as any) || sessionTab.type === ('model' as any) || sessionTab.type === ('binary' as any)) continue;
           // Migrate legacy agent tab types to the unified 'agent' type
           if (sessionTab.type === ('hester' as any)) {
             await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'hester');
@@ -2139,6 +2251,35 @@ const App: React.FC = () => {
                   key={tab.id}
                   active={isActive}
                   machineConfig={tab.machineConfig!}
+                />
+              );
+            }
+            if (tab.type === 'kicad') {
+              return (
+                <KiCadPane
+                  key={tab.id}
+                  active={isActive}
+                  filePath={tab.filePath}
+                  onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
+                />
+              );
+            }
+            if (tab.type === 'model') {
+              return (
+                <ModelViewerPane
+                  key={tab.id}
+                  active={isActive}
+                  filePath={tab.filePath}
+                />
+              );
+            }
+            if (tab.type === 'binary') {
+              return (
+                <BinaryFilePane
+                  key={tab.id}
+                  active={isActive}
+                  filePath={tab.filePath}
+                  onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
                 />
               );
             }

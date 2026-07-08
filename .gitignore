@@ -16,3 +16,4 @@ venvs/
 .DS_Store
 .pytest_cache/
 electron/resources/redis-standalone/
+*.tsbuildinfo

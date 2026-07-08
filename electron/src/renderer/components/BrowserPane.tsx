@@ -875,6 +875,8 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
             // Security settings
             partition="persist:browser"
             webpreferences="contextIsolation=yes, sandbox=yes"
+            // Enables Chromium's built-in PDF viewer (the only remaining "plugin")
+            plugins={true}
           />
         </div>
       </div>

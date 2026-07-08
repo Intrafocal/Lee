@@ -25,7 +25,10 @@ export type TabType =
   | 'workstream'
   | 'spyglass'
   | 'bridge'
-  | 'agent';
+  | 'agent'
+  | 'kicad'
+  | 'model'
+  | 'binary';
 
 // Dock positions for multi-panel layout
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';

@@ -306,6 +306,9 @@ contextBridge.exposeInMainWorld('lee', {
   fs: {
     readdir: (dirPath: string) => ipcRenderer.invoke('fs:readdir', dirPath),
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    readFileBase64: (filePath: string) => ipcRenderer.invoke('fs:readFileBase64', filePath),
+    readFileChunkBase64: (filePath: string, maxBytes: number) => ipcRenderer.invoke('fs:readFileChunkBase64', filePath, maxBytes),
+    parseCad: (filePath: string, kind: 'step' | 'iges' | 'brep') => ipcRenderer.invoke('cad:parse', filePath, kind),
     writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
     exists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
     stat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),

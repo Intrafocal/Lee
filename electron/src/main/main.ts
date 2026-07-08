@@ -115,10 +115,11 @@ function createWindow(workspace?: string): BrowserWindow {
         'Content-Security-Policy': [
           "default-src 'self'; " +
           "script-src 'self'; " +
-          "style-src 'self' 'unsafe-inline'; " +
+          // Google Fonts: KiCanvas (KiCad viewer) loads its toolbar icon font remotely
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
           "img-src 'self' data: blob:; " +
           "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; " +
-          "font-src 'self' data:; " +
+          "font-src 'self' data: https://fonts.gstatic.com; " +
           "frame-src 'self'"
         ],
       },
@@ -948,6 +949,52 @@ function setupIPC(): void {
       console.error('Failed to read file:', error);
       throw error;
     }
+  });
+
+  // Binary-safe read for viewers (3D models, etc.) — returns base64
+  ipcMain.handle('fs:readFileBase64', async (_event, filePath: string): Promise<string> => {
+    try {
+      const buffer = await fs.promises.readFile(filePath);
+      return buffer.toString('base64');
+    } catch (error) {
+      console.error('Failed to read file (binary):', error);
+      throw error;
+    }
+  });
+
+  // Read only the first maxBytes of a file — used for binary sniffing and
+  // hex previews without pulling huge files into memory
+  ipcMain.handle('fs:readFileChunkBase64', async (_event, filePath: string, maxBytes: number): Promise<{ base64: string; size: number }> => {
+    const stat = await fs.promises.stat(filePath);
+    const fileHandle = await fs.promises.open(filePath, 'r');
+    try {
+      const length = Math.min(stat.size, maxBytes);
+      const buffer = Buffer.alloc(length);
+      await fileHandle.read(buffer, 0, length, 0);
+      return { base64: buffer.toString('base64'), size: stat.size };
+    } finally {
+      await fileHandle.close();
+    }
+  });
+
+  // STEP/IGES/BREP tessellation via OpenCascade (occt-import-js).
+  // Runs in the main process because embind generates invokers with
+  // new Function(), which the renderer CSP rightly forbids.
+  let occtInstance: Promise<any> | null = null;
+  ipcMain.handle('cad:parse', async (_event, filePath: string, kind: 'step' | 'iges' | 'brep') => {
+    if (!occtInstance) {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const occtimportjs = require('occt-import-js');
+      occtInstance = occtimportjs();
+    }
+    const occt = await occtInstance;
+    const buffer = await fs.promises.readFile(filePath);
+    const content = new Uint8Array(buffer);
+    const result =
+      kind === 'iges' ? occt.ReadIgesFile(content, null)
+      : kind === 'brep' ? occt.ReadBrepFile(content, null)
+      : occt.ReadStepFile(content, null);
+    return result;
   });
 
   ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string): Promise<{ success: boolean; error?: string }> => {
