@@ -1,0 +1,113 @@
+# Dirigible app package manifest — consumed via the device yaml's
+# `apps: [- package: ./dirigible-app]` entry.
+
+id: dirigible
+name: "Dirigible"
+layout: single_screen
+
+# ---------------------------------------------------------------------------
+# Widgets
+#
+# The display is 320x240 landscape. We use two visibility modes in one
+# screen — list mode (tab navigator) and terminal mode (PTY viewer) —
+# toggled via SSContext::show/hide from handlers.
+# ---------------------------------------------------------------------------
+
+widgets:
+
+  # ---- Header (always visible) -----------------------------------------
+
+  - type: label
+    id: dir_machine_label
+    text: "—"
+    align: top_left
+    offset: [4, 2]
+    style:
+      color: "#FFFFFF"
+
+  - type: label
+    id: dir_conn_dot
+    text: "●"
+    align: top_left
+    offset: [180, 2]
+    style:
+      color: "#888888"     # gray = offline; turned green on connect
+
+  - type: label
+    id: dir_battery_label
+    text: ""
+    align: top_right
+    offset: [-4, 2]
+    style:
+      color: "#888888"
+
+  # ---- Tab list mode (default) ----------------------------------------
+  #
+  # The list widget renders a scrollable LVGL list. Selection is driven
+  # by trackball + click (LVGL group focus, courtesy of D2/D3) or touch.
+
+  - type: list
+    id: dir_tab_list
+    align: top_left
+    offset: [0, 22]
+    size: [320, 196]
+    on_select: handler_dir_tab_select
+
+  # ---- Terminal mode (hidden until a tab is opened) -------------------
+  #
+  # A monospace label rendered with SSFonts::monospace_8 (D7).
+  # We use a label, not a textarea, because we don't need editing.
+
+  - type: label
+    id: dir_term_output
+    text: ""
+    align: top_left
+    offset: [4, 22]
+    size: [312, 196]
+    long_mode: wrap
+    visible: false
+    style:
+      color: "#00FF00"
+      bg_color: "#000000"
+
+  # ---- Status bar (always visible) ------------------------------------
+
+  - type: label
+    id: dir_status_left
+    text: ""
+    align: bottom_left
+    offset: [4, -2]
+    style:
+      color: "#888888"
+
+  - type: label
+    id: dir_status_right
+    text: ""
+    align: bottom_right
+    offset: [-4, -2]
+    style:
+      color: "#888888"
+
+on_init:   handler_dir_init
+on_resume: handler_dir_resume
+on_pause:  handler_dir_pause
+on_close:  handler_dir_close
+
+# --- package-only keys (stripped before the app enters the normal pipeline) ---
+
+handlers: handlers.cpp
+
+# Build customisation — merged into the device schema's build: section.
+# - extra_component_dirs adds Dirigible's own ESP-IDF components to the
+#   project (resolved relative to this package dir). The components/
+#   directory contains both `dirigible-core` (the cross-platform protocol
+#   layer) and `dirigible-esp32` (the SSWebSocket/SSHttpClient/SSMdns
+#   transport wrapper).
+# - main_requires extends the generated main/CMakeLists.txt REQUIRES list
+#   so handlers.cpp can include and use the dirigible-core API.
+build:
+  extra_component_dirs:
+    - ../../platform/esp32/components   # relative to this package dir
+  main_requires:
+    - dirigible-core
+    - dirigible-esp32

@@ -1,5 +1,4 @@
 #include "dirigible/pty_client.hpp"
-#include "dirigible/state.hpp"
 #include "cJSON.h"
 #include <cstring>
 
@@ -24,6 +23,12 @@ void PTYClient::connect() {
         url += "?token=" + token_;
     }
 
+    ws_->onConnect([this]() {
+        // Resize is latest-wins state, not an event: replay on every
+        // (re)connect since pre-open sends are dropped by the transport.
+        if (last_cols_ > 0 && last_rows_ > 0) sendResize(last_cols_, last_rows_);
+    });
+
     ws_->onMessage([this](cJSON* msg) {
         // PTY stream messages:
         //   { "type": "data", "data": "..." }
@@ -39,7 +44,6 @@ void PTYClient::connect() {
                 if (on_data_) {
                     on_data_(bytes, len);
                 }
-                EventBus::instance().emitPtyData(pty_id_, bytes, len);
             }
         } else if (strcmp(type_item->valuestring, "exit") == 0) {
             cJSON* code_item = cJSON_GetObjectItemCaseSensitive(msg, "code");
@@ -84,7 +88,9 @@ void PTYClient::sendInput(const std::string& text) {
 }
 
 void PTYClient::sendResize(int cols, int rows) {
-    if (!ws_ || !ws_->isConnected()) return;
+    last_cols_ = cols;
+    last_rows_ = rows;
+    if (!ws_ || !ws_->isConnected()) return;   // replayed from onConnect
 
     cJSON* msg = cJSON_CreateObject();
     cJSON_AddStringToObject(msg, "type", "resize");

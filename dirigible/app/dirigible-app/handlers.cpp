@@ -1,6 +1,8 @@
 // handlers.cpp — Dirigible app handlers
 //
-// User-territory file: screenschema build will not overwrite this.
+// Package source — consumed in place by screenschema codegen (copied into
+// build/generated/main/handlers_dirigible.cpp with a #line prologue on every
+// build; edit THIS file, never the copy).
 // Bridges ScreenSchema widget events into the dirigible-core API.
 
 #include "handlers.hpp"
@@ -53,6 +55,7 @@ struct DirigibleAppState {
 
     bool initialized = false;
     bool ui_attached = false;  // flipped to true once buildUI has run
+    bool foreground = false;   // true while Dirigible is the visible app
 };
 
 static DirigibleAppState g_app;
@@ -92,6 +95,16 @@ static dirigible::LeeConnection* activeConn() {
 // ---------------------------------------------------------------------------
 // View mode switching
 // ---------------------------------------------------------------------------
+
+// Tear down the active PTY stream — shared by ESC, pause, and close.
+static void teardownPty() {
+    if (g_app.pty) {
+        g_app.pty->disconnect();
+        delete g_app.pty;
+        g_app.pty = nullptr;
+    }
+    g_app.active_pty_id = -1;
+}
 
 static void enterTabListMode() {
     g_app.mode = DirigibleAppState::Mode::TabList;
@@ -173,17 +186,14 @@ static void onBatteryChange(SSBatteryReading reading) {
 // ---------------------------------------------------------------------------
 
 static bool onKeyIntercept(uint8_t key, SSKeySource source) {
+    if (!g_app.foreground) return false;  // backgrounded — never consume keys
+
     // In terminal mode, all keystrokes are forwarded to the PTY (no local
     // shortcut handling — typing in the terminal must work).
     if (g_app.mode == DirigibleAppState::Mode::Terminal) {
         // Esc returns to tab list
         if (key == 0x1B /* ESC */) {
-            if (g_app.pty) {
-                g_app.pty->disconnect();
-                delete g_app.pty;
-                g_app.pty = nullptr;
-                g_app.active_pty_id = -1;
-            }
+            teardownPty();
             enterTabListMode();
             return true;
         }
@@ -208,9 +218,8 @@ static bool onKeyIntercept(uint8_t key, SSKeySource source) {
 
 static std::string g_term_buf;
 
-static void onPtyData(int pty_id, const uint8_t* data, size_t len) {
+static void onPtyData(const uint8_t* data, size_t len) {
     if (g_app.mode != DirigibleAppState::Mode::Terminal) return;
-    if (pty_id != g_app.active_pty_id) return;
 
     // Naive append — strip ANSI escapes for now (full ANSI rendering is a
     // later phase). Just keep the last ~2KB of output.
@@ -275,7 +284,6 @@ void handler_dir_init(const SSEvent& /*event*/) {
     dirigible::EventBus::instance().on(dirigible::Event::ConnectionChanged, []() {
         renderContext(activeConn() ? activeConn()->currentContext() : nullptr);
     });
-    dirigible::EventBus::instance().onPtyData(onPtyData);
 
     // ---- Battery (D9) ---------------------------------------------------
     SSBattery::instance().onChange(onBatteryChange);
@@ -303,11 +311,16 @@ void handler_dir_init(const SSEvent& /*event*/) {
 
 void handler_dir_resume(const SSEvent& /*event*/) {
     ESP_LOGI(TAG, "Dirigible resume");
+    g_app.foreground = true;
     g_app.ui_attached = true;  // buildUI has now run
 
     // Initial UI sync — show the right mode and render any cached context
     enterTabListMode();
     if (auto* conn = activeConn()) {
+        // Re-fires on every resume-from-background (S3 resume() semantics).
+        // Safe: SSWebSocket::stop() drains its pending queue and init() is
+        // idempotent for the pump timer/mutex, so repeated connect() while
+        // the host is unreachable doesn't leak resources.
         if (!conn->isConnected()) conn->connect();
         renderContext(conn->currentContext());
     } else {
@@ -318,20 +331,24 @@ void handler_dir_resume(const SSEvent& /*event*/) {
 
 void handler_dir_pause(const SSEvent& /*event*/) {
     ESP_LOGI(TAG, "Dirigible pause");
-    // We keep the WS connection alive in the background so we don't lose state
-    // when the user navigates away briefly. Disconnect happens in on_close.
+    g_app.foreground = false;
+    // Drop out of terminal key-capture: tear down the PTY stream and return
+    // to the tab list so a backgrounded Dirigible never owns the keyboard.
+    if (g_app.mode == DirigibleAppState::Mode::Terminal) {
+        teardownPty();
+        enterTabListMode();   // widgets still exist during pause (screen preserved)
+    }
+    // LeeConnection WS stays alive so context keeps caching in background.
 }
 
 void handler_dir_close(const SSEvent& /*event*/) {
     ESP_LOGI(TAG, "Dirigible close");
-    if (g_app.pty) {
-        g_app.pty->disconnect();
-        delete g_app.pty;
-        g_app.pty = nullptr;
-    }
-    if (auto* conn = activeConn()) {
-        conn->disconnect();
-    }
+    g_app.foreground = false;
+    g_app.ui_attached = false;          // widgets are about to be destroyed
+    g_app.mode = DirigibleAppState::Mode::TabList;
+    teardownPty();
+    g_term_buf.clear();
+    if (auto* conn = activeConn()) conn->disconnect();
 }
 
 // ---- Tab list selection -----------------------------------------------
@@ -382,16 +399,12 @@ void handler_dir_tab_select(const SSEvent& event) {
         g_term_buf.clear();
         SSContext::instance().set("dir_term_output", std::string(""));
 
-        g_app.pty->onData([](const uint8_t* data, size_t len) {
-            // The EventBus path also fires; using either is fine.
-            (void)data; (void)len;
-        });
+        g_app.pty->onData(onPtyData);
         g_app.pty->connect();
 
         // Tell the host to resize this PTY to fit the T-Deck viewport.
-        // (PTYClient::sendResize sends {type:"resize", cols, rows} once
-        //  the WS is open. We send immediately; if the connection isn't
-        //  ready yet, the message queues until it is.)
+        // (PTYClient records the size and re-sends from onConnect once the
+        //  WS opens (and after every reconnect).)
         g_app.pty->sendResize(TERM_COLS, TERM_ROWS);
 
         enterTerminalMode();

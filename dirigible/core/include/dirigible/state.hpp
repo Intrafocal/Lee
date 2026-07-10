@@ -23,17 +23,14 @@ enum class Event {
 class EventBus {
 public:
     using Callback = std::function<void()>;
-    using PtyCallback = std::function<void(int pty_id, const uint8_t* data, size_t len)>;
 
     static EventBus& instance();
 
     // Subscribe to events
     void on(Event event, Callback cb);
-    void onPtyData(PtyCallback cb);
 
     // Emit events (called by core internals)
     void emit(Event event);
-    void emitPtyData(int pty_id, const uint8_t* data, size_t len);
 
 private:
     EventBus() = default;
@@ -43,7 +40,6 @@ private:
         Callback cb;
     };
     std::vector<EventSlot> listeners_;
-    std::vector<PtyCallback> pty_listeners_;
 };
 
 }  // namespace dirigible

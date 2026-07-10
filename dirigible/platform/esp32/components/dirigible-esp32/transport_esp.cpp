@@ -46,6 +46,12 @@ WebSocketEsp::~WebSocketEsp() {
     }
     if (ws_) {
         ws_->stop();
+        // The closures registered in registerCallbacks() (onMessage/onBinary/
+        // onOpen) capture `this`, but the SSWebSocket is owned by the named
+        // registry and outlives this wrapper. Remove them (and drain any
+        // queued open/message notifications) so a pump tick after deletion
+        // can't run a dangling closure (use-after-free).
+        ws_->clearCallbacks();
         // SSWebSocket instances are owned by the named registry — don't delete
     }
 }
@@ -128,8 +134,17 @@ void WebSocketEsp::registerCallbacks() {
         }
     });
 
-    // Connection state polling — SSWebSocket doesn't expose connect/disconnect
-    // events, so we poll isConnected() every 200ms via an LVGL timer.
+    // Native open hook — beats the 200ms poll; the poll's state compare
+    // (pollConnectionState) prevents double-fire.
+    ws_->onOpen([this]() {
+        if (last_connected_state_) return;
+        last_connected_state_ = true;
+        for (auto& cb : connect_cbs_) cb();
+    });
+
+    // Connection state polling — SSWebSocket doesn't expose a disconnect
+    // event, so we poll isConnected() every 200ms via an LVGL timer
+    // (sole disconnect-edge source + fallback for the connect edge).
     // LVGL 8.x exposes the user pointer via the lv_timer_t::user_data field.
     state_poll_timer_ = lv_timer_create(
         [](lv_timer_t* t) {

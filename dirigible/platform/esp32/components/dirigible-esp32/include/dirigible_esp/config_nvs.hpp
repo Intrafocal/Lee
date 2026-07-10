@@ -21,10 +21,22 @@ namespace dirigible_esp {
 //     m{i}_user       (str)   — for SSH (unused on ESP32)
 //     m{i}_lee_port   (u16)
 //     m{i}_hester_port(u16)
-//     m{i}_token      (str)   — cached bearer token
+//
+//   Token keys (one per machine, NOT part of the m{i}_ record):
+//     tok_<name>      (str)  — cached bearer token for machine <name>.
+//                              NVS keys max out at 15 chars, so this is
+//                              "tok_" + the first 11 chars of the machine
+//                              name; names sharing an 11-char prefix collide.
 //
 //   Free-form key/value:
 //     k_<key>         (str/i32/bool)  — generic config keys
+//
+// SECURITY: tokens are stored in PLAINTEXT in the default NVS partition.
+// They are only protected if the firmware enables flash encryption + NVS
+// encryption (CONFIG_NVS_ENCRYPTION + an `nvs_keys` partition) — transparent
+// to this code; configured in the generated project's sdkconfig/partition
+// table. TODO: enable NVS encryption in the screenschema-generated project;
+// hash long machine names into the tok_ key to avoid prefix collisions.
 // ---------------------------------------------------------------------------
 
 class ConfigNvs : public dirigible::IConfig {
