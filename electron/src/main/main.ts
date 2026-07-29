@@ -4,7 +4,7 @@
  * The "Meta-IDE" - a terminal multiplexer that spawns specialized CLI tools.
  */
 
-import { app, BrowserWindow, ipcMain, globalShortcut, Menu, dialog, clipboard, nativeImage, session } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, Menu, dialog, clipboard, nativeImage, session, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -949,6 +949,12 @@ function setupIPC(): void {
       console.error('Failed to read file:', error);
       throw error;
     }
+  });
+
+  // Hand a local file to the OS default application (e.g. a PDF to Preview).
+  // Resolves to '' on success, or an error message from the shell.
+  ipcMain.handle('shell:openPath', async (_event, filePath: string): Promise<string> => {
+    return shell.openPath(filePath);
   });
 
   // Binary-safe read for viewers (3D models, etc.) — returns base64

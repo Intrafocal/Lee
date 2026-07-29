@@ -8,7 +8,7 @@ export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
 
 export interface Tab {
   id: number;
-  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'spyglass' | 'bridge' | 'custom' | 'agent' | 'kicad' | 'model' | 'binary';
+  type: 'terminal' | 'editor' | 'editor-panel' | 'file' | 'files' | 'browser' | 'hester' | 'claude' | 'git' | 'docker' | 'flutter' | 'k8s' | 'hester-qa' | 'devops' | 'system' | 'sql' | 'library' | 'workstream' | 'spyglass' | 'bridge' | 'custom' | 'agent' | 'kicad' | 'model' | 'pdf' | 'binary';
   label: string;
   closable: boolean;
   watched?: boolean; // Whether this tab is being watched for idle state (agent tabs only)
@@ -95,6 +95,7 @@ export const TAB_ICONS: Record<Tab['type'], string> = {
   agent: '🤖',
   kicad: '🔌',
   model: '🧊',
+  pdf: '📄',
   binary: '📦',
 };
 

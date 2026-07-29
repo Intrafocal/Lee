@@ -6069,7 +6069,8 @@ body {
    ======================================================================== */
 
 .kicad-pane,
-.model-pane {
+.model-pane,
+.pdf-pane {
   display: none;
   flex-direction: column;
   height: 100%;
@@ -6077,7 +6078,8 @@ body {
 }
 
 .kicad-pane.active,
-.model-pane.active {
+.model-pane.active,
+.pdf-pane.active {
   display: flex;
 }
 
@@ -6148,6 +6150,13 @@ body {
 
 .model-canvas-container canvas {
   display: block;
+}
+
+.pdf-webview {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--bg-secondary);
 }
 
 .viewer-message {

@@ -28,6 +28,7 @@ export type TabType =
   | 'agent'
   | 'kicad'
   | 'model'
+  | 'pdf'
   | 'binary';
 
 // Dock positions for multi-panel layout

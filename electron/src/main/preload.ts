@@ -314,6 +314,10 @@ contextBridge.exposeInMainWorld('lee', {
     stat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
   },
 
+  shell: {
+    openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
+  },
+
   config: {
     load: (workspace: string) => ipcRenderer.invoke('config:load', workspace),
     getRaw: (workspace: string) => ipcRenderer.invoke('config:getRaw', workspace),

@@ -23,6 +23,7 @@ import { SpyglassPane } from './components/SpyglassPane';
 import { KiCadPane } from './components/KiCadPane';
 import { ModelViewerPane } from './components/ModelViewerPane';
 import { BinaryFilePane } from './components/BinaryFilePane';
+import { PdfPane } from './components/PdfPane';
 import { BridgePicker } from './components/BridgePicker';
 import { PairingDialog } from './components/PairingDialog';
 import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
@@ -36,8 +37,11 @@ const lee = (window as any).lee;
 // File extensions routed to dedicated viewer tabs instead of the text editor
 const KICAD_EXTENSIONS = ['kicad_sch', 'kicad_pcb'];
 const MODEL_EXTENSIONS = ['step', 'stp', 'stl', 'obj', '3mf', 'gltf', 'glb', 'iges', 'igs', 'brep', 'f3d', 'f3z'];
+const PDF_EXTENSIONS = ['pdf'];
+// Tab types whose whole content is a file on disk — restored by reopening it
+const FILE_BACKED_TAB_TYPES: Tab['type'][] = ['file', 'kicad', 'model', 'pdf', 'binary', 'browser'];
 // Extensions Chromium renders natively — opened in a browser tab at a file:// URL
-const BROWSER_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif', 'html', 'htm', 'pdf'];
+const BROWSER_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif', 'html', 'htm'];
 
 // Check if we're running inside Electron
 const isElectron = !!lee;
@@ -204,6 +208,8 @@ const App: React.FC = () => {
     type: Tab['type'];
     label: string;
     dockPosition: DockPosition;
+    // File-backed tabs (editor and viewers) are restored by reopening this path
+    filePath?: string;
   }
 
   // Save session (open tabs and their positions) to localStorage
@@ -213,6 +219,7 @@ const App: React.FC = () => {
       type: t.type,
       label: t.label,
       dockPosition: t.dockPosition,
+      ...(t.filePath ? { filePath: t.filePath } : {}),
     }));
     const storageKey = getSessionStorageKey(ws);
     console.log('[Lee] Saving session:', storageKey, sessionTabs);
@@ -245,7 +252,7 @@ const App: React.FC = () => {
     }
 
     // Non-PTY tabs that don't need Electron
-    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream', 'spyglass', 'kicad', 'model', 'binary'];
+    const nonPtyTabs: Tab['type'][] = ['files', 'editor-panel', 'browser', 'library', 'workstream', 'spyglass', 'kicad', 'model', 'pdf', 'binary'];
 
     if (!isElectron && !nonPtyTabs.includes(type)) {
       console.warn('Cannot create tab - not running in Electron');
@@ -640,6 +647,7 @@ const App: React.FC = () => {
     if (!opts?.forceText) {
       if (KICAD_EXTENSIONS.includes(ext)) type = 'kicad';
       else if (MODEL_EXTENSIONS.includes(ext)) type = 'model';
+      else if (PDF_EXTENSIONS.includes(ext)) type = 'pdf';
       else if (BROWSER_EXTENSIONS.includes(ext)) type = 'browser';
     }
 
@@ -680,7 +688,7 @@ const App: React.FC = () => {
           filePath,
           browserUrl: fileUrl,
         };
-      } else if (type === 'kicad' || type === 'model') {
+      } else if (type === 'kicad' || type === 'model' || type === 'pdf') {
         // Viewer tabs load their own content (model files can be large binaries)
         newTab = {
           id: tabId,
@@ -745,6 +753,12 @@ const App: React.FC = () => {
       return null;
     }
   }, [tabs, getLanguageName]);
+
+  // Session restore reaches for this without taking it as an effect dependency —
+  // handleFileOpen changes identity on every tab change, which would re-run the
+  // restore effect (and duplicate tabs) before it finishes.
+  const handleFileOpenRef = useRef(handleFileOpen);
+  handleFileOpenRef.current = handleFileOpen;
 
   // Save file content for a file tab
   const handleFileSave = useCallback(async (tabId?: number) => {
@@ -1171,6 +1185,16 @@ const App: React.FC = () => {
       );
     }
 
+    if (tab.type === 'pdf') {
+      return (
+        <PdfPane
+          key={tab.id}
+          active={active}
+          filePath={tabData.filePath}
+        />
+      );
+    }
+
     if (tab.type === 'binary') {
       return (
         <BinaryFilePane
@@ -1552,8 +1576,25 @@ const App: React.FC = () => {
         for (const sessionTab of savedSession) {
           // Skip tabs that require runtime state not persisted in sessions
           if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
-          // Viewer tabs need a filePath which isn't persisted in sessions
-          if (sessionTab.type === ('kicad' as any) || sessionTab.type === ('model' as any) || sessionTab.type === ('binary' as any)) continue;
+
+          // File-backed tabs (editor and every viewer) are restored by
+          // reopening the path, which re-runs the normal routing: viewers get
+          // their content back, and a file that changed on disk — or stopped
+          // being binary — lands in whichever tab type now fits it.
+          if (FILE_BACKED_TAB_TYPES.includes(sessionTab.type)) {
+            // Legacy sessions predate persisted paths; browser tabs only carry
+            // one when they were opened for a local file
+            if (!sessionTab.filePath) continue;
+            // Silently drop files that were moved or deleted since last run
+            if (!(await lee.fs.exists(sessionTab.filePath))) continue;
+            // A 'file' tab was text at save time — keep it text, even for an
+            // extension that would otherwise route to a viewer
+            await handleFileOpenRef.current(
+              sessionTab.filePath,
+              sessionTab.type === 'file' ? { forceText: true } : undefined
+            );
+            continue;
+          }
           // Migrate legacy agent tab types to the unified 'agent' type
           if (sessionTab.type === ('hester' as any)) {
             await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'hester');
@@ -2267,6 +2308,15 @@ const App: React.FC = () => {
             if (tab.type === 'model') {
               return (
                 <ModelViewerPane
+                  key={tab.id}
+                  active={isActive}
+                  filePath={tab.filePath}
+                />
+              );
+            }
+            if (tab.type === 'pdf') {
+              return (
+                <PdfPane
                   key={tab.id}
                   active={isActive}
                   filePath={tab.filePath}
