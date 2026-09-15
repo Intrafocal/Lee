@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 interface MachineConfig {
   name: string;

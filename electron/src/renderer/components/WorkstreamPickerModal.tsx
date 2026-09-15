@@ -46,7 +46,8 @@ export const WorkstreamPickerModal: React.FC<WorkstreamPickerModalProps> = ({
         setWorkstreams(Array.isArray(data) ? data : data.workstreams || []);
       }
     } catch {
-      // daemon unavailable
+      // Daemon unavailable: the empty list plus the status bar's daemon
+      // indicator already say so.
     } finally {
       setLoading(false);
     }
@@ -80,7 +81,8 @@ export const WorkstreamPickerModal: React.FC<WorkstreamPickerModalProps> = ({
         onSelect(ws.id, ws.title);
       }
     } catch {
-      // daemon unavailable
+      // Daemon unavailable: the empty list plus the status bar's daemon
+      // indicator already say so.
     }
   };
 

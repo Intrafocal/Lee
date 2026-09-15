@@ -23,7 +23,7 @@
     "dist:win": "npm run fetch-python && npm run fetch-redis && electron-builder --win",
     "dist:linux": "npm run fetch-python && npm run fetch-redis && electron-builder --linux",
     "clean": "rm -rf dist out node_modules/.vite",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "npx @electron/rebuild"
   },

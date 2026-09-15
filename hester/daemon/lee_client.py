@@ -241,8 +241,12 @@ class LeeContextClient:
         Returns LeeContext or None on failure.
         """
         try:
+            headers: dict[str, str] = {}
+            token = _read_lee_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self._api_url}/context")
+                response = await client.get(f"{self._api_url}/context", headers=headers)
                 if response.status_code == 200:
                     data = response.json()
                     self._context = LeeContext.model_validate(data.get("data", {}))
@@ -277,10 +281,16 @@ class LeeContextClient:
         }
 
         try:
+            headers = {}
+            token = _read_lee_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{self._api_url}/command",
                     json=payload,
+                    headers=headers,
                 )
                 return response.json()
         except httpx.ConnectError:

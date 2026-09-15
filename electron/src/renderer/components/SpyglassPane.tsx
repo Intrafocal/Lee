@@ -12,6 +12,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 
+const lee = window.lee;
+
 interface AvailableTui {
   command: string;
   name: string;
@@ -81,7 +83,8 @@ const SpyglassTerminal: React.FC<{
   port: number;
   ptyId: number;
   active: boolean;
-}> = ({ host, port, ptyId, active }) => {
+  token: string | null;
+}> = ({ host, port, ptyId, active, token }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -133,14 +136,16 @@ const SpyglassTerminal: React.FC<{
       terminal.loadAddon(webglAddon);
       webglAddon.onContextLoss(() => webglAddon.dispose());
     } catch {
-      // WebGL not available, canvas fallback
+      // WebGL not available; the canvas fallback renders fine, so there's
+      // nothing for the user to act on.
     }
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
     // Connect WebSocket to remote PTY
-    const url = `ws://${host}:${port}/pty/${ptyId}/stream`;
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+    const url = `ws://${host}:${port}/pty/${ptyId}/stream${tokenQuery}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -163,7 +168,8 @@ const SpyglassTerminal: React.FC<{
           terminal.write(`\r\n\x1b[90m[Process exited with code ${msg.code}]\x1b[0m\r\n`);
         }
       } catch {
-        // ignore parse errors
+        // A malformed frame from the remote machine; drop it and keep the
+        // stream alive rather than tearing the pane down.
       }
     };
 
@@ -210,7 +216,7 @@ const SpyglassTerminal: React.FC<{
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-  }, [host, port, ptyId]);
+  }, [host, port, ptyId, token]);
 
   // Focus terminal when active
   useEffect(() => {
@@ -241,7 +247,8 @@ const SpyglassBrowserViewer: React.FC<{
   host: string;
   port: number;
   tabId: number;
-}> = ({ host, port, tabId }) => {
+  token: string | null;
+}> = ({ host, port, tabId, token }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -253,7 +260,8 @@ const SpyglassBrowserViewer: React.FC<{
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const url = `ws://${host}:${port}/browser/${tabId}/cast`;
+    const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+    const url = `ws://${host}:${port}/browser/${tabId}/cast${tokenQuery}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -297,7 +305,9 @@ const SpyglassBrowserViewer: React.FC<{
             }
           }
         } catch {
-          // ignore
+          // Malformed metadata frame from the remote machine: drop it and
+          // keep the cast running (the connection itself is reported by the
+          // banner via setError).
         }
       }
     };
@@ -332,7 +342,7 @@ const SpyglassBrowserViewer: React.FC<{
       }
       wsRef.current = null;
     };
-  }, [host, port, tabId]);
+  }, [host, port, tabId, token]);
 
   // Click handler — normalize to 0-1 coords
   const handleClick = useCallback((e: React.MouseEvent) => {
@@ -453,11 +463,43 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
   const [error, setError] = useState<string | null>(null);
   const [showTuiPicker, setShowTuiPicker] = useState(false);
   const [selectedTabId, setSelectedTabId] = useState<number | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenStatus, setTokenStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
+  // Fetch the remote machine's auth token via the main process (over SSH, cached there).
+  useEffect(() => {
+    let cancelled = false;
+    setTokenStatus('loading');
+    setToken(null);
+
+    (async () => {
+      try {
+        const fetched = await lee?.machines?.getToken?.(machineConfig.name);
+        if (cancelled) return;
+        if (fetched) {
+          setToken(fetched);
+          setTokenStatus('ready');
+        } else {
+          setTokenStatus('error');
+          setError(`Could not fetch auth token for ${machineConfig.name}. Check SSH access to the machine.`);
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setTokenStatus('error');
+        setError(`Failed to fetch auth token for ${machineConfig.name}: ${err?.message || err}`);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [machineConfig.name]);
+
   const connect = useCallback(() => {
-    const url = `ws://${machineConfig.host}:${machineConfig.lee_port}/context/stream`;
+    if (!token) return;
+    const url = `ws://${machineConfig.host}:${machineConfig.lee_port}/context/stream?token=${encodeURIComponent(token)}`;
 
     try {
       const ws = new WebSocket(url);
@@ -491,9 +533,10 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
     } catch {
       setError(`Failed to connect to ${machineConfig.name}`);
     }
-  }, [machineConfig]);
+  }, [machineConfig, token]);
 
   useEffect(() => {
+    if (tokenStatus !== 'ready') return;
     connect();
     return () => {
       if (wsRef.current) {
@@ -504,20 +547,27 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
         clearTimeout(reconnectTimer.current);
       }
     };
-  }, [connect]);
+  }, [connect, tokenStatus]);
 
   const sendCommand = useCallback(async (domain: string, action: string, params: any = {}) => {
+    if (!token) {
+      setError(`Cannot send command to ${machineConfig.name}: no auth token`);
+      return;
+    }
     try {
       const url = `http://${machineConfig.host}:${machineConfig.lee_port}/command`;
       await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ domain, action, params }),
       });
     } catch (err) {
       console.error('[Spyglass] Command failed:', err);
     }
-  }, [machineConfig]);
+  }, [machineConfig, token]);
 
   const handleTabClick = useCallback((tabId: number) => {
     // Toggle: click active tab again to deselect
@@ -647,6 +697,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
               host={machineConfig.host}
               port={machineConfig.lee_port}
               tabId={selectedTab.id}
+              token={token}
             />
           ) : selectedTab && (selectedTab.type === 'spyglass' || NON_RENDERABLE_TABS.has(selectedTab.type)) ? (
             <SpyglassTabSummary
@@ -661,6 +712,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
               port={machineConfig.lee_port}
               ptyId={selectedTab.ptyId}
               active={active}
+              token={token}
             />
           ) : selectedTab ? (
             <SpyglassTabSummary

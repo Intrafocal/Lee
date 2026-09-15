@@ -28,11 +28,12 @@ import { BridgePicker } from './components/BridgePicker';
 import { PairingDialog } from './components/PairingDialog';
 import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
 import { useHotkeys } from './hooks/useHotkeys';
+import { rendererShortcuts, resolveChord, formatChord } from '../shared/shortcuts';
 import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
 
 // Get the Lee API from preload
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // File extensions routed to dedicated viewer tabs instead of the text editor
 const KICAD_EXTENSIONS = ['kicad_sch', 'kicad_pcb'];
@@ -53,6 +54,14 @@ export interface TabData extends Tab {
   // File-specific data (for type='file')
   fileContent?: string;
   fileOriginalContent?: string;
+  /**
+   * mtime (epoch ms) of the bytes currently in the buffer - set on open and
+   * after every successful save. A different mtime on disk means someone
+   * else (an agent, a build step, git) wrote the file (C4).
+   */
+  fileMtime?: number | null;
+  /** True once the watched file disappears from disk; the buffer stays open. */
+  fileDeleted?: boolean;
   // Browser-specific data (for type='browser')
   browserWebviewId?: number; // WebContents ID for IPC
   browserErrorCount?: number; // Console error count for watched browser tabs
@@ -93,6 +102,44 @@ const App: React.FC = () => {
 
   // Status message queue from Hester
   const [statusMessages, setStatusMessages] = useState<StatusMessage[]>([]);
+
+  /**
+   * C22: one place that turns "something went wrong" into something the user
+   * can actually see. Everything in the renderer that used to `console.error`
+   * on a user-initiated path now calls this.
+   *
+   * `error` messages stick around until dismissed; everything else expires.
+   */
+  const notify = useCallback((
+    level: 'info' | 'success' | 'warn' | 'error',
+    message: string,
+    opts?: { ttl?: number; prompt?: string; id?: string },
+  ) => {
+    const type = level === 'warn' ? 'warning' : level;
+    const id = opts?.id ?? `${level}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const ttl = opts?.ttl ?? (level === 'error' ? 0 : 8);
+    setStatusMessages((prev) => [
+      ...prev.filter((m) => m.id !== id),
+      {
+        id,
+        message,
+        type,
+        timestamp: Date.now(),
+        ...(opts?.prompt ? { prompt: opts.prompt } : {}),
+        ...(ttl ? { ttl } : {}),
+      },
+    ]);
+    if (ttl) {
+      setTimeout(() => {
+        setStatusMessages((prev) => prev.filter((m) => m.id !== id));
+      }, ttl * 1000);
+    }
+  }, []);
+
+  // Stable handle for use inside effects and IPC callbacks without dragging
+  // `notify` through every dependency array.
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
 
   // Prompt to send immediately when opening command palette
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
@@ -135,59 +182,20 @@ const App: React.FC = () => {
   const [showPairingDialog, setShowPairingDialog] = useState(false);
   const [bridgePreselectedMachine, setBridgePreselectedMachine] = useState<any>(null);
 
-  // Helper to convert config keybinding format to useHotkeys format
-  // Config uses: cmd+shift+t, useHotkeys uses: meta+shift+t
-  const normalizeKeybinding = useCallback((binding: string): string => {
-    return binding
-      .replace(/cmd/gi, 'meta')
-      .replace(/command/gi, 'meta')
-      .toLowerCase();
-  }, []);
-
-  // Get keybinding from config or use default
+  // Chords come from the shared registry (src/shared/shortcuts.ts), which also
+  // generates the application menu's accelerators and docs/shortcuts.md, so a
+  // chord can't be owned by two surfaces at once (C15). `keybindings:` in
+  // config.yaml still overrides any of them by action name.
   const getKeybinding = useCallback((action: string, defaultBinding: string): string => {
-    const configBinding = config?.keybindings?.[action];
-    return configBinding ? normalizeKeybinding(configBinding) : defaultBinding;
-  }, [config, normalizeKeybinding]);
+    return resolveChord(action, config?.keybindings) || defaultBinding;
+  }, [config]);
 
-  // Format keybinding for display (e.g., meta+shift+t → ⇧⌘T)
-  const formatKeybinding = useCallback((binding: string): string => {
-    const parts = binding.toLowerCase().split('+');
-    let result = '';
-
-    // Order: ctrl, alt, shift, meta, then key
-    if (parts.includes('ctrl') || parts.includes('control')) result += '⌃';
-    if (parts.includes('alt') || parts.includes('option')) result += '⌥';
-    if (parts.includes('shift')) result += '⇧';
-    if (parts.includes('meta') || parts.includes('cmd') || parts.includes('command')) result += '⌘';
-
-    // Get the main key (last non-modifier)
-    const key = parts.find(p => !['ctrl', 'control', 'alt', 'option', 'shift', 'meta', 'cmd', 'command'].includes(p));
-    if (key) {
-      // Special key mappings
-      const keyMap: Record<string, string> = {
-        'tab': 'Tab',
-        'esc': 'Esc',
-        'escape': 'Esc',
-        'enter': '↵',
-        'return': '↵',
-        'arrowup': '↑',
-        'arrowdown': '↓',
-        'arrowleft': '←',
-        'arrowright': '→',
-        '/': '/',
-      };
-      result += keyMap[key] || key.toUpperCase();
-    }
-
-    return result;
-  }, []);
+  const formatKeybinding = useCallback((binding: string): string => formatChord(binding), []);
 
   // Get formatted keybinding for display
   const getDisplayKeybinding = useCallback((action: string, defaultBinding: string): string => {
-    const binding = getKeybinding(action, defaultBinding);
-    return formatKeybinding(binding);
-  }, [getKeybinding, formatKeybinding]);
+    return formatChord(getKeybinding(action, defaultBinding));
+  }, [getKeybinding]);
 
   // Keep refs in sync for use in event handlers (avoids stale closures)
   useEffect(() => {
@@ -210,6 +218,11 @@ const App: React.FC = () => {
     dockPosition: DockPosition;
     // File-backed tabs (editor and viewers) are restored by reopening this path
     filePath?: string;
+    // Agent tabs: the actual provider key (e.g. 'claude', 'hester', or a
+    // custom key from config) — label is only the display name and may not
+    // match the key, so restoring via label breaks non-default providers.
+    // Older sessions won't have this; restore falls back to the label.
+    provider?: string;
   }
 
   // Save session (open tabs and their positions) to localStorage
@@ -220,6 +233,7 @@ const App: React.FC = () => {
       label: t.label,
       dockPosition: t.dockPosition,
       ...(t.filePath ? { filePath: t.filePath } : {}),
+      ...(t.type === 'agent' && t.provider ? { provider: t.provider } : {}),
     }));
     const storageKey = getSessionStorageKey(ws);
     console.log('[Lee] Saving session:', storageKey, sessionTabs);
@@ -243,7 +257,10 @@ const App: React.FC = () => {
   }, [getSessionStorageKey]);
 
   // Create a new tab - defined BEFORE useEffects that depend on it
-  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string) => {
+  // spawnOptions: only consulted for type === 'terminal' — lets a caller (the
+  // ui_control `tui custom` command) run a specific command/args instead of
+  // the default login shell, while still going through normal tab creation.
+  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[] }) => {
     // Bridge type opens the picker instead of creating a tab directly
     if (type === 'bridge' as any) {
       setBridgePreselectedMachine(null);
@@ -273,7 +290,7 @@ const App: React.FC = () => {
             console.log('[Lee] Converting legacy editor tab to editor-panel');
             return createTab('editor-panel', dockPosition, label || 'Editor');
           case 'terminal':
-            ptyId = await lee.pty.spawn(undefined, [], workspace, tabLabel);
+            ptyId = await lee.pty.spawn(spawnOptions?.command, spawnOptions?.args, workspace, tabLabel);
             break;
           case 'git':
             ptyId = await lee.pty.spawnTUI('git', workspace);
@@ -318,6 +335,9 @@ const App: React.FC = () => {
         }
       } catch (error) {
         console.error(`Failed to spawn ${type}:`, error);
+        notify('warn', `Couldn't open ${label || type}: ${error instanceof Error ? error.message : String(error)}`, {
+          id: `spawn-fail-${type}`,
+        });
         return null;
       }
     }
@@ -368,7 +388,7 @@ const App: React.FC = () => {
     }
 
     return tabId;
-  }, [workspace]);
+  }, [workspace, agentProviders, notify]);
 
   // Move a tab to a different dock position
   const dockTab = useCallback((tabId: number, newPosition: DockPosition) => {
@@ -429,10 +449,192 @@ const App: React.FC = () => {
     saveSession(updatedTabs, workspace);
   }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
 
+  // ---------------------------------------------------------------------
+  // C4: external-change detection
+  //
+  // The editor is not the only writer of an open file - agents, builds and
+  // git all are. Every file tab records the mtime of the bytes in its buffer
+  // (`fileMtime`), the main process watches the file (fs:watchFile), and the
+  // two are compared on change, on focus, and immediately before a save so
+  // Cmd+S can't silently clobber someone else's work.
+  // ---------------------------------------------------------------------
+
+  /** mtimes only ever differ by whole milliseconds; treat sub-ms as equal. */
+  const mtimeMatches = (a: number | null | undefined, b: number | null): boolean =>
+    a != null && b != null && Math.abs(a - b) < 1;
+
+  /** Paths with an external-change prompt already on screen. */
+  const externalPromptsRef = useRef<Set<string>>(new Set());
+
+  /** Reload a file tab's buffer from disk, discarding whatever it held. */
+  const reloadFileTab = useCallback(async (tabId: number, filePath: string) => {
+    const content = await lee.fs.readFile(filePath);
+    const stat = await lee.fs.stat(filePath);
+    setTabs((prev) => prev.map((t) => (t.id === tabId
+      ? {
+          ...t,
+          fileContent: content,
+          fileOriginalContent: content,
+          fileModified: false,
+          fileMtime: stat?.mtime ?? null,
+          fileDeleted: false,
+        }
+      : t)));
+  }, []);
+
+  /**
+   * Write a file tab to disk, asking first if the file changed underneath us.
+   * Returns true when the bytes actually landed.
+   */
+  const saveTabToDisk = useCallback(async (tab: TabData): Promise<boolean> => {
+    if (!isElectron || !tab.filePath) return false;
+
+    try {
+      const before = await lee.fs.stat(tab.filePath);
+      const diskMtime = before?.mtime ?? null;
+      const changedUnderUs = diskMtime !== null && !mtimeMatches(tab.fileMtime, diskMtime);
+
+      if (changedUnderUs) {
+        const choice = await lee.dialog.confirm({
+          type: 'warning',
+          title: 'File changed on disk',
+          message: `"${tab.label}" has changed on disk since you opened it.`,
+          detail: 'Saving now replaces those changes with your version of the file.',
+          buttons: ['Overwrite', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+        });
+        if (choice !== 0) {
+          notify('info', `Save cancelled — "${tab.label}" changed on disk`, { ttl: 6 });
+          return false;
+        }
+      }
+
+      const result = await lee.fs.writeFile(tab.filePath, tab.fileContent || '');
+      if (!result.success) {
+        notify('error', `Couldn't save "${tab.label}": ${result.error || 'unknown error'}`);
+        return false;
+      }
+
+      const after = await lee.fs.stat(tab.filePath);
+      setTabs((prev) => prev.map((t) => (t.id === tab.id
+        ? {
+            ...t,
+            fileModified: false,
+            fileOriginalContent: t.fileContent,
+            fileMtime: after?.mtime ?? null,
+            fileDeleted: false,
+          }
+        : t)));
+      lee.context.recordAction('file_save', tab.filePath);
+      return true;
+    } catch (error) {
+      notify('error', `Couldn't save "${tab.label}": ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }, [notify]);
+
+  /** React to a watched file changing (or disappearing) on disk. */
+  const handleExternalFileChange = useCallback(async (filePath: string, diskMtime: number | null) => {
+    const affected = tabsRef.current.filter((t) => t.type === 'file' && t.filePath === filePath);
+
+    for (const tab of affected) {
+      if (diskMtime === null) {
+        if (!tab.fileDeleted) {
+          setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, fileDeleted: true } : t)));
+          notifyRef.current('warn', `"${tab.label}" was deleted on disk — the buffer is still open`);
+        }
+        continue;
+      }
+
+      // Our own save, echoed back by the watcher.
+      if (mtimeMatches(tab.fileMtime, diskMtime)) continue;
+
+      if (!tab.fileModified) {
+        try {
+          await reloadFileTab(tab.id, filePath);
+          notifyRef.current('info', `Reloaded ${tab.label} (changed on disk)`, { ttl: 5, id: `reload-${tab.id}` });
+        } catch (error) {
+          notifyRef.current('error', `Couldn't reload "${tab.label}": ${error instanceof Error ? error.message : String(error)}`);
+        }
+        continue;
+      }
+
+      // Dirty buffer: let the user decide. One prompt per path at a time.
+      if (externalPromptsRef.current.has(filePath)) continue;
+      externalPromptsRef.current.add(filePath);
+      try {
+        const choice = await lee.dialog.confirm({
+          type: 'warning',
+          title: 'File changed on disk',
+          message: `"${tab.label}" changed on disk while you were editing it.`,
+          detail:
+            'Reload discards your unsaved edits and loads the version on disk.\n' +
+            'Keep mine leaves your buffer untouched; saving it will ask before overwriting.',
+          buttons: ['Reload (discard my edits)', 'Keep mine'],
+          defaultId: 1,
+          cancelId: 1,
+        });
+        if (choice === 0) {
+          await reloadFileTab(tab.id, filePath);
+        } else {
+          setTabs((prev) => prev.map((t) => (t.id === tab.id ? { ...t, fileDeleted: false } : t)));
+        }
+      } finally {
+        externalPromptsRef.current.delete(filePath);
+      }
+    }
+  }, [reloadFileTab]);
+
+  /**
+   * Backstop for the watcher: fs.watch misses events on some filesystems
+   * (network mounts, containers), so re-check every open file whenever the
+   * window regains focus.
+   */
+  const checkOpenFilesForExternalChanges = useCallback(async () => {
+    if (!isElectron) return;
+    for (const tab of tabsRef.current) {
+      if (tab.type !== 'file' || !tab.filePath) continue;
+      const stat = await lee.fs.stat(tab.filePath);
+      const diskMtime = stat?.mtime ?? null;
+      if (mtimeMatches(tab.fileMtime, diskMtime)) continue;
+      if (diskMtime === null && tab.fileDeleted) continue;
+      await handleExternalFileChange(tab.filePath, diskMtime);
+    }
+  }, [handleExternalFileChange]);
+
   // Close a tab
-  const closeTab = useCallback((tabId: number) => {
+  const closeTab = useCallback(async (tabId: number) => {
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab || !tab.closable) return;
+
+    // Unsaved-changes guard: only 'file' tabs (the code editor) track
+    // fileModified. A real three-button native dialog (C25) replaces the two
+    // chained window.confirm() prompts this used to need.
+    if (tab.type === 'file' && tab.fileModified && isElectron) {
+      const choice = await lee.dialog.confirm({
+        type: 'warning',
+        title: 'Unsaved changes',
+        message: `"${tab.label}" has unsaved changes.`,
+        detail: 'Save them before closing the tab?',
+        buttons: ['Save', "Don't Save", 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+      });
+      if (choice === 2) return; // Cancel - leave the tab open
+      if (choice === 0) {
+        const saved = await saveTabToDisk(tab);
+        if (!saved) return; // Save failed or was cancelled - keep the tab
+      }
+    }
+
+    // Stop watching the file unless another tab still has it open (C4)
+    if (isElectron && tab.type === 'file' && tab.filePath) {
+      const stillOpen = tabsRef.current.some(
+        (t) => t.id !== tabId && t.type === 'file' && t.filePath === tab.filePath,
+      );
+      if (!stillOpen) lee.fs.unwatchFile(tab.filePath);
+    }
 
     // Record action for activity tracking
     if (isElectron) {
@@ -476,18 +678,37 @@ const App: React.FC = () => {
     // Save session to localStorage (without the closed tab)
     const remainingTabs = tabs.filter((t) => t.id !== tabId);
     saveSession(remainingTabs, workspace);
-  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
+  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
 
   // Keep closeTabRef in sync for use in event handlers (avoids stale closures)
   useEffect(() => {
     closeTabRef.current = closeTab;
   }, [closeTab]);
 
-  // Close all tabs and kill their PTY processes (used during workspace switch)
-  const closeAllTabs = useCallback(() => {
+  // Close all tabs and kill their PTY processes (used during workspace switch).
+  // Returns false (and leaves everything open) if the user cancels a
+  // dirty-files prompt.
+  const closeAllTabs = useCallback(async (): Promise<boolean> => {
+    const dirtyCount = tabsRef.current.filter((t) => t.type === 'file' && t.fileModified).length;
+    if (dirtyCount > 0 && isElectron) {
+      const choice = await lee.dialog.confirm({
+        type: 'warning',
+        title: 'Unsaved changes',
+        message: `${dirtyCount} file${dirtyCount > 1 ? 's have' : ' has'} unsaved changes.`,
+        detail: 'Closing them now discards those changes.',
+        buttons: ['Discard and Close', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+      });
+      if (choice !== 0) return false;
+    }
+
     for (const tab of tabsRef.current) {
       if (tab.ptyId !== null && isElectron) {
         lee.pty.kill(tab.ptyId);
+      }
+      if (isElectron && tab.type === 'file' && tab.filePath) {
+        lee.fs.unwatchFile(tab.filePath);
       }
     }
     ptyEventManager.clearAll();
@@ -496,10 +717,11 @@ const App: React.FC = () => {
     setActiveLeftTabId(null);
     setActiveRightTabId(null);
     setActiveBottomTabId(null);
+    return true;
   }, []);
 
   // Switch to a new workspace: save old session, close tabs, restore new session
-  const switchWorkspace = useCallback((newWorkspace: string) => {
+  const switchWorkspace = useCallback(async (newWorkspace: string) => {
     if (newWorkspace === workspace) return;
 
     isSwitchingRef.current = true;
@@ -507,7 +729,11 @@ const App: React.FC = () => {
     // Save current tabs to the OLD workspace's session before switching
     saveSession(tabsRef.current, workspace);
 
-    closeAllTabs();
+    if (!(await closeAllTabs())) {
+      // User cancelled the unsaved-changes prompt - abort the switch.
+      isSwitchingRef.current = false;
+      return;
+    }
 
     // Reset session restore gate so the restore effect re-triggers for the new workspace
     setSessionRestored(false);
@@ -571,7 +797,9 @@ const App: React.FC = () => {
     if (!tab) return;
 
     if (tab.ptyId !== null && isElectron) {
-      try { await lee.pty.kill(tab.ptyId); } catch {}
+      // Best-effort: the old PTY is being replaced either way, and it may
+      // already have exited on its own.
+      try { await lee.pty.kill(tab.ptyId); } catch { /* already gone */ }
     }
 
     try {
@@ -585,8 +813,9 @@ const App: React.FC = () => {
       ));
     } catch (error) {
       console.error('Failed to switch agent provider:', error);
+      notify('error', `Couldn't start ${newProvider}: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [switchProviderDialog, workspace, agentProviders]);
+  }, [switchProviderDialog, workspace, agentProviders, notify]);
 
   // Handle idle state change from TerminalPane
   const handleIdleChange = useCallback((ptyId: number, isIdle: boolean) => {
@@ -727,6 +956,9 @@ const App: React.FC = () => {
         } else {
           const content = await lee.fs.readFile(filePath);
           const language = getLanguageName(filePath);
+          // Record the mtime of exactly these bytes and start watching the
+          // file, so an agent editing it underneath us is detected (C4).
+          const stat = await lee.fs.stat(filePath);
           newTab = {
             id: tabId,
             type: 'file',
@@ -739,7 +971,9 @@ const App: React.FC = () => {
             fileModified: false,
             fileContent: content,
             fileOriginalContent: content,
+            fileMtime: stat?.mtime ?? null,
           };
+          lee.fs.watchFile(filePath);
         }
       }
 
@@ -750,9 +984,10 @@ const App: React.FC = () => {
       return tabId;
     } catch (error) {
       console.error('Failed to open file:', error);
+      notify('error', `Couldn't open ${filePath.split('/').pop()}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
-  }, [tabs, getLanguageName]);
+  }, [tabs, getLanguageName, notify]);
 
   // Session restore reaches for this without taking it as an effect dependency —
   // handleFileOpen changes identity on every tab change, which would re-run the
@@ -773,22 +1008,10 @@ const App: React.FC = () => {
       return;
     }
 
-    try {
-      const result = await lee.fs.writeFile(tab.filePath, tab.fileContent || '');
-      if (result.success) {
-        setTabs((prev) => prev.map((t) =>
-          t.id === targetTabId
-            ? { ...t, fileModified: false, fileOriginalContent: t.fileContent }
-            : t
-        ));
-        lee.context.recordAction('file_save', tab.filePath);
-      } else {
-        console.error('Failed to save file:', result.error);
-      }
-    } catch (error) {
-      console.error('Failed to save file:', error);
-    }
-  }, [tabs, activeTabId]);
+    // saveTabToDisk compares the recorded mtime with what's on disk first and
+    // asks before overwriting somebody else's edits (C4).
+    await saveTabToDisk(tab);
+  }, [tabs, activeTabId, saveTabToDisk]);
 
   // Create a new untitled file
   const handleNewFile = useCallback((directory?: string) => {
@@ -823,6 +1046,9 @@ const App: React.FC = () => {
       fileModified: true, // New file is unsaved
       fileContent: '',
       fileOriginalContent: '', // Empty original means new file
+      // Nothing on disk yet; the first save records a real mtime, and if the
+      // path appeared in the meantime saveTabToDisk asks before overwriting.
+      fileMtime: null,
     };
 
     if (isElectron) {
@@ -974,8 +1200,9 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to spawn Hester with session:', error);
+      notify('error', `Couldn't resume that Hester session: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [workspace]);
+  }, [workspace, notify]);
 
   // Handle Ask Hester from file tree context menu
   // autoSubmit defaults to true - set false to pre-populate without sending
@@ -1004,6 +1231,7 @@ const App: React.FC = () => {
       await lee.pty.write(ptyId, text);
     } catch (error) {
       console.error('Failed to send to agent:', error);
+      notifyRef.current('warn', `Couldn't send that to the agent tab: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
@@ -1083,6 +1311,7 @@ const App: React.FC = () => {
           fileContent={tabData.fileContent}
           fileLanguage={tabData.fileLanguage}
           fileModified={tabData.fileModified}
+          fileDeleted={tabData.fileDeleted}
           onContentChange={(content) => handleFileContentChange(tab.id, content)}
           onSave={() => handleFileSave(tab.id)}
           onAskHester={handleAskHester}
@@ -1225,7 +1454,7 @@ const App: React.FC = () => {
 
     if (workspace && workspaceInitialized) {
       // Already have a workspace — do a full switch (close old tabs, restore new session)
-      switchWorkspace(selectedWorkspace);
+      void switchWorkspace(selectedWorkspace);
     } else {
       // First-time init — no tabs to clean up
       setWorkspace(selectedWorkspace);
@@ -1244,7 +1473,7 @@ const App: React.FC = () => {
       const cwd = await lee.app.getWorkspace();
 
       if (workspace && workspaceInitialized) {
-        switchWorkspace(cwd);
+        await switchWorkspace(cwd);
       } else {
         setWorkspace(cwd);
         setWorkspaceInitialized(true);
@@ -1387,6 +1616,7 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load workspace config:', error);
+      notifyRef.current('error', `Couldn't load the workspace config: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, [workspace]);
 
@@ -1409,6 +1639,7 @@ const App: React.FC = () => {
       setTuiOptions(options);
     } catch (error) {
       console.error('Failed to fetch TUI options:', error);
+      notifyRef.current('warn', 'Couldn\'t read the TUI list — the new-tab menu may be incomplete');
     }
   }, []);
 
@@ -1420,6 +1651,7 @@ const App: React.FC = () => {
       setAgentProviders(providers);
     } catch (error) {
       console.error('Failed to fetch agent providers:', error);
+      notifyRef.current('warn', 'Couldn\'t read the agent provider list — agent tabs may be unavailable');
     }
   }, []);
 
@@ -1450,6 +1682,8 @@ const App: React.FC = () => {
       const data = await response.json();
       setDaemonStatus(data.status === 'healthy' ? 'healthy' : 'unhealthy');
     } catch {
+      // Best-effort poll every 10s: a down daemon is already reported by the
+      // status-bar indicator, and a toast per poll would be unusable.
       setDaemonStatus('unhealthy');
     }
   }, []);
@@ -1480,13 +1714,17 @@ const App: React.FC = () => {
           break;
       }
       console.log(`Daemon ${action} result:`, result);
+      if (result && !result.success) {
+        notify('error', `Hester daemon ${action} failed: ${result.error || 'unknown error'}`);
+      }
       // Re-check health after action
       setTimeout(checkDaemonHealth, 1500);
     } catch (error) {
       console.error(`Daemon ${action} error:`, error);
+      notify('error', `Hester daemon ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
       setDaemonStatus('unhealthy');
     }
-  }, [checkDaemonHealth]);
+  }, [checkDaemonHealth, notify]);
 
   const handleSpyglass = useCallback((machine: any) => {
     const existing = tabs.find(t =>
@@ -1559,6 +1797,7 @@ const App: React.FC = () => {
       }
     } catch (error) {
       console.error('[Bridge] Failed to spawn SSH:', error);
+      notifyRef.current('error', `Couldn't open a bridge to ${machineConfig.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
@@ -1573,46 +1812,66 @@ const App: React.FC = () => {
       // Each createTab spawns a PTY process, so stagger them
       const workspaceName = workspace.split('/').pop() || 'Files';
       (async () => {
-        for (const sessionTab of savedSession) {
-          // Skip tabs that require runtime state not persisted in sessions
-          if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
+        // One rejected tab restore used to abort the whole loop and skip
+        // setSessionRestored(true) below, silently disabling autosave for
+        // the rest of the session. Isolate each tab and always flip the gate.
+        try {
+          for (const sessionTab of savedSession) {
+            try {
+              // Skip tabs that require runtime state not persisted in sessions
+              if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
 
-          // File-backed tabs (editor and every viewer) are restored by
-          // reopening the path, which re-runs the normal routing: viewers get
-          // their content back, and a file that changed on disk — or stopped
-          // being binary — lands in whichever tab type now fits it.
-          if (FILE_BACKED_TAB_TYPES.includes(sessionTab.type)) {
-            // Legacy sessions predate persisted paths; browser tabs only carry
-            // one when they were opened for a local file
-            if (!sessionTab.filePath) continue;
-            // Silently drop files that were moved or deleted since last run
-            if (!(await lee.fs.exists(sessionTab.filePath))) continue;
-            // A 'file' tab was text at save time — keep it text, even for an
-            // extension that would otherwise route to a viewer
-            await handleFileOpenRef.current(
-              sessionTab.filePath,
-              sessionTab.type === 'file' ? { forceText: true } : undefined
-            );
-            continue;
+              // File-backed tabs (editor and every viewer) are restored by
+              // reopening the path, which re-runs the normal routing: viewers get
+              // their content back, and a file that changed on disk — or stopped
+              // being binary — lands in whichever tab type now fits it.
+              if (FILE_BACKED_TAB_TYPES.includes(sessionTab.type)) {
+                // Legacy sessions predate persisted paths; browser tabs only carry
+                // one when they were opened for a local file
+                if (!sessionTab.filePath) continue;
+                // Silently drop files that were moved or deleted since last run
+                if (!(await lee.fs.exists(sessionTab.filePath))) continue;
+                // A 'file' tab was text at save time — keep it text, even for an
+                // extension that would otherwise route to a viewer
+                await handleFileOpenRef.current(
+                  sessionTab.filePath,
+                  sessionTab.type === 'file' ? { forceText: true } : undefined
+                );
+                continue;
+              }
+              // Migrate legacy agent tab types to the unified 'agent' type
+              if (sessionTab.type === ('hester' as any)) {
+                await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'hester');
+                continue;
+              }
+              if (sessionTab.type === ('claude' as any)) {
+                await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'claude');
+                continue;
+              }
+              if (sessionTab.type === ('pi' as any)) {
+                await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'pi');
+                continue;
+              }
+              // Agent tabs: restore via the persisted provider key, not the
+              // display label (which may be capitalized or not match the key at
+              // all for custom providers). Fall back to a lowercased label for
+              // sessions saved before `provider` was persisted.
+              if (sessionTab.type === 'agent') {
+                const provider = sessionTab.provider || sessionTab.label.toLowerCase();
+                await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider);
+                continue;
+              }
+              // Files tabs should always use workspace name as label
+              const label = sessionTab.type === 'files' ? workspaceName : sessionTab.label;
+              await createTab(sessionTab.type, sessionTab.dockPosition, label);
+            } catch (err) {
+              console.error('[Lee] Failed to restore session tab:', sessionTab, err);
+              notifyRef.current('warn', `Couldn't restore "${sessionTab.label}" tab: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
-          // Migrate legacy agent tab types to the unified 'agent' type
-          if (sessionTab.type === ('hester' as any)) {
-            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'hester');
-            continue;
-          }
-          if (sessionTab.type === ('claude' as any)) {
-            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'claude');
-            continue;
-          }
-          if (sessionTab.type === ('pi' as any)) {
-            await createTab('agent' as Tab['type'], sessionTab.dockPosition, 'pi');
-            continue;
-          }
-          // Files tabs should always use workspace name as label
-          const label = sessionTab.type === 'files' ? workspaceName : sessionTab.label;
-          await createTab(sessionTab.type, sessionTab.dockPosition, label);
+        } finally {
+          setSessionRestored(true);
         }
-        setSessionRestored(true);
       })();
     } else {
       setSessionRestored(true);
@@ -1650,6 +1909,7 @@ const App: React.FC = () => {
         focusedPanel,
         workspace,
         editorDaemonPort,
+        dirtyFileCount: tabs.filter((t) => t.type === 'file' && t.fileModified).length,
       });
     }, 100);
 
@@ -1692,7 +1952,7 @@ const App: React.FC = () => {
     // File > Open Folder
     lee.file.onFolderOpen((folderPath: string) => {
       console.log('Folder open requested:', folderPath);
-      switchWorkspace(folderPath);
+      void switchWorkspace(folderPath);
     });
 
     // File > Save - saves current active file tab
@@ -1711,6 +1971,10 @@ const App: React.FC = () => {
         const result = await lee.fs.writeFile(filePath, tab.fileContent || '');
         if (result.success) {
           const fileName = filePath.split('/').pop() || filePath;
+          // The watch follows the tab to its new path (C4).
+          if (tab.filePath) lee.fs.unwatchFile(tab.filePath);
+          lee.fs.watchFile(filePath);
+          const stat = await lee.fs.stat(filePath);
           setTabs((prev) => prev.map((t) =>
             t.id === activeTabId
               ? {
@@ -1720,15 +1984,17 @@ const App: React.FC = () => {
                   fileModified: false,
                   fileOriginalContent: t.fileContent,
                   fileLanguage: getLanguageName(filePath),
+                  fileMtime: stat?.mtime ?? null,
+                  fileDeleted: false,
                 }
               : t
           ));
           lee.context.recordAction('file_save_as', filePath);
         } else {
-          console.error('Failed to save file as:', result.error);
+          notifyRef.current('error', `Couldn't save "${fileNameOf(filePath)}": ${result.error || 'unknown error'}`);
         }
       } catch (error) {
-        console.error('Failed to save file as:', error);
+        notifyRef.current('error', `Couldn't save "${fileNameOf(filePath)}": ${error instanceof Error ? error.message : String(error)}`);
       }
     });
 
@@ -1832,9 +2098,18 @@ const App: React.FC = () => {
     });
 
     // Create a new tab
-    const cleanupCreateTab = lee.system.onCreateTab(async (params: { type: string; label?: string; cwd?: string }) => {
+    const cleanupCreateTab = lee.system.onCreateTab(async (params: { type: string; label?: string; cwd?: string; command?: string; args?: string[] }) => {
       console.log('[System] Create tab requested:', params);
-      await createTab(params.type as Tab['type'], 'center', params.label);
+      if (params.command) {
+        // ui_control `tui custom` — run a specific command in a terminal tab
+        // rather than the default login shell.
+        await createTab('terminal' as Tab['type'], 'center', params.label || params.command, {
+          command: params.command,
+          args: params.args,
+        });
+      } else {
+        await createTab(params.type as Tab['type'], 'center', params.label);
+      }
     });
 
     // Remote cast active (Aeronaut connected)
@@ -1918,6 +2193,31 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // C4: react to watched files changing on disk, and re-check every open file
+  // whenever the window regains focus (fs.watch misses events on some mounts).
+  useEffect(() => {
+    if (!isElectron) return;
+
+    const cleanupFileChanged = lee.fs.onFileChanged(({ path, mtimeMs }) => {
+      void handleExternalFileChange(path, mtimeMs);
+    });
+
+    const onFocus = () => { void checkOpenFilesForExternalChanges(); };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cleanupFileChanged();
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [handleExternalFileChange, checkOpenFilesForExternalChanges]);
+
+  // Switching to a different tab is also a good moment to notice a file
+  // that moved underneath us while it wasn't visible.
+  useEffect(() => {
+    if (!isElectron || activeTabId === null) return;
+    void checkOpenFilesForExternalChanges();
+  }, [activeTabId, checkOpenFilesForExternalChanges]);
+
   // Handle status messages from Hester (via IPC from main process)
   useEffect(() => {
     if (!isElectron) return;
@@ -1975,12 +2275,30 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Build hotkey map from config (with defaults)
+  // Build the hotkey map from the shared registry (C15).
+  //
+  // Every renderer-owned action in src/shared/shortcuts.ts gets a handler
+  // here; the chord itself comes from the registry (or the user's
+  // `keybindings:` override). Actions the application menu owns - Cmd+S,
+  // Cmd+O, Cmd+Shift+O, Cmd+, ... - deliberately have no handler, so they
+  // can't double-fire.
   const hotkeyMap = useMemo(() => {
-    const map: Record<string, () => void> = {};
+    const handlers: Record<string, () => void> = {};
+
+    // Resolve the active tab id of whichever panel currently has focus, not
+    // always the center panel's — otherwise Cmd+Esc/Cmd+W acted on the
+    // center tab even while a side panel (left/right/bottom) was focused.
+    const getFocusedTabId = (): number | null => {
+      switch (focusedPanel) {
+        case 'left': return activeLeftTabId;
+        case 'right': return activeRightTabId;
+        case 'bottom': return activeBottomTabId;
+        default: return activeTabId;
+      }
+    };
 
     // Command Palette
-    map[getKeybinding('command_palette', 'meta+/')] = () => {
+    handlers['command_palette'] = () => {
       const currentMessage = statusMessages.length > 0 ? statusMessages[statusMessages.length - 1] : null;
       if (currentMessage?.prompt) {
         setPendingPrompt(currentMessage.prompt);
@@ -1990,45 +2308,45 @@ const App: React.FC = () => {
         setShowCommandPalette(true);
       }
     };
-    map['meta+shift+/'] = () => {
+    handlers['command_palette_blank'] = () => {
       setPendingPrompt(null);
       setShowCommandPalette(true);
     };
 
     // TUI launchers (from config or defaults)
-    map[getKeybinding('terminal', 'meta+shift+t')] = () => createTab('terminal');
-    map[getKeybinding('browser', 'meta+shift+b')] = () => createTab('browser');
-    map[getKeybinding('files', 'meta+shift+e')] = () => getOrCreateTab('files', undefined, workspace.split('/').pop() || 'Files');
+    handlers['terminal'] = () => createTab('terminal');
+    handlers['browser'] = () => createTab('browser');
+    handlers['files'] = () => getOrCreateTab('files', undefined, workspace.split('/').pop() || 'Files');
     // Agent tab launchers
-    map[getKeybinding('hester', 'meta+shift+h')] = () => createTab('agent' as Tab['type'], undefined, 'hester');
-    map[getKeybinding('claude', 'meta+shift+c')] = () => createTab('agent' as Tab['type'], undefined, 'claude');
-    map[getKeybinding('pi', 'meta+shift+i')] = () => createTab('agent' as Tab['type'], undefined, 'pi');
-    map[getKeybinding('devops', 'meta+shift+o')] = () => getOrCreateTab('devops');
+    handlers['hester'] = () => createTab('agent' as Tab['type'], undefined, 'hester');
+    handlers['claude'] = () => createTab('agent' as Tab['type'], undefined, 'claude');
+    handlers['pi'] = () => createTab('agent' as Tab['type'], undefined, 'pi');
+    handlers['devops'] = () => getOrCreateTab('devops');
     // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
-    map[getKeybinding('git', 'meta+shift+g')] = () => createTab('git');
-    map[getKeybinding('docker', 'meta+shift+d')] = () => createTab('docker');
-    map[getKeybinding('flutter', 'meta+shift+f')] = () => createTab('flutter');
-    map[getKeybinding('k8s', 'meta+shift+k')] = () => createTab('k8s');
-    map[getKeybinding('sql', 'meta+shift+p')] = () => createTab('sql');
-    map[getKeybinding('hester_qa', 'meta+shift+q')] = () => createTab('hester-qa');
-    map[getKeybinding('library', 'meta+shift+y')] = () => getOrCreateTab('library');
-    map[getKeybinding('system', 'meta+shift+m')] = () => getOrCreateTab('system');
-    map[getKeybinding('workstream', 'meta+shift+w')] = () => setShowWorkstreamPicker(true);
-    map[getKeybinding('aeronaut_pairing', 'meta+shift+a')] = () => setShowPairingDialog(true);
+    handlers['git'] = () => createTab('git');
+    handlers['docker'] = () => createTab('docker');
+    handlers['flutter'] = () => createTab('flutter');
+    handlers['k8s'] = () => createTab('k8s');
+    handlers['sql'] = () => createTab('sql');
+    handlers['hester_qa'] = () => createTab('hester-qa');
+    handlers['library'] = () => getOrCreateTab('library');
+    handlers['system'] = () => getOrCreateTab('system');
+    handlers['workstream'] = () => setShowWorkstreamPicker(true);
+    handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
     // Tab switching (Cmd+1-9)
-    map[getKeybinding('tab_1', 'meta+1')] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_2', 'meta+2')] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_3', 'meta+3')] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_4', 'meta+4')] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_5', 'meta+5')] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_6', 'meta+6')] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_7', 'meta+7')] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_8', 'meta+8')] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
-    map[getKeybinding('tab_9', 'meta+9')] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
+    handlers['tab_1'] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
+    handlers['tab_2'] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
+    handlers['tab_3'] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
+    handlers['tab_4'] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
+    handlers['tab_5'] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
+    handlers['tab_6'] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
+    handlers['tab_7'] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
+    handlers['tab_8'] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
+    handlers['tab_9'] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
 
     // Tab navigation
-    map[getKeybinding('next_tab', 'ctrl+tab')] = () => {
+    handlers['next_tab'] = () => {
       if (centerTabs.length > 1 && activeTabId) {
         const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
         const nextIndex = (currentIndex + 1) % centerTabs.length;
@@ -2036,7 +2354,7 @@ const App: React.FC = () => {
         setFocusedPanel('center');
       }
     };
-    map[getKeybinding('prev_tab', 'ctrl+shift+tab')] = () => {
+    handlers['prev_tab'] = () => {
       if (centerTabs.length > 1 && activeTabId) {
         const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
         const prevIndex = currentIndex === 0 ? centerTabs.length - 1 : currentIndex - 1;
@@ -2046,11 +2364,12 @@ const App: React.FC = () => {
     };
 
     // Watch/Idle system (agent tabs only)
-    map[getKeybinding('toggle_watch', 'meta+w')] = () => {
-      const activeTab = tabs.find(t => t.id === activeTabId);
-      if (activeTab?.type === 'agent') toggleWatch(activeTabId!);
+    handlers['toggle_watch'] = () => {
+      const focusedTabId = getFocusedTabId();
+      const focusedTab = tabs.find(t => t.id === focusedTabId);
+      if (focusedTab?.type === 'agent') toggleWatch(focusedTabId!);
     };
-    map[getKeybinding('cycle_idle', 'meta+i')] = () => {
+    handlers['cycle_idle'] = () => {
       const idleTabs = tabs.filter(t => t.type === 'agent' && t.watched && t.isIdle);
       if (idleTabs.length === 0) return;
 
@@ -2090,13 +2409,38 @@ const App: React.FC = () => {
     };
 
     // Close tab
-    map[getKeybinding('close_tab', 'meta+esc')] = () => activeTabId && closeTab(activeTabId);
+    handlers['close_tab'] = () => {
+      const focusedTabId = getFocusedTabId();
+      if (focusedTabId) closeTab(focusedTabId);
+    };
 
-    // Scroll to bottom
-    map['meta+arrowdown'] = () => focusManager.scrollToBottom();
+    // Scroll to bottom. `notInEditor` in the registry keeps this from
+    // shadowing CodeMirror's own go-to-end binding (C15).
+    handlers['scroll_bottom'] = () => focusManager.scrollToBottom();
+
+    // Resolve each action to its chord. A chord bound to two actions is a
+    // registry bug, so warn rather than silently letting one win.
+    const map: Record<string, () => void> = {};
+    for (const shortcut of rendererShortcuts()) {
+      const handler = handlers[shortcut.action];
+      if (!handler) continue;
+      const chord = resolveChord(shortcut.action, config?.keybindings);
+      if (!chord) continue;
+      if (map[chord]) {
+        console.warn(`[Lee] Shortcut conflict: ${chord} is bound to more than one action (${shortcut.action})`);
+      }
+      map[chord] = shortcut.notInEditor
+        ? () => {
+            // Let the code editor keep chords it owns (Cmd+Down = go to end).
+            const active = document.activeElement as HTMLElement | null;
+            if (active?.closest?.('.cm-editor')) return;
+            handler();
+          }
+        : handler;
+    }
 
     return map;
-  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, tabs, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
+  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
   // Setup hotkeys
   useHotkeys(hotkeyMap);
@@ -2199,151 +2543,13 @@ const App: React.FC = () => {
           renderTab={renderTab}
         >
         <div className="terminal-container">
-          {/* Render all center tabs directly to prevent remounting on tab switch */}
-          {centerTabs.map((tab) => {
-            const isActive = tab.id === activeTabId;
-            if (tab.type === 'files') {
-              return (
-                <FileTreePane
-                  key={tab.id}
-                  workspace={workspace}
-                  onFileOpen={handleFileOpen}
-                  onNewFile={handleNewFile}
-                  onAskHester={handleAskHester}
-                  onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
-                  agentTabs={agentTabsForUI}
-                  active={isActive}
-                />
-              );
-            }
-            if (tab.type === 'file') {
-              // File tabs render EditorPanel with single file
-              return (
-                <EditorPanel
-                  key={tab.id}
-                  tabId={tab.id}
-                  workspace={workspace}
-                  active={isActive}
-                  filePath={tab.filePath}
-                  fileContent={tab.fileContent}
-                  fileLanguage={tab.fileLanguage}
-                  fileModified={tab.fileModified}
-                  onContentChange={(content) => handleFileContentChange(tab.id, content)}
-                  onSave={() => handleFileSave(tab.id)}
-                  onAskHester={handleAskHester}
-                  onOpenFile={handleFileOpen}
-                />
-              );
-            }
-            if (tab.type === 'editor-panel') {
-              // Legacy editor-panel type - redirect to empty state
-              return (
-                <EditorPanel
-                  key={tab.id}
-                  tabId={tab.id}
-                  workspace={workspace}
-                  active={isActive}
-                  onAskHester={handleAskHester}
-                />
-              );
-            }
-            if (tab.type === 'browser') {
-              return (
-                <BrowserPane
-                  key={tab.id}
-                  active={isActive}
-                  tabId={tab.id}
-                  initialUrl={tab.browserUrl}
-                  watched={tab.watched}
-                  onTitleChange={(title) => handleBrowserTitleChange(tab.id, title)}
-                  onUrlChange={(url) => handleBrowserUrlChange(tab.id, url)}
-                  onLoadingChange={(loading) => handleBrowserLoadingChange(tab.id, loading)}
-                  onAskHester={handleAskHester}
-                  onSendToAgent={agentTabsForUI.length > 0 ? handleSendToAgent : undefined}
-                  agentTabs={agentTabsForUI}
-                  onErrorCountChange={(count) => handleBrowserErrorCountChange(tab.id, count)}
-                  onFrameSnapshotCaptured={(dir) => handleFrameSnapshotCaptured(tab.id, dir)}
-                />
-              );
-            }
-            if (tab.type === 'library') {
-              return (
-                <LibraryPane
-                  key={tab.id}
-                  active={isActive}
-                  workspace={workspace}
-                  onOpenFile={handleFileOpen}
-                />
-              );
-            }
-            if (tab.type === 'workstream') {
-              return (
-                <WorkstreamPane
-                  key={tab.id}
-                  active={isActive}
-                  workspace={workspace}
-                  workstreamId={tab.workstreamId || ''}
-                />
-              );
-            }
-            if (tab.type === 'spyglass') {
-              return (
-                <SpyglassPane
-                  key={tab.id}
-                  active={isActive}
-                  machineConfig={tab.machineConfig!}
-                />
-              );
-            }
-            if (tab.type === 'kicad') {
-              return (
-                <KiCadPane
-                  key={tab.id}
-                  active={isActive}
-                  filePath={tab.filePath}
-                  onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
-                />
-              );
-            }
-            if (tab.type === 'model') {
-              return (
-                <ModelViewerPane
-                  key={tab.id}
-                  active={isActive}
-                  filePath={tab.filePath}
-                />
-              );
-            }
-            if (tab.type === 'pdf') {
-              return (
-                <PdfPane
-                  key={tab.id}
-                  active={isActive}
-                  filePath={tab.filePath}
-                />
-              );
-            }
-            if (tab.type === 'binary') {
-              return (
-                <BinaryFilePane
-                  key={tab.id}
-                  active={isActive}
-                  filePath={tab.filePath}
-                  onOpenAsText={(fp) => handleFileOpen(fp, { forceText: true })}
-                />
-              );
-            }
-            return (
-              <TerminalPane
-                key={tab.id}
-                ptyId={tab.ptyId}
-                active={isActive}
-                label={tab.label}
-                watched={tab.watched}
-                onIdleChange={handleIdleChange}
-              />
-            );
-          })}
+          {/* Render all center tabs directly to prevent remounting on tab switch.
+              Uses the same renderTab() the side panels use (see the "dual tab-render
+              dispatch" note) so both chains stay in sync automatically - this chain
+              used to hand-duplicate renderTab's switch and had drifted (missing
+              onSendToAgent for file/editor-panel, onCheckpointReadyChange for
+              browser, and the missing-machineConfig guard for spyglass). */}
+          {centerTabs.map((tab) => renderTab(tab as DockableTab, tab.id === activeTabId))}
           {centerTabs.length === 0 && (
             <div className="empty-state">
               {/* Content at top */}
@@ -2504,6 +2710,11 @@ const App: React.FC = () => {
     </div>
   );
 };
+
+/** Basename of a path, for user-facing messages. */
+function fileNameOf(filePath: string): string {
+  return filePath.split('/').pop() || filePath;
+}
 
 function getDefaultLabel(type: Tab['type']): string {
   switch (type) {

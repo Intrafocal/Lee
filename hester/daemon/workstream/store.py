@@ -43,6 +43,11 @@ class WorkstreamStore:
             self.base_dir = Path(base_dir)
         else:
             self.base_dir = self.working_dir / DEFAULT_WORKSTREAMS_DIR
+        # Created lazily on first write (see _ensure_dir) so simply pointing the
+        # daemon at a workspace doesn't create .hester/ in it.
+
+    def _ensure_dir(self) -> None:
+        """Create the workstreams directory on demand (first write only)."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _ws_dir(self, ws_id: str) -> Path:
@@ -50,6 +55,7 @@ class WorkstreamStore:
 
     def create(self, workstream: Workstream) -> Workstream:
         """Create a new Workstream directory and write all artifacts."""
+        self._ensure_dir()
         ws_dir = self._ws_dir(workstream.id)
         ws_dir.mkdir(parents=True, exist_ok=True)
 

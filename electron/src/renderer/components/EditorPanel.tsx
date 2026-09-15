@@ -35,7 +35,7 @@ import { cpp } from '@codemirror/lang-cpp';
 
 import { MarkdownPreview } from './MarkdownPreview';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // --- Agent highlight decoration ---
 const addHighlight = StateEffect.define<{ from: number; to: number }[]>();
@@ -79,6 +79,8 @@ interface EditorPanelProps {
   fileContent?: string;
   fileLanguage?: string;
   fileModified?: boolean;
+  /** True when the file has been deleted on disk but the buffer is still open (C4). */
+  fileDeleted?: boolean;
   onContentChange?: (content: string) => void;
   onSave?: () => void;
   onAskHester?: (prompt: string) => void;
@@ -135,6 +137,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   fileContent,
   fileLanguage,
   fileModified,
+  fileDeleted,
   onContentChange,
   onSave,
   onAskHester,
@@ -673,6 +676,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           {filePath.replace(workspace + '/', '')}
         </span>
         {fileModified && <span className="status-modified">Modified</span>}
+        {fileDeleted && (
+          <span className="status-deleted" title="The file no longer exists on disk; saving recreates it">
+            Deleted on disk
+          </span>
+        )}
       </div>
     </div>
   );

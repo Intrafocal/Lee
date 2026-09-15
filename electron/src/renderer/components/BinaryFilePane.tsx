@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 const PREVIEW_BYTES = 4096;
 

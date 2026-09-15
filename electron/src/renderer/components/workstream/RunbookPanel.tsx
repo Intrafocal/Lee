@@ -45,7 +45,8 @@ export const RunbookPanel: React.FC<RunbookPanelProps> = ({
         onTasksChanged();
       }
     } catch {
-      // daemon unavailable
+      // Daemon unavailable: the status bar's daemon indicator is the single
+      // report for this, rather than one per panel poll.
     }
   };
 

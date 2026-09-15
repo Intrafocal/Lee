@@ -3,233 +3,39 @@
  *
  * This script runs in a privileged context and creates a bridge
  * between the main process and the renderer.
+ *
+ * The exposed object is declared as `LeeAPI` (src/shared/lee-api.ts), the same
+ * interface the renderer sees through `window.lee` - so a wrapper renamed or
+ * given a different arity here fails to compile rather than surfacing as an
+ * undefined-is-not-a-function at runtime (C23).
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type {
+  LeeAPI,
+  ConfirmOptions,
+  ClipboardImageData,
+  DirChangedEvent,
+  EditorContextUpdate,
+  EditorRange,
+  FileChangedEvent,
+  StatusMessagePayload,
+} from '../shared/lee-api';
 
-// Dialog result type
-export interface OpenDialogResult {
-  canceled: boolean;
-  filePaths: string[];
-}
+export type {
+  LeeAPI,
+  ClipboardImageData,
+  EditorContextUpdate,
+  EditorRange,
+  FileEntry,
+  OpenDialogResult,
+} from '../shared/lee-api';
 
-// File entry type for directory listing
-export interface FileEntry {
-  name: string;
-  path: string;
-  type: 'file' | 'directory';
-}
-
-// Clipboard image data
-export interface ClipboardImageData {
-  hasImage: boolean;
-  base64?: string;
-  width?: number;
-  height?: number;
-  format?: string;
-  tempFilePath?: string;
-}
-
-// Editor context for Hester integration
-export interface EditorContextUpdate {
-  file: string | null;
-  language: string | null;
-  cursor: { line: number; column: number };
-  selection: string | null;
-  selectedRange: { from: { line: number; column: number }; to: { line: number; column: number } } | null;
-  modified: boolean;
-}
-
-// Range used by editor highlight/select commands
-export interface EditorRange {
-  fromLine: number;
-  fromCol: number;
-  toLine: number;
-  toCol: number;
-}
-
-// Type definitions for the exposed API
-export interface LeeAPI {
-  pty: {
-    spawn: (command?: string, args?: string[], cwd?: string, name?: string) => Promise<number>;
-    spawnTUI: (tuiType: string, cwd?: string, options?: any) => Promise<number>;
-    spawnAgent: (provider: string, cwd?: string) => Promise<number>;
-    getAvailableTUIs: () => Promise<Array<{ key: string; name: string; icon: string; shortcut?: string }>>;
-    getAgentProviders: () => Promise<Record<string, { command: string; name: string; icon?: string; args?: string[]; env?: Record<string, string>; cwd_aware?: boolean; path_arg?: string; prewarm?: boolean }>>;
-    prewarm: (workspace: string) => Promise<void>;
-    write: (id: number, data: string) => Promise<void>;
-    resize: (id: number, cols: number, rows: number) => Promise<void>;
-    kill: (id: number) => Promise<void>;
-    onData: (callback: (id: number, data: string) => void) => () => void;
-    onExit: (callback: (id: number, code: number) => void) => () => void;
-    onState: (callback: (id: number, state: any) => void) => () => void;
-    removeAllListeners: () => void;
-  };
-  window: {
-    minimize: () => Promise<void>;
-    maximize: () => Promise<void>;
-    close: () => Promise<void>;
-    new: (workspace?: string) => Promise<number>;
-    getId: () => Promise<number | null>;
-  };
-  app: {
-    getWorkspace: () => Promise<string>;
-  };
-  dialog: {
-    showOpenDialog: (options: { properties?: string[]; title?: string }) => Promise<OpenDialogResult>;
-  };
-  fs: {
-    readdir: (path: string) => Promise<FileEntry[]>;
-    readFile: (path: string) => Promise<string>;
-    writeFile: (path: string, content: string) => Promise<{ success: boolean; error?: string }>;
-    exists: (path: string) => Promise<boolean>;
-    stat: (path: string) => Promise<{ isFile: boolean; isDirectory: boolean; size: number; mtime: number } | null>;
-  };
-  config: {
-    load: (workspace: string) => Promise<any>;
-    getRaw: (workspace: string) => Promise<string | null>;
-    saveRaw: (workspace: string, content: string) => Promise<{ success: boolean; error?: string }>;
-    save: (workspace: string, config: any) => Promise<{ success: boolean; error?: string }>;
-  };
-  globalConfig: {
-    load: () => Promise<any>;
-    getRaw: () => Promise<string | null>;
-    saveRaw: (content: string) => Promise<{ success: boolean; error?: string }>;
-    save: (config: any) => Promise<{ success: boolean; error?: string }>;
-  };
-  file: {
-    onNew: (callback: () => void) => void;
-    onOpen: (callback: (filePath: string) => void) => void;
-    onFolderOpen: (callback: (folderPath: string) => void) => void;
-    onSave: (callback: () => void) => void;
-    onSaveAs: (callback: (filePath: string) => void) => void;
-    removeAllListeners: () => void;
-  };
-  clipboard: {
-    readImage: () => Promise<ClipboardImageData>;
-    saveImageToTemp: (filename?: string) => Promise<string | null>;
-    writeText: (text: string) => Promise<void>;
-    readText: () => Promise<string>;
-    onImagePaste: (callback: (imageData: ClipboardImageData) => void) => void;
-    removeAllListeners: () => void;
-  };
-  context: {
-    update: (update: any) => void;
-    recordAction: (actionType: string, target: string) => void;
-    get: () => Promise<any>;
-    updateEditor: (ctx: EditorContextUpdate) => void;
-  };
-  editor: {
-    // Commands to send to EditorPanel (renderer → main)
-    open: (filePath: string) => void;
-    save: () => void;
-    close: () => void;
-    gotoLine: (line: number, column?: number) => void;
-    select: (fromLine: number, fromCol: number, toLine: number, toCol: number) => void;
-    highlight: (ranges: EditorRange[], durationMs?: number) => void;
-    insert: (line: number, column: number, text: string) => void;
-    replace: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string) => void;
-    // Report the result of an editor:open IPC back to the main process so the
-    // HTTP /command response can include the resolved tab_id.
-    reportOpenResult: (requestId: string, tabId: number | null) => void;
-    // Listeners for EditorPanel to receive commands (main → renderer).
-    // Each callback receives an optional `tabId` so panels can filter for messages targeted at them.
-    onOpen: (callback: (filePath: string, tabId: number | undefined, requestId: string | undefined) => void) => () => void;
-    onSave: (callback: (tabId: number | undefined) => void) => () => void;
-    onClose: (callback: (tabId: number | undefined) => void) => () => void;
-    onGotoLine: (callback: (line: number, column: number | undefined, tabId: number | undefined) => void) => () => void;
-    onSelect: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, tabId: number | undefined) => void) => () => void;
-    onHighlight: (callback: (ranges: EditorRange[], durationMs: number | undefined, tabId: number | undefined) => void) => () => void;
-    onInsert: (callback: (line: number, column: number, text: string, tabId: number | undefined) => void) => () => void;
-    onReplace: (callback: (fromLine: number, fromCol: number, toLine: number, toCol: number, text: string, tabId: number | undefined) => void) => () => void;
-    removeAllListeners: () => void;
-  };
-  system: {
-    onFocusTab: (callback: (tabId: string) => void) => () => void;
-    onCloseTab: (callback: (tabId: string) => void) => () => void;
-    onCreateTab: (callback: (params: { type: string; label?: string; cwd?: string }) => void) => () => void;
-    onCastActive: (callback: (info: { tabId?: number; ptyId?: number }) => void) => () => void;
-    onCastInactive: (callback: (info: { tabId?: number; ptyId?: number }) => void) => () => void;
-    removeAllListeners: () => void;
-  };
-  panel: {
-    onToggle: (callback: (panel: string) => void) => () => void;
-    onShow: (callback: (panel: string) => void) => () => void;
-    onHide: (callback: (panel: string) => void) => () => void;
-    onResize: (callback: (panel: string, size: number) => void) => () => void;
-    onFocus: (callback: (panel: string) => void) => () => void;
-    removeAllListeners: () => void;
-  };
-  status: {
-    onPush: (callback: (message: StatusMessage) => void) => () => void;
-    onClear: (callback: (id: string) => void) => () => void;
-    onClearAll: (callback: () => void) => () => void;
-    removeAllListeners: () => void;
-  };
-  daemon: {
-    start: () => Promise<{ success: boolean; error?: string }>;
-    stop: () => Promise<{ success: boolean; error?: string }>;
-    restart: () => Promise<{ success: boolean; error?: string }>;
-  };
-  browser: {
-    // Registration
-    register: (tabId: number, webContentsId: number) => Promise<any>;
-    unregister: (tabId: number) => Promise<void>;
-    updateState: (webContentsId: number, update: any) => void;
-    // Navigation control
-    requestNavigation: (tabId: number, url: string, requireApproval?: boolean) => Promise<{ approved: boolean; requestId?: string }>;
-    resolveNavigation: (requestId: string, approved: boolean) => Promise<void>;
-    isDomainApproved: (domain: string) => Promise<boolean>;
-    approveDomain: (domain: string) => Promise<void>;
-    // CDP operations
-    screenshot: (tabId: number) => Promise<{ success: boolean; data?: any; error?: string }>;
-    dom: (tabId: number) => Promise<{ success: boolean; data?: any; error?: string }>;
-    click: (tabId: number, selector: string) => Promise<{ success: boolean; data?: any; error?: string }>;
-    type: (tabId: number, selector: string, text: string) => Promise<{ success: boolean; data?: any; error?: string }>;
-    fillForm: (tabId: number, fields: Array<{ selector: string; value: string }>) => Promise<{ success: boolean; data?: any; error?: string }>;
-    // State queries
-    getAll: () => Promise<any[]>;
-    get: (tabId: number) => Promise<any | undefined>;
-    // Snapshot capture
-    captureSnapshot: (tabId: number, options: {
-      screenshot: boolean;
-      consoleLogs: string[];
-      dom: boolean;
-      url: string;
-      title: string;
-      sessionState?: object;
-    }) => Promise<{ success: boolean; dir?: string; timestamp?: string; files?: string[]; error?: string }>;
-    // Cast resize events (from Aeronaut browsercast)
-    onCastResize: (callback: (tabId: number, width: number, height: number) => void) => () => void;
-    onCastRestore: (callback: (tabId: number) => void) => () => void;
-  };
-  // Hester session integration
-  hester: {
-    getSession: (sessionId: string, userId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
-  };
-  machines: {
-    getAll: () => Promise<any[]>;
-    reload: () => Promise<any[]>;
-    fetchContext: (machineConfig: any) => Promise<any>;
-    onChange: (callback: (machines: any[]) => void) => () => void;
-  };
-  aeronaut: {
-    getPairingQR: () => Promise<{ qrDataUrl: string; pairingInfo: any }>;
-    onShowPairing: (callback: () => void) => () => void;
-  };
-}
-
-// Status message from Hester
-export interface StatusMessage {
-  id: string;
-  message: string;
-  type: 'hint' | 'info' | 'success' | 'warning';
-  prompt?: string;
-  ttl?: number;
-}
+/** Status message shape pushed from main / Hester (kept for older imports). */
+export type StatusMessage = StatusMessagePayload;
 
 // Expose protected methods to the renderer
-contextBridge.exposeInMainWorld('lee', {
+const api: LeeAPI = {
   pty: {
     spawn: (command?: string, args?: string[], cwd?: string, name?: string) =>
       ipcRenderer.invoke('pty:spawn', command, args, cwd, name),
@@ -301,6 +107,11 @@ contextBridge.exposeInMainWorld('lee', {
   dialog: {
     showOpenDialog: (options: { properties?: string[]; title?: string }) =>
       ipcRenderer.invoke('dialog:open', options),
+
+    // Native message box (C25). Resolves to the index of the button pressed,
+    // so a three-way Save / Discard / Cancel prompt is one call.
+    confirm: (options: ConfirmOptions) =>
+      ipcRenderer.invoke('dialog:showMessageBox', options),
   },
 
   fs: {
@@ -312,6 +123,25 @@ contextBridge.exposeInMainWorld('lee', {
     writeFile: (filePath: string, content: string) => ipcRenderer.invoke('fs:writeFile', filePath, content),
     exists: (filePath: string) => ipcRenderer.invoke('fs:exists', filePath),
     stat: (filePath: string) => ipcRenderer.invoke('fs:stat', filePath),
+
+    // Filesystem watching (C4 / C17). One fs.watch per directory lives in the
+    // main process; these just subscribe this window to it.
+    watchFile: (filePath: string) => ipcRenderer.invoke('fs:watchFile', filePath),
+    unwatchFile: (filePath: string) => ipcRenderer.invoke('fs:unwatchFile', filePath),
+    watchDir: (dirPath: string) => ipcRenderer.invoke('fs:watchDir', dirPath),
+    unwatchDir: (dirPath: string) => ipcRenderer.invoke('fs:unwatchDir', dirPath),
+
+    onFileChanged: (callback: (event: FileChangedEvent) => void) => {
+      const listener = (_event: unknown, payload: FileChangedEvent) => callback(payload);
+      ipcRenderer.on('fs:fileChanged', listener);
+      return () => ipcRenderer.removeListener('fs:fileChanged', listener);
+    },
+
+    onDirChanged: (callback: (event: DirChangedEvent) => void) => {
+      const listener = (_event: unknown, payload: DirChangedEvent) => callback(payload);
+      ipcRenderer.on('fs:dirChanged', listener);
+      return () => ipcRenderer.removeListener('fs:dirChanged', listener);
+    },
   },
 
   shell: {
@@ -320,6 +150,7 @@ contextBridge.exposeInMainWorld('lee', {
 
   config: {
     load: (workspace: string) => ipcRenderer.invoke('config:load', workspace),
+    sources: (workspace: string) => ipcRenderer.invoke('config:sources', workspace),
     getRaw: (workspace: string) => ipcRenderer.invoke('config:getRaw', workspace),
     saveRaw: (workspace: string, content: string) => ipcRenderer.invoke('config:saveRaw', workspace, content),
     save: (workspace: string, config: any) => ipcRenderer.invoke('config:save', workspace, config),
@@ -499,7 +330,7 @@ contextBridge.exposeInMainWorld('lee', {
       ipcRenderer.on('system:close-tab', listener);
       return () => ipcRenderer.removeListener('system:close-tab', listener);
     },
-    onCreateTab: (callback: (params: { type: string; label?: string; cwd?: string }) => void) => {
+    onCreateTab: (callback: (params: { type: string; label?: string; cwd?: string; command?: string; args?: string[] }) => void) => {
       const listener = (_event: any, params: any) => callback(params);
       ipcRenderer.on('system:create-tab', listener);
       return () => ipcRenderer.removeListener('system:create-tab', listener);
@@ -664,10 +495,13 @@ contextBridge.exposeInMainWorld('lee', {
       ipcRenderer.invoke('hester:get-session', sessionId, userId),
   },
 
+  getApiToken: () => ipcRenderer.invoke('app:getApiToken'),
+
   machines: {
     getAll: () => ipcRenderer.invoke('machines:getAll'),
     reload: () => ipcRenderer.invoke('machines:reload'),
     fetchContext: (machineConfig: any) => ipcRenderer.invoke('machines:fetchContext', machineConfig),
+    getToken: (machineName: string) => ipcRenderer.invoke('machines:getToken', machineName),
     onChange: (callback: (machines: any[]) => void) => {
       const listener = (_event: any, machines: any[]) => callback(machines);
       ipcRenderer.on('machines:change', listener);
@@ -683,4 +517,6 @@ contextBridge.exposeInMainWorld('lee', {
       return () => ipcRenderer.removeListener('aeronaut:show-pairing', listener);
     },
   },
-} as LeeAPI);
+};
+
+contextBridge.exposeInMainWorld('lee', api);

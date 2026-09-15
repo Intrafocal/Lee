@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 // Get the Lee API from preload
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // Service configuration from config.yaml
 interface ServiceConfig {

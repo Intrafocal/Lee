@@ -160,8 +160,11 @@ from .prepare import (
 try:
     from .registries import get_prompt_registry, PromptMatch
     REGISTRIES_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     REGISTRIES_AVAILABLE = False
+    logging.getLogger("hester.daemon.agent").warning(
+        f"Prompt registries disabled: {e} (run: pip install {e.name or 'numpy'})"
+    )
     get_prompt_registry = None  # type: ignore
     PromptMatch = None  # type: ignore
 
@@ -268,8 +271,14 @@ class HesterDaemonAgent(HybridGeminiCapability):
             self._ollama_client = OllamaFunctionGemma(
                 ollama_url=settings.ollama_url,
                 timeout=settings.ollama_timeout,
+                model=settings.prepare_model,
+                recheck_seconds=settings.ollama_recheck_minutes * 60.0,
             )
-            logger.info(f"Prepare step enabled: Ollama at {settings.ollama_url}")
+            logger.info(
+                f"Prepare step enabled: Ollama at {settings.ollama_url}, "
+                f"model={settings.prepare_model}, "
+                f"recheck every {settings.ollama_recheck_minutes:g} min"
+            )
 
         # Initialize local Gemma client for hybrid ReAct loop
         self._local_client: Optional[OllamaGemmaClient] = None
@@ -279,6 +288,11 @@ class HesterDaemonAgent(HybridGeminiCapability):
                 ollama_url=settings.ollama_url,
                 default_timeout_ms=settings.local_timeout_ms,
                 warm_context_ttl_seconds=settings.warm_context_ttl_seconds,
+                recheck_seconds=settings.ollama_recheck_minutes * 60.0,
+                model_overrides={
+                    "gemma4-e4b": settings.local_model,
+                    "functiongemma": settings.prepare_model,
+                },
             )
             if settings.warm_context_enabled:
                 self._warm_context = WarmContextManager(
@@ -1873,23 +1887,36 @@ Goal: {task.get('goal', 'No goal specified')}"""
         }
 
     async def health_check(self) -> Dict[str, Any]:
-        """Perform a health check on the agent."""
+        """
+        Cheap liveness report for the agent.
+
+        Deliberately makes NO model call: /health is polled every 10s per Lee
+        window, and a live generate made every poll cost ~1s, spammed the log,
+        and reported "unhealthy" whenever the network blipped. Use
+        deep_health_check() (GET /health/deep) for a real round-trip test.
+        """
+        return {
+            "status": "healthy",
+            "model": self.settings.gemini_model,
+            "tools_registered": len(self._tool_definitions),
+            "api_key_configured": bool(
+                self.settings.google_api_key
+                and self.settings.google_api_key.get_secret_value()
+            ),
+        }
+
+    async def deep_health_check(self) -> Dict[str, Any]:
+        """Health check that makes one live model call to verify reachability."""
+        base = await self.health_check()
         try:
-            # Test simple generation
             result = await self.simple_generate(
                 prompt="Say 'OK' if you can hear me.",
                 system_prompt="Respond with just 'OK'.",
             )
-
-            return {
-                "status": "healthy",
-                "model": self.settings.gemini_model,
-                "tools_registered": len(self._tool_definitions),
-                "test_response": result[:20] if result else None,
-            }
+            base["test_response"] = result[:20] if result else None
+            return base
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-            }
+            logger.error(f"Deep health check failed: {e}")
+            base["status"] = "unhealthy"
+            base["error"] = str(e)
+            return base

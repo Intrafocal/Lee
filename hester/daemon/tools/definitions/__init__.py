@@ -419,6 +419,12 @@ def to_gemini_function_declarations() -> List[Dict[str, Any]]:
     return declarations
 
 
+# Names of tools/categories contributed by plugins, so a workspace switch can
+# take the previous workspace's plugin tools back out of the global lists.
+_PLUGIN_TOOL_NAMES: set[str] = set()
+_PLUGIN_CATEGORY_NAMES: set[str] = set()
+
+
 def register_plugin_tools(
     tool_defs: List[ToolDefinition],
     categories: Dict[str, List[str]],
@@ -426,7 +432,35 @@ def register_plugin_tools(
     """Register tools and categories from a plugin."""
     HESTER_TOOLS.extend(tool_defs)
     TOOL_CATEGORIES.update(categories)
+    _PLUGIN_TOOL_NAMES.update(t.name for t in tool_defs)
+    _PLUGIN_CATEGORY_NAMES.update(categories.keys())
     logger.info(f"Registered {len(tool_defs)} plugin tools, {len(categories)} categories")
+
+
+def unregister_plugin_tools() -> int:
+    """
+    Remove every plugin-contributed tool and category from the global registry.
+
+    Called before loading a different workspace's plugins so project A's tools
+    don't bleed into project B. Returns the number of tools removed.
+    """
+    if not _PLUGIN_TOOL_NAMES and not _PLUGIN_CATEGORY_NAMES:
+        return 0
+
+    removed = [t for t in HESTER_TOOLS if t.name in _PLUGIN_TOOL_NAMES]
+    for tool in removed:
+        try:
+            HESTER_TOOLS.remove(tool)
+        except ValueError:
+            pass
+    for category in _PLUGIN_CATEGORY_NAMES:
+        TOOL_CATEGORIES.pop(category, None)
+
+    count = len(removed)
+    _PLUGIN_TOOL_NAMES.clear()
+    _PLUGIN_CATEGORY_NAMES.clear()
+    logger.info(f"Unregistered {count} plugin tools")
+    return count
 
 
 __all__ = [
@@ -538,4 +572,5 @@ __all__ = [
     "get_tools_description_for_names",
     # Plugin registration
     "register_plugin_tools",
+    "unregister_plugin_tools",
 ]

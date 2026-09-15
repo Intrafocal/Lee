@@ -9,6 +9,10 @@ import asyncio
 import json
 import logging
 import os
+import secrets
+import signal
+import sys
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, AsyncGenerator, Optional, Union
@@ -17,7 +21,8 @@ import yaml
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
 import redis.asyncio as redis
 
 from .agent import HesterDaemonAgent
@@ -31,6 +36,9 @@ from .redis_manager import ManagedRedis
 from .session import SessionManager, InMemorySessionManager, ExplorationSessionManager, InMemoryExplorationSessionManager
 from .settings import HesterDaemonSettings
 from ..shared.gemini_tools import PhaseUpdate, ReActPhase
+from ..shared.auth import auth_disabled, lee_api_token
+from ..shared.config import load_merged_config
+from ..shared.workspace import get_current_workspace, set_current_workspace, workspace_id
 
 # Optional imports for knowledge management (graceful degradation if unavailable)
 try:
@@ -88,8 +96,14 @@ def setup_file_logging() -> None:
 
         log_file = log_dir / 'hester.log'
 
-        # Create file handler
-        file_handler = logging.FileHandler(log_file, mode='a')
+        # Rotating handler: hester.log had grown to 60 MB unbounded.
+        file_handler = RotatingFileHandler(
+            log_file,
+            mode='a',
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=5,
+            encoding='utf-8',
+        )
         file_handler.setLevel(logging.INFO)
 
         # Create formatter that identifies daemon logs
@@ -157,20 +171,180 @@ class AppState:
     # Managed Redis lifecycle
     managed_redis: Optional[ManagedRedis] = None
 
+    # Whether lifespan shutdown should also stop a managed redis this daemon
+    # started. False by default so a restart (SIGKILL'd PTY, or a crash) leaves
+    # redis running for the next daemon to reconnect to; POST /shutdown sets it
+    # True, which is the path Lee uses on quit.
+    stop_redis_on_shutdown: bool = False
+
 
 app_state = AppState()
 
 
 def _load_workspace_config(working_dir: Path) -> dict:
-    """Load .lee/config.yaml from workspace."""
-    for config_path in [
-        working_dir / ".lee" / "config.yaml",
-        working_dir / "lee.yaml",
-    ]:
-        if config_path.exists():
-            with open(config_path) as f:
+    """
+    Load the effective Lee config for a workspace.
+
+    Uses the shared loader so the daemon, devops manager, and `hester doctor`
+    agree on precedence: ~/.config/lee < ~/.lee < <workspace>/.lee.
+    """
+    config = load_merged_config(working_dir)
+    if config:
+        return config
+    # Legacy fallback: a bare lee.yaml at the workspace root.
+    legacy = working_dir / "lee.yaml"
+    if legacy.exists():
+        try:
+            with open(legacy) as f:
                 return yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning(f"Failed to read {legacy}: {e}")
     return {}
+
+
+def _load_plugins_for_workspace(working_dir: Path) -> int:
+    """
+    Load the plugins declared by `working_dir`'s config into the global registry.
+
+    Any plugin tools from a previously-loaded workspace are unregistered first,
+    so project A's tools don't stay visible while serving project B.
+    Returns the number of plugins loaded.
+    """
+    if not PLUGINS_AVAILABLE:
+        return 0
+
+    try:
+        from .tools.definitions import register_plugin_tools, unregister_plugin_tools
+        unregister_plugin_tools()
+
+        app_state.plugin_loader = PluginLoader(workspace=working_dir)
+        workspace_config = _load_workspace_config(working_dir)
+        if not workspace_config.get("plugins"):
+            logger.debug(f"No plugins configured for {working_dir}")
+            if getattr(app_state, "agent", None) is not None:
+                app_state.agent._plugin_loader = app_state.plugin_loader
+            return 0
+
+        plugins = app_state.plugin_loader.load_all(workspace_config)
+        for plugin in plugins.values():
+            register_plugin_tools(plugin.tool_definitions, plugin.categories)
+
+        if getattr(app_state, "agent", None) is not None:
+            app_state.agent._plugin_loader = app_state.plugin_loader
+
+        if KNOWLEDGE_AVAILABLE:
+            from .registries import get_prompt_registry, get_agent_registry
+            prompt_registry = get_prompt_registry()
+            agent_registry = get_agent_registry()
+            for plugin in plugins.values():
+                if plugin.prompt_configs or plugin.prompt_templates:
+                    prompt_registry.merge_plugin_prompts(
+                        plugin.prompt_configs, plugin.prompt_templates
+                    )
+                if plugin.agent_configs or plugin.toolset_configs:
+                    agent_registry.merge_plugin_agents(
+                        plugin.agent_configs, plugin.toolset_configs
+                    )
+
+        logger.info(f"Loaded {len(plugins)} plugin(s) for {working_dir}")
+        return len(plugins)
+    except Exception as e:
+        logger.warning(f"Plugin loading failed for {working_dir}: {e}")
+        return 0
+
+
+async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
+    """
+    Re-point the daemon at a different workspace without restarting it.
+
+    One daemon serves every Lee window, so it has to follow whichever workspace
+    is active: plugins, the .hester/-backed stores, and the background watchers
+    are all rebound here. Redis key scoping (hester:ws:<id>:) reads the current
+    workspace at call time and needs no work.
+    """
+    resolved = set_current_workspace(new_dir)
+    previous = app_state.settings.working_directory
+    app_state.settings.working_directory = str(resolved)
+    changes: Dict[str, Any] = {
+        "workspace": str(resolved),
+        "workspace_id": workspace_id(),
+        "previous": previous,
+    }
+
+    # 1. Plugins (unregisters the previous workspace's tools first)
+    changes["plugins_loaded"] = _load_plugins_for_workspace(resolved)
+
+    # 2. .hester/-backed stores
+    try:
+        from .workstream.store import WorkstreamStore
+        app_state.ws_store = WorkstreamStore(working_dir=resolved)
+        from .tools.workstream_tools import init_workstream_tools
+        init_workstream_tools(app_state.ws_store)
+        changes["workstreams"] = "rebound"
+    except Exception as e:
+        logger.warning(f"Workstream store rebind failed: {e}")
+        changes["workstreams"] = f"failed: {e}"
+
+    if CONTEXT_BUNDLES_AVAILABLE and app_state.bundle_service is not None:
+        try:
+            app_state.bundle_service = ContextBundleService(working_dir=str(resolved))
+            changes["bundles"] = "rebound"
+        except Exception as e:
+            logger.warning(f"Context bundle service rebind failed: {e}")
+            changes["bundles"] = f"failed: {e}"
+
+    # 3. Knowledge store/engine working dir (used for bundle + doc file access)
+    if app_state.knowledge_store is not None:
+        app_state.knowledge_store._working_dir = resolved
+    if app_state.knowledge_engine is not None:
+        app_state.knowledge_engine._working_dir = resolved
+        changes["knowledge"] = "rebound"
+
+    # 4. Watchers — stop, rebuild against the new dir, restart if they were running
+    if app_state.git_watcher is not None:
+        try:
+            await app_state.git_watcher.stop()
+            app_state.git_watcher = GitWatcher(
+                working_dir=resolved,
+                poll_interval=app_state.settings.knowledge_git_poll_interval,
+            )
+            asyncio.create_task(app_state.git_watcher.start())
+        except Exception as e:
+            logger.warning(f"Git watcher rebind failed: {e}")
+
+    if app_state.task_watcher is not None:
+        try:
+            await app_state.task_watcher.stop()
+            app_state.task_watcher = TaskWatcher(
+                working_dir=resolved,
+                significant_lines=app_state.settings.knowledge_significant_lines,
+            )
+        except Exception as e:
+            logger.warning(f"Task watcher rebind failed: {e}")
+
+    if app_state.proactive_watcher is not None:
+        try:
+            await app_state.proactive_watcher.stop()
+            app_state.proactive_watcher = ProactiveWatcher(
+                working_dir=resolved,
+                bundle_service=app_state.bundle_service,
+            )
+            asyncio.create_task(app_state.proactive_watcher.start())
+            if PROACTIVE_CONFIG_AVAILABLE and app_state.proactive_config_manager is not None:
+                def on_proactive_config_change(config: "ProactiveConfig") -> None:
+                    if app_state.proactive_watcher:
+                        app_state.proactive_watcher.update_config(config)
+                app_state.proactive_config_manager = ProactiveConfigManager(
+                    working_dir=resolved,
+                    on_config_change=on_proactive_config_change,
+                )
+            changes["watchers"] = "restarted"
+        except Exception as e:
+            logger.warning(f"Proactive watcher rebind failed: {e}")
+            changes["watchers"] = f"failed: {e}"
+
+    logger.info(f"Workspace switched: {previous} -> {resolved} (id {workspace_id()})")
+    return changes
 
 
 @asynccontextmanager
@@ -182,8 +356,48 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Hester daemon...")
 
     # Load settings
-    app_state.settings = HesterDaemonSettings()
+    try:
+        app_state.settings = HesterDaemonSettings()
+    except ValidationError as e:
+        missing_google_key = any(
+            str(err.get("loc", [""])[0]).lower() == "google_api_key"
+            for err in e.errors()
+        )
+        if missing_google_key:
+            message = (
+                "Hester daemon cannot start: GOOGLE_API_KEY is not set "
+                "(set hester.google_api_key in ~/.lee/config.yaml or export GOOGLE_API_KEY)"
+            )
+        else:
+            message = f"Hester daemon cannot start: invalid settings ({e})"
+        # Emitted after setup_file_logging() has attached the ~/.lee/logs/hester.log
+        # handler, so this single clear line lands there instead of a hidden traceback.
+        logger.error(message)
+        print(message, file=sys.stderr)
+        sys.exit(1)
     logger.info(f"Loaded settings - port: {app_state.settings.port}")
+
+    # Pin the workspace explicitly (HESTER_WORKING_DIRECTORY from Lee, else cwd)
+    # so nothing downstream has to guess from os.getcwd().
+    boot_workspace = set_current_workspace(
+        app_state.settings.working_directory or os.getcwd()
+    )
+    app_state.settings.working_directory = str(boot_workspace)
+    logger.info(f"Workspace: {boot_workspace} (id {workspace_id()})")
+
+    # Auth state — say it once, loudly, at boot.
+    if _auth_is_disabled():
+        logger.warning(
+            "HESTER_AUTH_DISABLED is set: the daemon API is UNAUTHENTICATED on "
+            f"{app_state.settings.host}:{app_state.settings.port}. Debug only."
+        )
+    elif lee_api_token():
+        logger.info("API auth: bearer token from ~/.lee/api-token")
+    else:
+        logger.warning(
+            "API auth: no ~/.lee/api-token found; requests are NOT authenticated. "
+            "Start Lee once to generate the token."
+        )
 
     # Initialize Redis via ManagedRedis (tries external → existing managed → new managed)
     app_state.managed_redis = ManagedRedis(
@@ -349,38 +563,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Agent initialized with model: {app_state.settings.gemini_model}")
 
     # Load plugins from workspace config
-    if PLUGINS_AVAILABLE:
-        try:
-            working_dir = Path(app_state.settings.working_directory or os.getcwd())
-            app_state.plugin_loader = PluginLoader(workspace=working_dir)
-            workspace_config = _load_workspace_config(working_dir)
-            if workspace_config.get("plugins"):
-                plugins = app_state.plugin_loader.load_all(workspace_config)
-                # Register plugin tools into global registry
-                from .tools.definitions import register_plugin_tools
-                for plugin in plugins.values():
-                    register_plugin_tools(plugin.tool_definitions, plugin.categories)
-                # Pass plugin_loader to agent for handler merging
-                app_state.agent._plugin_loader = app_state.plugin_loader
-                # Merge plugin prompts and agents into registries
-                if KNOWLEDGE_AVAILABLE:
-                    from .registries import get_prompt_registry, get_agent_registry
-                    prompt_registry = get_prompt_registry()
-                    agent_registry = get_agent_registry()
-                    for plugin in plugins.values():
-                        if plugin.prompt_configs or plugin.prompt_templates:
-                            prompt_registry.merge_plugin_prompts(
-                                plugin.prompt_configs, plugin.prompt_templates
-                            )
-                        if plugin.agent_configs or plugin.toolset_configs:
-                            agent_registry.merge_plugin_agents(
-                                plugin.agent_configs, plugin.toolset_configs
-                            )
-                logger.info(f"Loaded {len(plugins)} plugin(s)")
-            else:
-                logger.debug("No plugins configured in workspace config")
-        except Exception as e:
-            logger.warning(f"Plugin loading failed: {e}")
+    _load_plugins_for_workspace(Path(app_state.settings.working_directory or os.getcwd()))
 
     # Start knowledge engine if available
     if app_state.knowledge_engine:
@@ -478,7 +661,10 @@ async def lifespan(app: FastAPI):
 
     # Shut down Redis (SHUTDOWN SAVE for managed, close for external)
     if app_state.managed_redis:
-        await app_state.managed_redis.shutdown(app_state.redis_client)
+        await app_state.managed_redis.shutdown(
+            app_state.redis_client,
+            stop_redis=app_state.stop_redis_on_shutdown,
+        )
     elif app_state.redis_client:
         await app_state.redis_client.close()
 
@@ -503,6 +689,60 @@ app.add_middleware(
 )
 
 
+# ============================================================================
+# Auth (A10): bearer token shared with Lee's api-server
+# ============================================================================
+#
+# The token is the contents of ~/.lee/api-token, written by Lee's Electron
+# api-server and read over SSH by paired devices. The daemon binds 0.0.0.0 so
+# Aeronaut/Dirigible/Spyglass can reach it over the LAN; auth is what makes
+# that safe. To lock the daemon to loopback instead, set `hester.listen_host:
+# 127.0.0.1` in config (Lee passes it through as HESTER_HOST).
+
+# Paths reachable without a token: the liveness poll and CORS preflight only.
+_AUTH_EXEMPT_PATHS = {"/health"}
+
+
+def _auth_is_disabled() -> bool:
+    settings = getattr(app_state, "settings", None)
+    if settings is not None and getattr(settings, "auth_disabled", False):
+        return True
+    return auth_disabled()
+
+
+@app.middleware("http")
+async def require_bearer_token(request: Request, call_next):
+    """Require `Authorization: Bearer <~/.lee/api-token>` on every endpoint."""
+    if request.method == "OPTIONS" or request.url.path in _AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    if _auth_is_disabled():
+        return await call_next(request)
+
+    expected = lee_api_token()
+    if not expected:
+        # No token file yet (Lee has never run). Fail open rather than locking
+        # the user out of their own daemon, but say so.
+        logger.warning(
+            "No ~/.lee/api-token found; daemon API is UNAUTHENTICATED. "
+            "Start Lee once to generate the token."
+        )
+        return await call_next(request)
+
+    header = request.headers.get("authorization") or ""
+    supplied = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not supplied:
+        supplied = (request.query_params.get("token") or "").strip()
+
+    if not secrets.compare_digest(supplied, expected):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "unauthorized", "detail": "Missing or invalid bearer token"},
+        )
+
+    return await call_next(request)
+
+
 def get_agent() -> HesterDaemonAgent:
     """Dependency to get the agent instance."""
     return app_state.agent
@@ -519,11 +759,13 @@ def get_lee_client() -> LeeContextClient:
 
 
 @app.get("/health")
-async def health_check() -> Dict[str, Any]:
+async def health_check(deep: bool = False) -> Dict[str, Any]:
     """
     Health check endpoint.
 
-    Returns status of the daemon and its dependencies.
+    Reports whether the daemon, Redis, and the Lee client are up, plus the
+    configured model and tool count. Makes NO model call — Lee polls this
+    every 10s per window. Use GET /health/deep for a live model round-trip.
     """
     # Check Redis connection (report managed vs external vs in-memory)
     if app_state.redis_available and app_state.redis_client:
@@ -569,8 +811,11 @@ async def health_check() -> Dict[str, Any]:
     else:
         redis_status = "unavailable (using in-memory sessions)"
 
-    # Check agent
-    agent_health = await app_state.agent.health_check()
+    # Check agent (cheap by default: no model call — see A1)
+    if deep:
+        agent_health = await app_state.agent.deep_health_check()
+    else:
+        agent_health = await app_state.agent.health_check()
 
     # Check Lee context client
     lee_connected = app_state.lee_client.connected
@@ -636,6 +881,10 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy" if is_healthy else "degraded",
         "service": "hester-daemon",
         "port": app_state.settings.port,
+        "deep": deep,
+        "auth": "disabled" if _auth_is_disabled() else "bearer",
+        "workspace": str(get_current_workspace()),
+        "workspace_id": workspace_id(),
         "session_backend": "redis" if app_state.redis_available else "in-memory",
         "components": {
             "redis": redis_status,
@@ -645,6 +894,78 @@ async def health_check() -> Dict[str, Any]:
             "proactive": proactive_status,
         },
     }
+
+
+@app.get("/health/deep")
+async def health_check_deep() -> Dict[str, Any]:
+    """
+    Health check that also makes one live model call.
+
+    Costs a Gemini round-trip (~1s). Use this from `hester daemon status --deep`
+    or a manual Restart-button check, never from a poll loop.
+    """
+    return await health_check(deep=True)
+
+
+@app.get("/workspace")
+async def get_workspace() -> Dict[str, Any]:
+    """Which workspace is the daemon currently serving?"""
+    return {
+        "workspace": str(get_current_workspace()),
+        "workspace_id": workspace_id(),
+    }
+
+
+@app.post("/workspace")
+async def post_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Re-point the daemon at a different workspace.
+
+    Lee calls this when the user switches workspace, and when focus moves to a
+    window whose workspace differs. Cheaper and less disruptive than restarting
+    the daemon: sessions and Redis connections survive.
+    """
+    raw = payload.get("path") or payload.get("workspace")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Missing 'path'")
+
+    try:
+        target = Path(str(raw)).expanduser().resolve()
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Bad path: {e}")
+
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {target}")
+
+    if target == get_current_workspace():
+        return {
+            "success": True,
+            "changed": False,
+            "workspace": str(target),
+            "workspace_id": workspace_id(),
+        }
+
+    changes = await _switch_workspace(target)
+    return {"success": True, "changed": True, **changes}
+
+
+@app.post("/shutdown")
+async def post_shutdown(keep_redis: bool = False) -> Dict[str, Any]:
+    """
+    Ask the daemon to shut down cleanly.
+
+    Lee calls this on quit so the daemon (and the managed redis it started)
+    don't outlive the app. `keep_redis=1` leaves a managed redis running, which
+    is what a restart wants — a restarting daemon reconnects to it.
+    """
+    app_state.stop_redis_on_shutdown = not keep_redis
+
+    async def _terminate() -> None:
+        await asyncio.sleep(0.2)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    asyncio.create_task(_terminate())
+    return {"success": True, "stopping": True, "keep_redis": keep_redis}
 
 
 # ============================================================================

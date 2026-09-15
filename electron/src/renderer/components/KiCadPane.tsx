@@ -10,7 +10,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // Side-effect module that registers the custom elements — load once, on demand
 let kicanvasModule: Promise<unknown> | null = null;

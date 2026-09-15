@@ -21,6 +21,8 @@ import numpy as np
 if TYPE_CHECKING:
     import redis.asyncio as redis
 
+from ...shared.workspace import workspace_key_prefix
+
 logger = logging.getLogger("hester.daemon.semantic.embeddings")
 
 # Embedding configuration
@@ -28,8 +30,10 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768
 CACHE_TTL_SECONDS = 86400 * 7  # 7 days
 
-# Redis key prefix for embedding cache
-REDIS_EMBEDDING_PREFIX = "hester:embedding:"
+# Redis key prefix for the embedding cache, scoped to the current workspace
+# (resolved at call time — the daemon can be re-pointed via POST /workspace).
+def REDIS_EMBEDDING_PREFIX() -> str:
+    return f"{workspace_key_prefix()}embedding:"
 
 
 class EmbeddingService:
@@ -97,7 +101,7 @@ class EmbeddingService:
     def _cache_key(self, text: str) -> str:
         """Generate cache key for text."""
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
-        return f"{REDIS_EMBEDDING_PREFIX}{text_hash}"
+        return f"{REDIS_EMBEDDING_PREFIX()}{text_hash}"
 
     def _serialize_embedding(self, embedding: np.ndarray) -> bytes:
         """Serialize numpy array to bytes for Redis storage."""

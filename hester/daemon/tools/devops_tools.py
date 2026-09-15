@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 import yaml
 
+from ...shared.config import load_merged_config_with_sources
+
 from .base import ToolResult
 
 
@@ -86,21 +88,23 @@ def _run_shell_command(
 
 
 def _parse_config(working_dir: str) -> Dict[str, Any]:
-    """Parse .lee/config.yaml from the working directory."""
-    config_paths = [
-        Path(working_dir) / ".lee" / "config.yaml",
-        Path.home() / ".config" / "lee" / "config.yaml",
-    ]
+    """
+    Load the effective Lee config for a workspace.
 
-    for config_path in config_paths:
-        if config_path.exists():
-            try:
-                with open(config_path) as f:
-                    return yaml.safe_load(f) or {}
-            except Exception as e:
-                return {"error": f"Failed to parse config: {e}"}
+    Shared loader, so precedence matches Lee and the daemon:
+    ~/.config/lee < ~/.lee < <workspace>/.lee (merged, not first-match).
+    """
+    try:
+        config, sources = load_merged_config_with_sources(Path(working_dir))
+    except Exception as e:
+        return {"error": f"Failed to parse config: {e}"}
 
-    return {"error": "No config file found (.lee/config.yaml or ~/.config/lee/config.yaml)"}
+    if not sources:
+        return {
+            "error": "No config file found (~/.config/lee/config.yaml, "
+                     "~/.lee/config.yaml, or <workspace>/.lee/config.yaml)"
+        }
+    return config
 
 
 def _get_service_key(env_name: str, service_name: str) -> str:

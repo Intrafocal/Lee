@@ -113,6 +113,9 @@ export class BrowserManager extends EventEmitter {
       this.tabToBrowser.delete(tabId);
       this.tabToWindow.delete(tabId);
       console.log(`[BrowserManager] Unregistered browser tab ${tabId}`);
+      // Let ContextBridge drop this tab too, or Hester keeps seeing a ghost
+      // browser entry for a tab that no longer exists.
+      this.emit('unregister', tabId);
     }
   }
 

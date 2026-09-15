@@ -35,7 +35,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
       });
       if (res.ok) onPhaseChanged();
     } catch {
-      // daemon unavailable
+      // Daemon unavailable; reported once by the status bar indicator.
     } finally {
       setTransitioning(false);
     }

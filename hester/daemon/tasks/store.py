@@ -32,9 +32,14 @@ class TaskStore:
         else:
             self.tasks_dir = self.working_dir / DEFAULT_TASKS_DIR
 
-        # Ensure directory exists
-        self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        # Directory creation is deferred to the first write (see _ensure_dir):
+        # merely constructing a store used to litter .hester/ into every
+        # workspace the daemon touched, read-only ones included.
         logger.debug(f"Task store initialized: {self.tasks_dir}")
+
+    def _ensure_dir(self) -> None:
+        """Create the tasks directory on demand (first write only)."""
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
     def _task_path(self, task_id: str) -> Path:
         """Get the file path for a task."""
@@ -70,6 +75,7 @@ class TaskStore:
             task: Task to save
         """
         task.updated_at = datetime.utcnow()
+        self._ensure_dir()
         path = self._task_path(task.id)
         path.write_text(task.to_markdown())
         logger.debug(f"Saved task: {task.id}")
@@ -148,6 +154,9 @@ class TaskStore:
             List of tasks, sorted by updated_at descending
         """
         tasks: List[Task] = []
+
+        if not self.tasks_dir.is_dir():
+            return tasks
 
         for path in self.tasks_dir.glob("*.md"):
             try:

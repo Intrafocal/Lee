@@ -28,18 +28,41 @@ from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 
 import numpy as np
 
+from ...shared.workspace import workspace_key_prefix
+
 if TYPE_CHECKING:
     import redis.asyncio as redis
 
 logger = logging.getLogger("hester.daemon.knowledge.store")
 
-# Redis key prefixes
-BUNDLE_PREFIX = "hester:bundle:"
-DOC_PREFIX = "hester:doc:"
-BUNDLES_INDEX = "hester:bundles:index"
-DOCS_INDEX = "hester:docs:index"
-DOCS_BY_FILE_PREFIX = "hester:docs:by_file:"
-DOCS_LAST_SYNC = "hester:docs:last_sync"
+# Redis key names, scoped to the workspace the daemon is currently serving.
+# These are functions, not constants, because the workspace can change at
+# runtime (POST /workspace) — bundle/doc embeddings from project A must not
+# match project B's queries. Keys written under the old global names
+# (hester:bundle:*, hester:doc:*, ...) are simply orphaned; re-sync rebuilds them.
+
+def BUNDLE_PREFIX() -> str:
+    return f"{workspace_key_prefix()}bundle:"
+
+
+def DOC_PREFIX() -> str:
+    return f"{workspace_key_prefix()}doc:"
+
+
+def BUNDLES_INDEX() -> str:
+    return f"{workspace_key_prefix()}bundles:index"
+
+
+def DOCS_INDEX() -> str:
+    return f"{workspace_key_prefix()}docs:index"
+
+
+def DOCS_BY_FILE_PREFIX() -> str:
+    return f"{workspace_key_prefix()}docs:by_file:"
+
+
+def DOCS_LAST_SYNC() -> str:
+    return f"{workspace_key_prefix()}docs:last_sync"
 
 # TTL for bundle/doc entries (7 days)
 DEFAULT_TTL = 86400 * 7
@@ -169,14 +192,14 @@ class KnowledgeStore:
 
         # Store metadata
         await self._redis.setex(
-            f"{BUNDLE_PREFIX}{bundle_id}:meta",
+            f"{BUNDLE_PREFIX()}{bundle_id}:meta",
             DEFAULT_TTL,
             json.dumps(meta),
         )
 
         # Store content
         await self._redis.setex(
-            f"{BUNDLE_PREFIX}{bundle_id}:content",
+            f"{BUNDLE_PREFIX()}{bundle_id}:content",
             DEFAULT_TTL,
             content,
         )
@@ -185,20 +208,20 @@ class KnowledgeStore:
         if embedding is not None:
             embedding_bytes = struct.pack(f"{len(embedding)}f", *embedding.tolist())
             await self._redis.setex(
-                f"{BUNDLE_PREFIX}{bundle_id}:embedding",
+                f"{BUNDLE_PREFIX()}{bundle_id}:embedding",
                 DEFAULT_TTL,
                 embedding_bytes,
             )
 
         # Add to index
-        await self._redis.sadd(BUNDLES_INDEX, bundle_id)
+        await self._redis.sadd(BUNDLES_INDEX(), bundle_id)
 
     async def get_bundle_meta(self, bundle_id: str) -> Optional[Dict[str, Any]]:
         """Get bundle metadata."""
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{BUNDLE_PREFIX}{bundle_id}:meta")
+        data = await self._redis.get(f"{BUNDLE_PREFIX()}{bundle_id}:meta")
         if data:
             return json.loads(data)
         return None
@@ -208,7 +231,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{BUNDLE_PREFIX}{bundle_id}:content")
+        data = await self._redis.get(f"{BUNDLE_PREFIX()}{bundle_id}:content")
         if data:
             return data.decode() if isinstance(data, bytes) else data
         return None
@@ -218,7 +241,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{BUNDLE_PREFIX}{bundle_id}:embedding")
+        data = await self._redis.get(f"{BUNDLE_PREFIX()}{bundle_id}:embedding")
         if data:
             return self._deserialize_embedding(data)
         return None
@@ -228,7 +251,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return []
 
-        bundle_ids = await self._redis.smembers(BUNDLES_INDEX)
+        bundle_ids = await self._redis.smembers(BUNDLES_INDEX())
         return [
             bid.decode() if isinstance(bid, bytes) else bid
             for bid in bundle_ids
@@ -240,11 +263,11 @@ class KnowledgeStore:
             return False
 
         await self._redis.delete(
-            f"{BUNDLE_PREFIX}{bundle_id}:meta",
-            f"{BUNDLE_PREFIX}{bundle_id}:content",
-            f"{BUNDLE_PREFIX}{bundle_id}:embedding",
+            f"{BUNDLE_PREFIX()}{bundle_id}:meta",
+            f"{BUNDLE_PREFIX()}{bundle_id}:content",
+            f"{BUNDLE_PREFIX()}{bundle_id}:embedding",
         )
-        await self._redis.srem(BUNDLES_INDEX, bundle_id)
+        await self._redis.srem(BUNDLES_INDEX(), bundle_id)
         return True
 
     # =========================================================================
@@ -288,7 +311,7 @@ class KnowledgeStore:
 
             # Add incremental filter if needed
             if incremental and self._redis:
-                last_sync = await self._redis.get(DOCS_LAST_SYNC)
+                last_sync = await self._redis.get(DOCS_LAST_SYNC())
                 if last_sync:
                     last_sync_str = last_sync.decode() if isinstance(last_sync, bytes) else last_sync
                     query = query.gt("created_at", last_sync_str)
@@ -321,7 +344,7 @@ class KnowledgeStore:
 
             # Update last sync timestamp
             if self._redis:
-                await self._redis.set(DOCS_LAST_SYNC, datetime.utcnow().isoformat())
+                await self._redis.set(DOCS_LAST_SYNC(), datetime.utcnow().isoformat())
 
             logger.info(f"Synced {count} docs from Supabase to Redis")
             return count
@@ -343,14 +366,14 @@ class KnowledgeStore:
 
         # Store metadata
         await self._redis.setex(
-            f"{DOC_PREFIX}{doc_hash}:meta",
+            f"{DOC_PREFIX()}{doc_hash}:meta",
             DEFAULT_TTL,
             json.dumps(meta),
         )
 
         # Store chunk text
         await self._redis.setex(
-            f"{DOC_PREFIX}{doc_hash}:chunk",
+            f"{DOC_PREFIX()}{doc_hash}:chunk",
             DEFAULT_TTL,
             chunk_text,
         )
@@ -363,25 +386,25 @@ class KnowledgeStore:
                 embedding_array = embedding
             embedding_bytes = struct.pack(f"{len(embedding_array)}f", *embedding_array.tolist())
             await self._redis.setex(
-                f"{DOC_PREFIX}{doc_hash}:embedding",
+                f"{DOC_PREFIX()}{doc_hash}:embedding",
                 DEFAULT_TTL,
                 embedding_bytes,
             )
 
         # Add to index
-        await self._redis.sadd(DOCS_INDEX, doc_hash)
+        await self._redis.sadd(DOCS_INDEX(), doc_hash)
 
         # Add to by-file index
         file_path = meta.get("file_path", "")
         if file_path:
-            await self._redis.sadd(f"{DOCS_BY_FILE_PREFIX}{file_path}", doc_hash)
+            await self._redis.sadd(f"{DOCS_BY_FILE_PREFIX()}{file_path}", doc_hash)
 
     async def get_doc_meta(self, doc_hash: str) -> Optional[Dict[str, Any]]:
         """Get doc metadata."""
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{DOC_PREFIX}{doc_hash}:meta")
+        data = await self._redis.get(f"{DOC_PREFIX()}{doc_hash}:meta")
         if data:
             return json.loads(data)
         return None
@@ -391,7 +414,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{DOC_PREFIX}{doc_hash}:chunk")
+        data = await self._redis.get(f"{DOC_PREFIX()}{doc_hash}:chunk")
         if data:
             return data.decode() if isinstance(data, bytes) else data
         return None
@@ -401,7 +424,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return None
 
-        data = await self._redis.get(f"{DOC_PREFIX}{doc_hash}:embedding")
+        data = await self._redis.get(f"{DOC_PREFIX()}{doc_hash}:embedding")
         if data:
             return self._deserialize_embedding(data)
         return None
@@ -411,7 +434,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return []
 
-        doc_hashes = await self._redis.smembers(DOCS_INDEX)
+        doc_hashes = await self._redis.smembers(DOCS_INDEX())
         return [
             dhash.decode() if isinstance(dhash, bytes) else dhash
             for dhash in doc_hashes
@@ -423,11 +446,11 @@ class KnowledgeStore:
             return []
 
         # Get all keys matching the by-file pattern
-        keys = await self._redis.keys(f"{DOCS_BY_FILE_PREFIX}*")
+        keys = await self._redis.keys(f"{DOCS_BY_FILE_PREFIX()}*")
         files = []
         for key in keys:
             key_str = key.decode() if isinstance(key, bytes) else key
-            file_path = key_str.replace(DOCS_BY_FILE_PREFIX, "")
+            file_path = key_str.replace(DOCS_BY_FILE_PREFIX(), "")
             files.append(file_path)
         return sorted(files)
 
@@ -436,7 +459,7 @@ class KnowledgeStore:
         if not self._available or not self._redis:
             return []
 
-        doc_hashes = await self._redis.smembers(f"{DOCS_BY_FILE_PREFIX}{file_path}")
+        doc_hashes = await self._redis.smembers(f"{DOCS_BY_FILE_PREFIX()}{file_path}")
         return [
             dhash.decode() if isinstance(dhash, bytes) else dhash
             for dhash in doc_hashes
@@ -453,15 +476,15 @@ class KnowledgeStore:
 
         # Delete doc keys
         await self._redis.delete(
-            f"{DOC_PREFIX}{doc_hash}:meta",
-            f"{DOC_PREFIX}{doc_hash}:chunk",
-            f"{DOC_PREFIX}{doc_hash}:embedding",
+            f"{DOC_PREFIX()}{doc_hash}:meta",
+            f"{DOC_PREFIX()}{doc_hash}:chunk",
+            f"{DOC_PREFIX()}{doc_hash}:embedding",
         )
-        await self._redis.srem(DOCS_INDEX, doc_hash)
+        await self._redis.srem(DOCS_INDEX(), doc_hash)
 
         # Remove from by-file index
         if file_path:
-            await self._redis.srem(f"{DOCS_BY_FILE_PREFIX}{file_path}", doc_hash)
+            await self._redis.srem(f"{DOCS_BY_FILE_PREFIX()}{file_path}", doc_hash)
 
         return True
 
@@ -485,9 +508,9 @@ class KnowledgeStore:
                 "indexed_files": 0,
             }
 
-        bundle_ids = await self._redis.smembers(BUNDLES_INDEX)
-        doc_hashes = await self._redis.smembers(DOCS_INDEX)
-        last_sync = await self._redis.get(DOCS_LAST_SYNC)
+        bundle_ids = await self._redis.smembers(BUNDLES_INDEX())
+        doc_hashes = await self._redis.smembers(DOCS_INDEX())
+        last_sync = await self._redis.get(DOCS_LAST_SYNC())
 
         return {
             "available": True,
@@ -503,11 +526,11 @@ class KnowledgeStore:
             return
 
         # Get all bundle and doc keys
-        bundle_keys = await self._redis.keys(f"{BUNDLE_PREFIX}*")
-        doc_keys = await self._redis.keys(f"{DOC_PREFIX}*")
+        bundle_keys = await self._redis.keys(f"{BUNDLE_PREFIX()}*")
+        doc_keys = await self._redis.keys(f"{DOC_PREFIX()}*")
 
         # Delete all keys
-        all_keys = bundle_keys + doc_keys + [BUNDLES_INDEX, DOCS_INDEX, DOCS_LAST_SYNC]
+        all_keys = bundle_keys + doc_keys + [BUNDLES_INDEX(), DOCS_INDEX(), DOCS_LAST_SYNC()]
         if all_keys:
             await self._redis.delete(*all_keys)
 

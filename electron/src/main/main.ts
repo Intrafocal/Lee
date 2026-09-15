@@ -17,6 +17,17 @@ import { BrowserManager } from './browser-manager';
 import { RendererContextUpdate, UserActionType } from '../shared/context';
 import { saveDebugTrace, DebugTrace } from './debug-trace';
 import { MachineManager } from './machine-manager';
+import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
+import { fsWatcher } from './fs-watcher';
+import {
+  SHORTCUTS,
+  GLOBAL_FOCUS_ACTION,
+  formatChord,
+  menuAccelerator,
+  normalizeChord,
+  resolveChord,
+  toAccelerator,
+} from '../shared/shortcuts';
 
 // File entry type for directory listing
 interface FileEntry {
@@ -26,6 +37,26 @@ interface FileEntry {
 }
 
 import { windowRegistry } from './window-registry';
+
+// Single-instance lock: a second `lee` launch used to get its own PTYManager
+// and try (and fail) to bind the same :9000/:9001 ports, with the failure
+// going nowhere visible - a dead API server, silently. Bail out immediately
+// instead and hand off to the already-running instance.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // No CLI/workspace-path argument parsing exists in this app today (the
+    // renderer's own workspace picker owns that flow), so there's no argv
+    // to route to a new window here - just bring the existing one forward.
+    const ws = windowRegistry.getFocused() || windowRegistry.getAny();
+    if (ws) {
+      if (ws.browserWindow.isMinimized()) ws.browserWindow.restore();
+      ws.browserWindow.focus();
+    }
+  });
+}
 
 // Global singletons (shared across all windows)
 let ptyManager: PTYManager;
@@ -38,6 +69,8 @@ const isDev = process.env.NODE_ENV === 'development';
 
 // Track if quit has been confirmed to avoid showing dialog twice
 let quitConfirmed = false;
+// Ensures the graceful-daemon-shutdown path in will-quit runs at most once
+let daemonShutdownAttempted = false;
 
 // Track which windows have reload confirmed (per-window)
 const reloadConfirmedWindows = new Set<number>();
@@ -65,6 +98,8 @@ async function confirmAndReload(bw: BrowserWindow, forceReload: boolean): Promis
     if (result.response === 0) {
       // User clicked "Reload"
       reloadConfirmedWindows.add(bw.id);
+      fsWatcher.releaseWindow(bw.id);
+      ptyManager?.killForWindow(bw.id);
       if (forceReload) {
         bw.webContents.reloadIgnoringCache();
       } else {
@@ -73,7 +108,10 @@ async function confirmAndReload(bw: BrowserWindow, forceReload: boolean): Promis
       setTimeout(() => { reloadConfirmedWindows.delete(bw.id); }, 100);
     }
   } else {
-    // No active terminals, just reload
+    // No active terminals, still kill any prewarmed/background PTYs (daemon, warm
+    // pool entries) owned by this window so reload doesn't leak them.
+    fsWatcher.releaseWindow(bw.id);
+    ptyManager?.killForWindow(bw.id);
     if (forceReload) {
       bw.webContents.reloadIgnoringCache();
     } else {
@@ -155,6 +193,13 @@ function createWindow(workspace?: string): BrowserWindow {
   };
   browserManager.on('state', onBrowserState);
 
+  // Prune closed browser tabs from context too, or Hester keeps "seeing" tabs
+  // that no longer exist.
+  const onBrowserUnregister = (tabId: number) => {
+    contextBridge.removeBrowserContext(tabId);
+  };
+  browserManager.on('unregister', onBrowserUnregister);
+
   // Build URL hash to communicate window init state to renderer
   // - #new → show workspace modal (no pre-selected workspace)
   // - #workspace=<path> → use this workspace directly, skip modal
@@ -181,12 +226,28 @@ function createWindow(workspace?: string): BrowserWindow {
   // Update menu checkmarks when this window gains focus
   bw.on('focus', () => {
     setupApplicationMenu();
+    // One daemon serves every window, so re-point it at the focused window's
+    // workspace (no-ops when it already matches).
+    const focusedWorkspace = windowRegistry.get(bw.id)?.workspace;
+    if (focusedWorkspace) {
+      // The focused window's config is what the shared daemon runs with (C12):
+      // its API key, model, listen host and working directory.
+      ptyManager.setDaemonWindow(bw.id);
+      ptyManager.setDaemonWorkspace(focusedWorkspace).catch(() => { /* daemon may be down */ });
+    }
+    // Menu accelerators follow the focused window's keybindings.
+    const focusedConfig = ptyManager.getWindowConfig(bw.id)?.config;
+    if (focusedConfig) applyConfigToMainProcess(focusedConfig);
   });
 
   bw.on('closed', () => {
+    // Drop this window's fs watches (editor file watches, file-tree dirs)
+    fsWatcher.releaseWindow(bw.id);
+
     // Remove event listeners
     ptyManager.removeListener('state', onPtyState);
     browserManager.removeListener('state', onBrowserState);
+    browserManager.removeListener('unregister', onBrowserUnregister);
 
     // Kill PTYs owned by this window
     ptyManager.killForWindow(bw.id);
@@ -235,11 +296,22 @@ function createWindow(workspace?: string): BrowserWindow {
     }
   });
 
-  // Intercept Cmd+R / Cmd+Shift+R to show reload confirmation
+  // Intercept Cmd+R / Cmd+Shift+R to show reload confirmation.
+  // Ctrl+R is deliberately NOT treated as reload here: it's bash's
+  // reverse-search inside a terminal tab, and on non-mac platforms it's a
+  // plain shell/editor chord too - only Cmd (meta) means "reload the IDE".
+  // Also skip entirely when the focused tab is a terminal/agent/browser tab
+  // so their own Cmd+R handling (or lack thereof) isn't preempted.
   bw.webContents.on('before-input-event', async (event, input) => {
-    const isReloadKey = (input.meta || input.control) && input.key.toLowerCase() === 'r';
+    const isReloadKey = input.meta && input.key.toLowerCase() === 'r';
+    if (!isReloadKey) return;
 
-    if (isReloadKey && !reloadConfirmedWindows.has(bw.id)) {
+    const focusedTabType = windowRegistry.get(bw.id)?.contextBridge.getFocusedTabType();
+    if (focusedTabType === 'terminal' || focusedTabType === 'agent' || focusedTabType === 'browser') {
+      return;
+    }
+
+    if (!reloadConfirmedWindows.has(bw.id)) {
       event.preventDefault();
       await confirmAndReload(bw, input.shift);
     }
@@ -248,22 +320,82 @@ function createWindow(workspace?: string): BrowserWindow {
   return bw;
 }
 
-function setupGlobalShortcuts(): void {
-  // These shortcuts work even when the app doesn't have focus
-  // For in-app shortcuts, we use IPC from the renderer
+/**
+ * The focused window's `keybindings:` block, used to build menu accelerators.
+ * Updated whenever a merged config is loaded (see applyConfigToMainProcess).
+ */
+let currentKeybindings: Record<string, string> = {};
 
-  // Ctrl/Cmd+Shift+L to focus Lee from anywhere
-  globalShortcut.register('CommandOrControl+Shift+L', () => {
-    const ws = windowRegistry.getFocused() || windowRegistry.getAny();
-    if (ws) {
-      if (ws.browserWindow.isMinimized()) ws.browserWindow.restore();
-      ws.browserWindow.focus();
+/** The system-wide chord currently registered, if any. */
+let registeredGlobalChord: string | null = null;
+
+function focusLeeWindow(): void {
+  const ws = windowRegistry.getFocused() || windowRegistry.getAny();
+  if (!ws) return;
+  if (ws.browserWindow.isMinimized()) ws.browserWindow.restore();
+  ws.browserWindow.focus();
+}
+
+/**
+ * Register (or clear) the system-wide "bring Lee forward" chord.
+ *
+ * This used to be an unconditional `CommandOrControl+Shift+L`, which took
+ * that chord away from every other application on the machine whether or not
+ * anyone wanted it. It's now opt-in: set
+ * `keybindings.global_focus_lee: cmd+shift+l` in config.yaml. Any falsy or
+ * empty value leaves the chord alone.
+ */
+function applyGlobalFocusShortcut(keybindings: Record<string, string> | null | undefined): void {
+  const raw = keybindings?.[GLOBAL_FOCUS_ACTION];
+  const wanted =
+    typeof raw === 'string' && raw.trim() && !['false', 'off', 'none'].includes(raw.trim().toLowerCase())
+      ? toAccelerator(normalizeChord(raw))
+      : null;
+
+  if (wanted === registeredGlobalChord) return;
+
+  if (registeredGlobalChord) {
+    globalShortcut.unregister(registeredGlobalChord);
+    registeredGlobalChord = null;
+  }
+  if (!wanted) return;
+
+  try {
+    if (globalShortcut.register(wanted, focusLeeWindow)) {
+      registeredGlobalChord = wanted;
+      console.log('[Lee] Registered global focus shortcut:', wanted);
+    } else {
+      pushStatus('warn', `Couldn't register the system-wide shortcut ${wanted} - another app already owns it`);
     }
-  });
+  } catch (error: any) {
+    pushStatus('warn', `Couldn't register the system-wide shortcut ${wanted}: ${error?.message || error}`);
+  }
+}
+
+/**
+ * Apply the parts of a merged config the main process itself owns: menu
+ * accelerators and the optional system-wide focus chord.
+ */
+function applyConfigToMainProcess(config: any): void {
+  const keybindings = (config?.keybindings && typeof config.keybindings === 'object')
+    ? (config.keybindings as Record<string, string>)
+    : {};
+  currentKeybindings = keybindings;
+  applyGlobalFocusShortcut(keybindings);
+  setupApplicationMenu();
+}
+
+/** Pretty chord for the Help > Keyboard Shortcuts listing. */
+function formatChordForMenu(action: string): string {
+  return formatChord(resolveChord(action, currentKeybindings)).padEnd(8, ' ');
 }
 
 function setupApplicationMenu(): void {
   const isMac = process.platform === 'darwin';
+  // Accelerators come from the shared registry (src/shared/shortcuts.ts).
+  // `accel()` returns undefined for actions the renderer owns, so a menu item
+  // can still exist for discoverability without double-firing the action.
+  const accel = (action: string) => menuAccelerator(action, currentKeybindings);
 
   const template: Electron.MenuItemConstructorOptions[] = [
     // App menu (macOS only)
@@ -274,7 +406,7 @@ function setupApplicationMenu(): void {
         { type: 'separator' as const },
         {
           label: 'Edit Workspace Config...',
-          accelerator: 'CmdOrCtrl+,' as string,
+          accelerator: accel('edit_workspace_config'),
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('menu:edit-config');
           },
@@ -308,14 +440,14 @@ function setupApplicationMenu(): void {
       submenu: [
         {
           label: 'New File',
-          accelerator: 'CmdOrCtrl+N',
+          accelerator: accel('new_file'),
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('file:new');
           },
         },
         {
           label: 'New Window',
-          accelerator: 'CmdOrCtrl+Shift+N',
+          accelerator: accel('new_window'),
           click: () => {
             createWindow();
           },
@@ -323,7 +455,7 @@ function setupApplicationMenu(): void {
         { type: 'separator' },
         {
           label: 'Open...',
-          accelerator: 'CmdOrCtrl+O',
+          accelerator: accel('open_file'),
           click: async () => {
             const focusedWindow = BrowserWindow.getFocusedWindow();
             if (!focusedWindow) return;
@@ -337,7 +469,7 @@ function setupApplicationMenu(): void {
         },
         {
           label: 'Open Folder...',
-          accelerator: 'CmdOrCtrl+Shift+O',
+          accelerator: accel('open_folder'),
           click: async () => {
             const focusedWindow = BrowserWindow.getFocusedWindow();
             if (!focusedWindow) return;
@@ -352,14 +484,14 @@ function setupApplicationMenu(): void {
         { type: 'separator' },
         {
           label: 'Save',
-          accelerator: 'CmdOrCtrl+S',
+          accelerator: accel('save_file'),
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('file:save');
           },
         },
         {
           label: 'Save As...',
-          accelerator: 'CmdOrCtrl+Shift+S',
+          accelerator: accel('save_file_as'),
           click: async () => {
             const focusedWindow = BrowserWindow.getFocusedWindow();
             if (!focusedWindow) return;
@@ -370,7 +502,17 @@ function setupApplicationMenu(): void {
           },
         },
         { type: 'separator' },
-        isMac ? { role: 'close' as const } : { role: 'quit' as const },
+        // Deliberately NOT `role: 'close'`: that role carries an implicit
+        // CmdOrCtrl+W accelerator, and the OS resolves menu accelerators
+        // before the renderer sees the key - so Cmd+W closed the window
+        // instead of toggling watch on the focused agent tab, which is what
+        // it's documented to do. The item stays; only its chord is gone.
+        isMac
+          ? {
+              label: 'Close Window',
+              click: () => { BrowserWindow.getFocusedWindow()?.close(); },
+            }
+          : { role: 'quit' as const },
       ],
     },
 
@@ -401,8 +543,11 @@ function setupApplicationMenu(): void {
       label: 'View',
       submenu: [
         {
+          // No accelerator: CmdOrCtrl+R used to double-bind this (menu +
+          // before-input-event), and on mac Ctrl+R is bash's reverse-search,
+          // not "reload the IDE". Reload is still reachable from this menu
+          // item by click, or via Cmd+Shift+R (Force Reload) below.
           label: 'Reload',
-          accelerator: 'CmdOrCtrl+R',
           click: async () => {
             const focused = BrowserWindow.getFocusedWindow();
             if (focused) await confirmAndReload(focused, false);
@@ -410,7 +555,7 @@ function setupApplicationMenu(): void {
         },
         {
           label: 'Force Reload',
-          accelerator: 'CmdOrCtrl+Shift+R',
+          accelerator: accel('force_reload'),
           click: async () => {
             const focused = BrowserWindow.getFocusedWindow();
             if (focused) await confirmAndReload(focused, true);
@@ -425,8 +570,9 @@ function setupApplicationMenu(): void {
         { role: 'togglefullscreen' as const },
         { type: 'separator' as const },
         {
+          // No accelerator: the renderer owns Cmd+Shift+A (registry scope
+          // 'both'); binding it here too fired the dialog twice.
           label: 'Aeronaut Pairing...',
-          accelerator: 'CmdOrCtrl+Shift+A',
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('aeronaut:show-pairing');
           },
@@ -477,10 +623,26 @@ function setupApplicationMenu(): void {
       role: 'help' as const,
       submenu: [
         {
+          // No accelerator: the renderer owns Cmd+/ (registry scope 'both').
           label: 'Ask Hester...',
-          accelerator: 'CmdOrCtrl+/',
           click: () => {
             BrowserWindow.getFocusedWindow()?.webContents.send('command-palette:open');
+          },
+        },
+        { type: 'separator' as const },
+        {
+          label: 'Keyboard Shortcuts',
+          click: () => {
+            const focused = BrowserWindow.getFocusedWindow();
+            const lines = SHORTCUTS.filter((sc) => !sc.documentationOnly)
+              .map((sc) => `${formatChordForMenu(sc.action)}  —  ${sc.description}`);
+            dialog.showMessageBox(focused!, {
+              type: 'info',
+              title: 'Keyboard Shortcuts',
+              message: 'Lee keyboard shortcuts',
+              detail: lines.join('\n'),
+              buttons: ['OK'],
+            });
           },
         },
         { type: 'separator' as const },
@@ -510,6 +672,164 @@ function parseYamlConfig(content: string): any {
   }
 }
 
+/**
+ * Strip secrets out of a workspace config before it reaches the ContextBridge
+ * (and therefore GET /context, which is readable by any bearer-token holder
+ * on the LAN, and by Hester's live-context WebSocket). PTYManager keeps the
+ * full, unredacted config since it needs the real values to spawn tools
+ * (pgcli, the daemon, etc).
+ */
+function redactWorkspaceConfigForContext(config: any): any {
+  if (!config || typeof config !== 'object') return config;
+
+  let redacted: any;
+  try {
+    redacted = JSON.parse(JSON.stringify(config));
+  } catch {
+    // Unclonable config (a cycle) - returning it unredacted is wrong, so
+    // hand back the original and let the caller's own redaction apply.
+    return config;
+  }
+
+  if (redacted.hester && typeof redacted.hester === 'object') {
+    delete redacted.hester.google_api_key;
+  }
+
+  if (Array.isArray(redacted.sql?.connections)) {
+    redacted.sql.connections = redacted.sql.connections.map((conn: any) => {
+      if (conn && typeof conn === 'object') {
+        const { password, ...rest } = conn;
+        return rest;
+      }
+      return conn;
+    });
+  }
+
+  if (redacted.tuis && typeof redacted.tuis === 'object') {
+    for (const tui of Object.values(redacted.tuis) as any[]) {
+      if (tui?.connection && typeof tui.connection === 'object') {
+        delete tui.connection.password;
+      }
+    }
+  }
+
+  // The remote-machine list includes SSH usernames/hosts used to fetch other
+  // machines' auth tokens - keep it out of the shared context entirely.
+  delete redacted.machines;
+
+  return redacted;
+}
+
+
+/**
+ * Last-seen merged `hester:` config block, keyed by workspace. Used to decide
+ * whether a config save actually changed anything the daemon cares about.
+ */
+const lastHesterConfig = new Map<string, string>();
+
+function serializeHesterBlock(config: any): string {
+  // Stable stringify: key order in YAML shouldn't count as a change.
+  const normalize = (value: any): any => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((acc: any, key) => {
+        acc[key] = normalize(value[key]);
+        return acc;
+      }, {} as any);
+    }
+    return value;
+  };
+  return JSON.stringify(normalize(config?.hester ?? null));
+}
+
+export type StatusLevel = 'info' | 'success' | 'warn' | 'error';
+
+/**
+ * Surface a message in every window's status bar (C22).
+ *
+ * The main process has no UI of its own, so anything it only `console.error`s
+ * is invisible to the user - this is the one place that turns a main-process
+ * failure into something they can see.
+ */
+export function pushStatus(
+  level: StatusLevel,
+  message: string,
+  opts?: { id?: string; ttl?: number; prompt?: string },
+): void {
+  // The status bar's vocabulary is hint/info/success/warning/error.
+  const type = level === 'warn' ? 'warning' : level;
+  const payload = {
+    id: opts?.id ?? `main-${level}-${Date.now()}`,
+    message,
+    type,
+    ...(opts?.ttl ? { ttl: opts.ttl } : {}),
+    ...(opts?.prompt ? { prompt: opts.prompt } : {}),
+  };
+  const windows = windowRegistry.getAll();
+  if (windows.size === 0) {
+    // Nothing is listening yet (early boot / after the last window closed).
+    console[level === 'error' ? 'error' : 'warn']('[Lee]', message);
+    return;
+  }
+  for (const ws of windows.values()) {
+    if (!ws.browserWindow.isDestroyed()) {
+      ws.browserWindow.webContents.send('status:push', payload);
+    }
+  }
+}
+
+/**
+ * Restart the Hester daemon when the effective `hester:` block changed on save.
+ *
+ * The daemon reads its settings from env at spawn time, so a config edit was
+ * previously invisible until the user quit Lee.
+ */
+async function restartDaemonIfHesterConfigChanged(workspace: string, mergedConfig: any): Promise<void> {
+  const next = serializeHesterBlock(mergedConfig);
+  const previous = lastHesterConfig.get(workspace);
+  lastHesterConfig.set(workspace, next);
+
+  if (previous === undefined || previous === next) return;
+
+  if (!ptyManager.isDaemonLeeManaged()) {
+    pushStatus(
+      'warn',
+      'Hester config changed, but the daemon on :9000 was not started by Lee - restart it manually',
+    );
+    return;
+  }
+
+  pushStatus('info', 'Hester restarting: config changed');
+  try {
+    const result = await ptyManager.restartDaemon();
+    if (!result.success) {
+      pushStatus('error', `Hester restart failed: ${result.error || 'unknown error'}`);
+      return;
+    }
+    await ptyManager.setDaemonWorkspace(workspace);
+  } catch (error: any) {
+    pushStatus('error', `Hester restart failed: ${error?.message || error}`);
+  }
+}
+
+
+
+/**
+ * A global-config save affects every workspace's merged config, so re-merge
+ * for the focused window's workspace and restart the daemon if `hester:` moved.
+ */
+async function reloadAfterGlobalConfigSave(): Promise<void> {
+  const workspace = windowRegistry.getFocused()?.workspace || windowRegistry.getAny()?.workspace;
+  if (!workspace) return;
+  try {
+    const { config } = await loadMergedConfig(workspace);
+    await restartDaemonIfHesterConfigChanged(workspace, config);
+  } catch (error) {
+    console.error('Failed to re-merge config after global save:', error);
+  }
+}
+
+
 function setupIPC(): void {
   // PTY operations
   ipcMain.handle('pty:spawn', (event, command?: string, args?: string[], cwd?: string, name?: string) => {
@@ -535,12 +855,12 @@ function setupIPC(): void {
     // Check if TUI definition exists
     const def = ptyManager.getTUIDefinition(tuiType, windowId);
     if (!def) {
-      throw new Error(`Unknown TUI type: ${tuiType}. Available: ${ptyManager.getAvailableTUITypes().join(', ')}`);
+      throw new Error(`Unknown TUI type: ${tuiType}. Available: ${ptyManager.getAvailableTUITypes(windowId).join(', ')}`);
     }
 
     // Handle TUIs with connection config (SQL clients like pgcli)
     if (def.connection) {
-      return ptyManager.spawnConnectionTUI(tuiType, def, cwd);
+      return ptyManager.spawnConnectionTUI(tuiType, def, cwd, windowId);
     }
 
     // For TUIs marked as prewarm-able, use the prewarm pool unless options are specified
@@ -656,7 +976,13 @@ function setupIPC(): void {
 
   // Get workspace (current working directory)
   ipcMain.handle('app:get-workspace', () => {
-    return process.cwd();
+    const cwd = process.cwd();
+    // Launched from the Dock/Finder (or as a packaged app generally), cwd is
+    // "/" - not a sensible workspace to silently open. Fall back to home.
+    if (cwd === '/' || cwd === path.parse(cwd).root) {
+      return app.getPath('home');
+    }
+    return cwd;
   });
 
   // Dialog operations
@@ -672,6 +998,63 @@ function setupIPC(): void {
     };
   });
 
+  /**
+   * C25: a real native dialog for the renderer's confirm prompts.
+   *
+   * `window.confirm()` inside a BrowserWindow is a Chromium sheet with no
+   * title, only OK/Cancel, and no way to express a three-way choice
+   * (Save / Discard / Cancel). This returns the index of the button pressed;
+   * cancelId is returned when the dialog is dismissed.
+   */
+  ipcMain.handle('dialog:showMessageBox', async (event, options: {
+    title?: string;
+    message: string;
+    detail?: string;
+    buttons?: string[];
+    defaultId?: number;
+    cancelId?: number;
+    type?: 'none' | 'info' | 'error' | 'question' | 'warning';
+  }) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const buttons = Array.isArray(options.buttons) && options.buttons.length > 0
+      ? options.buttons
+      : ['OK', 'Cancel'];
+    const result = await dialog.showMessageBox(bw!, {
+      type: options.type ?? 'question',
+      title: options.title ?? 'Lee',
+      message: options.message,
+      detail: options.detail,
+      buttons,
+      defaultId: options.defaultId ?? 0,
+      cancelId: options.cancelId ?? buttons.length - 1,
+      noLink: true,
+    });
+    return result.response;
+  });
+
+  // ---------- C4 / C17: filesystem watching ----------
+  // One fs.watch per directory, shared by editor file watches and file-tree
+  // directory watches (see fs-watcher.ts).
+  ipcMain.handle('fs:watchFile', (event, filePath: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw) fsWatcher.watchFile(filePath, bw.id);
+  });
+
+  ipcMain.handle('fs:unwatchFile', (event, filePath: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw) fsWatcher.unwatchFile(filePath, bw.id);
+  });
+
+  ipcMain.handle('fs:watchDir', (event, dirPath: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw) fsWatcher.watchDir(dirPath, bw.id);
+  });
+
+  ipcMain.handle('fs:unwatchDir', (event, dirPath: string) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    if (bw) fsWatcher.unwatchDir(dirPath, bw.id);
+  });
+
   // Prewarm with workspace
   ipcMain.handle('pty:prewarm', async (event, workspace: string) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
@@ -682,28 +1065,21 @@ function setupIPC(): void {
     const winState = windowId != null ? windowRegistry.get(windowId) : undefined;
     const contextBridge = winState?.contextBridge;
 
-    // Load workspace config and set on PTY manager
+    // Load workspace config (deep-merged across ~/.config/lee, ~/.lee, <ws>/.lee) and set on PTY manager
     try {
-      const configPaths = [
-        path.join(workspace, '.lee', 'config.yaml'),
-        path.join(app.getPath('home'), '.lee', 'config.yaml'),
-        path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
-      ];
-
-      for (const configPath of configPaths) {
-        try {
-          const content = await fs.promises.readFile(configPath, 'utf-8');
-          const config = parseYamlConfig(content);
-          console.log('Setting workspace config from:', configPath);
-          console.log('  source files:', config.source || []);
-          ptyManager.setWorkspaceConfig(workspace, config, windowId);
-          contextBridge?.setWorkspaceConfig(config);
-          contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
-          break;
-        } catch {
-          // Try next path
-        }
+      const { config, sources } = await loadMergedConfig(workspace);
+      console.log('Setting workspace config, merged from:', sources);
+      if (windowId != null) {
+        ptyManager.setWorkspaceConfig(workspace, config, windowId);
+        // The window doing the prewarm is the one the user is looking at, so
+        // its config is the one the shared daemon should run with (C12).
+        ptyManager.setDaemonWindow(windowId);
       }
+      applyConfigToMainProcess(config);
+      contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
+      contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
+      // Baseline for the "did hester: change?" comparison on later saves
+      lastHesterConfig.set(workspace, serializeHesterBlock(config));
 
       // Even if no config was found, broadcast default TUI definitions
       if (!contextBridge?.getContext().availableTuis) {
@@ -711,6 +1087,7 @@ function setupIPC(): void {
       }
     } catch (error) {
       console.error('Failed to load workspace config:', error);
+      pushStatus('error', `Couldn't load the config for ${workspace}: ${(error as Error).message}`);
     }
 
     // Update window workspace in registry
@@ -731,9 +1108,15 @@ function setupIPC(): void {
 
     // Also start Hester daemon in background for command palette
     // (async - checks if port 9000 is available first)
-    ptyManager.prewarmDaemon().catch((err) => {
-      console.error('Failed to start Hester daemon:', err);
-    });
+    ptyManager.prewarmDaemon()
+      .catch((err) => {
+        console.error('Failed to start Hester daemon:', err);
+      })
+      .finally(() => {
+        // Whether we just started it or it was already up (possibly pinned to
+        // another window's workspace), tell it which workspace to serve.
+        ptyManager.setDaemonWorkspace(workspace).catch(() => { /* daemon may be down */ });
+      });
   });
 
   // Config operations - load .lee/config.yaml
@@ -744,34 +1127,43 @@ function setupIPC(): void {
     const contextBridge = winState?.contextBridge;
 
     try {
-      // Try workspace-local config first, then global
-      const configPaths = [
-        path.join(workspace, '.lee', 'config.yaml'),
-        path.join(app.getPath('home'), '.lee', 'config.yaml'),
-        path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
-      ];
-
-      for (const configPath of configPaths) {
-        try {
-          const content = await fs.promises.readFile(configPath, 'utf-8');
-          const config = parseYamlConfig(content);
-          console.log('Loaded config from:', configPath);
-          console.log('  sql.default:', config.sql?.default);
-          console.log('  sql.connections:', config.sql?.connections?.length, config.sql?.connections?.map((c: any) => c.name));
-          // Also update pty-manager and context-bridge with the config
-          ptyManager.setWorkspaceConfig(workspace, config, windowId);
-          contextBridge?.setWorkspaceConfig(config);
-          contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
-          return config;
-        } catch {
-          // Try next path
-        }
+      // Deep-merge ~/.config/lee, ~/.lee, and <workspace>/.lee (workspace wins per key)
+      const { config, sources } = await loadMergedConfig(workspace);
+      if (sources.length === 0) {
+        console.log('No config file found');
+        return null;
       }
-
-      console.log('No config file found');
-      return null;
+      console.log('Loaded config, merged from:', sources);
+      console.log('  sql.default:', config.sql?.default);
+      console.log('  sql.connections:', config.sql?.connections?.length, config.sql?.connections?.map((c: any) => c.name));
+      // Also update pty-manager and context-bridge with the config
+      if (windowId != null) ptyManager.setWorkspaceConfig(workspace, config, windowId);
+      applyConfigToMainProcess(config);
+      contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
+      contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
+      return config;
     } catch (error) {
       console.error('Failed to load config:', error);
+      pushStatus('error', `Couldn't load config for ${workspace}: ${(error as Error).message}`);
+      return null;
+    }
+  });
+
+  /**
+   * C20: where each top-level config key actually came from.
+   *
+   * The config editor shows a merged view but used to save (and read raw
+   * YAML) only against <ws>/.lee/config.yaml, so a value inherited from
+   * ~/.lee/config.yaml looked workspace-local and got copied into the
+   * workspace file on save - shadowing the global one. The editor now labels
+   * each section with its source file and lets the Raw tab pick a file.
+   */
+  ipcMain.handle('config:sources', async (_event, workspace: string) => {
+    try {
+      const { sources, keySources, paths } = await loadConfigWithProvenance(workspace);
+      return { sources, keySources, paths };
+    } catch (error) {
+      console.error('Failed to resolve config provenance:', error);
       return null;
     }
   });
@@ -783,7 +1175,12 @@ function setupIPC(): void {
       const content = await fs.promises.readFile(configPath, 'utf-8');
       return content;
     } catch (error) {
-      console.error('Failed to read raw config:', error);
+      // ENOENT is the common case (no workspace config yet) - the editor
+      // renders an empty buffer and creates the file on save.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        console.error('Failed to read raw config:', error);
+        pushStatus('warn', `Couldn't read ${workspace}/.lee/config.yaml: ${(error as Error).message}`);
+      }
       return null;
     }
   });
@@ -806,15 +1203,19 @@ function setupIPC(): void {
       await fs.promises.writeFile(configPath, content, 'utf-8');
       console.log('Saved raw config to:', configPath);
 
-      // Reload config into pty-manager and context-bridge
-      const config = parseYamlConfig(content);
-      ptyManager.setWorkspaceConfig(workspace, config, windowId);
-      contextBridge?.setWorkspaceConfig(config);
+      // Reload the deep-merged config (workspace + global) into pty-manager and context-bridge,
+      // so the in-memory config isn't just the raw workspace file.
+      const { config } = await loadMergedConfig(workspace);
+      if (windowId != null) ptyManager.setWorkspaceConfig(workspace, config, windowId);
+      contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
+      applyConfigToMainProcess(config);
+      await restartDaemonIfHesterConfigChanged(workspace, config);
 
       return { success: true };
     } catch (error: any) {
       console.error('Failed to save raw config:', error);
+      pushStatus('error', `Couldn't save ${workspace}/.lee/config.yaml: ${error.message}`);
       return { success: false, error: error.message };
     }
   });
@@ -845,14 +1246,19 @@ function setupIPC(): void {
       await fs.promises.writeFile(configPath, content, 'utf-8');
       console.log('Saved config to:', configPath);
 
-      // Reload config into pty-manager and context-bridge
-      ptyManager.setWorkspaceConfig(workspace, config, windowId);
-      contextBridge?.setWorkspaceConfig(config);
+      // Reload the deep-merged config (workspace + global) into pty-manager and context-bridge,
+      // so the in-memory config isn't just the raw workspace object passed in.
+      const { config: mergedConfig } = await loadMergedConfig(workspace);
+      if (windowId != null) ptyManager.setWorkspaceConfig(workspace, mergedConfig, windowId);
+      contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(mergedConfig));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
+      applyConfigToMainProcess(mergedConfig);
+      await restartDaemonIfHesterConfigChanged(workspace, mergedConfig);
 
       return { success: true };
     } catch (error: any) {
       console.error('Failed to save config:', error);
+      pushStatus('error', `Couldn't save ${workspace}/.lee/config.yaml: ${error.message}`);
       return { success: false, error: error.message };
     }
   });
@@ -888,9 +1294,11 @@ function setupIPC(): void {
       await fs.promises.writeFile(configPath, content, 'utf-8');
       console.log('Saved raw global config to:', configPath);
       await machineManager.loadConfig();
+      await reloadAfterGlobalConfigSave();
       return { success: true };
     } catch (error: any) {
       console.error('Failed to save raw global config:', error);
+      pushStatus('error', `Couldn't save ~/.lee/config.yaml: ${error.message}`);
       return { success: false, error: error.message };
     }
   });
@@ -909,9 +1317,11 @@ function setupIPC(): void {
       await fs.promises.writeFile(configPath, content, 'utf-8');
       console.log('Saved global config to:', configPath);
       await machineManager.loadConfig();
+      await reloadAfterGlobalConfigSave();
       return { success: true };
     } catch (error: any) {
       console.error('Failed to save global config:', error);
+      pushStatus('error', `Couldn't save ~/.lee/config.yaml: ${error.message}`);
       return { success: false, error: error.message };
     }
   });
@@ -936,6 +1346,13 @@ function setupIPC(): void {
       return result;
     } catch (error) {
       console.error('Failed to read directory:', error);
+      // ENOENT is routine once the file tree started watching directories
+      // (C17): a directory can vanish between the change event and the
+      // re-read. Anything else - permissions, a broken mount - is worth
+      // saying out loud, since the tree would otherwise just look empty.
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        pushStatus('warn', `Couldn't read ${dirPath}: ${(error as Error).message}`, { ttl: 8 });
+      }
       return [];
     }
   });
@@ -1009,6 +1426,8 @@ function setupIPC(): void {
       return { success: true };
     } catch (error: any) {
       console.error('Failed to write file:', error);
+      // The renderer surfaces the failed save itself (it needs to keep the
+      // tab open), so don't double-report here.
       return { success: false, error: error.message };
     }
   });
@@ -1018,6 +1437,7 @@ function setupIPC(): void {
       await fs.promises.access(filePath);
       return true;
     } catch {
+      // "Doesn't exist" is the answer, not an error.
       return false;
     }
   });
@@ -1032,6 +1452,8 @@ function setupIPC(): void {
         mtime: stat.mtimeMs,
       };
     } catch {
+      // null means "no such file" - C4's change detection relies on that
+      // rather than on an exception.
       return null;
     }
   });
@@ -1324,7 +1746,11 @@ function setupIPC(): void {
 
       const response = await fetch(daemonUrl, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          // Hester requires the shared bearer on everything but GET /health
+          Authorization: `Bearer ${apiServer.getAuthToken()}`,
+        },
       });
 
       if (!response.ok) {
@@ -1368,6 +1794,20 @@ function setupIPC(): void {
       return await machineManager.fetchRemoteContext(machineConfig);
     } catch (err: any) {
       return { error: err.message };
+    }
+  });
+
+  // Shared Lee/Hester bearer token, for renderer fetches to the daemon on :9000
+  ipcMain.handle('app:getApiToken', async () => {
+    return apiServer.getAuthToken();
+  });
+
+  ipcMain.handle('machines:getToken', async (_event, machineName: string) => {
+    try {
+      return await machineManager.getTokenForMachine(machineName);
+    } catch (err: any) {
+      console.error('[Main] Failed to fetch machine token:', err);
+      return null;
     }
   });
 
@@ -1461,7 +1901,11 @@ app.whenReady().then(() => {
     browserManager,
     windowRegistry,
   });
-  apiServer.start();
+  apiServer.start().catch((err) => {
+    // Already surfaced to the user via status:push inside start() when it's
+    // EADDRINUSE; this just stops it becoming an unhandled rejection.
+    console.error('[Lee] API server failed to start:', err);
+  });
 
   // Initialize machine manager for Lee-to-Lee connectivity
   machineManager = new MachineManager();
@@ -1479,8 +1923,8 @@ app.whenReady().then(() => {
   // Setup IPC handlers
   setupIPC();
 
-  // Setup global shortcuts (once, not per-window)
-  setupGlobalShortcuts();
+  // The system-wide focus chord is opt-in and comes from config, so it's
+  // registered by applyConfigToMainProcess() once a workspace config loads.
 
   // Create first window
   createWindow();
@@ -1505,10 +1949,14 @@ app.on('before-quit', async (event) => {
   // Skip if already confirmed
   if (quitConfirmed) return;
 
-  // Aggregate active terminals across ALL windows
+  // Aggregate active terminals and unsaved files across ALL windows
   const activeCount = ptyManager.getActiveTerminalCount();
+  let dirtyFileCount = 0;
+  for (const ws of windowRegistry.getAll().values()) {
+    dirtyFileCount += ws.contextBridge.getDirtyFileCount();
+  }
 
-  if (activeCount > 0) {
+  if (activeCount > 0 || dirtyFileCount > 0) {
     // Prevent quit until user confirms
     event.preventDefault();
 
@@ -1516,6 +1964,15 @@ app.on('before-quit', async (event) => {
     const terminalList = terminalNames.length <= 5
       ? terminalNames.join(', ')
       : `${terminalNames.slice(0, 5).join(', ')} and ${terminalNames.length - 5} more`;
+
+    const messageParts: string[] = [];
+    if (activeCount > 0) messageParts.push(`${activeCount} active terminal${activeCount > 1 ? 's' : ''}`);
+    if (dirtyFileCount > 0) messageParts.push(`${dirtyFileCount} unsaved file${dirtyFileCount > 1 ? 's' : ''}`);
+
+    const detailParts: string[] = [];
+    if (activeCount > 0) detailParts.push(`Running: ${terminalList}`);
+    if (dirtyFileCount > 0) detailParts.push(`${dirtyFileCount} file${dirtyFileCount > 1 ? 's have' : ' has'} unsaved changes that will be lost.`);
+    detailParts.push('Are you sure you want to quit?');
 
     // Use any available window as dialog parent
     const parentWindow = windowRegistry.getAny()?.browserWindow || BrowserWindow.getAllWindows()[0] || null;
@@ -1526,8 +1983,8 @@ app.on('before-quit', async (event) => {
       defaultId: 1,
       cancelId: 1,
       title: 'Quit Lee?',
-      message: `You have ${activeCount} active terminal${activeCount > 1 ? 's' : ''} open`,
-      detail: `Running: ${terminalList}\n\nAre you sure you want to quit? All terminal sessions will be closed.`,
+      message: `You have ${messageParts.join(' and ')} open`,
+      detail: detailParts.join('\n\n'),
     });
 
     if (result.response === 0) {
@@ -1540,13 +1997,43 @@ app.on('before-quit', async (event) => {
 });
 
 // Cleanup on quit
-app.on('will-quit', () => {
+app.on('will-quit', (event) => {
   globalShortcut.unregisterAll();
+  fsWatcher.closeAll();
+
+  // If the daemon is ours, ask it to exit cleanly first so it shuts down the
+  // managed redis it started (both used to outlive Lee). A restart takes the
+  // kill-the-PTY path instead, which deliberately leaves redis running.
+  if (ptyManager.isDaemonLeeManaged() && !daemonShutdownAttempted) {
+    daemonShutdownAttempted = true;
+    event.preventDefault();
+    ptyManager
+      .shutdownDaemonGracefully()
+      .catch(() => { /* fall through to killAll */ })
+      .finally(() => {
+        ptyManager.killAll();
+        apiServer.stop();
+        app.quit();
+      });
+    return;
+  }
+
   ptyManager.killAll();
   apiServer.stop();
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions / rejections.
+//
+// These used to only reach the console, which in a packaged app means
+// nowhere the user will ever look. Surface them in the status bar too (C22)
+// so a main-process failure is at least visible.
 process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
+  pushStatus('error', `Lee hit an internal error: ${error?.message || error}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  console.error('Unhandled promise rejection:', reason);
+  pushStatus('error', `Lee hit an internal error: ${message}`);
 });

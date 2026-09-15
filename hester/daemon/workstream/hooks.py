@@ -16,13 +16,32 @@ from typing import Any, Dict
 # Hook script that parses stdin JSON and sends telemetry
 TELEMETRY_HOOK_SCRIPT = '''#!/usr/bin/env python3
 """Claude Code hook script for Workstream telemetry."""
+import os
 import sys
 import json
 import urllib.request
 
 HESTER_URL = "{hester_url}"
+
+
+def _lee_token():
+    """Bearer token shared with Lee (~/.lee/api-token); Hester's API requires it."""
+    try:
+        return open(os.path.expanduser("~/.lee/api-token")).read().strip()
+    except Exception:
+        return ""
+
+
 WORKSTREAM_ID = "{workstream_id}"
 TASK_ID = "{task_id}"
+
+def _hook_headers():
+    headers = {{"Content-Type": "application/json"}}
+    token = _lee_token()
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
 
 def send_telemetry(action: str, data: dict):
     """Send telemetry to Hester daemon."""
@@ -39,7 +58,7 @@ def send_telemetry(action: str, data: dict):
     req = urllib.request.Request(
         f"{{HESTER_URL}}/orchestrate/telemetry",
         data=payload,
-        headers={{"Content-Type": "application/json"}},
+        headers=_hook_headers(),
         method="POST"
     )
     try:

@@ -66,6 +66,7 @@ def _register_commands():
     from .chat import chat
     from .agent import agent
     from .daemon import daemon
+    from .doctor import doctor
     from .db import db
     from .redis import redis
     from .ask import ask
@@ -84,6 +85,7 @@ def _register_commands():
     cli.add_command(chat)
     cli.add_command(agent)
     cli.add_command(daemon)
+    cli.add_command(doctor)
     cli.add_command(db)
     cli.add_command(redis)
     cli.add_command(ask)

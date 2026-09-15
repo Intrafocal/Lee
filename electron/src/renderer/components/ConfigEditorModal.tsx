@@ -8,8 +8,32 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import type { ConfigSources } from '../../shared/lee-api';
 
-const lee = (window as any).lee;
+const lee = window.lee;
+
+/** `/Users/ben/.lee/config.yaml` -> `~/.lee/config.yaml` */
+function prettyPath(p: string | undefined): string {
+  if (!p) return '';
+  const match = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)(\/.*)$/);
+  return match ? `~${match[2]}` : p;
+}
+
+/**
+ * C20: the structured view shows the MERGED config, so a value the user is
+ * looking at may live in ~/.lee/config.yaml rather than in this workspace.
+ * Label each section with the file its keys actually came from, so saving
+ * (which writes the workspace file) isn't a surprise.
+ */
+const SourceHint: React.FC<{ path?: string; fallback?: string }> = ({ path, fallback }) => {
+  const shown = path ?? fallback;
+  if (!shown) return null;
+  return (
+    <div className="config-source-hint" title={shown}>
+      from: {prettyPath(shown)}
+    </div>
+  );
+};
 
 
 interface ConfigEditorModalProps {
@@ -37,9 +61,20 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
   const [editedConfig, setEditedConfig] = useState<any>(null);
   const [selectedTui, setSelectedTui] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
-  const [rawYaml, setRawYaml] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // C20: provenance of each top-level key, plus the two editable raw files.
+  const [sources, setSources] = useState<ConfigSources | null>(null);
+  const [rawTarget, setRawTarget] = useState<'workspace' | 'global'>('workspace');
+  const [rawWorkspaceYaml, setRawWorkspaceYaml] = useState('');
+  const [rawGlobalYaml, setRawGlobalYaml] = useState('');
+  /**
+   * Which file a newly-entered Google API key should be written to.
+   * Defaults to the global file: it's a machine-wide credential, and writing
+   * it into <ws>/.lee/config.yaml is how it ended up in a git repo before.
+   */
+  const [apiKeyTarget, setApiKeyTarget] = useState<'global' | 'workspace'>('global');
 
   // Initialize edited config when modal opens
   useEffect(() => {
@@ -63,7 +98,19 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
     }
   }, [isOpen, config, initialSection]);
 
-  // Load raw YAML when switching to raw tab
+  // Where each top-level key came from (for the section hints)
+  useEffect(() => {
+    if (!isOpen || !workspace || !lee) return;
+    lee.config.sources(workspace)
+      .then((result) => setSources(result))
+      .catch((err) => {
+        console.error('Failed to resolve config provenance:', err);
+        setSources(null);
+      });
+  }, [isOpen, workspace]);
+
+  // Load BOTH raw files when switching to the raw tab - the tab is a picker
+  // between the workspace file and the global one, each saved to its own path.
   useEffect(() => {
     if (activeSection === 'raw' && workspace && lee) {
       loadRawYaml();
@@ -72,13 +119,22 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
 
   const loadRawYaml = async () => {
     try {
-      const content = await lee.config.getRaw(workspace);
-      setRawYaml(content || '');
+      const [ws, global] = await Promise.all([
+        lee.config.getRaw(workspace),
+        lee.globalConfig.getRaw(),
+      ]);
+      setRawWorkspaceYaml(ws ?? '');
+      setRawGlobalYaml(global ?? '');
     } catch (err) {
       console.error('Failed to load raw config:', err);
-      setRawYaml('# Failed to load config file');
+      setError(`Couldn't read the config files: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+
+  const rawYaml = rawTarget === 'global' ? rawGlobalYaml : rawWorkspaceYaml;
+  const rawPath = rawTarget === 'global'
+    ? sources?.paths.global
+    : (sources?.paths.workspace ?? `${workspace}/.lee/config.yaml`);
 
   const handleTuiChange = useCallback((tuiKey: string, field: string, value: any) => {
     setEditedConfig((prev: any) => {
@@ -198,13 +254,39 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
     setError(null);
     try {
       if (activeSection === 'raw') {
-        // Save raw YAML
-        await lee.config.saveRaw(workspace, rawYaml);
+        // Each raw buffer is saved to its own file, never merged into the other.
+        const result = rawTarget === 'global'
+          ? await lee.globalConfig.saveRaw(rawGlobalYaml)
+          : await lee.config.saveRaw(workspace, rawWorkspaceYaml);
+        if (!result.success) throw new Error(result.error || 'Failed to save config');
       } else {
-        // Save structured config
-        await lee.config.save(workspace, editedConfig);
+        const toSave = JSON.parse(JSON.stringify(editedConfig ?? {}));
+
+        // The API key is a machine-wide credential: unless the user
+        // deliberately chose this workspace, it goes to ~/.lee/config.yaml
+        // and is stripped from what we write into <ws>/.lee/config.yaml.
+        if (apiKeyTarget === 'global') {
+          const key: string | undefined = toSave?.hester?.google_api_key;
+          if (toSave.hester) delete toSave.hester.google_api_key;
+          const globalConfig = (await lee.globalConfig.load()) || {};
+          const hester = { ...(globalConfig.hester || {}) };
+          if (key) hester.google_api_key = key;
+          else delete hester.google_api_key;
+          globalConfig.hester = hester;
+          const globalResult = await lee.globalConfig.save(globalConfig);
+          if (!globalResult.success) {
+            throw new Error(globalResult.error || 'Failed to save ~/.lee/config.yaml');
+          }
+        }
+
+        const result = await lee.config.save(workspace, toSave);
+        if (!result.success) throw new Error(result.error || 'Failed to save config');
       }
       setHasChanges(false);
+      // Refresh provenance - a key may have moved between files.
+      lee.config.sources(workspace).then(setSources).catch(() => {
+        // Non-fatal: the hints just keep showing their previous values.
+      });
       onSave(editedConfig);
     } catch (err: any) {
       setError(err.message || 'Failed to save config');
@@ -232,7 +314,9 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
       <div className="config-modal" onClick={(e) => e.stopPropagation()}>
         <div className="config-modal-header">
           <h2>Configuration</h2>
-          <p>{workspace}/.lee/config.yaml</p>
+          <p title={(sources?.sources || []).join('\n')}>
+            merged from {(sources?.sources || [`${workspace}/.lee/config.yaml`]).map(prettyPath).join('  ←  ')}
+          </p>
           <button className="config-modal-close" onClick={onClose}>×</button>
         </div>
 
@@ -274,6 +358,7 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
           {/* TUIs Section */}
           {activeSection === 'tuis' && (
             <div className="config-tuis-section">
+              <SourceHint path={sources?.keySources?.tuis} />
               <div className="config-tuis-sidebar">
                 <div className="config-tuis-list">
                   {tuiKeys.map((key) => (
@@ -467,6 +552,7 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
           {/* Keybindings Section */}
           {activeSection === 'keybindings' && (
             <div className="config-keybindings-section">
+              <SourceHint path={sources?.keySources?.keybindings} />
               <div className="config-keybindings-grid">
                 {Object.entries(editedConfig?.keybindings || {}).map(([action, binding]) => (
                   <div key={action} className="config-keybinding-row">
@@ -486,6 +572,7 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
           {/* Terminal Section */}
           {activeSection === 'terminal' && (
             <div className="config-terminal-section">
+              <SourceHint path={sources?.keySources?.terminal} />
               <div className="config-form-group">
                 <label>Shell</label>
                 <input
@@ -529,6 +616,7 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
           {/* Hester Section */}
           {activeSection === 'hester' && (
             <div className="config-hester-section">
+              <SourceHint path={sources?.keySources?.hester} />
               <div className="config-form-group">
                 <label>Google API Key</label>
                 <div className="config-secret-input">
@@ -540,7 +628,30 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
                     placeholder="Enter your Google API key"
                   />
                 </div>
-                <span className="config-input-hint">Required for Gemini models. Stored in .lee/config.yaml</span>
+                <div className="config-radio-row">
+                  <label className="config-checkbox">
+                    <input
+                      type="radio"
+                      name="api-key-target"
+                      checked={apiKeyTarget === 'global'}
+                      onChange={() => { setApiKeyTarget('global'); setHasChanges(true); }}
+                    />
+                    <span>Save to {prettyPath(sources?.paths.global) || '~/.lee/config.yaml'} (all workspaces)</span>
+                  </label>
+                  <label className="config-checkbox">
+                    <input
+                      type="radio"
+                      name="api-key-target"
+                      checked={apiKeyTarget === 'workspace'}
+                      onChange={() => { setApiKeyTarget('workspace'); setHasChanges(true); }}
+                    />
+                    <span>Save to this workspace only</span>
+                  </label>
+                </div>
+                <span className="config-input-hint">
+                  Required for Gemini models. The global file is the safer home for it -
+                  a workspace config can end up committed to the project's repo.
+                </span>
               </div>
 
               <div className="config-form-row">
@@ -582,14 +693,33 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
           {/* Raw YAML Section */}
           {activeSection === 'raw' && (
             <div className="config-raw-section">
+              <div className="config-raw-picker">
+                <button
+                  className={`config-raw-file ${rawTarget === 'workspace' ? 'active' : ''}`}
+                  onClick={() => setRawTarget('workspace')}
+                >
+                  {prettyPath(sources?.paths.workspace) || `${workspace}/.lee/config.yaml`}
+                </button>
+                <button
+                  className={`config-raw-file ${rawTarget === 'global' ? 'active' : ''}`}
+                  onClick={() => setRawTarget('global')}
+                >
+                  {prettyPath(sources?.paths.global) || '~/.lee/config.yaml'}
+                </button>
+                <span className="config-raw-path-note">
+                  Each file is edited and saved on its own; the structured tabs show them merged.
+                </span>
+              </div>
               <textarea
                 value={rawYaml}
                 onChange={(e) => {
-                  setRawYaml(e.target.value);
+                  if (rawTarget === 'global') setRawGlobalYaml(e.target.value);
+                  else setRawWorkspaceYaml(e.target.value);
                   setHasChanges(true);
                 }}
                 className="config-raw-editor"
                 spellCheck={false}
+                placeholder={`# ${rawPath} (does not exist yet - saving creates it)`}
               />
             </div>
           )}
@@ -614,7 +744,11 @@ export const ConfigEditorModal: React.FC<ConfigEditorModalProps> = ({
               onClick={handleSave}
               disabled={!hasChanges || saving}
             >
-              {saving ? 'Saving...' : 'Save'}
+              {saving
+                ? 'Saving...'
+                : activeSection === 'raw'
+                  ? `Save ${rawTarget === 'global' ? 'Lee config' : 'workspace config'}`
+                  : 'Save'}
             </button>
           </div>
         </div>

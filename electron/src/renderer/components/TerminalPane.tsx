@@ -17,7 +17,7 @@ import { ptyEventManager } from '../hooks/usePtyEvents';
 import '@xterm/xterm/css/xterm.css';
 
 // Get the Lee API from preload
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // Clipboard image data type from preload
 interface ClipboardImageData {
@@ -105,7 +105,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ ptyId, active, label
       // Fallback to FitAddon on any error
       try {
         fitAddonRef.current?.fit();
-      } catch {}
+      } catch {
+        // Last-resort fallback for a detached/zero-size terminal; nothing
+        // useful to tell the user, and the next resize retries anyway.
+      }
     }
   }, []);
 

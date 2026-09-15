@@ -22,7 +22,6 @@ dependencies = [
     "google-genai>=1.0.0",
     "pillow>=10.0.0",
     "claude-code-sdk>=0.0.10",
-    "anthropic>=0.40.0",
 
     # Hester Daemon
     "fastapi>=0.100",
@@ -32,9 +31,11 @@ dependencies = [
     "asyncpg>=0.29",
     "prompt_toolkit>=3.0",
     "supabase>=2.0.0",
+    "numpy>=1.26",
+    "websockets>=12.0",
+    "slack_sdk>=3.27",
 
     # Lee Editor
-    "textual>=0.94.0",
     "pyyaml>=6.0",
     "gitpython>=3.1.0",
     "aiohttp>=3.9.0",
@@ -48,14 +49,13 @@ dev = [
 
 [project.scripts]
 hester = "hester.cli:main"
-lee = "editor.main:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hester", "editor"]
+packages = ["hester"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

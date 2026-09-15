@@ -57,11 +57,40 @@ export class APIServer {
     return this.authToken;
   }
 
+  /**
+   * Load the persisted auth token from ~/.lee/api-token if present, else
+   * generate a new one and write it. Keeping the token stable across
+   * restarts is required for paired Aeronaut phones, Dirigible devices,
+   * and remote Spyglass connections to keep working.
+   */
+  private static loadOrCreateAuthToken(): string {
+    const tokenDir = path.join(os.homedir(), '.lee');
+    const tokenPath = path.join(tokenDir, 'api-token');
+
+    try {
+      const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+      if (existing) {
+        return existing;
+      }
+    } catch {
+      // File doesn't exist or isn't readable - fall through to generate.
+    }
+
+    const token = crypto.randomUUID();
+    try {
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(tokenPath, token, { mode: 0o600 });
+    } catch (err) {
+      console.error('Failed to write api-token file:', err);
+    }
+    return token;
+  }
+
   constructor(config: APIServerConfig) {
     this.ptyManager = config.ptyManager;
     this.browserManager = config.browserManager;
     this.port = config.port;
-    this.authToken = crypto.randomUUID();
+    this.authToken = APIServer.loadOrCreateAuthToken();
 
     this.app = express();
     this.app.use(express.json());
@@ -89,10 +118,12 @@ export class APIServer {
       next();
     });
 
-    // Auth middleware - require Bearer token on POST and DELETE routes
+    // Auth middleware - require Bearer token on every route except the
+    // unauthenticated health check and CORS preflight. GET /context used to
+    // be exempt here too, which leaked the full workspace config (API keys,
+    // DB passwords, machine list) to anyone on the LAN who could reach :9001.
     this.app.use((req: Request, res: Response, next: NextFunction) => {
-      // Skip auth for GET requests (health, context, etc.) and OPTIONS preflight
-      if (req.method === 'GET' || req.method === 'OPTIONS') {
+      if (req.method === 'OPTIONS' || (req.method === 'GET' && req.path === '/health')) {
         next();
         return;
       }
@@ -233,15 +264,8 @@ export class APIServer {
         this.server = this.app.listen(this.port, () => {
           console.log(`Lee API server listening on port ${this.port}`);
 
-          // Write auth token to ~/.lee/api-token so remote machines can read it via SSH
-          const tokenDir = path.join(os.homedir(), '.lee');
-          const tokenPath = path.join(tokenDir, 'api-token');
-          try {
-            fs.mkdirSync(tokenDir, { recursive: true });
-            fs.writeFileSync(tokenPath, this.authToken, { mode: 0o600 });
-          } catch (err) {
-            console.error('Failed to write api-token file:', err);
-          }
+          // Auth token is loaded/persisted to ~/.lee/api-token in the constructor
+          // (see loadOrCreateAuthToken) so remote machines can read it via SSH.
 
           // Create all WebSocket servers in noServer mode
           this.wss = new WebSocketServer({ noServer: true });
@@ -656,6 +680,24 @@ export class APIServer {
           console.log(`PTY WebSocket server listening on ws://localhost:${this.port}/pty/:id/stream`);
           console.log(`Browser cast WebSocket server listening on ws://localhost:${this.port}/browser/:tabId/cast`);
           resolve();
+        });
+        // listen() reports a bind failure (e.g. EADDRINUSE - a second Lee
+        // instance, or anything else squatting on the port) via an 'error'
+        // event, not by throwing synchronously - without this handler it
+        // was an unhandled 'error' event, which Node treats as an uncaught
+        // exception and takes the whole process down.
+        this.server.on('error', (err: NodeJS.ErrnoException) => {
+          console.error('Lee API server error:', err);
+          if (err.code === 'EADDRINUSE') {
+            for (const ws of windowRegistry.getAll().values()) {
+              ws.browserWindow.webContents.send('status:push', {
+                id: `api-server-error-${Date.now()}`,
+                message: `Lee's API server couldn't start: port ${this.port} is already in use. Hester, Aeronaut, and Spyglass commands won't work until this is resolved.`,
+                type: 'error',
+              });
+            }
+          }
+          reject(err);
         });
       } catch (error) {
         reject(error);
@@ -1204,16 +1246,23 @@ export class APIServer {
         res.status(400).json({ success: false, error: 'Custom TUI requires command parameter' });
         return;
       }
-      // Custom commands can't use renderer's createTab — spawn directly
-      try {
-        const ptyId = this.ptyManager.spawnTUI(command, [], cwd, label);
-        res.json({ success: true, data: { pty_id: ptyId, action: 'custom' } });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
+      // Route through the same system:create-tab path the other TUI spawns
+      // use, so this gets a real tab (and a window owner) instead of a
+      // detached PTY nothing can see or close from the UI.
+      const customWs = this.getWindowForCommand(params);
+      const customWindow = customWs?.browserWindow || null;
+      if (!customWindow) {
+        res.status(503).json({ success: false, error: 'No window available' });
+        return;
       }
+      customWindow.webContents.send('system:create-tab', {
+        type: 'terminal',
+        label: label || command,
+        cwd,
+        command,
+        args: params.args as string[] | undefined,
+      });
+      res.json({ success: true, data: { action: 'custom' } });
       return;
     }
 
@@ -1252,41 +1301,16 @@ export class APIServer {
     }
 
     switch (action) {
+      // toggle/show/hide/resize dispatch the IPC event, but App.tsx's
+      // handlers for them are explicit no-ops ("not yet implemented") -
+      // this used to report success while doing nothing. Report honestly
+      // until they're wired up; 'focus' actually works.
       case 'toggle':
-        if (!params.panel) {
-          res.status(400).json({ success: false, error: 'Missing panel parameter' });
-          return;
-        }
-        mainWindow.webContents.send('panel:toggle', params.panel);
-        res.json({ success: true, data: { action: 'toggle', panel: params.panel } });
-        break;
-
       case 'show':
-        if (!params.panel) {
-          res.status(400).json({ success: false, error: 'Missing panel parameter' });
-          return;
-        }
-        mainWindow.webContents.send('panel:show', params.panel);
-        res.json({ success: true, data: { action: 'show', panel: params.panel } });
-        break;
-
       case 'hide':
-        if (!params.panel) {
-          res.status(400).json({ success: false, error: 'Missing panel parameter' });
-          return;
-        }
-        mainWindow.webContents.send('panel:hide', params.panel);
-        res.json({ success: true, data: { action: 'hide', panel: params.panel } });
-        break;
-
       case 'resize':
-        if (!params.panel || params.size === undefined) {
-          res.status(400).json({ success: false, error: 'Missing panel or size parameter' });
-          return;
-        }
-        mainWindow.webContents.send('panel:resize', params.panel, params.size);
-        res.json({ success: true, data: { action: 'resize', panel: params.panel, size: params.size } });
-        break;
+        res.status(501).json({ success: false, error: `Panel action '${action}' is not implemented yet` });
+        return;
 
       case 'focus':
         if (!params.panel) {
@@ -1324,22 +1348,36 @@ export class APIServer {
     }
 
     switch (action) {
-      case 'push':
-        // Push a new message to the status queue
-        if (!params.message) {
-          res.status(400).json({ success: false, error: 'Missing message parameter' });
+      case 'push': {
+        // Push a new message to the status queue. This is called by an
+        // unauthenticated-until-recently, LAN-reachable API (see C3), so
+        // validate everything rather than forwarding whatever arrived
+        // straight into renderer state.
+        if (typeof params.message !== 'string' || params.message.trim().length === 0) {
+          res.status(400).json({ success: false, error: 'message must be a non-empty string' });
           return;
         }
-        const messageId = params.id || `msg-${Date.now()}`;
+        const messageId = params.id !== undefined && params.id !== null ? String(params.id) : `msg-${Date.now()}`;
+
+        // Coerce ttl to a finite positive number; drop anything else (NaN,
+        // negative, Infinity, non-numeric) rather than pass it through to
+        // setTimeout() in the renderer.
+        let ttl: number | undefined;
+        if (params.ttl !== undefined && params.ttl !== null) {
+          const parsedTtl = Number(params.ttl);
+          ttl = Number.isFinite(parsedTtl) && parsedTtl > 0 ? parsedTtl : undefined;
+        }
+
         mainWindow.webContents.send('status:push', {
           id: messageId,
           message: params.message,
           type: params.type || 'hint',
           prompt: params.prompt,
-          ttl: params.ttl,
+          ttl,
         });
         res.json({ success: true, data: { action: 'push', id: messageId } });
         break;
+      }
 
       case 'clear':
         // Clear a specific message by ID

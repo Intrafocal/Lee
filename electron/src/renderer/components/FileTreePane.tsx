@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 // Context menu state
 interface ContextMenuState {
@@ -80,6 +80,88 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
     loadRoot();
   }, [loadRoot]);
 
+  // ---------------------------------------------------------------------
+  // C17: auto-refresh.
+  //
+  // The tree used to read a directory once, on expand, and never again -
+  // files an agent or a build created stayed invisible until the manual
+  // refresh button. The main process watches the root plus every expanded
+  // directory (non-recursive, debounced, noisy dirs skipped) and this
+  // re-reads just the directory that changed, so expansion, filter and
+  // scroll position all survive.
+  // ---------------------------------------------------------------------
+
+  /** Re-read one directory in place, keeping the rest of the tree as it is. */
+  const refreshDir = useCallback(async (dirPath: string) => {
+    if (!lee) return;
+    try {
+      const children = await lee.fs.readdir(dirPath);
+      if (dirPath === workspace) {
+        setEntries(children);
+      } else {
+        setChildrenCache((prev) => {
+          if (!prev.has(dirPath)) return prev; // not expanded any more
+          return new Map(prev).set(dirPath, children);
+        });
+      }
+    } catch {
+      // The directory itself went away - forget it rather than showing a
+      // listing that no longer exists.
+      setChildrenCache((prev) => {
+        if (!prev.has(dirPath)) return prev;
+        const next = new Map(prev);
+        next.delete(dirPath);
+        return next;
+      });
+      setExpanded((prev) => {
+        if (!prev.has(dirPath)) return prev;
+        const next = new Set(prev);
+        next.delete(dirPath);
+        return next;
+      });
+    }
+  }, [workspace]);
+
+  // Watch the workspace root
+  useEffect(() => {
+    if (!workspace || !lee) return;
+    lee.fs.watchDir(workspace);
+    return () => { lee.fs.unwatchDir(workspace); };
+  }, [workspace]);
+
+  // Watch exactly the directories that are currently expanded
+  const watchedDirsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!lee) return;
+    for (const dir of expanded) {
+      if (!watchedDirsRef.current.has(dir)) {
+        lee.fs.watchDir(dir);
+        watchedDirsRef.current.add(dir);
+      }
+    }
+    for (const dir of [...watchedDirsRef.current]) {
+      if (!expanded.has(dir)) {
+        lee.fs.unwatchDir(dir);
+        watchedDirsRef.current.delete(dir);
+      }
+    }
+  }, [expanded]);
+
+  // Release every watch when the tab closes
+  useEffect(() => {
+    const watched = watchedDirsRef.current;
+    return () => {
+      if (!lee) return;
+      for (const dir of watched) lee.fs.unwatchDir(dir);
+      watched.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lee) return;
+    return lee.fs.onDirChanged(({ path }) => { void refreshDir(path); });
+  }, [refreshDir]);
+
   // Toggle directory expansion
   const toggleDir = useCallback(async (dirPath: string) => {
     if (expanded.has(dirPath)) {
@@ -151,6 +233,8 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
     try {
       await lee.clipboard.writeText(relativePath);
     } catch (error) {
+      // Clipboard writes only fail when the OS denies access; there's no
+      // recovery beyond retrying the menu item.
       console.error('Failed to copy path to clipboard:', error);
     }
     closeContextMenu();

@@ -57,11 +57,28 @@ interface WorkspaceConfig {
   terminal?: { shell?: string; scrollback?: number; font_size?: number; copy_on_select?: boolean };
   tuis?: Record<string, TUIDefinition>;
   keybindings?: Record<string, string>;
+  sql?: {
+    /** Name of the connection in `connections` to use by default */
+    default?: string;
+    connections?: Array<{
+      name: string;
+      host: string;
+      port?: number;
+      database: string;
+      user: string;
+      password?: string;
+      ssl?: boolean;
+    }>;
+  };
   hester?: {
     google_api_key?: string;
     model?: string;
     thinking_depth?: boolean;
     ollama_url?: string;
+    prepare_model?: string;
+    local_model?: string;
+    ollama_recheck_minutes?: number;
+    listen_host?: string;
   };
 }
 
@@ -106,6 +123,14 @@ function loadConfig(): LeeConfig {
   // No config found - login shell (-l flag) will handle PATH via ~/.bashrc
   console.log('No config found, relying on login shell for environment');
   return { paths: [], tools: {} };
+}
+
+/**
+ * POSIX single-quote an argument for the `shell: true` escape hatch.
+ * Everything else spawns with an argv array and needs no quoting at all.
+ */
+function shellQuote(arg: string): string {
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Expand ~ to home directory */
@@ -231,10 +256,25 @@ export class PTYManager extends EventEmitter {
   private nextId = 1;
   private shell: string;
   private config: LeeConfig;
-  private extendedPath: string;
+  private configPaths: string[];
+  private cachedExtendedPath: string | null = null;
+  private loginShellPath: string | null = null;
+  private loginShellPathResolved = false;
 
   // Background daemon PTY (hidden, not attached to any tab)
   private daemonPtyId: number | null = null;
+
+  // Ring buffer of the daemon PTY's recent output, for surfacing crash context
+  private daemonOutputBuffer: string[] = [];
+
+  // lee.log size cap (see rotateLogIfNeeded)
+  private static readonly LOG_MAX_BYTES = 10 * 1024 * 1024;
+  private static readonly LOG_BACKUP_COUNT = 3;
+  private logRotationChecked = false;
+
+  // Last workspace we told the daemon to serve (avoids redundant POSTs)
+  private lastDaemonWorkspace: string | null = null;
+  private static DAEMON_BUFFER_MAX_LINES = 40;
 
   // Prewarmed TUI pool for instant startup
   // Maps TUI type to { ptyId, workspace }
@@ -248,21 +288,46 @@ export class PTYManager extends EventEmitter {
   // Per-window workspace configs (loaded from .lee/config.yaml)
   private windowConfigs: Map<number, { workspace: string; config: WorkspaceConfig | null }> = new Map();
 
-  // Legacy accessors for daemon/global operations
-  private get currentWorkspace(): string | null {
-    // Return first window's workspace (for daemon startup etc.)
-    for (const entry of this.windowConfigs.values()) {
-      return entry.workspace;
-    }
-    return null;
+  /**
+   * Which window's config feeds the (single, shared) Hester daemon.
+   *
+   * One daemon backs every Lee window, so its env - API key, model, listen
+   * host, HESTER_WORKING_DIRECTORY - has to come from exactly one window.
+   * That's the focused one: main.ts calls setDaemonWindow() on window focus
+   * and on prewarm, the same hook A3 uses to POST /workspace. Previously
+   * these reads silently took whichever window happened to be inserted into
+   * the map first, so a second window on another project could never
+   * influence the daemon and a stale `-1` placeholder entry could win.
+   */
+  private daemonWindowId: number | null = null;
+
+  /** Point the daemon-facing config reads at a specific window. */
+  setDaemonWindow(windowId: number): void {
+    this.daemonWindowId = windowId;
   }
 
-  private get workspaceConfig(): WorkspaceConfig | null {
-    // Return first window's config (for daemon startup etc.)
-    for (const entry of this.windowConfigs.values()) {
-      return entry.config;
-    }
-    return null;
+  /** Workspace of the window currently feeding the daemon. */
+  private get daemonWorkspace(): string | null {
+    if (this.daemonWindowId === null) return null;
+    return this.windowConfigs.get(this.daemonWindowId)?.workspace ?? null;
+  }
+
+  /** Config of the window currently feeding the daemon. */
+  private get daemonConfig(): WorkspaceConfig | null {
+    if (this.daemonWindowId === null) return null;
+    return this.windowConfigs.get(this.daemonWindowId)?.config ?? null;
+  }
+
+  /** Resolve a window's merged workspace config (null when unknown). */
+  private configFor(windowId?: number): WorkspaceConfig | null {
+    if (windowId == null) return null;
+    return this.windowConfigs.get(windowId)?.config ?? null;
+  }
+
+  /** Resolve a window's workspace path (null when unknown). */
+  private workspaceFor(windowId?: number): string | null {
+    if (windowId == null) return null;
+    return this.windowConfigs.get(windowId)?.workspace ?? null;
   }
 
   constructor() {
@@ -271,11 +336,10 @@ export class PTYManager extends EventEmitter {
     this.shell = process.env.SHELL || '/bin/bash';
     // Load config
     this.config = loadConfig();
-    // Build extended PATH from config
-    const configPaths = (this.config.paths || []).map(expandPath);
-    const currentPath = process.env.PATH || '';
-    this.extendedPath = [...configPaths, ...currentPath.split(':')].join(':');
-    console.log('Lee config loaded, PATH extended with:', configPaths);
+    // Build extended PATH from config (the login shell's PATH is folded in
+    // lazily on first use - see the `extendedPath` getter)
+    this.configPaths = (this.config.paths || []).map(expandPath);
+    console.log('Lee config loaded, PATH extended with:', this.configPaths);
 
     // App-managed venv path
     this.hesterVenvPath = path.join(app.getPath('home'), '.lee', 'venv');
@@ -286,31 +350,87 @@ export class PTYManager extends EventEmitter {
     if (fs.existsSync(hesterBin)) {
       console.log('Hester venv found at:', this.hesterVenvPath, '(will validate on first use)');
     }
+
+    // Capture the daemon PTY's output into a small ring buffer so we can
+    // surface the last few meaningful lines if it crashes.
+    this.on('data', (id: number, chunk: string) => {
+      if (this.daemonPtyId === null || id !== this.daemonPtyId) return;
+      const lines = chunk.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (lines.length === 0) return;
+      this.daemonOutputBuffer.push(...lines);
+      const excess = this.daemonOutputBuffer.length - PTYManager.DAEMON_BUFFER_MAX_LINES;
+      if (excess > 0) {
+        this.daemonOutputBuffer.splice(0, excess);
+      }
+    });
+  }
+
+  /**
+   * Ask the user's login shell what PATH it ends up with.
+   *
+   * Launched from the Dock, Electron inherits a bare
+   * /usr/bin:/bin:/usr/sbin:/sbin, so anything installed by Homebrew, nvm,
+   * pyenv, mise, cargo or pipx is invisible. Spawning TUIs through
+   * `$SHELL -ilc '<string>'` used to paper over that (at the cost of building
+   * a shell command string - see C11); now that TUIs are spawned directly
+   * with an argv array, we resolve that PATH once here instead.
+   *
+   * Cached for the life of the process; failures fall back to config paths
+   * plus whatever PATH Electron was given.
+   */
+  private resolveLoginShellPath(): string | null {
+    if (this.loginShellPathResolved) return this.loginShellPath;
+    this.loginShellPathResolved = true;
+    try {
+      // A sentinel keeps rc-file chatter (MOTDs, version notices) out of the
+      // parsed value - we take only the line we printed.
+      const output = execSync(
+        `${this.shell} -ilc 'printf "\n__LEE_PATH__%s\n" "$PATH"'`,
+        { encoding: 'utf-8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const line = output.split('\n').reverse().find((l) => l.startsWith('__LEE_PATH__'));
+      const value = line?.slice('__LEE_PATH__'.length).trim();
+      // Sanity check: a PATH is colon-separated. A shell whose $PATH isn't a
+      // plain string (fish expands it as a list) would hand back something
+      // space-separated - ignore that rather than poisoning the PATH.
+      if (value && value.includes(':') && !value.includes(' ')) {
+        this.loginShellPath = value;
+        this.log('INFO', 'Resolved login-shell PATH', { entries: value.split(':').length });
+      }
+    } catch (error: any) {
+      this.log('WARN', 'Could not resolve login-shell PATH; using inherited PATH', {
+        shell: this.shell,
+        error: error?.message,
+      });
+    }
+    return this.loginShellPath;
+  }
+
+  /**
+   * PATH used for every spawn and for command-availability checks:
+   * config `paths:` first, then the login shell's PATH, then Electron's own.
+   */
+  private get extendedPath(): string {
+    if (this.cachedExtendedPath) return this.cachedExtendedPath;
+    const loginPath = this.resolveLoginShellPath();
+    const parts = [
+      ...this.configPaths,
+      ...(loginPath ? loginPath.split(':') : []),
+      ...(process.env.PATH || '').split(':'),
+    ].filter(Boolean);
+    this.cachedExtendedPath = [...new Set(parts)].join(':');
+    return this.cachedExtendedPath;
   }
 
   /**
    * Set workspace configuration for a specific window.
-   * If no windowId is provided, sets for the first window (legacy compat).
    */
-  setWorkspaceConfig(workspace: string, config: WorkspaceConfig | null, windowId?: number): void {
-    const id = windowId ?? this.getDefaultWindowId();
-    if (id !== null) {
-      this.windowConfigs.set(id, { workspace, config });
-    } else {
-      // No windows yet — store with a temp key that will be replaced
-      this.windowConfigs.set(-1, { workspace, config });
-    }
-    console.log('Workspace config set:', workspace, 'windowId:', id, config?.source || 'no source files');
-  }
-
-  /**
-   * Get the default window ID (first window).
-   */
-  private getDefaultWindowId(): number | null {
-    for (const id of this.windowConfigs.keys()) {
-      if (id !== -1) return id;
-    }
-    return null;
+  setWorkspaceConfig(workspace: string, config: WorkspaceConfig | null, windowId: number): void {
+    this.windowConfigs.set(windowId, { workspace, config });
+    // First window to report a config also becomes the daemon's source of
+    // truth until something focuses a different one.
+    if (this.daemonWindowId === null) this.daemonWindowId = windowId;
+    console.log('Workspace config set:', workspace, 'windowId:', windowId, config?.source || 'no source files');
   }
 
   /**
@@ -592,7 +712,9 @@ export class PTYManager extends EventEmitter {
       const storedHash = fs.readFileSync(hashFile, 'utf-8').trim();
       return currentHash !== storedHash;
     } catch {
-      return false; // Don't block on hash check errors
+      // Hash check is an optimisation; a failure just means "no upgrade
+      // needed" rather than blocking Hester from starting.
+      return false;
     }
   }
 
@@ -630,10 +752,8 @@ export class PTYManager extends EventEmitter {
     // Start with process environment
     const env: Record<string, string> = { ...process.env } as Record<string, string>;
 
-    // Resolve workspace config: prefer window-specific, fall back to legacy
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const workspace = cwd || winConfig?.workspace || this.currentWorkspace;
+    const wsConfig = this.configFor(windowId);
+    const workspace = cwd || this.workspaceFor(windowId);
 
     // Load source files from workspace config FIRST
     if (wsConfig?.source && wsConfig.source.length > 0) {
@@ -709,9 +829,7 @@ export class PTYManager extends EventEmitter {
     let cmd = command;
     let finalArgs = args;
 
-    // Resolve config for the window
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const wsConfig = this.configFor(windowId);
 
     if (!cmd) {
       const configuredShell = wsConfig?.terminal?.shell;
@@ -812,6 +930,17 @@ export class PTYManager extends EventEmitter {
   private getDaemonEnvironment(): Record<string, string> {
     const env: Record<string, string> = {};
 
+    // The daemon PTY is deliberately not owned by any window (so closing a
+    // window doesn't kill it), which means getEnvironment() can't resolve a
+    // window config for it. Apply the daemon window's `source:` files here
+    // instead - they carry things like GOOGLE_APPLICATION_CREDENTIALS.
+    const daemonConfig = this.daemonConfig;
+    if (daemonConfig?.source && daemonConfig.source.length > 0) {
+      const sourceEnv = loadSourceEnv(daemonConfig.source, this.daemonWorkspace || undefined);
+      delete sourceEnv.PATH; // PATH is owned by the extendedPath getter
+      Object.assign(env, sourceEnv);
+    }
+
     // Pass resources path so Hester can find bundled binaries (redis-server, etc.)
     if (app.isPackaged) {
       env.HESTER_RESOURCES_PATH = process.resourcesPath;
@@ -820,28 +949,10 @@ export class PTYManager extends EventEmitter {
       env.HESTER_RESOURCES_PATH = path.join(app.getAppPath(), 'resources');
     }
 
-    let hesterConfig = this.workspaceConfig?.hester;
-
-    // If workspace config isn't loaded yet (prewarm), try global config files
-    if (!hesterConfig) {
-      const globalConfigPaths = [
-        path.join(app.getPath('home'), '.lee', 'config.yaml'),
-        path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
-      ];
-      for (const configPath of globalConfigPaths) {
-        try {
-          const content = fs.readFileSync(configPath, 'utf-8');
-          // Simple YAML extraction for google_api_key (avoid full parser dependency)
-          const match = content.match(/google_api_key:\s*(.+)/);
-          if (match) {
-            hesterConfig = { google_api_key: match[1].trim() };
-            break;
-          }
-        } catch {
-          // File doesn't exist, try next
-        }
-      }
-    }
+    // Workspace config is set from the deep-merged config.yaml chain
+    // (~/.config/lee < ~/.lee < <workspace>/.lee), so it already contains
+    // global keys even when the workspace file itself has `hester: {}`.
+    const hesterConfig = this.daemonConfig?.hester;
 
     if (!hesterConfig) return env;
 
@@ -857,29 +968,42 @@ export class PTYManager extends EventEmitter {
     if (hesterConfig.ollama_url) {
       env.HESTER_OLLAMA_URL = hesterConfig.ollama_url;
     }
+    if (hesterConfig.prepare_model) {
+      env.HESTER_PREPARE_MODEL = hesterConfig.prepare_model;
+    }
+    if (hesterConfig.local_model) {
+      env.HESTER_LOCAL_MODEL = hesterConfig.local_model;
+    }
+    if (hesterConfig.ollama_recheck_minutes !== undefined) {
+      env.HESTER_OLLAMA_RECHECK_MINUTES = String(hesterConfig.ollama_recheck_minutes);
+    }
     return env;
+  }
+
+  /**
+   * Which interface the daemon should bind.
+   *
+   * Defaults to 0.0.0.0 so paired devices (Aeronaut, Dirigible, remote
+   * Spyglass) keep working; the daemon now requires the ~/.lee/api-token
+   * bearer on every endpoint except GET /health. Set
+   * `hester.listen_host: 127.0.0.1` in config to restrict it to loopback.
+   */
+  private getDaemonHost(): string {
+    const configured = this.daemonConfig?.hester?.listen_host;
+    return typeof configured === 'string' && configured.trim()
+      ? configured.trim()
+      : '0.0.0.0';
   }
 
   /**
    * Check if GOOGLE_API_KEY is available from workspace config, global config, or process environment.
    * Returns the source if found, or null if missing.
    */
-  private getGoogleApiKeySource(): 'config' | 'global-config' | 'env' | null {
-    if (this.workspaceConfig?.hester?.google_api_key) return 'config';
+  private getGoogleApiKeySource(): 'config' | 'env' | null {
+    // Same source of truth as getDaemonEnvironment(): the deep-merged
+    // workspace config (~/.config/lee < ~/.lee < <workspace>/.lee).
+    if (this.daemonConfig?.hester?.google_api_key) return 'config';
     if (process.env.GOOGLE_API_KEY) return 'env';
-    // Check global config files directly (for prewarm before workspace config is loaded)
-    const globalConfigPaths = [
-      path.join(app.getPath('home'), '.lee', 'config.yaml'),
-      path.join(app.getPath('home'), '.config', 'lee', 'config.yaml'),
-    ];
-    for (const configPath of globalConfigPaths) {
-      try {
-        const content = fs.readFileSync(configPath, 'utf-8');
-        if (content.includes('google_api_key')) return 'global-config';
-      } catch {
-        // File doesn't exist, try next
-      }
-    }
     return null;
   }
 
@@ -924,30 +1048,150 @@ export class PTYManager extends EventEmitter {
     }
 
     this.log('INFO', 'Starting Hester daemon in background', {
-      workspace: this.currentWorkspace,
+      workspace: this.daemonWorkspace,
     });
 
     // Use hester daemon start command - pass workspace for env sourcing
     const hesterPath = this.resolveTool('hester');
     const daemonEnv = this.getDaemonEnvironment();
+    // Make the workspace explicit rather than leaving the daemon to infer it
+    // from cwd; /workspace re-points it later when the user switches projects.
+    if (this.daemonWorkspace) {
+      daemonEnv.HESTER_WORKING_DIRECTORY = this.daemonWorkspace;
+    }
+    const daemonHost = this.getDaemonHost();
     const id = this.spawn(
       hesterPath,
-      ['daemon', 'start', '--port', '9000', '--host', '0.0.0.0'],
-      this.currentWorkspace || undefined,
+      ['daemon', 'start', '--port', '9000', '--host', daemonHost],
+      this.daemonWorkspace || undefined,
       'Hester Daemon',
       true,
-      daemonEnv
+      daemonEnv,
+      undefined,
     );
 
     this.daemonPtyId = id;
+    this.daemonOutputBuffer = [];
 
-    // If daemon exits, clear reference
-    this.once('exit', (exitId: number, code: number) => {
-      if (exitId === id && this.daemonPtyId === id) {
-        this.log(code === 0 ? 'INFO' : 'WARN', 'Hester daemon exited', { exitCode: code });
+    // If daemon exits, clear reference. Use `on` + an id check (not `once`),
+    // since `once('exit', ...)` would be consumed by the exit of ANY PTY,
+    // not necessarily the daemon's.
+    const onDaemonExit = (exitId: number, code: number) => {
+      if (exitId !== id) return;
+      this.off('exit', onDaemonExit);
+      this.log(code === 0 ? 'INFO' : 'WARN', 'Hester daemon exited', { exitCode: code });
+      if (this.daemonPtyId === id) {
         this.daemonPtyId = null;
       }
-    });
+      if (code !== 0) {
+        const tail = this.daemonOutputBuffer.slice(-8).join(' | ');
+        this.emit('daemon-warning', {
+          message: `Hester daemon exited (code ${code})${tail ? ': ' + tail : ''}`,
+          type: 'error' as const,
+        });
+      }
+    };
+    this.on('exit', onDaemonExit);
+  }
+
+  /**
+   * Is the daemon on :9000 one WE started (as opposed to an external process
+   * that already owned the port)?
+   */
+  isDaemonLeeManaged(): boolean {
+    return this.daemonPtyId !== null;
+  }
+
+  /**
+   * Read the shared Lee/Hester bearer token (~/.lee/api-token). Same file the
+   * api-server persists; the daemon requires it on every endpoint but /health.
+   */
+  private readApiToken(): string | null {
+    try {
+      const token = fs.readFileSync(path.join(app.getPath('home'), '.lee', 'api-token'), 'utf-8').trim();
+      return token || null;
+    } catch {
+      // No token file yet (first run, or the api-server hasn't written it);
+      // requests go out unauthenticated and the daemon logs the refusal.
+      return null;
+    }
+  }
+
+  /**
+   * Tell the daemon which workspace to serve.
+   *
+   * One daemon backs every Lee window, so it has to follow the active one:
+   * this reloads that workspace's plugins and re-points the .hester/-backed
+   * stores and watchers, without the cost of a daemon restart.
+   */
+  async setDaemonWorkspace(workspace: string): Promise<boolean> {
+    if (!workspace) return false;
+    if (this.lastDaemonWorkspace === workspace) return true;
+
+    const token = this.readApiToken();
+    try {
+      const response = await fetch('http://127.0.0.1:9000/workspace', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ path: workspace }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok) {
+        this.log('WARN', 'Hester workspace switch rejected', {
+          workspace,
+          status: response.status,
+        });
+        return false;
+      }
+      this.lastDaemonWorkspace = workspace;
+      this.log('INFO', 'Hester now serving workspace', { workspace });
+      return true;
+    } catch (error: any) {
+      // Daemon may simply not be up yet; it picks the workspace up from
+      // HESTER_WORKING_DIRECTORY when it starts.
+      this.log('INFO', 'Could not notify Hester of workspace change', {
+        workspace,
+        error: error?.message,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Ask the daemon to exit cleanly (A11), so it and the managed redis it
+   * started don't outlive Lee. Used on quit only — a restart kills the PTY
+   * instead, which leaves the managed redis running for the next daemon to
+   * reconnect to.
+   */
+  async shutdownDaemonGracefully(timeoutMs = 3000): Promise<boolean> {
+    if (this.daemonPtyId === null) return false;
+
+    const token = this.readApiToken();
+    try {
+      await fetch('http://127.0.0.1:9000/shutdown', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error: any) {
+      this.log('WARN', 'Graceful daemon shutdown request failed', { error: error?.message });
+      return false;
+    }
+
+    // Give the daemon a moment to save Redis and exit before killAll().
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.daemonPtyId === null) {
+        this.log('INFO', 'Hester daemon shut down cleanly');
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    this.log('WARN', 'Hester daemon did not exit within timeout; killing');
+    return false;
   }
 
   /**
@@ -1044,6 +1288,7 @@ export class PTYManager extends EventEmitter {
    */
   async restartDaemon(): Promise<{ success: boolean; error?: string }> {
     this.log('INFO', 'Restarting daemon');
+    this.lastDaemonWorkspace = null;
 
     // Stop first
     const stopResult = await this.stopDaemon();
@@ -1086,7 +1331,7 @@ export class PTYManager extends EventEmitter {
     this.log('INFO', `Prewarming ${tuiType} TUI`, { workspace, windowId });
 
     let id: number;
-    const cwd = workspace || this.currentWorkspace || undefined;
+    const cwd = workspace || this.workspaceFor(windowId) || undefined;
 
     switch (tuiType) {
       case 'terminal':
@@ -1111,14 +1356,19 @@ export class PTYManager extends EventEmitter {
 
     this.warmTUIPool.set(poolKey, { id, workspace: workspace || null });
 
-    // If warm TUI exits, remove from pool
-    this.once('exit', (exitId: number) => {
+    // If warm TUI exits, remove from pool. Use `on` + an id check (not
+    // `once`), since `once('exit', ...)` would be consumed by the exit of
+    // ANY PTY, not necessarily this warm entry's.
+    const onWarmExit = (exitId: number) => {
+      if (exitId !== id) return;
+      this.off('exit', onWarmExit);
       const warm = this.warmTUIPool.get(poolKey);
       if (warm && warm.id === exitId) {
         this.log('INFO', `Prewarmed ${tuiType} exited, removing from pool`);
         this.warmTUIPool.delete(poolKey);
       }
-    });
+    };
+    this.on('exit', onWarmExit);
   }
 
   /**
@@ -1194,6 +1444,47 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
+   * Check whether a resolved command is actually runnable: an absolute path
+   * that exists, or a bare name found in one of the extended PATH
+   * directories. Used before spawnTUI() hands a shell -c command, so a
+   * missing tool (lazygit not installed, say) surfaces as a clear error
+   * instead of a PTY that opens and immediately exits with "command not
+   * found" - which looked to the tab UI like a spawn that silently no-oped.
+   */
+  private resolveExecutable(command: string): string | null {
+    if (command.includes('/')) {
+      try {
+        return fs.statSync(command).isFile() ? command : null;
+      } catch {
+        return null;
+      }
+    }
+    for (const dir of this.extendedPath.split(':')) {
+      if (!dir) continue;
+      const candidate = path.join(dir, command);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // not in this directory
+      }
+    }
+    return null;
+  }
+
+  private isCommandAvailable(command: string): boolean {
+    return this.resolveExecutable(command) !== null;
+  }
+
+  /** Install hints surfaced when a default TUI's command isn't on PATH. */
+  private static readonly TUI_INSTALL_HINTS: Record<string, string> = {
+    lazygit: 'brew install lazygit',
+    lazydocker: 'brew install lazydocker',
+    k9s: 'brew install k9s',
+    btop: 'brew install btop',
+    pgcli: 'brew install pgcli or pipx install pgcli',
+  };
+
+  /**
    * Spawn a generic TUI application.
    * Runs through interactive login shell to ensure PATH is properly set from .bashrc
    */
@@ -1203,29 +1494,33 @@ export class PTYManager extends EventEmitter {
     cwd?: string,
     name?: string,
     envOverrides?: Record<string, string>,
-    windowId?: number
+    windowId?: number,
+    useShell: boolean = false,
   ): number {
     const resolvedCmd = this.resolveTool(command);
 
-    // Build environment variable prefix for any overrides
-    const envPrefix = envOverrides
-      ? Object.entries(envOverrides)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(' ') + ' '
-      : '';
+    // Escape hatch: a TUI definition can set `shell: true` when its `command`
+    // is really a shell snippet (`foo && bar`, a pipeline, a glob). Those
+    // still go through `$SHELL -ilc`, with every argument quoted.
+    if (useShell) {
+      const shell = this.configFor(windowId)?.terminal?.shell || this.shell;
+      const fullCommand = [resolvedCmd, ...args.map(shellQuote)].join(' ');
+      this.log('INFO', 'Spawning TUI through a shell (shell: true)', { command, args });
+      return this.spawn(shell, ['-il', '-c', fullCommand], cwd, name || command, false, envOverrides, windowId);
+    }
 
-    // Build the full command string
-    const fullCommand = args.length > 0
-      ? `${envPrefix}${resolvedCmd} ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`
-      : `${envPrefix}${resolvedCmd}`;
+    const executable = this.resolveExecutable(resolvedCmd);
+    if (!executable) {
+      const hint = PTYManager.TUI_INSTALL_HINTS[command];
+      this.log('WARN', 'Refusing to spawn TUI: command not found on PATH', { command, resolvedCmd });
+      throw new Error(`"${command}" not found on PATH${hint ? ` (${hint})` : ''}`);
+    }
 
-    // Spawn through interactive login shell so PATH is set from .bashrc
-    // -i = interactive (sources .bashrc), -l = login (sources .bash_profile)
-    // -c = run command
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const shell = wsConfig?.terminal?.shell || this.shell;
-    return this.spawn(shell, ['-il', '-c', fullCommand], cwd, name || command, false, undefined, windowId);
+    // Spawn the resolved binary directly with an argv array and an env
+    // object - no shell, so nothing in an argument (quotes, $, backticks,
+    // spaces) can be reinterpreted as shell syntax, and env overrides never
+    // appear in `ps` as part of a command string.
+    return this.spawn(executable, args, cwd, name || command, false, envOverrides, windowId);
   }
 
   /**
@@ -1270,43 +1565,119 @@ export class PTYManager extends EventEmitter {
       cwd_aware: true,
       path_arg: 'cwd',
     },
+    // Documented in CLAUDE.md as built-in defaults, but were missing here -
+    // Cmd+Shift+G/D/K/P/F silently no-op'd (spawnTUI threw "Unknown TUI
+    // type", swallowed by the renderer's console.error-only catch).
+    git: {
+      command: 'lazygit',
+      name: 'Git',
+      icon: '🌿',
+      shortcut: '⇧⌘G',
+      cwd_aware: true,
+    },
+    docker: {
+      command: 'lazydocker',
+      name: 'Docker',
+      icon: '🐳',
+      shortcut: '⇧⌘D',
+    },
+    k8s: {
+      command: 'k9s',
+      name: 'K8s',
+      icon: '☸️',
+      shortcut: '⇧⌘K',
+    },
+    system: {
+      command: 'btop',
+      name: 'System Monitor',
+      icon: '📊',
+    },
+    flutter: {
+      command: 'flx',
+      name: 'Flutter',
+      icon: '📱',
+      shortcut: '⇧⌘F',
+      cwd_from_config: 'flutter.path',
+      cwd_aware: true,
+    },
+    // getTUIDefinition() fills `connection` in from the top-level `sql:`
+    // block (sql.default names one of sql.connections) when there's no
+    // explicit `tuis.sql.connection` override. With neither, bare pgcli
+    // still works off libpq's usual PG* env vars / local socket.
+    sql: {
+      command: 'pgcli',
+      name: 'SQL',
+      icon: '🗄️',
+      shortcut: '⇧⌘P',
+    },
   };
 
   /**
    * Get a TUI definition by key, checking config first then falling back to defaults.
    */
   getTUIDefinition(tuiType: string, windowId?: number): TUIDefinition | null {
-    // Check window-specific config first
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const wsConfig = this.configFor(windowId);
     const configTui = wsConfig?.tuis?.[tuiType];
     const defaultTui = PTYManager.DEFAULT_TUIS[tuiType];
 
+    let def: TUIDefinition | null = null;
     if (configTui && defaultTui) {
       // Merge: config overrides defaults, but defaults fill in missing fields
-      return { ...defaultTui, ...configTui };
+      def = { ...defaultTui, ...configTui };
+    } else {
+      def = configTui ?? defaultTui ?? null;
     }
 
-    if (configTui) {
-      return configTui;
+    if (def && tuiType === 'sql' && !def.connection) {
+      const conn = this.resolveSqlConnection(wsConfig);
+      if (conn) def = { ...def, connection: conn };
     }
 
-    if (defaultTui) {
-      return defaultTui;
+    return def;
+  }
+
+  /**
+   * Map the documented top-level `sql:` block onto the `sql` TUI's connection.
+   *
+   * `sql.default` names an entry in `sql.connections`; if it names nothing (or
+   * is absent) the first connection wins. An explicit `tuis.sql.connection`
+   * still takes precedence - this only fills in when there isn't one. The
+   * password never reaches the command line: spawnConnectionTUI passes it via
+   * PGPASSWORD.
+   */
+  private resolveSqlConnection(wsConfig: WorkspaceConfig | null): TUIDefinition['connection'] | null {
+    const connections = wsConfig?.sql?.connections;
+    if (!Array.isArray(connections) || connections.length === 0) return null;
+
+    const wanted = wsConfig?.sql?.default;
+    const chosen = (wanted && connections.find((c) => c?.name === wanted)) || connections[0];
+    if (!chosen || !chosen.host || !chosen.database || !chosen.user) {
+      if (wanted && !connections.some((c) => c?.name === wanted)) {
+        this.log('WARN', 'sql.default names an unknown connection', { default: wanted });
+      }
+      return null;
     }
 
-    return null;
+    return {
+      host: chosen.host,
+      port: chosen.port,
+      database: chosen.database,
+      user: chosen.user,
+      password: chosen.password,
+      ssl: chosen.ssl,
+    };
   }
 
   /**
    * Get all available TUI types (from config + defaults).
    */
-  getAvailableTUITypes(): string[] {
+  getAvailableTUITypes(windowId?: number): string[] {
     const types = new Set<string>(Object.keys(PTYManager.DEFAULT_TUIS));
 
-    // Add any custom TUIs from config
-    if (this.workspaceConfig?.tuis) {
-      for (const key of Object.keys(this.workspaceConfig.tuis)) {
+    // Add any custom TUIs from this window's config
+    const wsConfig = this.configFor(windowId);
+    if (wsConfig?.tuis) {
+      for (const key of Object.keys(wsConfig.tuis)) {
         types.add(key);
       }
     }
@@ -1323,9 +1694,7 @@ export class PTYManager extends EventEmitter {
    * Used to broadcast available TUIs in context for Bridge discovery.
    */
   getAllTUIDefinitions(windowId?: number): Record<string, TUIDefinition> {
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const configTuis = wsConfig?.tuis ?? {};
+    const configTuis = this.configFor(windowId)?.tuis ?? {};
 
     const merged: Record<string, TUIDefinition> = { ...PTYManager.DEFAULT_TUIS };
     for (const [key, def] of Object.entries(configTuis)) {
@@ -1341,9 +1710,7 @@ export class PTYManager extends EventEmitter {
    * Core tabs (Terminal, Browser, Library, Workstream) are handled by TabBar.
    */
   getAvailableTUIsWithMeta(windowId?: number): Array<{ key: string; name: string; icon: string; shortcut?: string }> {
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const configTuis = wsConfig?.tuis ?? {};
+    const configTuis = this.configFor(windowId)?.tuis ?? {};
 
     // Merge always-show defaults with configured TUIs
     const merged = new Map<string, { key: string; name: string; icon: string; shortcut?: string }>();
@@ -1409,8 +1776,7 @@ export class PTYManager extends EventEmitter {
    * Checks config `agents:` first, then built-in defaults.
    */
   getAgentDefinition(provider: string, windowId?: number): AgentDefinition | null {
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const wsConfig = this.configFor(windowId);
     const configAgent = (wsConfig as any)?.agents?.[provider] as AgentDefinition | undefined;
     const defaultAgent = PTYManager.DEFAULT_AGENTS[provider];
 
@@ -1424,8 +1790,7 @@ export class PTYManager extends EventEmitter {
    * Get all available agent providers (built-ins merged with config).
    */
   getAllAgentProviders(windowId?: number): Record<string, AgentDefinition> {
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
+    const wsConfig = this.configFor(windowId);
     const configAgents = ((wsConfig as any)?.agents ?? {}) as Record<string, AgentDefinition>;
 
     const merged: Record<string, AgentDefinition> = { ...PTYManager.DEFAULT_AGENTS };
@@ -1453,7 +1818,7 @@ export class PTYManager extends EventEmitter {
       spawnCwd = cwd;
     }
 
-    return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId);
+    return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId, def.shell === true);
   }
 
   /**
@@ -1489,10 +1854,8 @@ export class PTYManager extends EventEmitter {
     // Determine working directory
     let workingDir = cwd;
 
-    // Resolve config for the window
-    const winConfig = windowId != null ? this.windowConfigs.get(windowId) : undefined;
-    const wsConfig = winConfig?.config ?? this.workspaceConfig;
-    const wsWorkspace = winConfig?.workspace ?? this.currentWorkspace;
+    const wsConfig = this.configFor(windowId);
+    const wsWorkspace = this.workspaceFor(windowId);
 
     if (def.cwd_from_config) {
       // Resolve cwd from config path (e.g., 'flutter.path')
@@ -1555,7 +1918,7 @@ export class PTYManager extends EventEmitter {
       }
     }
 
-    return this.spawnTUI(def.command, args, workingDir, def.name, def.env, windowId);
+    return this.spawnTUI(def.command, args, workingDir, def.name, def.env, windowId, def.shell === true);
   }
 
   /**
@@ -1566,7 +1929,7 @@ export class PTYManager extends EventEmitter {
    * @param def - The TUI definition with connection config
    * @param cwd - Working directory
    */
-  spawnConnectionTUI(tuiType: string, def: TUIDefinition, cwd?: string): number {
+  spawnConnectionTUI(tuiType: string, def: TUIDefinition, cwd?: string, windowId?: number): number {
     if (!def.connection) {
       throw new Error(`TUI ${tuiType} does not have connection config`);
     }
@@ -1574,21 +1937,28 @@ export class PTYManager extends EventEmitter {
     const conn = def.connection;
     const args: string[] = [...(def.args || [])];
 
-    // Build connection string: postgresql://user:password@host:port/database
+    // Connection string WITHOUT the password: argv is world-readable through
+    // `ps`, so the password travels in the environment instead (libpq reads
+    // PGPASSWORD, and pgcli/psql/pg_dump all inherit it).
     const port = conn.port || 5432;
-    const password = conn.password ? `:${conn.password}` : '';
     const sslMode = conn.ssl ? '?sslmode=require' : '';
-    const connStr = `postgresql://${conn.user}${password}@${conn.host}:${port}/${conn.database}${sslMode}`;
+    const connStr = `postgresql://${conn.user}@${conn.host}:${port}/${conn.database}${sslMode}`;
     args.push(connStr);
+
+    const env: Record<string, string> = { ...(def.env || {}) };
+    if (conn.password) {
+      env.PGPASSWORD = conn.password;
+    }
 
     this.log('INFO', `Spawning ${def.command} with connection`, {
       tuiType,
       host: conn.host,
       database: conn.database,
       user: conn.user,
+      password: conn.password ? 'via PGPASSWORD' : 'none',
     });
 
-    return this.spawnTUI(def.command, args, cwd, def.name, def.env);
+    return this.spawnTUI(def.command, args, cwd, def.name, env, windowId, def.shell === true);
   }
 
   /**
@@ -1651,7 +2021,34 @@ export class PTYManager extends EventEmitter {
       fs.mkdirSync(logDir, { recursive: true });
     }
 
+    this.rotateLogIfNeeded(logPath);
+
     return logPath;
+  }
+
+  /**
+   * Size-cap lee.log: once per process, if it exceeds 10 MB, shift
+   * lee.log -> lee.log.1 -> .2 -> .3 and start fresh. (Hester rotates its own
+   * log via RotatingFileHandler.)
+   */
+  private rotateLogIfNeeded(logPath: string): void {
+    if (this.logRotationChecked) return;
+    this.logRotationChecked = true;
+
+    try {
+      const stats = fs.statSync(logPath);
+      if (stats.size < PTYManager.LOG_MAX_BYTES) return;
+
+      const keep = PTYManager.LOG_BACKUP_COUNT;
+      // Drop the oldest, then shift each backup up one slot.
+      try { fs.unlinkSync(`${logPath}.${keep}`); } catch { /* may not exist */ }
+      for (let i = keep - 1; i >= 1; i--) {
+        try { fs.renameSync(`${logPath}.${i}`, `${logPath}.${i + 1}`); } catch { /* may not exist */ }
+      }
+      fs.renameSync(logPath, `${logPath}.1`);
+    } catch {
+      // File missing or unreadable — nothing to rotate.
+    }
   }
 
   /**

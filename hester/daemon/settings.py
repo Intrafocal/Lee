@@ -15,6 +15,11 @@ class HesterDaemonSettings(BaseSettings):
     # Service configuration
     port: int = Field(default=9000, description="Port to listen on")
     host: str = Field(default="0.0.0.0", description="Host to bind to")
+    auth_disabled: bool = Field(
+        default=False,
+        validation_alias="HESTER_AUTH_DISABLED",
+        description="Debug escape hatch: disable bearer-token auth on the daemon API"
+    )
 
     # Redis configuration
     redis_url: str = Field(
@@ -111,6 +116,18 @@ class HesterDaemonSettings(BaseSettings):
     ollama_timeout: float = Field(
         default=2.0,
         description="Timeout for FunctionGemma calls (seconds)"
+    )
+    prepare_model: str = Field(
+        default="functiongemma",
+        description="Ollama model used for the prepare step (tool selection / depth)"
+    )
+    ollama_recheck_minutes: float = Field(
+        default=5.0,
+        description=(
+            "How often to re-probe Ollama for model availability. A failed or "
+            "timed-out local call marks the model unavailable immediately; it is "
+            "retried after this interval."
+        )
     )
     prepare_step_enabled: bool = Field(
         default=True,

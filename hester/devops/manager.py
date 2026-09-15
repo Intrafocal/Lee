@@ -24,6 +24,8 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 import yaml
 
+from ..shared.config import load_merged_config_with_sources
+
 
 @dataclass
 class ServiceAction:
@@ -170,24 +172,25 @@ class ServiceManager:
         self._load_config()
 
     def _load_config(self):
-        """Load configuration from .lee/config.yaml."""
-        config_paths = [
-            self.working_dir / ".lee" / "config.yaml",
-            Path.home() / ".config" / "lee" / "config.yaml",
-        ]
+        """
+        Load the effective Lee config.
 
-        for config_path in config_paths:
-            if config_path.exists():
-                try:
-                    with open(config_path) as f:
-                        self.config = yaml.safe_load(f) or {}
-                    self._parse_services()
-                    return
-                except Exception as e:
-                    self.config = {"error": str(e)}
-                    return
+        Uses the shared loader so precedence matches Lee and the daemon:
+        ~/.config/lee < ~/.lee < <workspace>/.lee (this used to skip
+        ~/.lee/config.yaml and take the first file found rather than merging).
+        """
+        try:
+            config, sources = load_merged_config_with_sources(self.working_dir)
+        except Exception as e:
+            self.config = {"error": str(e)}
+            return
 
-        self.config = {"error": "No config file found"}
+        if not sources:
+            self.config = {"error": "No config file found"}
+            return
+
+        self.config = config
+        self._parse_services()
 
     def _parse_services(self):
         """Parse services from config.yaml.

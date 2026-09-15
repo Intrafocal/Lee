@@ -7,6 +7,10 @@ import { useEffect } from 'react';
 type HotkeyHandler = () => void;
 type HotkeyMap = Record<string, HotkeyHandler>;
 
+const IS_MAC =
+  typeof navigator !== 'undefined' &&
+  (navigator.platform?.toUpperCase().includes('MAC') || navigator.userAgent?.includes('Mac'));
+
 export function useHotkeys(hotkeys: HotkeyMap) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -29,6 +33,18 @@ export function useHotkeys(hotkeys: HotkeyMap) {
         parts.push(key);
       }
 
+      // On macOS, Ctrl is a distinct chord from Cmd (terminals/shells rely on Ctrl
+      // for their own bindings - Ctrl+R reverse-search, Ctrl+W delete-word, etc).
+      // Don't let a bare Ctrl chord fall back to a Cmd-bound hotkey or vice versa.
+      // Also never intercept a Ctrl-only chord inside a terminal or code editor -
+      // let it reach the shell/editor untouched.
+      if (IS_MAC && hasCtrl && !hasMeta) {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest?.('.xterm, .cm-editor')) {
+          return;
+        }
+      }
+
       // Build modifier prefixes and key suffix separately
       // parts currently contains: [shift?], [alt?], [key]
       // We need to build combos like: meta+shift+key or ctrl+shift+key
@@ -40,13 +56,17 @@ export function useHotkeys(hotkeys: HotkeyMap) {
         combosToTry.push(['ctrl', ...parts].join('+'));
         combosToTry.push(['meta', ...parts].join('+'));
       } else if (hasMeta) {
-        // Just Cmd pressed - try meta first, then ctrl (for cross-platform compatibility)
         combosToTry.push(['meta', ...parts].join('+'));
-        combosToTry.push(['ctrl', ...parts].join('+'));
+        if (!IS_MAC) {
+          // Cross-platform fallback: non-mac hotkey maps may only define 'ctrl+...'
+          combosToTry.push(['ctrl', ...parts].join('+'));
+        }
       } else if (hasCtrl) {
-        // Just Ctrl pressed - try ctrl first, then meta
         combosToTry.push(['ctrl', ...parts].join('+'));
-        combosToTry.push(['meta', ...parts].join('+'));
+        if (!IS_MAC) {
+          // Cross-platform fallback: non-mac hotkey maps may only define 'meta+...'
+          combosToTry.push(['meta', ...parts].join('+'));
+        }
       } else {
         // No modifier - just use parts as-is
         combosToTry.push(parts.join('+'));

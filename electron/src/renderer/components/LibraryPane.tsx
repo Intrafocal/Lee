@@ -59,6 +59,12 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
 
   // Search state (shown in NodeChat area)
   const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
+  /**
+   * Last failure on a user-initiated action (C22). Background polls stay
+   * silent; anything the user clicked reports here instead of only to the
+   * console. Cleared by the next successful render of the banner's dismiss.
+   */
+  const [error, setError] = useState<string | null>(null);
 
   // Load sessions list on mount
   useEffect(() => {
@@ -75,7 +81,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       const data = await res.json();
       setSessions(data.sessions || []);
     } catch {
-      // Daemon not available
+      // Best-effort background poll; a down daemon is reported once by the
+      // status bar rather than on every refresh.
     }
   }, []);
 
@@ -96,7 +103,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       });
       setActiveNodeId(data.active_node_id || data.root_id);
     } catch {
-      // Daemon not available
+      // Best-effort background poll; a down daemon is reported once by the
+      // status bar rather than on every refresh.
     }
   }, []);
 
@@ -113,7 +121,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       await fetchSession(data.session_id);
       await fetchSessions();
     } catch {
-      // Daemon not available
+      // Best-effort background poll; a down daemon is reported once by the
+      // status bar rather than on every refresh.
     }
   }, [workspace, fetchSession, fetchSessions]);
 
@@ -569,8 +578,9 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
 
       // Refresh session
       await fetchSession(session.session_id);
-    } catch {
-      // Ignore
+    } catch (err) {
+      console.error('Failed to add source to node:', err);
+      setError('Couldn\'t add that source — is the Hester daemon running?');
     }
   }, [session, activeNodeId, fetchSession]);
 
@@ -588,7 +598,10 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       );
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const data = await res.json();
-      // Open workstream tab via Lee API
+      // Open workstream tab via Lee API.
+      // NOTE: `lee.sendCommand` is not part of the preload surface (see
+      // src/shared/lee-api.ts) - this branch has never run. Kept as an
+      // `any` cast rather than silently deleted; tracked as C27.
       if ((window as any).lee?.sendCommand) {
         (window as any).lee.sendCommand({
           domain: 'system',
@@ -598,6 +611,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       }
     } catch (err) {
       console.error('Failed to promote to workstream:', err);
+      setError('Couldn\'t promote that node to a workstream');
     }
   }, [session]);
 
@@ -618,8 +632,9 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
         // Could show a toast/notification here
         console.log('Saved as idea:', data.idea_id);
       }
-    } catch {
-      // Ignore
+    } catch (err) {
+      console.error('Failed to save as idea:', err);
+      setError('Couldn\'t save that as an idea — is the Hester daemon running?');
     }
   }, [session]);
 
@@ -652,8 +667,9 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
         }
         return updated;
       });
-    } catch {
-      // Ignore
+    } catch (err) {
+      console.error('Failed to rename node:', err);
+      setError('Couldn\'t rename that node — is the Hester daemon running?');
     }
   }, [session]);
 
@@ -941,6 +957,11 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
 
   return (
     <div className={`library-pane ${active ? 'active' : ''}`}>
+      {error && (
+        <div className="library-error-banner" onClick={() => setError(null)} title="Dismiss">
+          ⚠️ {error}
+        </div>
+      )}
       {/* Top: Tree + Chat side by side */}
       <div className="library-top">
         <div className="library-top-left">

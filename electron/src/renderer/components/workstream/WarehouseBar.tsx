@@ -35,7 +35,7 @@ export const WarehouseBar: React.FC<WarehouseBarProps> = ({
         onWarehouseChanged();
       }
     } catch {
-      // daemon unavailable
+      // Daemon unavailable; reported once by the status bar indicator.
     }
   };
 

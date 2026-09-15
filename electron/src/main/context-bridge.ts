@@ -65,6 +65,7 @@ export class ContextBridge extends EventEmitter {
   private sessionStart: number;
   private lastInteraction: number;
   private changeDebounceTimer: NodeJS.Timeout | null = null;
+  private dirtyFileCount = 0;
   private static readonly MAX_ACTION_HISTORY = 50;
   private static readonly CHANGE_DEBOUNCE_MS = 50;
 
@@ -142,7 +143,17 @@ export class ContextBridge extends EventEmitter {
       }
     }
 
+    // Track unsaved-file count for the quit-confirmation dialog
+    if (update.dirtyFileCount !== undefined) {
+      this.dirtyFileCount = update.dirtyFileCount;
+    }
+
     this.emitChange();
+  }
+
+  /** Count of open editor tabs with unsaved changes, as last reported by the renderer. */
+  getDirtyFileCount(): number {
+    return this.dirtyFileCount;
   }
 
   /**
@@ -273,6 +284,20 @@ export class ContextBridge extends EventEmitter {
   }
 
   /**
+   * Type of the currently focused tab (the active tab of the focused panel),
+   * or null if there isn't one. Used by the main process to decide whether a
+   * keyboard shortcut (e.g. Cmd/Ctrl+R) should be intercepted at the window
+   * level or left for the focused tab (terminal, agent, browser) to handle.
+   */
+  getFocusedTabType(): import('../shared/context').TabType | null {
+    const panel = this.context.panels[this.context.focusedPanel];
+    const activeTabId = panel?.activeTabId;
+    if (activeTabId == null) return null;
+    const tab = this.context.tabs.find((t) => t.id === activeTabId);
+    return tab?.type ?? null;
+  }
+
+  /**
    * Get current context snapshot with computed activity.
    */
   getContext(): LeeContext {
@@ -364,5 +389,16 @@ export class ContextBridge extends EventEmitter {
     };
 
     this.emitChange();
+  }
+
+  /**
+   * Drop a browser tab's entry once it's closed (BrowserManager's
+   * 'unregister' event) so Hester's context doesn't keep seeing ghost tabs.
+   */
+  removeBrowserContext(tabId: number): void {
+    if (this.context.browsers && tabId in this.context.browsers) {
+      delete this.context.browsers[tabId];
+      this.emitChange();
+    }
   }
 }

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from rich.console import Console
 
 from ...thinking_depth import ThinkingDepth
+from ....shared.auth import auth_headers
 from ....shared.gemini_tools import PhaseUpdate, ReActPhase
 from ..selectors import DepthSelector
 
@@ -101,6 +102,7 @@ class MessageProcessor:
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         f"{self.runner.daemon_url}/session/{session_id}/history",
+                        headers=auth_headers(),
                         timeout=10.0,
                     )
                     if response.status_code == 200:
@@ -330,6 +332,7 @@ class MessageProcessor:
                     "POST",
                     f"{self.runner.daemon_url}/context/stream",
                     json=request_payload,
+                    headers=auth_headers(),
                 ) as response:
                     response.raise_for_status()
 
@@ -417,6 +420,7 @@ class MessageProcessor:
 
                     continue_response = await client.post(
                         f"{self.runner.daemon_url}/context/continue",
+                        headers=auth_headers(),
                         json={
                             "session_id": self.runner.tui.session_id,
                             "new_depth": new_depth.name,

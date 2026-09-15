@@ -71,7 +71,7 @@ export const WorkstreamPane: React.FC<WorkstreamPaneProps> = ({
       const res = await fetch(`${HESTER_DAEMON}/workstream/${workstreamId}/warehouse`);
       if (res.ok) setWarehouse(await res.json());
     } catch {
-      // silent
+      // Background refresh; the pane's own error banner covers the load path.
     }
   }, [workstreamId]);
 

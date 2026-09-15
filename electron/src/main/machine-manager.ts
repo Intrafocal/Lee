@@ -201,6 +201,16 @@ export class MachineManager extends EventEmitter {
     return this.machines.map(m => ({ ...m, config: { ...m.config } }));
   }
 
+  /**
+   * Fetch (and cache) the API auth token for a configured machine by name.
+   * Used by SpyglassPane to authenticate WS/HTTP calls to a remote Lee.
+   */
+  async getTokenForMachine(machineName: string): Promise<string | null> {
+    const machine = this.machines.find(m => m.config.name === machineName);
+    if (!machine) return null;
+    return this.fetchToken(machine.config.host, machine.config.ssh_port);
+  }
+
   dispose(): void {
     if (this.healthTimer) {
       clearInterval(this.healthTimer);

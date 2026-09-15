@@ -13,6 +13,7 @@ Reduces Gemini token usage and provides faster classification.
 
 import asyncio
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -43,8 +44,11 @@ try:
         ThinkingTier,
     )
     REGISTRIES_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     REGISTRIES_AVAILABLE = False
+    logging.getLogger("hester.daemon.prepare").warning(
+        f"Prompt registries disabled: {e} (run: pip install {e.name or 'numpy'})"
+    )
     get_prompt_registry = None  # type: ignore
     get_agent_registry = None  # type: ignore
     PromptMatch = None  # type: ignore
@@ -546,6 +550,101 @@ class BatchPrepareResult:
     prepare_time_ms: float = 0.0
 
 
+# ============================================================================
+# Ollama model availability (shared, TTL-refreshed, failure-aware)
+# ============================================================================
+#
+# Availability used to be probed once per client instance and cached forever,
+# and the module-level helpers below construct a throwaway client per call — so
+# in practice nothing was cached and every request paid the full `ollama_timeout`
+# when the local model was missing or wedged.
+#
+# This cache is keyed by (ollama_url, model) and shared process-wide. It is
+# re-probed every `recheck_seconds` (default 5 min), a failed call marks the
+# model unavailable immediately, and state changes log exactly one line.
+
+DEFAULT_OLLAMA_RECHECK_SECONDS = 300.0
+
+
+class _OllamaAvailability:
+    """Process-wide availability cache for Ollama models."""
+
+    def __init__(self) -> None:
+        # key -> (available, checked_at_monotonic)
+        self._state: Dict[Tuple[str, str], Tuple[bool, float]] = {}
+        self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
+
+    def _log_change(self, key: Tuple[str, str], available: bool, reason: str) -> None:
+        previous = self._state.get(key)
+        if previous is not None and previous[0] == available:
+            return  # no state change; stay quiet (this runs per request)
+        url, model = key
+        if available:
+            logger.info(f"Ollama model '{model}' available at {url}")
+        else:
+            logger.info(
+                f"Ollama model '{model}' unavailable at {url} ({reason}); "
+                f"local step will be skipped without waiting for a timeout"
+            )
+
+    def mark_unavailable(self, ollama_url: str, model: str, reason: str) -> None:
+        """Record a live failure so the next request skips the local call instantly."""
+        key = (ollama_url, model)
+        self._log_change(key, False, reason)
+        self._state[key] = (False, time.monotonic())
+
+    def peek(self, ollama_url: str, model: str) -> Optional[bool]:
+        """Last known state without probing (None if never checked)."""
+        entry = self._state.get((ollama_url, model))
+        return entry[0] if entry else None
+
+    async def is_available(
+        self,
+        ollama_url: str,
+        model: str,
+        recheck_seconds: float = DEFAULT_OLLAMA_RECHECK_SECONDS,
+    ) -> bool:
+        key = (ollama_url, model)
+        entry = self._state.get(key)
+        now = time.monotonic()
+        if entry is not None and (now - entry[1]) < recheck_seconds:
+            return entry[0]
+
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            # Another coroutine may have refreshed while we waited.
+            entry = self._state.get(key)
+            now = time.monotonic()
+            if entry is not None and (now - entry[1]) < recheck_seconds:
+                return entry[0]
+
+            available = False
+            reason = "not installed"
+            try:
+                async with httpx.AsyncClient(timeout=1.0) as client:
+                    response = await client.get(f"{ollama_url}/api/tags")
+                    if response.status_code == 200:
+                        names = [
+                            m.get("name", "")
+                            for m in response.json().get("models", [])
+                        ]
+                        base = model.split(":")[0]
+                        available = any(
+                            n == model or n.split(":")[0] == base for n in names
+                        )
+                    else:
+                        reason = f"/api/tags returned {response.status_code}"
+            except Exception as e:
+                reason = f"Ollama unreachable: {e}"
+
+            self._log_change(key, available, reason)
+            self._state[key] = (available, time.monotonic())
+            return available
+
+
+OLLAMA_AVAILABILITY = _OllamaAvailability()
+
+
 class OllamaFunctionGemma:
     """
     Client for FunctionGemma via Ollama.
@@ -566,32 +665,28 @@ class OllamaFunctionGemma:
         self,
         ollama_url: Optional[str] = None,
         timeout: float = 2.0,  # Fast timeout for prepare step
+        model: Optional[str] = None,
+        recheck_seconds: float = DEFAULT_OLLAMA_RECHECK_SECONDS,
     ):
         self.ollama_url = ollama_url or self.DEFAULT_OLLAMA_URL
         self.timeout = timeout
-        self._available: Optional[bool] = None
+        # Model name is configurable (HESTER_PREPARE_MODEL / hester.prepare_model)
+        self.model = model or os.environ.get("HESTER_PREPARE_MODEL") or self.MODEL_NAME
+        self.recheck_seconds = recheck_seconds
 
     async def is_available(self) -> bool:
-        """Check if Ollama and FunctionGemma are available."""
-        if self._available is not None:
-            return self._available
+        """
+        Is Ollama up and is the prepare model installed?
 
-        try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
-                response = await client.get(f"{self.ollama_url}/api/tags")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    self._available = any(
-                        m.get("name", "").startswith(self.MODEL_NAME)
-                        for m in models
-                    )
-                else:
-                    self._available = False
-        except Exception as e:
-            logger.debug(f"Ollama not available: {e}")
-            self._available = False
+        Cached process-wide and re-probed every `recheck_seconds`; a failed
+        generate marks it unavailable immediately (see _mark_failed).
+        """
+        return await OLLAMA_AVAILABILITY.is_available(
+            self.ollama_url, self.model, self.recheck_seconds
+        )
 
-        return self._available
+    def _mark_failed(self, reason: str) -> None:
+        OLLAMA_AVAILABILITY.mark_unavailable(self.ollama_url, self.model, reason)
 
     async def chat_with_tools(
         self,
@@ -611,7 +706,7 @@ class OllamaFunctionGemma:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 payload = {
-                    "model": self.MODEL_NAME,
+                    "model": self.model,
                     "messages": messages,
                     "tools": tools,
                     "stream": False,
@@ -642,10 +737,13 @@ class OllamaFunctionGemma:
                     if content:
                         logger.debug(f"FunctionGemma returned text instead of tool_call: {content[:100]}")
 
-        except asyncio.TimeoutError:
-            logger.debug("FunctionGemma timed out")
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            # A timeout means Ollama is wedged or the model isn't loadable.
+            # Mark it unavailable so subsequent requests skip it instantly
+            # instead of each paying the full ollama_timeout.
+            self._mark_failed(f"timed out after {self.timeout}s")
         except Exception as e:
-            logger.debug(f"FunctionGemma error: {e}")
+            self._mark_failed(f"request failed: {e}")
 
         return None
 
@@ -2004,46 +2102,37 @@ class OllamaGemmaClient:
         ollama_url: Optional[str] = None,
         default_timeout_ms: float = 500.0,
         warm_context_ttl_seconds: int = 300,
+        recheck_seconds: float = DEFAULT_OLLAMA_RECHECK_SECONDS,
+        model_overrides: Optional[Dict[str, str]] = None,
     ):
         self.ollama_url = ollama_url or self.DEFAULT_OLLAMA_URL
         self.default_timeout_ms = default_timeout_ms
         self.warm_context_ttl_seconds = warm_context_ttl_seconds
-        self._model_availability: Dict[str, Optional[bool]] = {}
+        self.recheck_seconds = recheck_seconds
+        # Per-key Ollama model name overrides from settings (e.g. local_model).
+        self.model_overrides: Dict[str, str] = dict(model_overrides or {})
+
+    def ollama_name(self, model_key: str) -> Optional[str]:
+        """Resolve a model key to its Ollama model name (settings override wins)."""
+        if model_key in self.model_overrides:
+            return self.model_overrides[model_key]
+        config = self.MODEL_CONFIGS.get(model_key)
+        return config["ollama_name"] if config else None
 
     async def check_model_available(self, model_key: str) -> bool:
         """
-        Check if a specific Gemma model is available via Ollama.
+        Is this Gemma model installed in Ollama?
 
-        Uses cached result if previously checked.
+        Backed by the shared availability cache: re-probed every
+        `recheck_seconds`, and a failed/timed-out generate marks the model
+        unavailable immediately so the next call skips it without waiting.
         """
-        if model_key in self._model_availability:
-            return self._model_availability[model_key] or False
-
-        config = self.MODEL_CONFIGS.get(model_key)
-        if not config:
-            self._model_availability[model_key] = False
+        name = self.ollama_name(model_key)
+        if not name:
             return False
-
-        ollama_name = config["ollama_name"]
-
-        try:
-            async with httpx.AsyncClient(timeout=1.0) as client:
-                response = await client.get(f"{self.ollama_url}/api/tags")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    # Check if model name matches (with or without tag)
-                    base_name = ollama_name.split(":")[0]
-                    available = any(
-                        m.get("name", "").startswith(base_name)
-                        for m in models
-                    )
-                    self._model_availability[model_key] = available
-                    return available
-        except Exception as e:
-            logger.debug(f"Ollama model check failed for {model_key}: {e}")
-
-        self._model_availability[model_key] = False
-        return False
+        return await OLLAMA_AVAILABILITY.is_available(
+            self.ollama_url, name, self.recheck_seconds
+        )
 
     async def check_models_available(self) -> Dict[str, bool]:
         """Check availability of all configured models."""
@@ -2078,13 +2167,20 @@ class OllamaGemmaClient:
             logger.warning(f"Unknown model key: {model_key}")
             return None
 
+        ollama_name = self.ollama_name(model_key) or config["ollama_name"]
+
+        # Skip instantly when the model is known to be missing/unreachable,
+        # rather than paying local_timeout_ms on every THINK/OBSERVE phase.
+        if not await self.check_model_available(model_key):
+            return None
+
         timeout_s = (timeout_ms or self.default_timeout_ms) / 1000.0
         timeout_s = min(timeout_s, config["timeout"])  # Use model max as ceiling
 
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 payload: Dict[str, Any] = {
-                    "model": config["ollama_name"],
+                    "model": ollama_name,
                     "prompt": prompt,
                     "stream": False,
                     "options": {
@@ -2107,10 +2203,16 @@ class OllamaGemmaClient:
                 if response.status_code == 200:
                     return response.json().get("response", "")
 
-        except asyncio.TimeoutError:
-            logger.debug(f"Model {model_key} timed out after {timeout_s}s")
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            # Treat a timeout as unavailability: the next call skips it instantly
+            # until the recheck interval elapses.
+            OLLAMA_AVAILABILITY.mark_unavailable(
+                self.ollama_url, ollama_name, f"timed out after {timeout_s}s"
+            )
         except Exception as e:
-            logger.debug(f"Model {model_key} error: {e}")
+            OLLAMA_AVAILABILITY.mark_unavailable(
+                self.ollama_url, ollama_name, f"request failed: {e}"
+            )
 
         return None
 

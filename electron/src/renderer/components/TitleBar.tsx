@@ -5,7 +5,7 @@
 import React from 'react';
 
 // Get the Lee API from preload
-const lee = (window as any).lee;
+const lee = window.lee;
 
 export const TitleBar: React.FC = () => {
   const isMac = navigator.platform.toLowerCase().includes('mac');

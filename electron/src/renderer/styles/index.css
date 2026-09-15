@@ -1788,6 +1788,10 @@ body {
   border-left: 2px solid #da3;
 }
 
+.flyout-message-error {
+  border-left: 2px solid #e05252;
+}
+
 /* Command Palette */
 .command-palette-overlay {
   position: fixed;
@@ -6252,4 +6256,65 @@ body {
 
 .hex-ascii {
   color: var(--text-secondary);
+}
+
+/* Editor status bar: file removed on disk while its buffer stays open (C4) */
+.status-deleted {
+  color: #e05252;
+  font-weight: 600;
+}
+
+/* Config editor: where a merged section's keys actually came from (C20) */
+.config-source-hint {
+  font-size: 11px;
+  color: #7d8a85;
+  margin: 0 0 8px;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+}
+
+.config-radio-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.config-raw-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.config-raw-file {
+  background: transparent;
+  border: 1px solid #2c3a34;
+  color: #9fb0a8;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', Menlo, monospace;
+  cursor: pointer;
+}
+
+.config-raw-file.active {
+  border-color: #4f8f74;
+  color: #d6e6dd;
+  background: rgba(79, 143, 116, 0.12);
+}
+
+.config-raw-path-note {
+  font-size: 11px;
+  color: #6e7d77;
+}
+
+/* LibraryPane: failures on user-initiated actions (C22) */
+.library-error-banner {
+  padding: 6px 12px;
+  background: rgba(224, 82, 82, 0.12);
+  border-bottom: 1px solid rgba(224, 82, 82, 0.4);
+  color: #e8b0b0;
+  font-size: 12px;
+  cursor: pointer;
 }

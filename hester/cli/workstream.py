@@ -27,11 +27,13 @@ console = Console()
 
 DAEMON_URL = "http://localhost:9000"
 
+from ..shared.auth import auth_headers
+
 
 def _post(path: str, **kwargs) -> dict:
     """POST to daemon and return JSON."""
     try:
-        resp = httpx.post(f"{DAEMON_URL}{path}", **kwargs, timeout=10.0)
+        resp = httpx.post(f"{DAEMON_URL}{path}", **kwargs, headers=auth_headers(), timeout=10.0)
         resp.raise_for_status()
         return resp.json()
     except httpx.ConnectError:
@@ -45,7 +47,7 @@ def _post(path: str, **kwargs) -> dict:
 def _get(path: str, **kwargs) -> dict:
     """GET from daemon and return JSON."""
     try:
-        resp = httpx.get(f"{DAEMON_URL}{path}", **kwargs, timeout=10.0)
+        resp = httpx.get(f"{DAEMON_URL}{path}", **kwargs, headers=auth_headers(), timeout=10.0)
         resp.raise_for_status()
         return resp.json()
     except httpx.ConnectError:
@@ -59,7 +61,7 @@ def _get(path: str, **kwargs) -> dict:
 def _delete(path: str) -> dict:
     """DELETE from daemon."""
     try:
-        resp = httpx.delete(f"{DAEMON_URL}{path}", timeout=10.0)
+        resp = httpx.delete(f"{DAEMON_URL}{path}", headers=auth_headers(), timeout=10.0)
         resp.raise_for_status()
         return resp.json()
     except httpx.ConnectError:

@@ -5,7 +5,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { installHesterAuth } from './lib/hesterAuth';
 import './styles/index.css';
+
+// Hester's daemon requires the shared ~/.lee/api-token bearer on every endpoint
+// but GET /health. Wrap fetch once, before any component mounts.
+installHesterAuth();
 
 // Error boundary for debugging
 class ErrorBoundary extends React.Component<

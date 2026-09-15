@@ -38,6 +38,9 @@ class ManagedRedis:
         self.process: Optional[subprocess.Popen] = None
         self.managed_port: Optional[int] = None
         self.is_managed: bool = False
+        # True only when THIS process spawned redis-server (not when it
+        # reconnected to an already-running managed instance).
+        self.started_by_us: bool = False
         self._port_file = DATA_DIR / "managed.port"
         self._pid_file = DATA_DIR / "managed.pid"
 
@@ -97,6 +100,7 @@ class ManagedRedis:
             if client:
                 self.managed_port = port
                 self.is_managed = True
+                self.started_by_us = False
                 logger.info(f"Reconnected to existing managed Redis on port {port}")
                 return client
         except (ValueError, OSError):
@@ -155,6 +159,7 @@ class ManagedRedis:
 
         self.managed_port = port
         self.is_managed = True
+        self.started_by_us = True
 
         # Write state files for reconnection
         self._port_file.write_text(str(port))
@@ -260,12 +265,29 @@ class ManagedRedis:
                 self.process.kill()
             self.process = None
 
-    async def shutdown(self, client: Optional[aioredis.Redis]):
+    async def shutdown(self, client: Optional[aioredis.Redis], stop_redis: bool = True):
         """
-        Clean shutdown. For managed instances, sends SHUTDOWN SAVE to persist data.
-        For external Redis, just closes the connection.
+        Clean shutdown.
+
+        For a managed instance this process started, `stop_redis=True` sends
+        SHUTDOWN SAVE so redis doesn't outlive Lee. `stop_redis=False` (used on
+        a daemon restart) leaves it running with its state files intact, so the
+        next daemon reconnects to it instead of starting a second server.
+        External Redis is never stopped — we just close our connection.
         """
         if not client:
+            return
+
+        if self.is_managed and not self.started_by_us:
+            logger.info("Managed Redis was started elsewhere, leaving it running")
+            stop_redis = False
+
+        if self.is_managed and not stop_redis:
+            try:
+                await client.close()
+            except Exception:
+                pass
+            logger.info("Left managed Redis running (restart-friendly shutdown)")
             return
 
         if self.is_managed:

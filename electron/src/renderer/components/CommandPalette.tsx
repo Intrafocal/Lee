@@ -143,6 +143,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       const data = await response.json();
       setIsDaemonHealthy(data.status === 'healthy');
     } catch {
+      // Periodic health poll: the palette already shows the unhealthy state,
+      // so a message per poll would just be noise.
       setIsDaemonHealthy(false);
     }
   };

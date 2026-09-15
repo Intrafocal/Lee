@@ -7,7 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 interface PairingDialogProps {
   onClose: () => void;

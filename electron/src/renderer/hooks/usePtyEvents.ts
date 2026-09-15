@@ -36,7 +36,7 @@ class PtyEventManager {
   private init(): void {
     if (this.initialized) return;
 
-    const lee = (window as any).lee;
+    const lee = window.lee;
     if (!lee?.pty) {
       console.error('[PtyEventManager] lee.pty not available, retrying...');
       setTimeout(() => this.init(), 100);

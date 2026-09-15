@@ -12,6 +12,8 @@ from typing import Dict, Any, Optional, List
 
 import aiohttp
 
+from ...shared.auth import auth_headers
+
 from ..settings import HesterDaemonSettings
 
 logger = logging.getLogger("hester.daemon.tools.orchestrate")
@@ -89,7 +91,7 @@ async def send_telemetry(
             async with session.post(
                 endpoint,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=auth_headers({"Content-Type": "application/json"}),
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 if response.status == 200:
@@ -137,6 +139,7 @@ async def get_agent_status(session_id: str) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 endpoint,
+                headers=auth_headers(),
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
                 if response.status == 200:
@@ -209,6 +212,7 @@ async def list_agent_sessions(
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 endpoint,
+                headers=auth_headers(),
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
@@ -260,6 +264,7 @@ async def health_check() -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 endpoint,
+                headers=auth_headers(),
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:

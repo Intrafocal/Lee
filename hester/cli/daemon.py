@@ -154,12 +154,21 @@ def daemon_stop():
 
 
 @daemon.command("status")
-def daemon_status():
+@click.option(
+    "--deep",
+    is_flag=True,
+    help="Also make one live model call (hits /health/deep; costs a Gemini round-trip)"
+)
+def daemon_status(deep: bool):
     """Check the status of the Hester daemon.
 
     Shows whether the daemon is running and connection details.
+    By default this is free: /health reports the configured model without
+    calling it. Use --deep to verify the model actually responds.
     """
     import httpx
+
+    from ..shared.auth import auth_headers
 
     pid_file = Path.home() / ".hester" / "daemon.pid"
 
@@ -183,12 +192,14 @@ def daemon_status():
     # Try to connect to daemon
     port = int(os.environ.get("HESTER_PORT", 9000))
     host = os.environ.get("HESTER_HOST", "127.0.0.1")
-    url = f"http://{host}:{port}/health"
+    url = f"http://{host}:{port}/health/deep" if deep else f"http://{host}:{port}/health"
 
     console.print(f"\n[cyan]Checking daemon at {url}...[/cyan]")
 
     try:
-        response = httpx.get(url, timeout=5.0)
+        # /health is unauthenticated; /health/deep (like every other endpoint)
+        # needs the shared Lee bearer token.
+        response = httpx.get(url, headers=auth_headers(), timeout=30.0 if deep else 5.0)
         if response.status_code == 200:
             health = response.json()
             console.print(f"[green]Daemon is healthy![/green]")
@@ -203,6 +214,21 @@ def daemon_status():
                 console.print(f"[dim]Agent: {agent_health.get('status')}[/dim]")
                 console.print(f"[dim]Model: {agent_health.get('model')}[/dim]")
                 console.print(f"[dim]Tools: {agent_health.get('tools_registered')}[/dim]")
+                if agent_health.get("test_response") is not None:
+                    console.print(f"[dim]Live model reply: {agent_health['test_response']!r}[/dim]")
+                if agent_health.get("error"):
+                    console.print(f"[red]Agent error: {agent_health['error']}[/red]")
+            if health.get("workspace"):
+                console.print(f"[dim]Workspace: {health['workspace']}[/dim]")
+            if health.get("auth"):
+                console.print(f"[dim]Auth: {health['auth']}[/dim]")
+            if not deep:
+                console.print("[dim]Run with --deep to verify the model responds.[/dim]")
+        elif response.status_code == 401:
+            console.print(
+                "[red]Daemon rejected the request (401).[/red] "
+                "[dim]Check ~/.lee/api-token exists and matches the daemon's.[/dim]"
+            )
         else:
             console.print(f"[yellow]Daemon responded with status: {response.status_code}[/yellow]")
 

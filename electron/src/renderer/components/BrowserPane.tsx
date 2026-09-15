@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import type { ConsoleLogEntry, AgentGraphEvent, FrameSession } from '../../shared/context';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 const isElectron = typeof lee !== 'undefined';
 
 // Maximum console logs to keep in buffer
@@ -39,6 +39,8 @@ function getUrlHistory(): UrlHistoryEntry[] {
     const stored = localStorage.getItem(URL_HISTORY_KEY);
     return stored ? JSON.parse(stored) : [];
   } catch {
+    // localStorage can be unavailable or hold stale JSON; an empty history
+    // list is a fine outcome and not worth reporting.
     return [];
   }
 }
@@ -76,7 +78,8 @@ function saveUrlToHistory(url: string, title: string): void {
     const trimmed = history.slice(0, MAX_HISTORY_ENTRIES);
     localStorage.setItem(URL_HISTORY_KEY, JSON.stringify(trimmed));
   } catch {
-    // Ignore storage errors
+    // Best-effort localStorage write (quota, private mode) - losing the
+    // history entry is harmless.
   }
 }
 

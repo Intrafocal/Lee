@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type * as ThreeTypes from 'three';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 const FUSION_EXTENSIONS = ['f3d', 'f3z'];
 

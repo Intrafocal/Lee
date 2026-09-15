@@ -19,6 +19,8 @@ except ImportError:
 
 from .models import EditorState, FileContext
 
+from ..shared.workspace import workspace_key_prefix
+
 logger = logging.getLogger("hester.daemon.session")
 
 
@@ -107,14 +109,17 @@ class ExplorationSessionManager:
         self,
         redis_client: Any,
         ttl_seconds: int = 7200,  # 2 hours default
-        key_prefix: str = "hester:library:",
+        key_prefix: Optional[str] = None,
     ):
         self.redis = redis_client
         self.ttl = ttl_seconds
+        # Library explorations belong to a project, so scope them per workspace
+        # (resolved at call time, since the workspace can change at runtime).
         self._key_prefix = key_prefix
 
     def _session_key(self, session_id: str) -> str:
-        return f"{self._key_prefix}{session_id}"
+        prefix = self._key_prefix or f"{workspace_key_prefix()}library:"
+        return f"{prefix}{session_id}"
 
     async def get(self, session_id: str) -> Optional[ExplorationSession]:
         key = self._session_key(session_id)
@@ -245,7 +250,8 @@ class ExplorationSessionManager:
 
     async def list_sessions(self) -> List[Dict[str, Any]]:
         """List all exploration sessions with basic info."""
-        pattern = f"{self._key_prefix}*"
+        prefix = self._key_prefix or f"{workspace_key_prefix()}library:"
+        pattern = f"{prefix}*"
         keys = await self.redis.keys(pattern)
 
         sessions = []

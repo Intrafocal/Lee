@@ -12,7 +12,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-const lee = (window as any).lee;
+const lee = window.lee;
 
 /** file:// URL with each path segment escaped (spaces, #, ? in filenames) */
 function toFileUrl(filePath: string): string {

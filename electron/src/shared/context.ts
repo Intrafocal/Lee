@@ -227,6 +227,13 @@ export interface TUIDefinition {
   };
   /** Icon for splash screen display */
   icon?: string;
+  /**
+   * Escape hatch: run `command` through `$SHELL -ilc` instead of spawning the
+   * binary directly. Only needed when the command is really a shell snippet
+   * (`a && b`, a pipeline, a glob). Arguments are single-quoted before they
+   * reach the shell. Leave unset for ordinary tools.
+   */
+  shell?: boolean;
 }
 
 /**
@@ -252,6 +259,11 @@ export interface AgentDefinition {
   prewarm?: boolean;
   /** Icon shown in tab and provider switcher */
   icon?: string;
+  /**
+   * Escape hatch: run `command` through `$SHELL -ilc` instead of spawning the
+   * binary directly. Only needed when the command is really a shell snippet.
+   */
+  shell?: boolean;
 }
 
 /**
@@ -339,6 +351,8 @@ export interface RendererContextUpdate {
   focusedPanel?: DockPosition;
   workspace?: string;
   editorDaemonPort?: number | null;
+  /** Count of open editor tabs with unsaved changes - surfaced in the quit-confirmation dialog. */
+  dirtyFileCount?: number;
 }
 
 /**

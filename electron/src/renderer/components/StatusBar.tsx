@@ -16,7 +16,7 @@ import { MachineStatus } from './MachineStatus';
 export interface StatusMessage {
   id: string;
   message: string;
-  type: 'hint' | 'info' | 'success' | 'warning';
+  type: 'hint' | 'info' | 'success' | 'warning' | 'error';
   prompt?: string;
   ttl?: number;
   timestamp: number;
@@ -162,6 +162,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         return '✓';
       case 'warning':
         return '⚠️';
+      case 'error':
+        return '⛔';
       default:
         return '💬';
     }
