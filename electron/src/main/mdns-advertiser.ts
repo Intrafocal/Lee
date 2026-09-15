@@ -20,6 +20,7 @@
 
 import * as os from 'os';
 import * as path from 'path';
+import { spawn, ChildProcess } from 'child_process';
 import { Bonjour, Service } from 'bonjour-service';
 
 const SERVICE_NAME = 'lee';
@@ -57,6 +58,9 @@ function resolveInstanceName(config: any): string {
 export class MdnsAdvertiser {
   private bonjour: Bonjour | null = null;
   private service: Service | null = null;
+  private dnssd: ChildProcess | null = null;   // macOS: registration via mDNSResponder
+  private republishing = false;
+  private republishPending = false;
   private port: number | null = null;
   private hesterPort = DEFAULT_HESTER_PORT;
   private workspaceBasename = '';
@@ -168,14 +172,55 @@ export class MdnsAdvertiser {
     }
   }
 
+  /**
+   * (Re)publish. If a service is already up, wait for its goodbye packet to
+   * go out before announcing again: bonjour-service's stop() is async, and an
+   * announce followed by a goodbye for the same instance name makes browsers
+   * drop the entry (seen in lee.log as Published -> Unpublished on every
+   * workspace change). Calls arriving while a republish is in flight collapse
+   * into one trailing republish.
+   */
   private publish(): void {
     if (this.port == null) return;
+    if (this.republishing) { this.republishPending = true; return; }
+    if (!this.service) { this.publishNow(); return; }
+
+    this.republishing = true;
+    const old = this.service;
+    this.service = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      this.republishing = false;
+      this.log('INFO', 'Unpublished mDNS service', { name: this.instanceName });
+      if (this.enabled && this.started) this.publishNow();
+      if (this.republishPending) { this.republishPending = false; this.publish(); }
+    };
+    try {
+      old.stop?.(finish);
+    } catch {
+      finish();
+    }
+    setTimeout(finish, 1500); // stop() never calling back must not wedge us
+  }
+
+  private publishNow(): void {
+    if (this.port == null) return;
+    const txt = { v: '1', hester: String(this.hesterPort), ws: this.workspaceBasename };
+
+    // macOS: a second UDP 5353 socket alongside mDNSResponder never gets its
+    // announcements onto the wire (verified: bonjour-service reports "up",
+    // dns-sd -B and LAN devices see nothing; EHOSTUNREACH on responses).
+    // Registering through the system daemon with `dns-sd -R` is what works,
+    // and mDNSResponder withdraws the record when the process exits.
+    if (process.platform === 'darwin') {
+      this.publishViaDnssd(txt);
+      return;
+    }
+
     const bonjour = this.ensureBonjour();
     if (!bonjour) return;
-
-    this.unpublish();
-
-    const txt = { v: '1', hester: String(this.hesterPort), ws: this.workspaceBasename };
     try {
       this.service = bonjour.publish({
         name: this.instanceName,
@@ -195,7 +240,52 @@ export class MdnsAdvertiser {
     }
   }
 
+  private publishViaDnssd(txt: Record<string, string>): void {
+    const args = ['-R', this.instanceName, `_${SERVICE_NAME}._${SERVICE_PROTOCOL}`, '.', String(this.port)];
+    for (const [k, v] of Object.entries(txt)) args.push(`${k}=${v}`);
+    try {
+      const child = spawn('dns-sd', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      this.dnssd = child;
+      child.stdout?.on('data', (d: Buffer) => {
+        for (const line of d.toString().split('\n')) {
+          if (/registered and active|name in use|error/i.test(line)) {
+            this.log('INFO', 'dns-sd: ' + line.replace(/^[\d:.]+\s+/, '').trim());
+          }
+        }
+      });
+      child.stderr?.on('data', (d: Buffer) => this.log('WARN', 'dns-sd: ' + d.toString().trim()));
+      child.on('error', (err) => {
+        this.log('WARN', 'dns-sd registration failed', { error: err?.message || String(err) });
+        if (this.dnssd === child) this.dnssd = null;
+      });
+      child.on('exit', (code, signal) => {
+        if (this.dnssd === child) this.dnssd = null;
+        if (code !== null && code !== 0) this.log('WARN', 'dns-sd exited', { code, signal });
+      });
+      // Marker object so the republish path treats us as "published".
+      this.service = { stop: (cb?: () => void) => { this.stopDnssd(); cb?.(); } } as any;
+      this.log('INFO', 'Published mDNS service', {
+        name: this.instanceName,
+        type: `_${SERVICE_NAME}._${SERVICE_PROTOCOL}`,
+        port: this.port,
+        txt,
+        via: 'dns-sd',
+      });
+    } catch (err: any) {
+      this.log('WARN', 'Failed to publish mDNS service via dns-sd', { error: err?.message || String(err) });
+    }
+  }
+
+  private stopDnssd(): void {
+    const child = this.dnssd;
+    this.dnssd = null;
+    if (!child) return;
+    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+  }
+
   private unpublish(): void {
+    this.republishPending = false;
+    this.stopDnssd();
     if (!this.service) return;
     try {
       this.service.stop?.(() => {
