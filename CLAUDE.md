@@ -326,6 +326,11 @@ Hester controls Lee via `POST /command`:
 - `browser` - Browser automation (navigate, screenshot, dom, click, type, fill_form)
 - `status` - Status bar messages (push, clear, clear_all)
 
+**Read-only filesystem endpoints** (plain `GET`, not part of `/command`; added for Aeronaut's file viewer and Files browser, restricted to paths under an open window's workspace):
+- `GET /fs/read?path=<abs>[&stat=1]` - file content (utf8 or base64, 2 MB cap) or, with `stat=1`, just `{path, size, mtimeMs, mime}`
+- `GET /fs/list?path=<abs dir>` - one directory's entries, dirs first; defaults to the focused window's workspace
+- No separate `/fs/workspaces` - `GET /windows` already returns `{id, workspace, focused}` per open window
+
 ## Configuration
 
 Create `~/.config/lee/config.yaml` or `.lee/config.yaml` in your workspace:

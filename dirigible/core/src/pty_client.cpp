@@ -23,6 +23,9 @@ void PTYClient::connect() {
         url += "?token=" + token_;
     }
 
+    if (callbacks_registered_) { ws_->connect(url); return; }
+    callbacks_registered_ = true;
+
     ws_->onConnect([this]() {
         // Resize is latest-wins state, not an event: replay on every
         // (re)connect since pre-open sends are dropped by the transport.

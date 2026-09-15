@@ -85,9 +85,9 @@ class _PhaseContentState extends State<_PhaseContent>
         horizontal: AeronautTheme.spacingMd,
         vertical: AeronautTheme.spacingSm,
       ),
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AeronautColors.bgSurface,
-        border: const Border(
+        border: Border(
           bottom: BorderSide(color: AeronautColors.border),
         ),
       ),
@@ -96,7 +96,7 @@ class _PhaseContentState extends State<_PhaseContent>
           // Pulsing dot
           AnimatedBuilder(
             animation: _pulseAnimation,
-            builder: (_, __) => Container(
+            builder: (_, _) => Container(
               width: 8,
               height: 8,
               decoration: BoxDecoration(

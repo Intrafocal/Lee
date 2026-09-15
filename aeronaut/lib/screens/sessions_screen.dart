@@ -127,18 +127,18 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
         children: [
           SizedBox(
             height: MediaQuery.of(context).size.height * 0.6,
-            child: Center(
+            child: const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.history,
                     size: 48,
                     color: AeronautColors.textTertiary,
                   ),
-                  const SizedBox(height: AeronautTheme.spacingMd),
+                  SizedBox(height: AeronautTheme.spacingMd),
                   Text('No sessions', style: AeronautTheme.heading),
-                  const SizedBox(height: AeronautTheme.spacingSm),
+                  SizedBox(height: AeronautTheme.spacingSm),
                   Text(
                     'Start a conversation to create a session',
                     style: AeronautTheme.caption,
@@ -153,7 +153,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 
     return ListView.separated(
       itemCount: _sessions.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
+      separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final sessionId = _sessions[index];
         return Dismissible(

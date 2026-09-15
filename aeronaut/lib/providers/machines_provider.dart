@@ -3,14 +3,21 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/machine.dart';
+import '../services/api_auth.dart';
 import '../services/lee_api.dart';
 import '../services/machine_store.dart';
+
+/// Reachability of a saved machine, as seen by the background pinger.
+///
+/// [unauthorized] is distinct from [offline]: the host answered, it just
+/// rejected the saved bearer token, which needs a re-pair rather than a retry.
+enum MachineHealth { unknown, online, offline, unauthorized }
 
 /// State for the machines list + active selection.
 class MachinesState {
   final List<Machine> machines;
   final String? activeMachineId;
-  final Map<String, bool> healthStatus; // machineId → online
+  final Map<String, MachineHealth> healthStatus; // machineId → health
 
   const MachinesState({
     this.machines = const [],
@@ -27,12 +34,16 @@ class MachinesState {
     }
   }
 
-  bool isOnline(String machineId) => healthStatus[machineId] ?? false;
+  MachineHealth healthOf(String machineId) =>
+      healthStatus[machineId] ?? MachineHealth.unknown;
+
+  bool isOnline(String machineId) =>
+      healthOf(machineId) == MachineHealth.online;
 
   MachinesState copyWith({
     List<Machine>? machines,
     String? activeMachineId,
-    Map<String, bool>? healthStatus,
+    Map<String, MachineHealth>? healthStatus,
   }) {
     return MachinesState(
       machines: machines ?? this.machines,
@@ -101,37 +112,76 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
     await _store.saveActiveMachineId(id);
   }
 
-  /// Ping all machines for health status.
-  Future<void> pingAll() async {
-    final results = <String, bool>{};
-    await Future.wait(state.machines.map((machine) async {
-      final online = await _pingMachine(machine);
-      results[machine.id] = online;
-    }));
-    state = state.copyWith(healthStatus: {...state.healthStatus, ...results});
+  /// Add a machine, or update the one already saved for the same
+  /// `host:hostPort` — re-pairing refreshes the token rather than
+  /// stacking up duplicate entries.
+  Future<Machine> addOrUpdateMachine(Machine machine) async {
+    final existingIndex = state.machines.indexWhere(
+      (m) => m.host == machine.host && m.hostPort == machine.hostPort,
+    );
+    if (existingIndex < 0) {
+      await addMachine(machine);
+      return machine;
+    }
+    final existing = state.machines[existingIndex];
+    final merged = existing.copyWith(
+      name: machine.name,
+      hesterPort: machine.hesterPort,
+      token: machine.token,
+    );
+    final updated = [...state.machines]..[existingIndex] = merged;
+    state = state.copyWith(
+      machines: updated,
+      healthStatus: {...state.healthStatus}..remove(merged.id),
+    );
+    await _store.saveMachines(updated);
+    unawaited(_pingMachine(merged));
+    return merged;
   }
 
-  Future<bool> _pingMachine(Machine machine) async {
+  /// Mark a machine's token as rejected (called by the auth guard on a 401).
+  void markUnauthorized(String machineId) {
+    state = state.copyWith(
+      healthStatus: {
+        ...state.healthStatus,
+        machineId: MachineHealth.unauthorized,
+      },
+    );
+  }
+
+  /// Ping all machines for health status.
+  Future<void> pingAll() async {
+    await Future.wait(state.machines.map(_pingMachine));
+  }
+
+  /// Probe a machine on an authenticated route so a rejected token shows up
+  /// as [MachineHealth.unauthorized] rather than a false "online".
+  Future<MachineHealth> _pingMachine(Machine machine) async {
     final api = LeeApi(machine: machine);
     try {
-      final online = await api.healthCheck();
-      // Update lastSeen if online
-      if (online) {
+      final status = await api.probe();
+      final health = switch (status) {
+        ApiStatus.ok => MachineHealth.online,
+        ApiStatus.unauthorized => MachineHealth.unauthorized,
+        ApiStatus.unreachable => MachineHealth.offline,
+      };
+      if (!mounted) return health;
+
+      var machines = state.machines;
+      if (health == MachineHealth.online) {
         final updated = machine.copyWith(lastSeen: DateTime.now());
-        final machines = state.machines.map((m) {
+        machines = machines.map((m) {
           return m.id == machine.id ? updated : m;
         }).toList();
-        state = state.copyWith(
-          machines: machines,
-          healthStatus: {...state.healthStatus, machine.id: true},
-        );
-        await _store.saveMachines(machines);
-      } else {
-        state = state.copyWith(
-          healthStatus: {...state.healthStatus, machine.id: false},
-        );
       }
-      return online;
+      state = state.copyWith(
+        machines: machines,
+        healthStatus: {...state.healthStatus, machine.id: health},
+      );
+      if (health == MachineHealth.online) {
+        await _store.saveMachines(machines);
+      }
+      return health;
     } finally {
       api.dispose();
     }

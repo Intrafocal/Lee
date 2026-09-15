@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/lee_context.dart';
 import '../models/machine.dart';
+import 'api_auth.dart';
 
 /// Info about an open Lee window (workspace).
 class WindowInfo extends Equatable {
@@ -39,9 +40,14 @@ class WindowInfo extends Equatable {
 /// HTTP client for a Lee Host instance.
 ///
 /// Wraps the Host API (default port 9001):
-/// - GET /health
+/// - GET /health    (the only unauthenticated route)
 /// - GET /context
+/// - GET /windows
 /// - POST /command
+///
+/// Every route but `GET /health` requires `Authorization: Bearer <token>`.
+/// A 401 is reported to [ApiAuth] so the UI can say
+/// "Token rejected. Re-pair this machine." instead of a generic failure.
 class LeeApi {
   final Machine machine;
   final http.Client _client;
@@ -54,6 +60,13 @@ class LeeApi {
         if (machine.token.isNotEmpty)
           'Authorization': 'Bearer ${machine.token}',
       };
+
+  /// True when the response was a token rejection; reports it once.
+  bool _isUnauthorized(http.BaseResponse response) {
+    if (response.statusCode != 401 && response.statusCode != 403) return false;
+    ApiAuth.reportUnauthorized(machine.id, ApiService.lee);
+    return true;
+  }
 
   /// Health check. Returns true if the host is reachable and healthy.
   Future<bool> healthCheck() async {
@@ -70,6 +83,39 @@ class LeeApi {
     }
   }
 
+  /// Fetch `GET /health` as a map (unauthenticated on the Lee side).
+  Future<Map<String, dynamic>?> getHealth() async {
+    try {
+      final response = await _client
+          .get(Uri.parse('${machine.hostUrl}/health'), headers: _headers)
+          .timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        // Lee wraps payloads as { success, data }.
+        final data = json['data'];
+        return data is Map<String, dynamic> ? data : json;
+      }
+      _isUnauthorized(response);
+    } catch (_) {
+      // Connection failed
+    }
+    return null;
+  }
+
+  /// Probe an authenticated route to tell "offline" apart from
+  /// "token rejected". Used for machine health and before WS reconnects.
+  Future<ApiStatus> probe() async {
+    try {
+      final response = await _client
+          .get(Uri.parse('${machine.hostUrl}/windows'), headers: _headers)
+          .timeout(const Duration(seconds: 3));
+      if (_isUnauthorized(response)) return ApiStatus.unauthorized;
+      return response.statusCode == 200 ? ApiStatus.ok : ApiStatus.unreachable;
+    } catch (_) {
+      return ApiStatus.unreachable;
+    }
+  }
+
   /// Fetch a full context snapshot.
   Future<LeeContext?> getContext() async {
     try {
@@ -81,8 +127,12 @@ class LeeApi {
           .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return LeeContext.fromJson(json);
+        final data = json['data'];
+        return LeeContext.fromJson(
+          data is Map<String, dynamic> ? data : json,
+        );
       }
+      _isUnauthorized(response);
     } catch (_) {
       // Connection failed
     }
@@ -105,6 +155,7 @@ class LeeApi {
             .map((w) => WindowInfo.fromJson(w as Map<String, dynamic>))
             .toList();
       }
+      _isUnauthorized(response);
     } catch (_) {
       // Connection failed
     }
@@ -142,6 +193,7 @@ class LeeApi {
             body: body,
           )
           .timeout(const Duration(seconds: 5));
+      _isUnauthorized(response);
       return response.statusCode == 200;
     } catch (_) {
       return false;

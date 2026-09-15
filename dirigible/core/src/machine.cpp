@@ -9,11 +9,17 @@ MachineManager::MachineManager(ITransportFactory* factory)
 MachineManager::~MachineManager() {
     for (auto& m : machines_) {
         delete m.connection;
+        delete m.health_http;
     }
 }
 
 void MachineManager::loadFromConfig(IConfig* config) {
+    for (auto& m : machines_) {
+        delete m.connection;
+        delete m.health_http;
+    }
     machines_.clear();
+    active_name_.clear();   // the old pointer set is gone
     for (int i = 0; i < config->machineCount(); i++) {
         Machine m;
         m.config = config->machineAt(i);
@@ -23,21 +29,24 @@ void MachineManager::loadFromConfig(IConfig* config) {
 
 void MachineManager::pingAll() {
     for (auto& m : machines_) {
-        // Create a temporary HTTP client for health check
-        auto* http = factory_->createHttpClient(3000);
+        if (m.health_in_flight) continue;   // don't stack pings on a dead host
 
-        // If we have a token, set it (health check is optional auth)
+        if (!m.health_http) {
+            m.health_http = factory_->createHttpClient(3000);
+        }
         if (!m.token.empty()) {
-            http->setAuthToken(m.token);
+            m.health_http->setAuthToken(m.token);
         }
 
         std::string url = "http://" + m.config.host + ":"
                         + std::to_string(m.config.lee_port) + "/health";
 
         std::string name = m.config.name;
-        http->get(url, [this, name, http](int status, cJSON*) {
+        m.health_in_flight = true;
+        m.health_http->get(url, [this, name](int status, cJSON*) {
             Machine* mach = findByName(name);
-            if (!mach) { delete http; return; }
+            if (!mach) return;
+            mach->health_in_flight = false;
 
             bool was_online = mach->online;
             mach->online = (status >= 200 && status < 300);
@@ -52,7 +61,7 @@ void MachineManager::pingAll() {
                 }
             }
 
-            // If just came online and has no token, try to fetch one
+            // If it just came online with no token, try to fetch one.
             if (mach->online && mach->token.empty() && token_fetcher_) {
                 token_fetcher_(mach->config, [this, name](const std::string& token) {
                     Machine* m2 = findByName(name);
@@ -64,17 +73,17 @@ void MachineManager::pingAll() {
                     }
                 });
             }
-
-            delete http;
         });
     }
 }
 
 void MachineManager::setActive(const std::string& name) {
-    if (active_name_ == name) return;
+    // Idempotent, not early-returning on an unchanged name: after
+    // loadFromConfig() the machine list is rebuilt, so "same name" can still
+    // mean "no connection yet".
+    const bool changed = (active_name_ != name);
     active_name_ = name;
 
-    // Ensure connection exists for active machine
     Machine* m = findByName(name);
     if (m && !m->connection) {
         m->connection = new LeeConnection(factory_, m->config.host, m->config.lee_port);
@@ -83,7 +92,7 @@ void MachineManager::setActive(const std::string& name) {
         }
     }
 
-    EventBus::instance().emit(Event::MachineSwitched);
+    if (changed) EventBus::instance().emit(Event::MachineSwitched);
 }
 
 Machine* MachineManager::activeMachine() {

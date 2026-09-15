@@ -40,8 +40,11 @@ public:
     HesterClient(const HesterClient&) = delete;
     HesterClient& operator=(const HesterClient&) = delete;
 
-    // Send a chat message to Hester. Streams phases + final response.
-    // session_id can be empty to start a fresh session.
+    // Bearer token — Hester's daemon requires the same ~/.lee/api-token the
+    // Lee API uses (A10).  Call before send().
+    void setToken(const std::string& token);
+
+    // Hester accepts source in {"Lee","Slack","CLI","Aeronaut","Dirigible"}
     void send(const std::string& message,
               const std::string& session_id = "",
               const std::string& source = "Dirigible");

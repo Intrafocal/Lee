@@ -1,0 +1,44 @@
+# Dirigible / LilyGO T-Deck (ESP32-S3, 16 MB flash, 8 MB octal PSRAM)
+#
+# Derived from the sdkconfig screenschema's codegen produced for the
+# lilygo-t-deck board profile (Intrafocal/screenschema
+# @ 76b6ce9bb16521bd05d08f82b642014f390cf4cd, cli/codegen.py::_write_sdkconfig).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- flash / partitions ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- PSRAM (octal on the T-Deck) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# --- main task stack (B7) ---
+# The IDF default of 3840 overflows as soon as the app builds non-trivial
+# state on the main task; the T-Deck has 8 MB of PSRAM so 16 KB is free.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- LVGL 8 ---
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+# RGB565 byte swap: the ESP32 is little-endian, SPI sends MSB first.
+CONFIG_LV_COLOR_16_SWAP=y
+CONFIG_LV_MEM_CUSTOM=y
+CONFIG_LV_MEM_SIZE_KILOBYTES=512
+# The ASCII bitmap monospace fonts the terminal grid is measured against.
+CONFIG_LV_FONT_UNSCII_8=y
+CONFIG_LV_FONT_UNSCII_16=y
+
+# --- OTA ---
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# --- networking ---
+# Lee's PTY frames can be large; give lwip and the websocket room.
+CONFIG_LWIP_TCP_MSS=1436
+CONFIG_ESP_TLS_INSECURE=n

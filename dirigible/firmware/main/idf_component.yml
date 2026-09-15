@@ -1,0 +1,8 @@
+dependencies:
+  idf: ">=5.3"
+  # LVGL 8.x: the lifted T-Deck drivers use the v8 display/indev driver API
+  # (lv_disp_drv_t / lv_indev_drv_t), which v9 removed.
+  lvgl/lvgl: ">=8.3.0,<9.0.0"
+  espressif/esp_lcd_touch_gt911: ">=1.0.0"
+  espressif/esp_websocket_client: ">=1.1.0"
+  espressif/mdns: ">=1.0.0"

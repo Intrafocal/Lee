@@ -14,16 +14,20 @@ HesterClient::~HesterClient() {
     delete http_;
 }
 
+void HesterClient::setToken(const std::string& token) {
+    if (http_) http_->setAuthToken(token);
+}
+
 void HesterClient::send(const std::string& message,
                          const std::string& session_id,
                          const std::string& source) {
     if (!http_) return;
 
     // Build request body: { session_id, source, message }
+    // session_id is required by Hester's ContextRequest — always send the key,
+    // even when the caller passed an empty string.
     cJSON* body = cJSON_CreateObject();
-    if (!session_id.empty()) {
-        cJSON_AddStringToObject(body, "session_id", session_id.c_str());
-    }
+    cJSON_AddStringToObject(body, "session_id", session_id.c_str());
     cJSON_AddStringToObject(body, "source", source.c_str());
     cJSON_AddStringToObject(body, "message", message.c_str());
 

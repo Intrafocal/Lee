@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -115,18 +115,18 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
         children: [
           SizedBox(
             height: MediaQuery.of(context).size.height * 0.6,
-            child: Center(
+            child: const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.inventory_2_outlined,
                     size: 48,
                     color: AeronautColors.textTertiary,
                   ),
-                  const SizedBox(height: AeronautTheme.spacingMd),
+                  SizedBox(height: AeronautTheme.spacingMd),
                   Text('No bundles', style: AeronautTheme.heading),
-                  const SizedBox(height: AeronautTheme.spacingSm),
+                  SizedBox(height: AeronautTheme.spacingSm),
                   Text(
                     'Create bundles with: hester context create',
                     style: AeronautTheme.caption,
@@ -141,7 +141,7 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
 
     return ListView.separated(
       itemCount: _bundles.length,
-      separatorBuilder: (_, __) => const Divider(height: 1),
+      separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final bundle = _bundles[index];
         return _BundleTile(
@@ -340,7 +340,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
       data: _content!,
       selectable: true,
       padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-      onTapLink: (_, href, __) {
+      onTapLink: (_, href, _) {
         if (href != null) launchUrl(Uri.parse(href));
       },
       styleSheet: MarkdownStyleSheet(
@@ -359,7 +359,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
           border: Border.all(color: AeronautColors.border),
         ),
         codeblockPadding: const EdgeInsets.all(AeronautTheme.spacingSm),
-        blockquoteDecoration: BoxDecoration(
+        blockquoteDecoration: const BoxDecoration(
           border: Border(
             left: BorderSide(color: AeronautColors.accent, width: 3),
           ),
@@ -376,7 +376,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
           fontWeight: FontWeight.w600,
         ),
         tableBody: AeronautTheme.body.copyWith(fontSize: 12),
-        horizontalRuleDecoration: BoxDecoration(
+        horizontalRuleDecoration: const BoxDecoration(
           border: Border(
             top: BorderSide(color: AeronautColors.border),
           ),

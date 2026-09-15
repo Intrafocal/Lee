@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/hester_models.dart';
 import '../models/machine.dart';
+import 'api_auth.dart';
 
 /// HTTP client for a Hester daemon instance.
 ///
@@ -15,6 +16,18 @@ import '../models/machine.dart';
 /// - DELETE /session/:id
 /// - GET  /bundles
 /// - GET  /bundles/:id
+///
+/// Every route but `GET /health` requires `Authorization: Bearer <token>`
+/// (the same `~/.lee/api-token` Lee uses). A 401 is reported to [ApiAuth].
+/// Thrown when Hester rejects the bearer token, so the chat UI can show the
+/// re-pair message instead of a generic connection error.
+class HesterAuthException implements Exception {
+  const HesterAuthException();
+
+  @override
+  String toString() => AuthFailure.message;
+}
+
 class HesterApi {
   final Machine machine;
   final http.Client _client;
@@ -29,6 +42,34 @@ class HesterApi {
         if (machine.token.isNotEmpty)
           'Authorization': 'Bearer ${machine.token}',
       };
+
+  /// True when the response was a token rejection; reports it once.
+  bool _isUnauthorized(http.BaseResponse response) {
+    if (response.statusCode != 401 && response.statusCode != 403) return false;
+    ApiAuth.reportUnauthorized(machine.id, ApiService.hester);
+    return true;
+  }
+
+  /// Fetch `GET /health` as a map.
+  ///
+  /// Includes `auth` ("bearer" or "disabled"), `workspace` — the project the
+  /// daemon is currently pointed at — `workspace_id`, `session_backend` and a
+  /// `components` block.
+  Future<Map<String, dynamic>?> getHealth() async {
+    if (_baseUrl == null) return null;
+    try {
+      final response = await _client
+          .get(Uri.parse('$_baseUrl/health'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      _isUnauthorized(response);
+    } catch (_) {
+      // Connection failed
+    }
+    return null;
+  }
 
   /// Health check. Returns true if Hester daemon is reachable.
   Future<bool> healthCheck() async {
@@ -61,6 +102,7 @@ class HesterApi {
             body: body,
           )
           .timeout(const Duration(seconds: 30));
+      _isUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         return json['response'] as String?;
@@ -93,9 +135,14 @@ class HesterApi {
       });
 
       final response = await _client.send(request);
+      if (_isUnauthorized(response)) {
+        throw const HesterAuthException();
+      }
       if (response.statusCode == 200) {
         return response;
       }
+    } on HesterAuthException {
+      rethrow;
     } catch (_) {
       // Connection failed
     }
@@ -112,6 +159,7 @@ class HesterApi {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 5));
+      _isUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final sessions = json['sessions'] as List<dynamic>;
@@ -133,6 +181,7 @@ class HesterApi {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 10));
+      _isUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final history = json['conversation_history'] as List<dynamic>? ?? [];
@@ -157,6 +206,7 @@ class HesterApi {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 5));
+      _isUnauthorized(response);
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -173,6 +223,7 @@ class HesterApi {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 5));
+      _isUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final bundles = json['bundles'] as List<dynamic>;
@@ -196,6 +247,7 @@ class HesterApi {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 10));
+      _isUnauthorized(response);
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         return json['content'] as String?;

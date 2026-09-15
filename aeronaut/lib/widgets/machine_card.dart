@@ -1,25 +1,42 @@
 import 'package:flutter/material.dart';
 
 import '../models/machine.dart';
+import '../providers/machines_provider.dart';
+import '../services/api_auth.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 
 /// Card showing a saved machine with status indicator.
 class MachineCard extends StatelessWidget {
   final Machine machine;
-  final bool isOnline;
+  final MachineHealth health;
   final bool isActive;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
   const MachineCard({
     required this.machine,
-    this.isOnline = false,
+    this.health = MachineHealth.unknown,
     this.isActive = false,
     this.onTap,
     this.onLongPress,
     super.key,
   });
+
+  bool get isOnline => health == MachineHealth.online;
+
+  Color get _statusColor {
+    switch (health) {
+      case MachineHealth.online:
+        return AeronautColors.online;
+      case MachineHealth.unauthorized:
+        return AeronautColors.warning;
+      case MachineHealth.offline:
+        return AeronautColors.offline;
+      case MachineHealth.unknown:
+        return AeronautColors.textTertiary;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,9 +62,7 @@ class MachineCard extends StatelessWidget {
                 height: 10,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isOnline
-                      ? AeronautColors.online
-                      : AeronautColors.offline,
+                  color: _statusColor,
                   boxShadow: isOnline
                       ? [
                           BoxShadow(
@@ -79,7 +94,15 @@ class MachineCard extends StatelessWidget {
                         fontSize: 12,
                       ),
                     ),
-                    if (machine.workspace != null) ...[
+                    if (health == MachineHealth.unauthorized) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        AuthFailure.message,
+                        style: AeronautTheme.caption.copyWith(
+                          color: AeronautColors.warning,
+                        ),
+                      ),
+                    ] else if (machine.workspace != null) ...[
                       const SizedBox(height: 2),
                       Text(
                         machine.workspace!.split('/').last,
@@ -120,7 +143,7 @@ class MachineCard extends StatelessWidget {
                   style: AeronautTheme.caption,
                 ),
               const SizedBox(width: AeronautTheme.spacingSm),
-              Icon(
+              const Icon(
                 Icons.chevron_right,
                 color: AeronautColors.textTertiary,
                 size: 20,

@@ -6,11 +6,9 @@ Reads / writes a YAML config at ~/.dirigible/config.yaml on the host, then
 generates an ESP-IDF NVS partition image and flashes it to a connected
 T-Deck via esptool.
 
-Why this exists: until the on-device WiFi/text-input UI bugs are fixed
-upstream (B14, B15, B16 in hardware/docs/DirigibleBugs.md), there's no
-way to add a machine or set WiFi credentials from the device itself.
-This tool bypasses the broken UI by writing config directly to the NVS
-partition over USB.
+Why this exists: the device can pair itself now (WiFi scan, mDNS or manual
+host entry, typed token), but typing a UUID on a thumb keyboard is no fun.
+This tool writes the same NVS records directly over USB instead.
 
 Usage:
     dirigible-provision wifi set <ssid> <password>
@@ -21,8 +19,9 @@ Usage:
     dirigible-provision flash [--port /dev/ttyACM0] [--keep-app]
     dirigible-provision status
 
-NVS layout written by this tool (matches dirigible-esp32 ConfigNvs and
-screenschema SSWifiManager):
+NVS layout written by this tool (matches dirigible-esp32's ConfigNvs and
+WifiEsp; the "ss_wifi" namespace name is historical and deliberately kept
+so already-provisioned devices keep booting):
 
     Namespace "ss_wifi":
         ssid       (string)   WiFi SSID

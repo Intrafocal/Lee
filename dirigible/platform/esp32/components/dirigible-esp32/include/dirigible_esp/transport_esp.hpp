@@ -1,21 +1,26 @@
 #pragma once
 
-#include "dirigible/transport.hpp"
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
-// Forward declarations from ScreenSchema
-class SSWebSocket;
+#include "dirigible/transport.hpp"
+#include "dirigible_esp/dispatch.hpp"
+
+struct esp_websocket_client;
+typedef struct esp_websocket_client *esp_websocket_client_handle_t;
 
 namespace dirigible_esp {
 
 // ---------------------------------------------------------------------------
-// WebSocketEsp — wraps ScreenSchema's SSWebSocket
+// WebSocketEsp — dirigible::IWebSocket on esp_websocket_client.
 //
-// SSWebSocket lifetime is managed by ScreenSchema's named registry. We give
-// each instance a unique name and reuse it across reconnects.
+// Each instance owns its client handle outright (screenschema's SSWebSocket
+// kept them in a named global registry that outlived the wrapper, which is
+// what made its teardown path so delicate).  Events arrive on the websocket
+// task and are posted to the instance's Dispatcher, so every callback the core
+// sees runs on the LVGL task.
 // ---------------------------------------------------------------------------
 
 class WebSocketEsp : public dirigible::IWebSocket {
@@ -37,31 +42,30 @@ public:
     void onDisconnect(std::function<void()> cb) override;
 
 private:
-    void registerCallbacks();
-    void pollConnectionState();
+    static void event_handler(void* arg, const char* base, int32_t id, void* data);
+    void teardown();
 
-    std::string instance_name_;
-    SSWebSocket* ws_ = nullptr;
-    uint32_t reconnect_ms_;
-    bool callbacks_registered_ = false;
+    esp_websocket_client_handle_t client_ = nullptr;
+    std::string url_;
+    uint32_t    reconnect_ms_;
+    volatile bool connected_ = false;
 
-    // Local callback storage (we forward SSWebSocket events through these)
-    std::vector<std::function<void(cJSON*)>> message_cbs_;
+    std::string frame_buf_;   // reassembles fragmented frames (ws task only)
+    Dispatcher  dispatch_;
+
+    std::vector<std::function<void(cJSON*)>>                message_cbs_;
     std::vector<std::function<void(const uint8_t*, size_t)>> binary_cbs_;
-    std::vector<std::function<void()>> connect_cbs_;
-    std::vector<std::function<void()>> disconnect_cbs_;
-
-    // Connection state tracking — SSWebSocket doesn't expose connect/disconnect
-    // events directly, so we poll isConnected() via an LVGL timer.
-    bool last_connected_state_ = false;
-    void* state_poll_timer_ = nullptr;  // lv_timer_t*
+    std::vector<std::function<void()>>                      connect_cbs_;
+    std::vector<std::function<void()>>                      disconnect_cbs_;
 };
 
 // ---------------------------------------------------------------------------
-// HttpClientEsp — wraps ScreenSchema's SSHttpClient
+// HttpClientEsp — dirigible::IHttpClient on esp_http_client.
 //
-// SSHttpClient uses named endpoints. Each HttpClientEsp instance registers
-// its own endpoint name and parses incoming URLs to extract the path.
+// One short-lived FreeRTOS task per request (plain GET/POST), one long-lived
+// task per SSE stream.  Response JSON handed to the callback is owned by this
+// class and freed as soon as the callback returns, matching the IHttpClient
+// contract ("resp is non-owning").
 // ---------------------------------------------------------------------------
 
 class HttpClientEsp : public dirigible::IHttpClient {
@@ -78,24 +82,23 @@ public:
               std::function<void(int status, cJSON* resp)> cb) override;
 
     void postSSE(const std::string& url, cJSON* body,
-                  SSEEventCallback on_event,
-                  SSEDoneCallback on_done) override;
+                 SSEEventCallback on_event,
+                 SSEDoneCallback on_done) override;
 
 private:
-    // Ensures the SSHttpClient endpoint is registered with the current base URL
-    void ensureEndpoint(const std::string& base_url);
+    struct Request;
+    struct SSERequest;
 
-    // Parses "http://host:port/path?query" → (base, path)
-    static bool splitUrl(const std::string& url, std::string& base, std::string& path);
+    static void request_task(void* arg);
+    static void sse_task(void* arg);
 
-    std::string endpoint_name_;
-    std::string current_base_url_;
     std::string token_;
-    int timeout_ms_;
+    int         timeout_ms_;
+    Dispatcher  dispatch_;
 };
 
 // ---------------------------------------------------------------------------
-// DiscoveryEsp — wraps ScreenSchema's SSMdns::query()
+// DiscoveryEsp — dirigible::IDiscovery on the ESP-IDF mdns component.
 // ---------------------------------------------------------------------------
 
 class DiscoveryEsp : public dirigible::IDiscovery {
@@ -107,14 +110,14 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// TransportFactoryEsp — produces WebSocketEsp / HttpClientEsp / DiscoveryEsp
+// TransportFactoryEsp
 // ---------------------------------------------------------------------------
 
 class TransportFactoryEsp : public dirigible::ITransportFactory {
 public:
-    dirigible::IWebSocket* createWebSocket(uint32_t reconnect_ms = 5000) override;
+    dirigible::IWebSocket*  createWebSocket(uint32_t reconnect_ms = 5000) override;
     dirigible::IHttpClient* createHttpClient(int timeout_ms = 5000) override;
-    dirigible::IDiscovery* createDiscovery() override;
+    dirigible::IDiscovery*  createDiscovery() override;
 };
 
 }  // namespace dirigible_esp

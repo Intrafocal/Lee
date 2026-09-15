@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/browser_cast_provider.dart';
 import '../theme/aeronaut_colors.dart';
@@ -9,10 +10,15 @@ import '../theme/aeronaut_theme.dart';
 ///
 /// Displays JPEG frames streamed from Lee and forwards touch/key events.
 /// Works on real phones — rendering happens on the Mac, not locally.
+///
+/// [browserUrl] (from `LeeContext.browsers[tab.id]`, when Lee has reported
+/// it) seeds the URL bar and "Open in Safari" before the cast connection has
+/// sent its own metadata.
 class BrowserScreen extends ConsumerStatefulWidget {
   final int tabId;
+  final String? browserUrl;
 
-  const BrowserScreen({required this.tabId, super.key});
+  const BrowserScreen({required this.tabId, this.browserUrl, super.key});
 
   @override
   ConsumerState<BrowserScreen> createState() => _BrowserScreenState();
@@ -28,6 +34,19 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (widget.browserUrl != null && widget.browserUrl!.isNotEmpty) {
+      _urlController.text = widget.browserUrl!;
+    }
+  }
+
+  Future<void> _openInSafari() async {
+    final url = _urlController.text.trim().isNotEmpty
+        ? _urlController.text.trim()
+        : widget.browserUrl;
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   @override
@@ -191,6 +210,12 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
                     ],
                   ),
                 ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.open_in_browser, size: 18),
+                tooltip: 'Open in Safari',
+                color: AeronautColors.textSecondary,
+                onPressed: _openInSafari,
               ),
             ],
           ),

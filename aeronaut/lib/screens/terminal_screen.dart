@@ -287,7 +287,7 @@ class _NoPtyView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AeronautTheme.spacingSm),
-          Text(
+          const Text(
             'No PTY attached',
             style: AeronautTheme.caption,
           ),

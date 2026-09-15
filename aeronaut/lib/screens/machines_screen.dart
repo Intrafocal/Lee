@@ -4,9 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/machines_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../widgets/auth_banner.dart';
 import '../widgets/machine_card.dart';
+import '../providers/auth_provider.dart';
 import 'add_machine_screen.dart';
 import 'home_screen.dart';
+import 'machine_detail_screen.dart';
 import 'qr_scanner_screen.dart';
 
 /// List of saved machines with online/offline status.
@@ -18,6 +21,8 @@ class MachinesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final machinesState = ref.watch(machinesProvider);
+    // Keep the 401 guard installed from the first screen onwards.
+    ref.watch(authGuardProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -36,7 +41,10 @@ class MachinesScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: machinesState.machines.isEmpty
+      body: Column(children: [
+        const AuthBanner(),
+        Expanded(
+          child: machinesState.machines.isEmpty
           ? _EmptyState(
               onAdd: () => _navigateToAdd(context),
               onScan: () => _navigateToScan(context),
@@ -48,16 +56,15 @@ class MachinesScreen extends ConsumerWidget {
               child: ListView.separated(
                 padding: const EdgeInsets.all(AeronautTheme.spacingMd),
                 itemCount: machinesState.machines.length,
-                separatorBuilder: (_, __) =>
+                separatorBuilder: (_, _) =>
                     const SizedBox(height: AeronautTheme.spacingSm),
                 itemBuilder: (context, index) {
                   final machine = machinesState.machines[index];
-                  final isOnline = machinesState.isOnline(machine.id);
                   final isActive =
                       machine.id == machinesState.activeMachineId;
                   return MachineCard(
                     machine: machine,
-                    isOnline: isOnline,
+                    health: machinesState.healthOf(machine.id),
                     isActive: isActive,
                     onTap: () => _connectToMachine(context, ref, machine.id),
                     onLongPress: () => _showMachineActions(
@@ -69,6 +76,8 @@ class MachinesScreen extends ConsumerWidget {
                 },
               ),
             ),
+        ),
+      ]),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _navigateToAdd(context),
         child: const Icon(Icons.add),
@@ -106,6 +115,11 @@ class MachinesScreen extends ConsumerWidget {
     WidgetRef ref,
     String machineId,
   ) {
+    final machine = ref
+        .read(machinesProvider)
+        .machines
+        .where((m) => m.id == machineId)
+        .firstOrNull;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AeronautColors.bgElevated,
@@ -117,6 +131,20 @@ class MachinesScreen extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (machine != null)
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('Health & workspace', style: AeronautTheme.body),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            MachineDetailScreen(machine: machine),
+                      ),
+                    );
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.delete_outline,
                     color: AeronautColors.offline),
@@ -155,7 +183,7 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
+            const Icon(
               Icons.computer,
               size: 64,
               color: AeronautColors.textTertiary,

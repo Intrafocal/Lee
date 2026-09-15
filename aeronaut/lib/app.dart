@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'providers/auth_provider.dart';
 import 'providers/machines_provider.dart';
 import 'screens/machines_screen.dart';
 import 'theme/aeronaut_theme.dart';
@@ -17,7 +18,9 @@ class _AeronautAppState extends ConsumerState<AeronautApp> {
   @override
   void initState() {
     super.initState();
-    // Initialize machines provider (loads from disk + starts health pings)
+    // Install the 401 guard before anything can make a request, then load
+    // machines from disk and start health pings.
+    ref.read(authGuardProvider.notifier);
     Future.microtask(() {
       ref.read(machinesProvider.notifier).init();
     });

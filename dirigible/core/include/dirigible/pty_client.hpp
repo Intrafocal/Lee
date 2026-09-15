@@ -54,6 +54,7 @@ private:
 
     int last_cols_ = 0;
     int last_rows_ = 0;  // re-asserted on every (re)connect
+    bool callbacks_registered_ = false;
 };
 
 }  // namespace dirigible

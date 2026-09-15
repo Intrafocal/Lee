@@ -3,13 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/machine.dart';
+import '../providers/auth_provider.dart';
 import '../providers/machines_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 
 /// Form for adding a new machine via manual entry.
 ///
-/// QR scanning will be added in a later milestone.
+/// The usual path is the QR scanner; this is the fallback when the camera
+/// isn't available (e.g. Aeronaut on the web) or the host is behind a VPN
+/// address the QR doesn't know about.
 class AddMachineScreen extends ConsumerStatefulWidget {
   const AddMachineScreen({super.key});
 
@@ -52,7 +55,8 @@ class _AddMachineScreenState extends ConsumerState<AddMachineScreen> {
       token: _tokenController.text.trim(),
     );
 
-    await ref.read(machinesProvider.notifier).addMachine(machine);
+    await ref.read(machinesProvider.notifier).addOrUpdateMachine(machine);
+    ref.read(authGuardProvider.notifier).reset();
 
     if (mounted) {
       Navigator.of(context).pop();
@@ -142,7 +146,8 @@ class _AddMachineScreenState extends ConsumerState<AddMachineScreen> {
               ),
               const SizedBox(height: AeronautTheme.spacingSm),
               Text(
-                'Found in ~/.lee/aeronaut.token on the target machine.',
+                'Found in ~/.lee/api-token on the target machine, or paired '
+                'automatically by scanning Lee > View > Aeronaut Pairing.',
                 style: AeronautTheme.caption.copyWith(
                   color: AeronautColors.textTertiary,
                 ),

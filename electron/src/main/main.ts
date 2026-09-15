@@ -17,6 +17,7 @@ import { BrowserManager } from './browser-manager';
 import { RendererContextUpdate, UserActionType } from '../shared/context';
 import { saveDebugTrace, DebugTrace } from './debug-trace';
 import { MachineManager } from './machine-manager';
+import { MdnsAdvertiser } from './mdns-advertiser';
 import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
 import { fsWatcher } from './fs-watcher';
 import {
@@ -63,6 +64,7 @@ let ptyManager: PTYManager;
 let apiServer: APIServer;
 let browserManager: BrowserManager;
 let machineManager: MachineManager;
+let mdnsAdvertiser: MdnsAdvertiser;
 
 // Check if we're in development mode (explicitly set or running with vite dev server)
 const isDev = process.env.NODE_ENV === 'development';
@@ -237,7 +239,7 @@ function createWindow(workspace?: string): BrowserWindow {
     }
     // Menu accelerators follow the focused window's keybindings.
     const focusedConfig = ptyManager.getWindowConfig(bw.id)?.config;
-    if (focusedConfig) applyConfigToMainProcess(focusedConfig);
+    if (focusedConfig) applyConfigToMainProcess(focusedConfig, focusedWorkspace ?? undefined);
   });
 
   bw.on('closed', () => {
@@ -376,13 +378,16 @@ function applyGlobalFocusShortcut(keybindings: Record<string, string> | null | u
  * Apply the parts of a merged config the main process itself owns: menu
  * accelerators and the optional system-wide focus chord.
  */
-function applyConfigToMainProcess(config: any): void {
+function applyConfigToMainProcess(config: any, workspace?: string): void {
   const keybindings = (config?.keybindings && typeof config.keybindings === 'object')
     ? (config.keybindings as Record<string, string>)
     : {};
   currentKeybindings = keybindings;
   applyGlobalFocusShortcut(keybindings);
   setupApplicationMenu();
+  // Same hook A3 uses to notify the daemon of the focused workspace - reused
+  // here to keep the mDNS `ws` TXT record and advertise_mdns opt-out current.
+  mdnsAdvertiser?.applyConfig(config, workspace);
 }
 
 /** Pretty chord for the Help > Keyboard Shortcuts listing. */
@@ -1075,7 +1080,7 @@ function setupIPC(): void {
         // its config is the one the shared daemon should run with (C12).
         ptyManager.setDaemonWindow(windowId);
       }
-      applyConfigToMainProcess(config);
+      applyConfigToMainProcess(config, workspace);
       contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
       // Baseline for the "did hester: change?" comparison on later saves
@@ -1138,7 +1143,7 @@ function setupIPC(): void {
       console.log('  sql.connections:', config.sql?.connections?.length, config.sql?.connections?.map((c: any) => c.name));
       // Also update pty-manager and context-bridge with the config
       if (windowId != null) ptyManager.setWorkspaceConfig(workspace, config, windowId);
-      applyConfigToMainProcess(config);
+      applyConfigToMainProcess(config, workspace);
       contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
       return config;
@@ -1209,7 +1214,7 @@ function setupIPC(): void {
       if (windowId != null) ptyManager.setWorkspaceConfig(workspace, config, windowId);
       contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(config));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
-      applyConfigToMainProcess(config);
+      applyConfigToMainProcess(config, workspace);
       await restartDaemonIfHesterConfigChanged(workspace, config);
 
       return { success: true };
@@ -1252,7 +1257,7 @@ function setupIPC(): void {
       if (windowId != null) ptyManager.setWorkspaceConfig(workspace, mergedConfig, windowId);
       contextBridge?.setWorkspaceConfig(redactWorkspaceConfigForContext(mergedConfig));
       contextBridge?.setAvailableTuis(ptyManager.getAllTUIDefinitions(windowId));
-      applyConfigToMainProcess(mergedConfig);
+      applyConfigToMainProcess(mergedConfig, workspace);
       await restartDaemonIfHesterConfigChanged(workspace, mergedConfig);
 
       return { success: true };
@@ -1829,11 +1834,30 @@ function setupIPC(): void {
       if (localIp !== '127.0.0.1') break;
     }
 
+    // The daemon is always spawned on :9000 today (see pty-manager.ts), but
+    // read `hester.listen_port` from the focused window's merged config so
+    // this doesn't silently go stale if that becomes configurable.
+    let hesterPort = 9000;
+    const focusedWorkspace = windowRegistry.getFocused()?.workspace;
+    if (focusedWorkspace) {
+      try {
+        const { config } = await loadMergedConfig(focusedWorkspace);
+        const configured = Number(config?.hester?.listen_port);
+        if (configured > 0) hesterPort = configured;
+      } catch {
+        // Fall back to the default below.
+      }
+    }
+
+    const apiPort = apiServer.getPort();
     const pairingInfo = {
       name: os.hostname(),
       host: localIp,
-      hostPort: 9001,
-      hesterPort: 9000,
+      hostPort: apiPort,
+      hesterPort,
+      // Alias of hostPort for forward compatibility - keep hostPort too so
+      // existing Aeronaut/Dirigible parsers that read that key keep working.
+      apiPort,
       token: apiServer.getAuthToken(),
     };
 
@@ -1901,7 +1925,14 @@ app.whenReady().then(() => {
     browserManager,
     windowRegistry,
   });
-  apiServer.start().catch((err) => {
+  // mDNS advertisement (_lee._tcp) - lets Dirigible/other on-device clients
+  // discover Lee without manual host/port entry (E5). Logs through
+  // ptyManager's existing lee.log writer.
+  mdnsAdvertiser = new MdnsAdvertiser((level, message, details) => ptyManager.log(level, message, details));
+
+  apiServer.start().then(() => {
+    mdnsAdvertiser.start(apiServer.getPort());
+  }).catch((err) => {
     // Already surfaced to the user via status:push inside start() when it's
     // EADDRINUSE; this just stops it becoming an unhandled rejection.
     console.error('[Lee] API server failed to start:', err);
@@ -1915,6 +1946,11 @@ app.whenReady().then(() => {
     for (const ws of windowRegistry.getAll().values()) {
       ws.browserWindow.webContents.send('machines:change', states);
     }
+  });
+
+  // F3: ~/.lee/config.yaml changed on disk and MachineManager auto-reloaded.
+  machineManager.on('config-reloaded', ({ count }: { count: number }) => {
+    pushStatus('info', `Machines config reloaded (${count} machine${count === 1 ? '' : 's'})`);
   });
 
   // Setup application menu
@@ -2000,6 +2036,8 @@ app.on('before-quit', async (event) => {
 app.on('will-quit', (event) => {
   globalShortcut.unregisterAll();
   fsWatcher.closeAll();
+  mdnsAdvertiser?.stop();
+  machineManager?.dispose();
 
   // If the daemon is ours, ask it to exit cleanly first so it shuts down the
   // managed redis it started (both used to outlive Lee). A restart takes the

@@ -2053,8 +2053,12 @@ export class PTYManager extends EventEmitter {
 
   /**
    * Log a message to ~/.lee/logs/lee.log (main process events).
+   *
+   * Public so other main-process modules (e.g. the mDNS advertiser,
+   * machine-manager's config watcher) can append to the same log without
+   * duplicating the rotation/format logic.
    */
-  private log(level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, any>): void {
+  log(level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, any>): void {
     try {
       const logPath = this.getLogPath();
       const now = new Date();

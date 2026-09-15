@@ -30,6 +30,76 @@ export interface APIServerConfig {
   windowRegistry?: typeof windowRegistry;
 }
 
+/** Directory names never worth listing over `/fs/list` — mirrors fs-watcher.ts's ignore set. */
+const FS_LIST_IGNORED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '__pycache__',
+  '.dart_tool',
+  'build',
+  'dist',
+  'out',
+]);
+
+/** Hard cap on `/fs/read` content size (bytes). Above this, 413. */
+const FS_READ_CAP_BYTES = 2 * 1024 * 1024; // 2 MB
+
+/** Extensions that are always treated as binary and, within the cap, returned as base64. */
+const FS_BASE64_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf']);
+
+/** Best-effort mime type by extension for `/fs/read`. */
+const FS_MIME_TYPES: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.json': 'application/json',
+  '.js': 'text/javascript',
+  '.jsx': 'text/javascript',
+  '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
+  '.py': 'text/x-python',
+  '.dart': 'text/x-dart',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.scss': 'text/x-scss',
+  '.sh': 'text/x-shellscript',
+  '.bash': 'text/x-shellscript',
+  '.zsh': 'text/x-shellscript',
+  '.go': 'text/x-go',
+  '.rs': 'text/x-rust',
+  '.sql': 'text/x-sql',
+  '.c': 'text/x-c',
+  '.h': 'text/x-c',
+  '.cpp': 'text/x-c++',
+  '.hpp': 'text/x-c++',
+  '.java': 'text/x-java',
+  '.rb': 'text/x-ruby',
+  '.php': 'text/x-php',
+  '.toml': 'text/x-toml',
+  '.xml': 'application/xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.kicad_pcb': 'application/x-kicad-pcb',
+  '.kicad_sch': 'application/x-kicad-sch',
+  '.kicad_pro': 'application/x-kicad-project',
+  '.step': 'model/step',
+  '.stp': 'model/step',
+  '.stl': 'model/stl',
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
+};
+
+function fsMimeFor(ext: string): string {
+  return FS_MIME_TYPES[ext] || 'application/octet-stream';
+}
+
 /**
  * API server for external tool communication.
  */
@@ -55,6 +125,11 @@ export class APIServer {
   /** Get the auth token for passing to legitimate clients (e.g., Hester daemon). */
   getAuthToken(): string {
     return this.authToken;
+  }
+
+  /** The port this server is actually listening on. */
+  getPort(): number {
+    return this.port;
   }
 
   /**
@@ -770,6 +845,45 @@ export class APIServer {
   /**
    * Setup API routes.
    */
+  /**
+   * Real (symlink-resolved) paths of every window's workspace, for the
+   * `/fs/*` read-only endpoints. A window with no workspace open contributes
+   * nothing — there's no root to restrict reads to.
+   */
+  private getKnownWorkspaceRoots(): string[] {
+    const roots: string[] = [];
+    for (const [, ws] of windowRegistry.getAll()) {
+      if (!ws.workspace) continue;
+      try {
+        roots.push(fs.realpathSync(ws.workspace));
+      } catch {
+        // Workspace directory vanished; fall back to the resolved (not
+        // symlink-checked) path so at least an exact match still works.
+        roots.push(path.resolve(ws.workspace));
+      }
+    }
+    return roots;
+  }
+
+  /**
+   * Resolve a client-supplied path to its real, symlink-free form and check
+   * it falls inside (or equals) some open window's workspace. Symlinks are
+   * resolved *before* the containment check so a symlink planted inside a
+   * workspace can't be used to read outside it.
+   */
+  private resolveFsPath(rawPath: string): { real: string } | null {
+    if (!rawPath) return null;
+    let real: string;
+    try {
+      real = fs.realpathSync(path.resolve(rawPath));
+    } catch {
+      return null;
+    }
+    const roots = this.getKnownWorkspaceRoots();
+    const allowed = roots.some((root) => real === root || real.startsWith(root + path.sep));
+    return allowed ? { real } : null;
+  }
+
   private setupRoutes(): void {
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
@@ -862,6 +976,190 @@ export class APIServer {
         });
       }
       res.json({ success: true, data: windows });
+    });
+
+    // ============================================
+    // Read-only filesystem access (for Aeronaut's file viewer / browser)
+    //
+    // No `/fs/workspaces` endpoint: `GET /windows` above already returns
+    // `{ id, workspace, focused }` for every open window, which is exactly
+    // the root list a client needs to pick from.
+    // ============================================
+
+    // GET /fs/read?path=<abs>[&stat=1]
+    // Read a file under any open window's workspace. `stat=1` returns only
+    // the metadata (no content, no size cap) — useful for viewer tabs that
+    // just want to show "possibly large binary, N bytes" without fetching it.
+    this.app.get('/fs/read', (req: Request, res: Response) => {
+      const rawPath = typeof req.query.path === 'string' ? req.query.path : '';
+      const statOnly = req.query.stat === '1';
+      const resolved = this.resolveFsPath(rawPath);
+      if (!resolved) {
+        this.ptyManager.log('WARN', 'Rejected /fs/read outside known workspaces', { path: rawPath });
+        res.status(403).json({ success: false, error: 'Path is outside any open workspace' });
+        return;
+      }
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(resolved.real);
+      } catch {
+        res.status(404).json({ success: false, error: 'Not found' });
+        return;
+      }
+      if (!stat.isFile()) {
+        res.status(400).json({ success: false, error: 'Not a file' });
+        return;
+      }
+
+      const ext = path.extname(resolved.real).toLowerCase();
+      const mime = fsMimeFor(ext);
+
+      if (statOnly) {
+        res.json({
+          success: true,
+          data: { path: resolved.real, size: stat.size, mtimeMs: stat.mtimeMs, mime },
+        });
+        return;
+      }
+
+      if (stat.size > FS_READ_CAP_BYTES) {
+        res.status(413).json({
+          success: false,
+          error: `File is ${stat.size} bytes, over the ${FS_READ_CAP_BYTES} byte cap`,
+          data: { path: resolved.real, size: stat.size, mtimeMs: stat.mtimeMs, mime },
+        });
+        return;
+      }
+
+      let buf: Buffer;
+      try {
+        buf = fs.readFileSync(resolved.real);
+      } catch (err) {
+        res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Read failed' });
+        return;
+      }
+
+      // Binary detection: a NUL byte in the first 8000 bytes, or an
+      // extension we always treat as binary (images/PDF) regardless of
+      // content — SVG is text but still base64'd so the client can decode
+      // it the same way as every other image.
+      const sniffLen = Math.min(buf.length, 8000);
+      const looksBinary = FS_BASE64_EXTS.has(ext) || buf.subarray(0, sniffLen).includes(0);
+
+      if (looksBinary) {
+        if (FS_BASE64_EXTS.has(ext)) {
+          res.json({
+            success: true,
+            data: {
+              path: resolved.real,
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+              mime,
+              encoding: 'base64',
+              content: buf.toString('base64'),
+            },
+          });
+        } else {
+          res.status(415).json({
+            success: false,
+            error: 'Binary file type not viewable',
+            data: { path: resolved.real, size: stat.size, mtimeMs: stat.mtimeMs, mime },
+          });
+        }
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: {
+          path: resolved.real,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          mime,
+          encoding: 'utf8',
+          content: buf.toString('utf8'),
+        },
+      });
+    });
+
+    // GET /fs/list?path=<abs dir>
+    // List one directory under any open window's workspace, dirs first then
+    // files/symlinks alphabetically. Defaults to the focused window's
+    // workspace when `path` is omitted.
+    this.app.get('/fs/list', (req: Request, res: Response) => {
+      let rawPath = typeof req.query.path === 'string' ? req.query.path : '';
+      if (!rawPath) {
+        const ws = windowRegistry.getFocused() || windowRegistry.getAny();
+        rawPath = ws?.workspace || '';
+      }
+      if (!rawPath) {
+        res.status(400).json({ success: false, error: 'No path given and no workspace is open' });
+        return;
+      }
+
+      const resolved = this.resolveFsPath(rawPath);
+      if (!resolved) {
+        this.ptyManager.log('WARN', 'Rejected /fs/list outside known workspaces', { path: rawPath });
+        res.status(403).json({ success: false, error: 'Path is outside any open workspace' });
+        return;
+      }
+
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(resolved.real);
+      } catch {
+        res.status(404).json({ success: false, error: 'Not found' });
+        return;
+      }
+      if (!stat.isDirectory()) {
+        res.status(400).json({ success: false, error: 'Not a directory' });
+        return;
+      }
+
+      let names: string[];
+      try {
+        names = fs.readdirSync(resolved.real);
+      } catch (err) {
+        res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'List failed' });
+        return;
+      }
+
+      interface FsEntry {
+        name: string;
+        type: 'file' | 'dir' | 'symlink';
+        size: number;
+        mtimeMs: number;
+      }
+      const entries: FsEntry[] = [];
+      for (const name of names) {
+        if (FS_LIST_IGNORED_DIRS.has(name)) continue;
+        const full = path.join(resolved.real, name);
+        try {
+          const lst = fs.lstatSync(full);
+          if (lst.isSymbolicLink()) {
+            // Report as a symlink; size/mtime from the link itself so a
+            // dangling target doesn't throw.
+            entries.push({ name, type: 'symlink', size: lst.size, mtimeMs: lst.mtimeMs });
+          } else {
+            entries.push({
+              name,
+              type: lst.isDirectory() ? 'dir' : 'file',
+              size: lst.isDirectory() ? 0 : lst.size,
+              mtimeMs: lst.mtimeMs,
+            });
+          }
+        } catch {
+          // Race with a delete between readdir and lstat — skip it.
+        }
+      }
+      entries.sort((a, b) => {
+        if (a.type === 'dir' && b.type !== 'dir') return -1;
+        if (a.type !== 'dir' && b.type === 'dir') return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      res.json({ success: true, data: { path: resolved.real, entries } });
     });
 
     // ============================================

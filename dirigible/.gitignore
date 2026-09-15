@@ -1,9 +1,16 @@
-# Build artifacts
+# ESP-IDF build output
 build/
+firmware/build/
 core/build/
 
-# ESP-IDF
+# ESP-IDF component manager + generated config
 managed_components/
+firmware/managed_components/
+dependencies.lock
+firmware/dependencies.lock
 sdkconfig
 sdkconfig.old
-dependencies.lock
+firmware/sdkconfig
+firmware/sdkconfig.old
+
+.DS_Store

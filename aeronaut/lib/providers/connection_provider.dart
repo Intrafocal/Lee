@@ -7,6 +7,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/lee_context.dart';
 import '../models/machine.dart';
+import '../services/api_auth.dart';
+import '../services/lee_api.dart';
 import 'machines_provider.dart';
 import 'windows_provider.dart';
 
@@ -17,18 +19,25 @@ class ConnectionState {
   final ConnectionStatus status;
   final String? errorMessage;
 
+  /// True when the stream stopped because Lee rejected the bearer token.
+  /// The UI shows "Token rejected. Re-pair this machine." and no retry.
+  final bool unauthorized;
+
   const ConnectionState({
     this.status = ConnectionStatus.disconnected,
     this.errorMessage,
+    this.unauthorized = false,
   });
 
   ConnectionState copyWith({
     ConnectionStatus? status,
     String? errorMessage,
+    bool? unauthorized,
   }) {
     return ConnectionState(
       status: status ?? this.status,
       errorMessage: errorMessage,
+      unauthorized: unauthorized ?? this.unauthorized,
     );
   }
 }
@@ -42,8 +51,6 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
   StreamSubscription? _subscription;
   Timer? _reconnectTimer;
   String? _connectedMachineId;
-
-  int? _activeWindowId;
 
   ConnectionNotifier(this._ref) : super(const ConnectionState()) {
     // Watch for active machine changes
@@ -60,7 +67,8 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     // Watch for active window changes — clear cached context
     _ref.listen<WindowsState>(windowsProvider, (prev, next) {
       if (prev?.activeWindowId != next.activeWindowId) {
-        _activeWindowId = next.activeWindowId;
+        // Drop the replay buffer so a late subscriber doesn't see the
+        // previous window's tabs.
         _lastContext = null;
       }
     });
@@ -80,14 +88,13 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
 
   void _connect(Machine machine) {
     _connectedMachineId = machine.id;
-    state = state.copyWith(status: ConnectionStatus.connecting);
+    state = const ConnectionState(status: ConnectionStatus.connecting);
 
     try {
       final uri = Uri.parse(machine.contextStreamUrl);
-      _channel = WebSocketChannel.connect(
-        uri,
-        protocols: machine.token.isNotEmpty ? null : null,
-      );
+      // The token rides as a query param: WebSocket upgrades can't carry an
+      // Authorization header. Machine.wsUrl() appends it.
+      _channel = WebSocketChannel.connect(uri);
 
       _subscription = _channel!.stream.listen(
         (data) {
@@ -144,13 +151,46 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
   }
 
   void _scheduleReconnect(Machine machine) {
+    if (state.unauthorized) return;
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 3), () {
-      if (_connectedMachineId == machine.id && mounted) {
-        debugPrint('Aeronaut: reconnecting to ${machine.name}...');
-        _connect(machine);
+    _reconnectTimer = Timer(const Duration(seconds: 3), () async {
+      if (_connectedMachineId != machine.id || !mounted) return;
+
+      // A rejected token closes the WebSocket upgrade with a 401, which
+      // surfaces here as a plain socket error. Probe an authenticated HTTP
+      // route so we can stop retrying and tell the user to re-pair, instead
+      // of looping forever against a token Lee will never accept.
+      final api = LeeApi(machine: machine);
+      final ApiStatus status;
+      try {
+        status = await api.probe();
+      } finally {
+        api.dispose();
       }
+      if (_connectedMachineId != machine.id || !mounted) return;
+      if (status == ApiStatus.unauthorized) {
+        // ApiAuth already notified the guard, which calls handleAuthFailure.
+        return;
+      }
+
+      debugPrint('Aeronaut: reconnecting to ${machine.name}...');
+      _connect(machine);
     });
+  }
+
+  /// Called by the auth guard when this machine's token is rejected.
+  void handleAuthFailure(AuthFailure failure) {
+    if (failure.machineId != _connectedMachineId) return;
+    _reconnectTimer?.cancel();
+    _subscription?.cancel();
+    _channel?.sink.close();
+    _channel = null;
+    _lastContext = null;
+    state = const ConnectionState(
+      status: ConnectionStatus.error,
+      errorMessage: AuthFailure.message,
+      unauthorized: true,
+    );
   }
 
   void _disconnect() {

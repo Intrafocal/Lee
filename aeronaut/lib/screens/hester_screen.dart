@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -249,7 +249,7 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: AeronautTheme.spacingMd),
           Text(tabLabel, style: AeronautTheme.heading),
           const SizedBox(height: AeronautTheme.spacingSm),
-          Text(
+          const Text(
             'Ask Hester anything about your codebase',
             style: AeronautTheme.caption,
           ),
@@ -305,7 +305,7 @@ class _MessageBubble extends StatelessWidget {
                   : MarkdownBody(
                       data: message.content,
                       selectable: true,
-                      onTapLink: (_, href, __) {
+                      onTapLink: (_, href, _) {
                         if (href != null) launchUrl(Uri.parse(href));
                       },
                       styleSheet: _markdownStyle,
@@ -339,7 +339,7 @@ final _markdownStyle = MarkdownStyleSheet(
     border: Border.all(color: AeronautColors.border),
   ),
   codeblockPadding: const EdgeInsets.all(AeronautTheme.spacingSm),
-  blockquoteDecoration: BoxDecoration(
+  blockquoteDecoration: const BoxDecoration(
     border: Border(
       left: BorderSide(color: AeronautColors.accent, width: 3),
     ),
@@ -357,7 +357,7 @@ final _markdownStyle = MarkdownStyleSheet(
     fontWeight: FontWeight.w600,
   ),
   tableBody: AeronautTheme.body.copyWith(fontSize: 13),
-  horizontalRuleDecoration: BoxDecoration(
+  horizontalRuleDecoration: const BoxDecoration(
     border: Border(
       top: BorderSide(color: AeronautColors.border),
     ),

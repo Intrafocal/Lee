@@ -1,25 +1,30 @@
-# dirigible-esp32 ESP-IDF component
+# dirigible-esp32 — the ESP-IDF half of Dirigible: dirigible-core's transport
+# interfaces on esp_websocket_client / esp_http_client / mdns, station-mode
+# WiFi, and the NVS-backed config store.
 #
-# Wraps ScreenSchema's SSWebSocket / SSHttpClient as the dirigible-core
-# transport interfaces, plus an NVS-backed config store.
-#
-# Depends on:
-#   - dirigible-core (cross-platform protocol layer)
-#   - runtime         (ScreenSchema runtime component, exports SSWebSocket/SSHttpClient)
-#   - nvs_flash       (config storage)
-#   - json            (cJSON)
-#   - lvgl            (lv_timer for connection state polling)
+# Previously this component wrapped screenschema's SSWebSocket / SSHttpClient /
+# SSMdns / SSWifiManager.  The screenschema dependency is gone; the behaviour
+# those classes had earned lives on in transport_esp.cpp and wifi_esp.cpp.
 
 idf_component_register(
     SRCS
-        transport_esp.cpp
-        config_nvs.cpp
+        "dispatch.cpp"
+        "transport_esp.cpp"
+        "wifi_esp.cpp"
+        "config_nvs.cpp"
     INCLUDE_DIRS
-        include
+        "include"
     REQUIRES
         dirigible-core
-        runtime
-        nvs_flash
         json
         lvgl
+    PRIV_REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_http_client
+        esp_websocket_client
+        mdns
+        lwip
 )

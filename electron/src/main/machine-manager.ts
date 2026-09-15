@@ -25,8 +25,11 @@ export class MachineManager extends EventEmitter {
   private machines: MachineState[] = [];
   private healthTimer: NodeJS.Timeout | null = null;
   private static PING_INTERVAL = 15000;
+  private static CONFIG_WATCH_DEBOUNCE_MS = 500;
   private configPath: string;
   private tokenCache: Map<string, string> = new Map(); // host -> auth token
+  private configWatcher: fs.FSWatcher | null = null;
+  private configReloadTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
@@ -37,6 +40,53 @@ export class MachineManager extends EventEmitter {
     await this.loadConfig();
     await this.pingAll();
     this.healthTimer = setInterval(() => this.pingAll(), MachineManager.PING_INTERVAL);
+    this.watchConfig();
+  }
+
+  /**
+   * F3: auto-reload `machines:` when ~/.lee/config.yaml changes on disk
+   * (e.g. hand-edited, or rewritten by Lee's own config editor).
+   *
+   * Watches the *directory*, not the file: editors commonly replace a file
+   * via an atomic rename (write temp, rename over the target), which a
+   * watcher bound to the original file's inode would go deaf after. A
+   * directory watch keeps working across that and just gets filtered by
+   * basename. Events are debounced 500ms since fs.watch can fire several
+   * times for a single save.
+   */
+  private watchConfig(): void {
+    const dir = path.dirname(this.configPath);
+    const base = path.basename(this.configPath);
+    try {
+      this.configWatcher = fs.watch(dir, { persistent: false }, (_eventType, filename) => {
+        // Some platforms (notably certain network/virtual filesystems)
+        // don't report a filename - fall through and reload anyway rather
+        // than going silent.
+        if (filename && filename.toString() !== base) return;
+        if (this.configReloadTimer) clearTimeout(this.configReloadTimer);
+        this.configReloadTimer = setTimeout(() => {
+          this.configReloadTimer = null;
+          this.reloadFromWatch();
+        }, MachineManager.CONFIG_WATCH_DEBOUNCE_MS);
+      });
+      this.configWatcher.on('error', (err) => {
+        console.error('[MachineManager] Config watch error:', err);
+      });
+    } catch (err) {
+      // ~/.lee may not exist yet on a fresh install - nothing to watch until
+      // it's created; the explicit `machines:reload` IPC still works.
+      console.warn('[MachineManager] Could not watch', dir, err);
+    }
+  }
+
+  private async reloadFromWatch(): Promise<void> {
+    try {
+      await this.loadConfig();
+      await this.pingAll();
+      this.emit('config-reloaded', { count: this.machines.length });
+    } catch (err) {
+      console.error('[MachineManager] Reload from config watch failed:', err);
+    }
   }
 
   async loadConfig(): Promise<void> {
@@ -215,6 +265,18 @@ export class MachineManager extends EventEmitter {
     if (this.healthTimer) {
       clearInterval(this.healthTimer);
       this.healthTimer = null;
+    }
+    if (this.configReloadTimer) {
+      clearTimeout(this.configReloadTimer);
+      this.configReloadTimer = null;
+    }
+    if (this.configWatcher) {
+      try {
+        this.configWatcher.close();
+      } catch {
+        // Already closed.
+      }
+      this.configWatcher = null;
     }
   }
 }

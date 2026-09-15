@@ -31,12 +31,17 @@ namespace dirigible_esp {
 //   Free-form key/value:
 //     k_<key>         (str/i32/bool)  — generic config keys
 //
+// WiFi credentials live in a separate namespace ("ss_wifi", keys ssid /
+// password) owned by WifiEsp — see wifi_esp.cpp.  The name is historical
+// (it came from screenschema) and is kept so already-provisioned devices
+// keep booting; dirigible-provision writes the same layout.
+//
 // SECURITY: tokens are stored in PLAINTEXT in the default NVS partition.
 // They are only protected if the firmware enables flash encryption + NVS
 // encryption (CONFIG_NVS_ENCRYPTION + an `nvs_keys` partition) — transparent
-// to this code; configured in the generated project's sdkconfig/partition
-// table. TODO: enable NVS encryption in the screenschema-generated project;
-// hash long machine names into the tok_ key to avoid prefix collisions.
+// to this code, configured in firmware/sdkconfig.defaults and partitions.csv.
+// TODO: enable NVS encryption; hash long machine names into the tok_ key to
+// avoid prefix collisions.
 // ---------------------------------------------------------------------------
 
 class ConfigNvs : public dirigible::IConfig {

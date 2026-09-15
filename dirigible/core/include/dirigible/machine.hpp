@@ -18,6 +18,11 @@ struct Machine {
     bool online         = false;
     std::string token;             // cached bearer token
     LeeConnection* connection = nullptr;  // created on demand
+    // Long-lived health-check client.  Created on the first ping and kept:
+    // creating one per ping and deleting it from inside its own completion
+    // callback tore down the object that was running the callback.
+    IHttpClient* health_http  = nullptr;
+    bool health_in_flight     = false;
 };
 
 // ---------------------------------------------------------------------------

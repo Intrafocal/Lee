@@ -1901,6 +1901,12 @@ const App: React.FC = () => {
           ptyId: t.ptyId,
           dockPosition: t.dockPosition,
           state: getTabState(t),
+          // Extra per-type fields so remote clients (Aeronaut, Dirigible,
+          // Hester) can render viewer/agent/machine tabs without guessing.
+          ...(t.provider ? { provider: t.provider } : {}),
+          ...(t.filePath ? { filePath: t.filePath } : {}),
+          ...(t.workstreamId ? { workstreamId: t.workstreamId } : {}),
+          ...(t.machineConfig ? { machineName: t.machineConfig.name, machineHost: t.machineConfig.host } : {}),
         })),
         activeTabId,
         activeLeftTabId,

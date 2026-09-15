@@ -17,6 +17,8 @@ interface PairingInfo {
   name: string;
   host: string;
   hostPort: number;
+  /** Alias of hostPort, added for forward compatibility - same value. */
+  apiPort?: number;
   hesterPort: number;
   token: string;
 }

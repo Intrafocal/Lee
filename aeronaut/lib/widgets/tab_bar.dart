@@ -31,7 +31,7 @@ class LeeTabBar extends StatelessWidget {
           horizontal: AeronautTheme.spacingMd,
         ),
         itemCount: tabs.length,
-        separatorBuilder: (_, __) =>
+        separatorBuilder: (_, _) =>
             const SizedBox(width: AeronautTheme.spacingSm),
         itemBuilder: (context, index) {
           final tab = tabs[index];
@@ -99,37 +99,63 @@ class _TabChip extends StatelessWidget {
     );
   }
 
-  IconData _iconForTabType(TabType type) {
-    switch (type) {
-      case TabType.editor:
-        return Icons.code;
-      case TabType.terminal:
-        return Icons.terminal;
-      case TabType.git:
-        return Icons.merge_type;
-      case TabType.docker:
-        return Icons.widgets_outlined;
-      case TabType.k8s:
-        return Icons.cloud_outlined;
-      case TabType.flutter:
-        return Icons.phone_android;
-      case TabType.hester:
-      case TabType.hesterQa:
-        return Icons.cruelty_free;
-      case TabType.claude:
-        return Icons.auto_awesome;
-      case TabType.files:
-        return Icons.folder_outlined;
-      case TabType.browser:
-        return Icons.public;
-      case TabType.devops:
-        return Icons.monitor_heart_outlined;
-      case TabType.system:
-        return Icons.settings;
-      case TabType.sql:
-        return Icons.storage;
-      case TabType.library:
-        return Icons.library_books_outlined;
-    }
+  IconData _iconForTabType(TabType type) => iconForTabType(type);
+}
+
+/// Icon per tab type, mirroring `TAB_ICONS` in Lee's `TabBar.tsx`.
+IconData iconForTabType(TabType type) {
+  switch (type) {
+    case TabType.editor:
+    case TabType.editorPanel:
+      return Icons.code;
+    case TabType.file:
+      return Icons.description_outlined;
+    case TabType.terminal:
+      return Icons.terminal;
+    case TabType.git:
+      return Icons.merge_type;
+    case TabType.docker:
+      return Icons.widgets_outlined;
+    case TabType.k8s:
+      return Icons.cloud_outlined;
+    case TabType.flutter:
+      return Icons.phone_android;
+    case TabType.hester:
+    case TabType.hesterQa:
+      return Icons.cruelty_free;
+    case TabType.claude:
+      return Icons.auto_awesome;
+    case TabType.agent:
+      return Icons.smart_toy_outlined;
+    case TabType.files:
+      return Icons.folder_outlined;
+    case TabType.browser:
+      return Icons.public;
+    case TabType.devops:
+      return Icons.rocket_launch_outlined;
+    case TabType.system:
+      return Icons.monitor_heart_outlined;
+    case TabType.sql:
+      return Icons.storage;
+    case TabType.library:
+      return Icons.library_books_outlined;
+    case TabType.workstream:
+      return Icons.checklist;
+    case TabType.spyglass:
+      return Icons.travel_explore;
+    case TabType.bridge:
+      return Icons.swap_horiz;
+    case TabType.kicad:
+      return Icons.memory;
+    case TabType.model:
+      return Icons.view_in_ar_outlined;
+    case TabType.pdf:
+      return Icons.picture_as_pdf_outlined;
+    case TabType.binary:
+      return Icons.inventory_2_outlined;
+    case TabType.custom:
+      return Icons.build_outlined;
+    case TabType.unknown:
+      return Icons.tab_outlined;
   }
 }

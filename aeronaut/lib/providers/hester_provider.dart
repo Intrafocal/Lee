@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/hester_models.dart';
 import '../models/machine.dart';
+import '../services/api_auth.dart';
 import '../services/hester_api.dart';
 import 'machines_provider.dart';
 
@@ -48,6 +49,12 @@ class HesterChatNotifier extends StateNotifier<HesterChatState> {
 
       // Parse SSE from the byte stream
       await _parseSseStream(response.stream);
+    } on HesterAuthException {
+      state = state.copyWith(
+        isStreaming: false,
+        error: AuthFailure.message,
+        clearPhase: true,
+      );
     } catch (e) {
       debugPrint('Hester stream error: $e');
       state = state.copyWith(

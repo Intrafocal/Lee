@@ -82,7 +82,7 @@ class ContextRequest(BaseModel):
     """Request payload from Lee editor to Hester daemon."""
 
     session_id: str = Field(description="Unique session identifier")
-    source: Literal["Lee", "Slack", "CLI"] = Field(default="Lee", description="Source application")
+    source: Literal["Lee", "Slack", "CLI", "Aeronaut", "Dirigible"] = Field(default="Lee", description="Source application")
 
     # File context (optional - for code selection)
     file: Optional[str] = Field(None, description="Absolute file path")

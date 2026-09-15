@@ -70,6 +70,13 @@ export interface TabContext {
   state: TabState;
   /** For agent tabs: which provider is running (e.g. 'hester', 'claude', 'pi') */
   provider?: string;
+  /** For file/editor/viewer tabs (file, editor-panel, pdf, kicad, model, binary): absolute path */
+  filePath?: string;
+  /** For workstream tabs */
+  workstreamId?: string;
+  /** For spyglass/bridge tabs: the remote machine (no credentials) */
+  machineName?: string;
+  machineHost?: string;
 }
 
 /**
