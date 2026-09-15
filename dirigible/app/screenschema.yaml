@@ -1,0 +1,28 @@
+schema_version: "1.0"
+firmware_version: "0.1.0"
+
+board: lilygo-t-deck
+
+device:
+  id: "dirigible"
+  location: "desk"
+  friendly_name: "Dirigible"
+
+shell:
+  theme: dark
+  orientation: landscape
+  status_bar: false        # we draw our own slim header/footer
+  navigation: gesture
+  system_app:
+    wifi: true             # WiFi provisioning screen via Sym+W or system menu
+    ota: true              # OTA update via system menu
+
+# No network endpoints declared at the YAML level — Dirigible's LeeConnection
+# manages its own per-machine endpoints dynamically (one per configured Lee
+# instance) via the dirigible-esp32 transport wrapper.
+
+# The Dirigible app ships as a screenschema app package: dirigible-app/app.yaml
+# carries the widgets, handlers, and build customisation (extra_component_dirs
+# + main_requires for dirigible-core / dirigible-esp32).
+apps:
+  - package: ./dirigible-app

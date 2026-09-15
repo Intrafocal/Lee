@@ -1,0 +1,9 @@
+# Build artifacts
+build/
+core/build/
+
+# ESP-IDF
+managed_components/
+sdkconfig
+sdkconfig.old
+dependencies.lock
