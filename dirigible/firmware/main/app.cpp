@@ -116,6 +116,11 @@ void chrome_set_footer(const char* legend, const char* right)
     if (right  && a.lbl_footer_r) lv_label_set_text(a.lbl_footer_r, right);
 }
 
+void chrome_set_back_glyph(const char* glyph)
+{
+    if (app().back_lbl && glyph) lv_label_set_text(app().back_lbl, glyph);
+}
+
 void chrome_show_footer(bool show)
 {
     auto& a = app();
@@ -215,7 +220,7 @@ void connect_active_machine()
 {
     auto& a = app();
     if (!a.machines || a.machines->machineCount() == 0) {
-        app_set_status("no machine — long-press ball for menu");
+        app_set_status("no machine — tap = for the menu");
         return;
     }
 
@@ -266,11 +271,13 @@ static void menu_item_cb(lv_event_t* e)
     }
 }
 
+/// Opened from the tab list's back affordance — the tab list is the root, so
+/// "back" there means "what else can I do".  Every other view reaches its own
+/// parent instead, which is why this is no longer bound to the long-press.
 static void menu_open(void*)
 {
     auto& a = app();
     if (a.menu) { menu_close(); return; }
-    if (a.view == View::Terminal) return;   // ESC leaves the terminal instead
 
     a.menu = lv_list_create(a.screen);
     lv_obj_set_size(a.menu, 180, 120);
@@ -286,7 +293,31 @@ static void menu_open(void*)
     }
 }
 
-static void long_press_cb(void*) { menu_open(nullptr); }
+void app_back()
+{
+    auto& a = app();
+    if (a.menu) { menu_close(); return; }
+
+    switch (a.view) {
+    case View::Terminal:
+        terminal_close();
+        app_show(View::Tabs);
+        return;
+    case View::Hester:
+        app_show(View::Tabs);
+        return;
+    case View::Pairing:
+        pairing_back();
+        return;
+    case View::Tabs:
+        menu_open(nullptr);
+        return;
+    }
+}
+
+static void long_press_cb(void*) { app_back(); }
+
+static void back_btn_cb(lv_event_t*) { app_back(); }
 
 // ---------------------------------------------------------------------------
 // Global key hook — runs inside the keyboard indev read, on the LVGL task.
@@ -306,11 +337,11 @@ static bool key_hook(uint8_t ascii, void*)
     case View::Terminal: return terminal_key(ascii);
     case View::Pairing:  return pairing_key(ascii);
     case View::Hester:
-        if (ascii == 0x1B) { app_show(View::Tabs); return true; }
+        if (ascii == 0x1B) { app_back(); return true; }
         return false;
     case View::Tabs:
-        if (ascii == '\r' || ascii == '\n') return false;  // list activation
-        return false;
+        if (ascii == 0x1B) { app_back(); return true; }
+        return false;   // Enter activates the focused list row
     }
     return false;
 }
@@ -342,22 +373,28 @@ void app_show(View v)
     if (v != View::Pairing) chrome_clear_footer_buttons();
     chrome_show_footer(v != View::Terminal);
 
+    // The back button is the same object everywhere; only its glyph changes,
+    // so its position never moves under the thumb.
     switch (v) {
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("=");          // root: back opens the menu
         chrome_set_footer("Click open  Hold menu", "tabs");
         break;
     case View::Terminal:
         lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_footer("Esc back  ball=arrows", "term");
+        chrome_set_back_glyph("X");          // back here closes the PTY
+        chrome_set_footer("Esc/hold exit  ball=arrows", "term");
         break;
     case View::Hester:
         lv_obj_clear_flag(a.view_hester, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("<");
         chrome_set_footer("Enter ask  Esc tabs", "hester");
         hester_focus();
         break;
     case View::Pairing:
         lv_obj_clear_flag(a.view_pairing, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("<");
         break;
     }
 }
@@ -427,12 +464,32 @@ void app_start()
     lv_obj_set_style_border_opa(a.header, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.header, LV_OBJ_FLAG_SCROLLABLE);
 
-    // left: title.  Clipped to 13 chars (104 px) so it can never run into the
-    // centre slot, which starts at x=112.
+    // far left: the always-on back/close button, x 2..19.  Deliberately NOT in
+    // the input group — pairing and Hester focus their text fields on entry and
+    // a button ahead of them in the group steals that focus.  Touch and the
+    // trackball pointer reach it, ESC and a long-press do the same thing.
+    a.back_btn = lv_btn_create(a.header);
+    lv_obj_remove_style_all(a.back_btn);
+    lv_obj_set_size(a.back_btn, 18, HEADER_H - 2);
+    lv_obj_set_pos(a.back_btn, 2, 1);
+    lv_obj_set_style_bg_opa(a.back_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(a.back_btn, lv_color_hex(0x2a2a2a), 0);
+    lv_obj_set_style_bg_color(a.back_btn, lv_color_hex(0x2f5fa8), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(a.back_btn, 2, 0);
+    lv_obj_add_event_cb(a.back_btn, back_btn_cb, LV_EVENT_CLICKED, nullptr);
+
+    a.back_lbl = lv_label_create(a.back_btn);
+    lv_label_set_text(a.back_lbl, "<");
+    lv_obj_set_style_text_font(a.back_lbl, mono_font(), 0);
+    lv_obj_set_style_text_color(a.back_lbl, lv_color_hex(0xDDDDDD), 0);
+    lv_obj_center(a.back_lbl);
+
+    // left: title, x 24..107.  Clipped to 10 chars so it can never run into
+    // the centre slot, which starts at x=112.
     a.lbl_machine = make_label(a.header, "Dirigible", lv_color_white());
     lv_label_set_long_mode(a.lbl_machine, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(a.lbl_machine, 104);
-    lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_width(a.lbl_machine, 84);
+    lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
 
     // centre: step / status.  x 112..239 (128 px, 16 chars).
     a.lbl_centre = make_label(a.header, "", lv_color_hex(0xBBBBBB));
@@ -538,10 +595,27 @@ void app_start()
     // ---- first screen ---------------------------------------------------
     if (a.config->machineCount() == 0) {
         pairing_begin();
-    } else {
-        app_show(View::Tabs);
-        connect_active_machine();
+        return;
     }
+
+    app_show(View::Tabs);
+
+    // Dial the stored machine only once the link is actually up.  connect()
+    // spawns a WebSocket task that calls getaddrinfo() immediately, and at
+    // this point in boot WiFi has been initialised but has not associated, so
+    // dialling here would spend the whole association window failing to
+    // resolve.  The state callback is persistent and re-fires on every
+    // reconnect, which doubles as the recovery path after the AP drops.
+    auto& wifi = dirigible_esp::WifiEsp::instance();
+    wifi.onStateChanged([](bool connected, int8_t) {
+        if (!connected) return;
+        auto* c = activeConn();
+        if (c && c->isConnected()) return;   // already up — nothing to redial
+        connect_active_machine();
+    });
+
+    if (wifi.isConnected()) connect_active_machine();
+    else                    app_set_status("waiting for wifi");
 }
 
 }  // namespace dirigible_app

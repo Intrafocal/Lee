@@ -63,6 +63,8 @@ struct App {
     // --- chrome ---------------------------------------------------------
     lv_obj_t* screen        = nullptr;
     lv_obj_t* header        = nullptr;
+    lv_obj_t* back_btn      = nullptr;   // header left: always-on back/close
+    lv_obj_t* back_lbl      = nullptr;
     lv_obj_t* lbl_machine   = nullptr;   // header left: title
     lv_obj_t* lbl_centre    = nullptr;   // header centre: step / status
     lv_obj_t* conn_dot      = nullptr;   // header right: link state dot
@@ -91,6 +93,7 @@ struct App {
     // --- terminal -------------------------------------------------------
     VtScreen               vt;
     std::vector<lv_obj_t*> term_rows;
+    lv_obj_t*              term_cursor = nullptr;
     int term_char_w = 6;
     int term_line_h = 8;
 
@@ -131,6 +134,18 @@ App& app();
 void app_start();                 // builds the chrome and every view
 void app_show(View v);
 
+/// The one way out of wherever you are.  Closes the menu if it is open,
+/// otherwise steps the current view back: the terminal drops its PTY and
+/// returns to the tab list, Hester and pairing unwind, and the tab list (which
+/// has nowhere further back) opens the menu.
+///
+/// Three things call this and they must stay in agreement: the header's
+/// on-screen button, the ESC key, and a trackball long-press.  Before E15 the
+/// long-press opened the menu and did nothing at all in the terminal — the
+/// d-pad hook returned before the BSP's long-press detector ran — so a PTY tab
+/// was a dead end for anyone not reaching for ESC.
+void app_back();
+
 // Chrome ---------------------------------------------------------------------
 // One header/footer pair is shared by all four views; each view sets its own
 // title, centre status and key legend rather than hand-rolling a bar.
@@ -138,6 +153,11 @@ void chrome_set_title(const char* t);
 void chrome_set_centre(const char* t);
 void chrome_set_footer(const char* legend, const char* right = nullptr);
 void chrome_show_footer(bool show);
+
+/// Glyph on the header's always-present back button.  Lives in the header, not
+/// the body, so even the terminal — which spends every pixel below on the
+/// character grid — keeps a tappable way out.
+void chrome_set_back_glyph(const char* glyph);
 
 /// Footer action buttons (right-hand slot).  Views own their own set; adding
 /// one hides the right-hand hint label.  Buttons join the input group, so the

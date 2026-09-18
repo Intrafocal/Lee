@@ -148,12 +148,57 @@ pairing flow. Reach it later from the menu: hold the trackball.
 3. **Find Lee** — the device runs an mDNS PTR query for `_lee._tcp` and lists
    what answers; pick one, or choose **Manual entry** and type `host` or
    `host:port` (default 9001).
-4. **Token** — type the Lee API token.
+4. **Approve** — the device shows a 6-digit code; approve it on the Lee
+   machine. No token is typed.
 
-The token is typed rather than discovered on purpose: Lee's `_lee._tcp`
-advertisement carries the instance name, host and port but deliberately **no**
-`token` TXT record, because anything on the LAN can read a TXT record. Get the
-token from Lee's pairing dialog, or `cat ~/.lee/api-token`.
+### Code approval (E19)
+
+Step 4 is TV-style pairing. The device invents a 6-digit code and a 16-byte
+nonce, POSTs both to Lee's **unauthenticated** `/pair/request`, and puts the
+code on screen in `lv_font_unscii_16`, letter-spaced and grouped `483 910`, over
+a 120-second countdown bar. Lee raises a native **Pair a device** dialog naming
+the device, its kind and its IP, carrying the same code, with **Deny** as the
+default button; it also pushes a status-bar line in case the dialog opens
+behind something. The device polls `/pair/poll?nonce=…` every 1.5 s, and an
+Approve releases the bearer to that poll — **once**.
+
+```
+device                          Lee (:9001)                      user
+  |  POST /pair/request                |                           |
+  |  {device,kind,code,nonce}  ------> |                           |
+  |  <------ {status:"pending",        |  dialog: "Code 483 910"   |
+  |           expires_in:120}          | ------------------------> |
+  |  GET /pair/poll?nonce=…   ------>  |                           |
+  |  <------ {status:"pending"}        |  <----------------- Approve
+  |  GET /pair/poll?nonce=…   ------>  |                           |
+  |  <------ {status:"approved",       |                           |
+  |           token, hester_port, name}|                           |
+```
+
+Poll answers are `pending`, `denied`, `expired`, or `approved` with the grant.
+An unknown nonce, a timed-out one and one whose token was already collected all
+read as `expired`, so the endpoint cannot be used to enumerate. Lee keeps a
+request open for **120 s**, allows at most **3** undecided requests at once and
+**1 per remote IP**, and answers 429 past that. `denied` and `approved` entries
+are dropped as soon as they are read, so **Retry** on the device works
+immediately.
+
+Turn the whole thing off with `hester: { pairing_enabled: false }` in
+`~/.lee/config.yaml` — both routes then 404 and the device falls back to the
+typed token. Approvals and denials are logged to `lee.log` with the device name
+and IP.
+
+### Typed token (fallback)
+
+The old step survives, reachable from the **Token** footer button on the
+approve screen (and **Code** gets you back). Use it when Lee predates E19, has
+pairing disabled, or sits behind something that will not pass the POST: type
+the 36-char bearer from `cat ~/.lee/api-token` — the field counts `n/36` and
+turns green when what you typed is a UUID.
+
+Neither path reads the token off the network. Lee's `_lee._tcp` advertisement
+carries the instance name, host and port but deliberately **no** `token` TXT
+record, because anything on the LAN can read a TXT record.
 
 The token is persistent across Lee launches (punch-list item 2), so a
 provisioned device stays paired.
@@ -163,28 +208,44 @@ provisioned device stays paired.
 | Screen | What it does |
 |--------|--------------|
 | **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; if the tab owns a PTY it also opens the terminal on it. |
-| **Terminal** | A character grid over the PTY WebSocket. ESC returns to Tabs. |
+| **Terminal** | A character grid over the PTY WebSocket. ESC, the header **X** or a trackball hold returns to Tabs. |
 | **Hester** | One input line. Enter streams the ReAct phases, then the answer. |
 | **Pairing** | The flow above. |
 
 A 16 px header carries the machine name, a link dot and battery percentage; a
 14 px status bar carries the last message and the current screen.
 
+### Going back
+
+Every screen has a way out, and all three routes run the same `app_back()`:
+
+- the **on-screen button** at the far left of the header, present on every
+  screen and never moving, so it is always in the same place under the thumb.
+  Its glyph says what it will do: `<` steps back, `X` closes the PTY, and `=`
+  on the tab list — which has nowhere further back — opens the menu.
+- **ESC**
+- a **trackball hold** (0.8 s without rolling)
+
+It lives in the header rather than the body because the terminal spends every
+pixel below the header on the character grid; putting it there would have cost
+a row of text or left the terminal without a button.
+
 | Input | Effect |
 |-------|--------|
 | trackball roll | moves the LVGL pointer; rolling into a screen edge scrolls what's under it |
 | trackball click | activates whatever the pointer is over |
-| trackball hold (0.8 s) | opens the menu: Tabs / Hester / Pairing / Reconnect |
+| trackball hold (0.8 s) | back — closes the menu, or steps the screen back; on Tabs it opens the menu |
 | trackball in Terminal | acts as a d-pad, one detent per arrow key |
-| ESC | leaves Terminal; steps back through Pairing |
+| ESC | same as the hold |
+| header button | same as the hold |
 | touch | works anywhere the pointer does |
 | every other key | typed into whatever has focus, or straight to the PTY in Terminal |
 
 **Sym+key chords are not available.** The T-Deck's keypad MCU applies the Sym /
 Alt / Shift layer itself and reports one already-resolved ASCII byte over I2C,
 so the firmware cannot tell Sym+X from the symbol X produces. A Sym-based
-shortcut layer would need custom keypad firmware. The trackball long-press is
-the menu affordance instead.
+shortcut layer would need custom keypad firmware. The header button is the
+menu affordance instead.
 
 ### The terminal
 
@@ -198,12 +259,36 @@ from the font at boot rather than assumed. `lv_font_unscii_8` reports an
 
 The parser handles CR, LF, BS, TAB, FF; `ESC M`, `ESC 7`/`ESC 8`, charset
 selection; and the CSI sequences that move or erase — CUU/CUD/CUF/CUB, CNL/CPL,
-CHA, VPA, CUP/HVP, ED, EL, IL/DL, DCH, ICH, SU/SD, DECSTBM, SCP/RCP. SGR is
-parsed and discarded (the panel is monochrome by choice), OSC is consumed up to
-BEL or ST, and anything else is swallowed. There is no colour, no attribute
-rendering, no alternate-screen bookkeeping, no scrollback, no mouse reporting.
-Bytes ≥ 0x80 render as blanks, because the lifted font is ASCII-only and LVGL
-labels require valid UTF-8.
+CHA, VPA, CUP/HVP, ED, EL, IL/DL, DCH, ICH, SU/SD, DECSTBM, SCP/RCP. OSC is
+consumed up to BEL or ST, and anything else is swallowed. `?`/`>`/`<`/`=`
+private sequences are dropped whole rather than being handed to the final
+byte's handler — `ESC[>4;2m` is xterm's modifyOtherKeys, not an SGR.
+
+**UTF-8 is decoded to codepoints, and each codepoint folded to one cell.** The
+first cut folded at the byte level, which spent one cell per *byte*: every
+box-drawing rule cost three columns and rendered as three blanks, so a modern
+TUI arrived with its frames erased and everything after them shoved sideways.
+`·` ate two columns, `…` ate three. Box drawing now folds to `-`, `|` and `+`,
+block elements to `#`, arrows to `<^>v`, and anything unrecognised to `?`.
+Double-width codepoints (CJK, emoji) consume two cells so the remote program's
+column arithmetic still lines up; combining marks and zero-width formatting
+characters consume none.
+
+**Colour.** Each cell carries a 16-colour foreground index plus a reverse-video
+bit, and rows are painted as LVGL recolour markup (`#RRGGBB text#`). SGR 30-37,
+90-97, 39, bold/22, 38;5;*n* and 38;2;*r*;*g*;*b* all land, the last two folded
+to the nearest of the 16. Backgrounds are parsed and dropped — an LVGL label
+can recolour a span but cannot fill behind it — so reverse video renders as a
+swap to bright white, which keeps a selected row in lazygit visible. Index 0 is
+lifted off pure black for the same reason: with no background, literal black
+text would be invisible.
+
+Rows track their own dirty bit and only changed rows are re-set; at 24 rows of
+~400-byte markup, repainting all of them every 60 ms was most of the LVGL frame
+budget. A translucent block follows the cursor.
+
+Still absent: underline and blink as distinct attributes, alternate-screen
+bookkeeping, scrollback, mouse reporting.
 
 ## Wire protocol
 
@@ -216,6 +301,8 @@ Everything is authenticated with Lee's persistent API token
 | device → Lee | `ws://host:9001/pty/<id>/stream?token=…` | token query param |
 | device → Lee | `POST http://host:9001/command` | `Authorization: Bearer …` |
 | device → Lee | `GET http://host:9001/health` | open (used for the 15 s liveness ping) |
+| device → Lee | `POST http://host:9001/pair/request` | **open** — pairing, pre-token (E19) |
+| device → Lee | `GET http://host:9001/pair/poll?nonce=…` | **open** — pairing, pre-token (E19) |
 | device → Hester | `POST http://host:9000/context/stream` | `Authorization: Bearer …` |
 
 Context messages are `{"type":"context_update","data":{…LeeContext}}`. PTY
@@ -230,14 +317,19 @@ uses `system.focus_tab`, `system.close_tab`, `editor.open`, `editor.save` and
 Hester's SSE stream emits `event: phase` (`{"phase","iteration","tool_name"}`),
 `event: response` (`{"text","session_id"}`), `event: error` and `event: done`.
 
-**Known mismatch:** Hester's `ContextRequest.source` is typed
-`Literal["Lee","Slack","CLI"]`, so a request tagged `"Dirigible"` is rejected
-with a 422. The device sends `"Lee"` until that Literal is widened.
+The two `/pair/*` routes are the only unauthenticated ones besides `/health` —
+they are how a device with no token asks for one. They are excluded from Lee's
+CORS headers, so a page in a browser cannot raise pairing dialogs or read a
+grant out of a poll.
 
 ## Security
 
 - The bearer token is the only credential. Anything that can reach :9001 or
   :9000 with it can drive the editor, so keep both on a trusted LAN.
+- Code approval (E19) never puts the token on the wire unasked: the code has to
+  be read off the device's own screen, so a host that merely knows Lee's
+  address cannot pair itself. The grant is released to exactly one poll, and
+  `hester.pairing_enabled: false` removes the routes entirely.
 - Tokens and the WiFi password sit in plaintext NVS. They are only protected if
   the firmware enables flash encryption plus NVS encryption
   (`CONFIG_NVS_ENCRYPTION` and an `nvs_keys` partition). Not enabled today.

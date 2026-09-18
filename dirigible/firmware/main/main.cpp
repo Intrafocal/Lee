@@ -33,11 +33,20 @@ extern "C" void app_main(void)
     // every network callback lands on it.
     dirigible_esp::dispatch_start_pump();
 
+    // WiFi init — netif, the event loop and esp_wifi — must happen BEFORE the
+    // UI exists, because it is what brings lwIP's TCP/IP stack up.  Anything
+    // that opens a socket before this point asserts inside lwIP
+    // ("tcpip_send_msg_wait_sem ... Invalid mbox") and panics the device into
+    // a boot loop.  That is reachable from app_start(): a device with a
+    // machine already in NVS dials it on the way up, so the loop only appeared
+    // once pairing had succeeded once.  init() only starts the stack; it does
+    // not associate, so nothing here waits on a network.
+    dirigible_esp::WifiEsp::instance().init();
+
     dirigible_app::app_start();
 
-    // WiFi last, so the pairing screen is already on-screen if there are no
-    // stored credentials.
-    dirigible_esp::WifiEsp::instance().init();
+    // Associating comes last, so the pairing screen is already on-screen if
+    // there are no stored credentials.
     if (!dirigible_esp::WifiEsp::instance().autoConnect()) {
         ESP_LOGI(TAG, "no WiFi credentials — starting pairing");
         dirigible_app::pairing_begin();

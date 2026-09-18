@@ -18,7 +18,11 @@
  *        cursor, probing progressively inward past non-scrollable overlays.
  *   long-press  hold-without-roll fires a deferred callback (via lv_async_call,
  *        so the handler may safely tear down the widget tree) and cancels the
- *        in-flight press so no CLICKED event follows on release.
+ *        in-flight press so no CLICKED event follows on release.  It is
+ *        detected in BOTH modes: the firmware binds it to "back", and until
+ *        E15 the d-pad branch below returned before the detector ran, so the
+ *        one screen with no other way out — a full-screen PTY — was also the
+ *        one screen where the gesture did nothing.
  *
  * Dirigible addition: while a delta hook is installed (terminal mode) the ball
  * stops moving the cursor and reports quantised detents to the hook instead.
@@ -75,6 +79,28 @@ static void long_press_async(void *)
     if (s_long_cb) s_long_cb(s_long_user);
 }
 
+/// Press bookkeeping and the hold-without-roll detector, shared by both modes.
+/// `moved` is true when the ball turned during this poll, which downgrades the
+/// hold to a drag.
+static void track_press(bool pressed, bool moved)
+{
+    if (pressed && !s_was_pressed) {
+        s_press_start = lv_tick_get();
+        s_press_moved = false;
+        s_long_fired  = false;
+    }
+    if (pressed && moved) s_press_moved = true;  // drag intent, not long-press
+    if (pressed && !s_long_fired && !s_press_moved && s_long_cb &&
+        lv_tick_elaps(s_press_start) >= (uint32_t)TDECK_TB_LONG_PRESS_MS) {
+        s_long_fired = true;
+        // Cancel the in-flight press so the widget under the cursor doesn't
+        // also get CLICKED on release, and defer the action out of the indev
+        // read — it may delete the widget tree under us.
+        lv_indev_reset(s_indev, nullptr);
+        lv_async_call(long_press_async, nullptr);
+    }
+}
+
 static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
 {
     // Pin order matches LILYGO's reference: right, up, left, down.  Each
@@ -116,6 +142,7 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
 
     // ---- d-pad mode -------------------------------------------------------
     if (s_delta_hook) {
+        track_press(pressed, moved);
         if (det_x || det_y || (pressed && !s_was_pressed)) {
             s_delta_hook(det_x, det_y, pressed && !s_was_pressed, s_delta_user);
         }
@@ -148,21 +175,7 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
         if (s_cursor_y < 0) { over_y += s_cursor_y; s_cursor_y = 0; }
     }
 
-    if (pressed && !s_was_pressed) {
-        s_press_start = lv_tick_get();
-        s_press_moved = false;
-        s_long_fired  = false;
-    }
-    if (pressed && moved) s_press_moved = true;  // drag intent, not long-press
-    if (pressed && !s_long_fired && !s_press_moved && s_long_cb &&
-        lv_tick_elaps(s_press_start) >= (uint32_t)TDECK_TB_LONG_PRESS_MS) {
-        s_long_fired = true;
-        // Cancel the in-flight press so the widget under the cursor doesn't
-        // also get CLICKED on release, and defer the action out of the indev
-        // read — it may delete the widget tree under us.
-        lv_indev_reset(s_indev, nullptr);
-        lv_async_call(long_press_async, nullptr);
-    }
+    track_press(pressed, moved);
 
     // Edge-scroll: rolling against a screen edge scrolls the scrollable under
     // the cursor (only while not pressed — a held click is LVGL's own drag).

@@ -7,6 +7,13 @@
  * a COLS x ROWS cell buffer in VtScreen and paints one LVGL label per row, so
  * cursor addressing, erases and scrolling land where they should.
  *
+ * Rendering (E15).  Each row is one LVGL label in recolour mode, fed the
+ * markup VtScreen::rowMarkup() builds from the cell attributes, so ANSI
+ * foreground colour survives the trip.  Only rows VtScreen marked dirty are
+ * re-set: at 24 rows of ~400-byte markup, repainting the lot every 60 ms was
+ * most of the LVGL frame budget.  A translucent block follows the cursor,
+ * which a character grid otherwise has no way to show.
+ *
  * Grid size is measured, not assumed: the lifted monospace font is
  * lv_font_unscii_8, whose advance width LVGL reports at run time, so the same
  * code gives the right COLSxROWS if the font is ever swapped.  On a T-Deck
@@ -75,10 +82,24 @@ void terminal_build(lv_obj_t* parent)
         lv_obj_set_pos(l, 0, r * a.term_line_h);
         lv_obj_set_size(l, SCREEN_W, a.term_line_h);
         lv_obj_set_style_text_font(l, f, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(0xC8FFC8), 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xC8C8C8), 0);
+        // Colour arrives per span in the text itself; the style colour above
+        // is only the fallback for a row that carries no markup.
+        lv_label_set_recolor(l, true);
         lv_label_set_text(l, "");
         a.term_rows.push_back(l);
     }
+
+    // Cursor block, drawn over the grid.  Translucent so the character under
+    // it stays readable, and non-clickable so it never eats a tap.
+    a.term_cursor = lv_obj_create(a.view_terminal);
+    lv_obj_remove_style_all(a.term_cursor);
+    lv_obj_set_size(a.term_cursor, a.term_char_w, a.term_line_h);
+    lv_obj_set_style_bg_color(a.term_cursor, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(a.term_cursor, LV_OPA_40, 0);
+    lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_pos(a.term_cursor, 0, 0);
 
     ESP_LOGI(TAG, "grid %dx%d (glyph %dx%d)", cols, rows,
              a.term_char_w, a.term_line_h);
@@ -90,9 +111,18 @@ void terminal_build(lv_obj_t* parent)
 void terminal_repaint()
 {
     auto& a = app();
+
+    // The cursor moves on sequences that dirty no row at all (a bare CUP), so
+    // it is repositioned outside the dirty check.
+    if (a.term_cursor) {
+        lv_obj_set_pos(a.term_cursor, a.vt.cursorCol() * a.term_char_w,
+                       a.vt.cursorRow() * a.term_line_h);
+    }
+
     if (!a.vt.dirty()) return;
     for (int r = 0; r < a.vt.rows() && r < (int)a.term_rows.size(); r++) {
-        lv_label_set_text(a.term_rows[r], a.vt.row(r));
+        if (!a.vt.rowDirty(r)) continue;
+        lv_label_set_text(a.term_rows[r], a.vt.rowMarkup(r));
     }
     a.vt.clearDirty();
 }
