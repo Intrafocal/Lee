@@ -54,10 +54,10 @@ const lv_font_t* mono_font_big()
 const lv_font_t* sym_font()
 {
     // The unscii fonts are ASCII 0x20-0x7F only — no LV_SYMBOL_* glyphs, no
-    // U+2026 '…', no U+00B7 '·'.  Montserrat 14 is the one font in this build
-    // (CONFIG_LV_FONT_MONTSERRAT_14, also LV_FONT_DEFAULT) that carries the
-    // FontAwesome subset, so anything wanting a glyph uses this and everything
-    // else stays plain ASCII.
+    // U+2026 '…', no U+00B7 '·'.  The Montserrat sizes (12/14/16; 14 is also
+    // LV_FONT_DEFAULT) carry the FontAwesome subset, so anything wanting a
+    // glyph uses this.  The Waiting view sets Montserrat directly for its
+    // proportional text; the rest of the chrome stays unscii.
     return &lv_font_montserrat_14;
 }
 

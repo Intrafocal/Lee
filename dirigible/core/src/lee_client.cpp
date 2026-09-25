@@ -433,6 +433,38 @@ void LeeConnection::attentionReply(const std::string& id, const char* action,
     });
 }
 
+void LeeConnection::postAction(const std::string& path, cJSON* body,
+                               std::function<void(const ReplyResult&)> cb) {
+    if (!http_) {
+        cJSON_Delete(body);
+        ReplyResult r;
+        reply_result_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    http_->post(buildHttpUrl(path.c_str()), body, [cb](int status, cJSON* resp) {
+        ReplyResult r;
+        reply_result_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::attentionDismiss(const std::string& id,
+                                     std::function<void(const ReplyResult&)> cb) {
+    postAction("/attention/" + url_encode(id) + "/dismiss", cJSON_CreateObject(), std::move(cb));
+}
+
+void LeeConnection::attentionSnooze(const std::string& id, int minutes,
+                                    std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "minutes", minutes);
+    postAction("/attention/" + url_encode(id) + "/snooze", body, std::move(cb));
+}
+
+void LeeConnection::focusSet(bool on, std::function<void(const ReplyResult&)> cb) {
+    postAction(on ? "/focus/start" : "/focus/stop", cJSON_CreateObject(), std::move(cb));
+}
+
 void LeeConnection::capture(const std::string& text,
                             std::function<void(const CaptureOutcome&)> cb) {
     if (!http_) {

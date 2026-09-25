@@ -143,8 +143,8 @@ void app_show(View v);
 /// The one way out of wherever you are.  Closes the menu if it is open,
 /// otherwise steps the current view back: the terminal drops its PTY and
 /// returns to the tab list, Hester and pairing unwind, the tab list returns to
-/// Waiting, and Waiting (which has nowhere further back once its detail or
-/// capture field is closed) opens the menu.
+/// Waiting, and Waiting (which has nowhere further back once its reply/capture
+/// box or an opened finished turn is closed) opens the menu.
 ///
 /// Three things call this and they must stay in agreement: the header's
 /// on-screen button, the ESC key, and a trackball long-press.  Before E15 the
@@ -179,15 +179,15 @@ void app_set_status(const char* left, const char* right = nullptr);
 // Views ---------------------------------------------------------------------
 
 // Waiting: Lee's attention queue (Copilot v0, contracts §9.3), the default
-// view once connected.  Capture row on top, the waiting items below; an item
-// opens a detail with Approve/Deny or a reply field.  State lives in
-// screen_waiting.cpp.
+// view once connected.  A pager, one needs-you item per page, with big
+// lettered action buttons; reply and capture open a full-body text box.
+// State lives in screen_waiting.cpp.
 void waiting_build(lv_obj_t* parent);
 void waiting_open();                       // show it, refetch the queue
-void waiting_open_capture();               // show it with the capture field focused
+void waiting_open_capture();               // show it with the capture box open
 void waiting_render(bool new_snapshot = false);   // snapshot or link changed
-void waiting_chrome();                     // header centre, footer, rows
-bool waiting_back();                       // close detail/capture; false at root
+void waiting_chrome();                     // header centre, footer, page
+bool waiting_back();                       // close a box / opened item; false at root
 void waiting_alert();                      // an item's notify flipped: blink
 bool waiting_key(uint8_t ascii);
 void waiting_ball(int dx, int dy, bool click);
@@ -242,7 +242,7 @@ void viewer_ball(int dx, int dy, bool click);
 // Helpers -------------------------------------------------------------------
 const lv_font_t* mono_font();      // lv_font_unscii_8  — 8x9,  dense UI
 const lv_font_t* mono_font_big();  // lv_font_unscii_16 — 8x17, text entry
-const lv_font_t* sym_font();       // montserrat_14 — the only font with glyphs
+const lv_font_t* sym_font();       // montserrat_14 — has the LV_SYMBOL glyphs
 lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour);
 
 /// A 4-bar signal strength indicator, `level` of 4 filled.  Returns the

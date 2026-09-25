@@ -1112,6 +1112,8 @@ void demo_drop_progress()
 void demo_tick(lv_timer_t*)
 {
     auto& a = app();
+    // Left for the Waiting demo: stop driving pairing's chrome from under it.
+    if (a.view != View::Pairing) return;
     static int phase = 0;
     phase = (phase + 1) % 6;
 
@@ -1280,8 +1282,8 @@ void pairing_back()
     switch (a.pair_step) {
     case 0:
         // Nowhere further back; leave the flow only if there is something to
-        // go back to.
-        if (a.config && a.config->machineCount() > 0) waiting_open();
+        // go back to (the UI demo always has its canned Waiting queue).
+        if (DIRIGIBLE_UI_DEMO || (a.config && a.config->machineCount() > 0)) waiting_open();
         return;
     case 1: step_wifi();     return;
     case 2: step_password(); return;

@@ -130,6 +130,18 @@ public:
                         const std::string& text, int version,
                         std::function<void(const ReplyResult&)> cb);
 
+    /// POST /attention/:id/dismiss.  Human-only like reply (§4.4).
+    void attentionDismiss(const std::string& id,
+                          std::function<void(const ReplyResult&)> cb);
+
+    /// POST /attention/:id/snooze with {"minutes": n}.
+    void attentionSnooze(const std::string& id, int minutes,
+                         std::function<void(const ReplyResult&)> cb);
+
+    /// POST /focus/start (no item: Lee picks the focused window's workspace)
+    /// or POST /focus/stop.  The new state arrives in the next snapshot.
+    void focusSet(bool on, std::function<void(const ReplyResult&)> cb);
+
     /// POST /capture into Hester's Someday list, for the followed window's
     /// workspace.
     void capture(const std::string& text,
@@ -149,6 +161,10 @@ private:
     void fetchContext(int window_id);
     void setContext(LeeContext* ctx, int window_id);
     void setAttention(AttentionSnapshot&& snap);
+    /// POST `body` (owned; freed here or by the transport) to `path` and
+    /// report it as a ReplyResult.
+    void postAction(const std::string& path, cJSON* body,
+                    std::function<void(const ReplyResult&)> cb);
 
     std::string buildWsUrl() const;
     std::string buildHttpUrl(const char* path) const;

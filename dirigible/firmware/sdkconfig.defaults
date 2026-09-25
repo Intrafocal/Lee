@@ -33,6 +33,12 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=512
 # The ASCII bitmap monospace fonts the terminal grid is measured against.
 CONFIG_LV_FONT_UNSCII_8=y
 CONFIG_LV_FONT_UNSCII_16=y
+# Montserrat for the Waiting view's proportional text: 12 for meta lines and
+# hints, 14 (LVGL's default, already on) for the agent's words and buttons,
+# 16 for titles.  About 45 KB of flash for the two extra sizes.
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 # Dark variant of the stock theme (Phosphor design refresh): without this,
 # stock lv_btn/lv_list/lv_textarea/lv_bar draw the light-theme palette
 # (white bg, black text) regardless of the colours screen_*.cpp sets.

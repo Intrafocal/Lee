@@ -60,7 +60,7 @@ Since Copilot v0 the approved grant is a **per-device token** plus a
 `device_id` (`dev_` + 12 hex): Lee stores only its hash, lists the device under
 Devices, can revoke it, and attributes what the device does to it. The device
 keeps the id in NVS next to the token (`did_<name>`) and shows it in the setup
-card and on the empty Waiting screen. Replying to an agent needs a device
+card and in the empty Waiting screen's footer. Replying to an agent needs a device
 token: a device still holding the shared token can read the queue but gets
 `re-pair to reply`.
 
@@ -87,6 +87,12 @@ To eyeball every pairing state without a network:
 idf.py -DDIRIGIBLE_UI_DEMO=1 build flash monitor   # cycles the steps every 3 s
 ```
 
+The same build gives the Waiting screen a canned queue (a blocker, an
+approval with long text, a question, and two finished turns for the empty
+state). Answering, dismissing or snoozing removes an item locally; once the
+queue is empty, `x` refills it. Without a paired machine, Back from the first
+pairing step leaves for Waiting.
+
 Do not ship a `DIRIGIBLE_UI_DEMO` build — it drives the UI with canned data.
 
 The token is never discovered: the mDNS advertisement deliberately carries no
@@ -107,7 +113,7 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
-| Waiting  | the default screen: Lee's attention queue (see below). A capture field on top, then each item with a severity bar (red blocking, amber needs you, dim ambient), its title, tab and age; the header centre reads `N waiting` (plus `focus` / `away`). Select one to read the agent's words and answer it |
+| Waiting  | the default screen: Lee's attention queue as a pager, one item that needs you per page (see below): a kind chip (red blocking, amber needs you), `Claude · tab`, age and `1/3`; the title; the agent's words, scrolled by the ball; and two or three big buttons labelled with their letter. Nothing waiting: "Nothing needs you", the last few finished turns (tap one to read it) and `c capture · f focus · t tabs`. The header centre reads `N waiting` (`focus:` / `away:` in front when on) |
 | Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a `Win` button / `w` picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
 | Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
 | Viewer   | read-only file view: code with a line gutter (pans, or wraps on click), markdown/text wrapped; follows an editor tab's file, cursor line and unsaved mark |
@@ -117,13 +123,16 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Input                   | Effect                                          |
 |-------------------------|-------------------------------------------------|
-| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Waiting, Files and Viewer) |
-| trackball click         | activates what's under the pointer (the selected row in Waiting and Files; wrap toggle in Viewer). Never approves |
+| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Files and Viewer). In Waiting, up/down scrolls the agent's words and a deliberate sideways flick turns the page |
+| trackball click         | activates what's under the pointer (the selected row in Files; wrap toggle in Viewer). In Waiting it opens the reply box on items that take text. Never approves |
 | trackball hold (0.8 s)  | back; on Waiting it opens the menu: Waiting / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
-| ESC                     | leaves Terminal, steps back in Pairing, closes an item or the capture field |
-| j / k, Enter (Waiting)  | move, open the selected item                    |
-| c / t / r (Waiting)     | capture an idea, show the tab list, refetch the queue |
-| y / n (approval)        | approve / deny                                  |
+| ESC                     | leaves Terminal, steps back in Pairing; in Waiting closes the reply/capture box (keeping the draft) or a finished turn you opened |
+| swipe left / right, j / k (Waiting) | next / previous item                |
+| space / b (Waiting)     | scroll the agent's words a screen down / up     |
+| y / n (Waiting)         | approve / deny an approval                      |
+| r or Enter (Waiting)    | open the reply box; Enter sends, Esc keeps the draft |
+| d / s (Waiting)         | dismiss / snooze 15 minutes                     |
+| c / f / t (Waiting)     | capture to Someday, start or end focus, show the tab list |
 | w (on Tabs)             | pick which Lee window to follow                 |
 | Tab                     | moves focus within a screen (reaches the password `show` toggle and the footer buttons) |
 | touch                   | works everywhere the pointer does               |
@@ -140,16 +149,26 @@ blockers, finished turns); `docs/13-Copilot.md` §5 and
 
 - **Live.** The queue rides the `/context/stream` socket the device already
   holds, as `{"type":"attention_snapshot","data":…}`; `GET /attention?compact=1`
-  fills it on every connect and on `r`. At most 25 items, text cut to 280
-  characters; only what the screen draws is kept.
-- **Reply.** An approval shows **Approve** / **Deny** (`y` / `n`, or tap);
-  anything else that takes text shows a reply field, Enter sends. Every reply
-  echoes the item's `version`: if the item moved on, Lee answers 409, the queue
-  is refetched and nothing is resent — decide again on what is there now.
-  `agent gone` means its terminal exited.
-- **Capture.** Type in the top field (`c`, a tap, or Menu > Capture), Enter
-  sends it to Hester's Someday list for the followed window's workspace.
-  `saved, syncs later` means Hester was down and Lee spooled it.
+  fills it on every connect and whenever the screen is opened. At most 25
+  items, text cut to 280 characters; only what the screen draws is kept.
+- **Pager.** Approvals, questions, blockers and decisions (plus anything Lee
+  marks blocking) each get a page: blocking first, then needs you, oldest
+  first; parked items last. The page stays on its item as snapshots arrive;
+  when it is answered elsewhere the next one slides in. Only letters are
+  shortcuts, since symbols and digits need chords on the T-Deck keyboard.
+- **Reply.** An approval shows **Approve y** / **Deny n** (/ **Snooze s**);
+  anything that takes text shows **Reply r** / **Dismiss d** (/ **Snooze s**).
+  Reply opens a full-screen text box: Enter sends (there is no newline), Esc
+  closes it and keeps the draft. Every write echoes the `version` the page
+  showed: if the item moved on, Lee answers 409, the queue is refetched and
+  nothing is resent — decide again on what is there now. `agent gone` means
+  its terminal exited. A swipe that starts on a button never presses it.
+- **Capture.** `c` (the empty screen's hint, or Menu > Capture) opens a
+  full-screen box; Enter sends it to Hester's Someday list for the followed
+  window's workspace. "Saved - reaches Someday when Hester is back" means Lee
+  spooled it; the box closes itself after a successful send.
+- **Focus.** `f` starts a focus session (`POST /focus/start`, Lee picks the
+  workspace) or ends it (`/focus/stop`); the header shows `focus:` while on.
 - **Alerts.** Pull-first: the only alert is the header blinking amber when an
   item's `notify` flips on (Lee decides: blocking outside quiet hours, or a
   wake-marked item while you are away). Nothing goes through a push service.
@@ -169,6 +188,8 @@ or Lee's shared API token (`~/.lee/api-token`) on older setups.
 | device → Lee  | `POST http://host:9001/command` with `Authorization: Bearer …` |
 | device → Lee  | `GET http://host:9001/attention?compact=1` → `{success,data:AttentionSnapshot}` |
 | device → Lee  | `POST http://host:9001/attention/<id>/reply` — `{action:"approve"\|"deny"\|"text",text?,version}`; 409 stale, 410 agent gone, 403 shared token |
+| device → Lee  | `POST http://host:9001/attention/<id>/dismiss`, `…/snooze` `{minutes:15}` |
+| device → Lee  | `POST http://host:9001/focus/start` `{}`, `POST /focus/stop` |
 | device → Lee  | `POST http://host:9001/capture` — `{text,workspace}` → `{success,someday_id,spooled}` |
 | device → Lee  | `GET http://host:9001/fs/list?path=…`, `GET /fs/read?path=…[&stat=1]` — bearer; read-only, workspace-scoped |
 | device → Lee  | `POST http://host:9001/pair/request` — **no auth**; `{device,kind,code,nonce}` → `{status:"pending",expires_in}` |
