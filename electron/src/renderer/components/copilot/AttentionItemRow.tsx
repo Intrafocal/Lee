@@ -44,7 +44,10 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
     try {
       const result = await fn();
       if (!result.success) {
-        setError(result.error || 'failed');
+        // 409 'stale': the item changed underneath us (e.g. the prompt was
+        // answered in the tab). The snapshot push brings back the resolved
+        // item, so just say so instead of surfacing the raw code.
+        setError(result.error === 'stale' ? 'Already handled elsewhere' : result.error || 'failed');
         return false;
       }
       return true;
