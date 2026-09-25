@@ -9,6 +9,7 @@ set(CORE_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../../core)
 idf_component_register(
     SRCS
         ${CORE_DIR}/src/models.cpp
+        ${CORE_DIR}/src/fs.cpp
         ${CORE_DIR}/src/lee_client.cpp
         ${CORE_DIR}/src/pty_client.cpp
         ${CORE_DIR}/src/hester_client.cpp

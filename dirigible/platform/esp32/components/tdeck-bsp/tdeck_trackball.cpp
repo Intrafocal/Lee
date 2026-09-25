@@ -143,8 +143,12 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
     // ---- d-pad mode -------------------------------------------------------
     if (s_delta_hook) {
         track_press(pressed, moved);
-        if (det_x || det_y || (pressed && !s_was_pressed)) {
-            s_delta_hook(det_x, det_y, pressed && !s_was_pressed, s_delta_user);
+        // Click on *release*, and only for a plain press: a hold that became
+        // the long-press (back) or a roll-while-held must not also activate
+        // whatever the d-pad has selected.
+        const bool click = !pressed && s_was_pressed && !s_long_fired && !s_press_moved;
+        if (det_x || det_y || click) {
+            s_delta_hook(det_x, det_y, click, s_delta_user);
         }
         s_was_pressed = pressed;
         data->point.x = s_cursor_x;

@@ -4,12 +4,15 @@
  * Behaviour carried over from the screenschema-era handlers.cpp: rows come
  * from the LeeContext pushed over the /context/stream WebSocket, selecting one
  * sends `system.focus_tab` to Lee, and a tab that owns a PTY also opens the
- * terminal view on it.
+ * terminal view on it.  As in Aeronaut, a `files` tab opens the Files tree
+ * and an editor-like tab (editor / editor-panel / file) opens the viewer on
+ * the file Lee reports for it.
  *
  * Layout (E14), inside the 320x204 body under the shared header:
  *
  *   row, 26 px:  [ type ] > label .......................... pty
- *                 ^badge  ^focused marker                    ^has a PTY
+ *                 ^badge  ^focused marker     ^what a click opens: pty,
+ *                                              file (viewer), tree (Files)
  *
  * When there is no connection the list is replaced by a plain state panel
  * naming the machine it is trying to reach and offering Re-pair, rather than
@@ -47,7 +50,13 @@ bool tab_has_pty(const char* type)
 const char* tab_code(const char* type)
 {
     if (!type) return "tab";
-    if (strcmp(type, "editor")   == 0) return "edt";
+    if (strcmp(type, "editor")   == 0 || strcmp(type, "editor-panel") == 0 ||
+        strcmp(type, "file")     == 0) return "edt";
+    if (strcmp(type, "files")    == 0) return "fil";
+    if (strcmp(type, "pdf")      == 0) return "pdf";
+    if (strcmp(type, "kicad")    == 0) return "kcd";
+    if (strcmp(type, "model")    == 0) return "3d";
+    if (strcmp(type, "binary")   == 0) return "bin";
     if (strcmp(type, "terminal") == 0) return "trm";
     if (strcmp(type, "git")      == 0) return "git";
     if (strcmp(type, "docker")   == 0) return "dkr";
@@ -85,9 +94,22 @@ void row_clicked(lv_event_t* e)
 
     if (tab_has_pty(tab->type) && tab->pty_id >= 0) {
         terminal_open(tab->pty_id, tab->label ? tab->label : "pty");
+    } else if (tab->type && strcmp(tab->type, "files") == 0) {
+        files_open();
+    } else if (dirigible::tab_is_editor_like(tab->type)) {
+        viewer_open_tab(tab_id);
     }
-    // Editor / browser / file tabs just move focus on the host; Dirigible
-    // does not try to render them.
+    // Browser and viewer-pane tabs (pdf, kicad, model) just move focus on
+    // the host; Dirigible does not try to render them.
+}
+
+/// Right-hand hint naming what a click opens, or nullptr for focus-only.
+const char* tab_hint(const dirigible::TabContext& t)
+{
+    if (tab_has_pty(t.type) && t.pty_id >= 0) return "pty";
+    if (t.type && strcmp(t.type, "files") == 0) return "tree";
+    if (dirigible::tab_is_editor_like(t.type)) return "file";
+    return nullptr;
 }
 
 }  // namespace
@@ -149,16 +171,17 @@ void tab_row(lv_obj_t* list, const dirigible::TabContext& t, int index)
     lv_obj_t* mark = make_label(btn, active ? ">" : " ", dg::phosphor());
     lv_obj_align(mark, LV_ALIGN_LEFT_MID, 36, 0);
 
-    const bool pty = tab_has_pty(t.type) && t.pty_id >= 0;
+    const char* hint_text = tab_hint(t);
     lv_obj_t* label = make_label(btn, t.label ? t.label : "(unnamed)",
                                  active ? dg::text1() : dg::text2());
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    // 46 left, 34 px reserved on the right for the "pty" hint + 4 px margin.
-    lv_obj_set_width(label, SCREEN_W - 4 - 46 - (pty ? 34 : 4));
+    // 46 left; on the right, the hint (8 px a char) + 10 px, or a 4 px margin.
+    const int reserve = hint_text ? (int)strlen(hint_text) * 8 + 10 : 4;
+    lv_obj_set_width(label, SCREEN_W - 4 - 46 - reserve);
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 46, 0);
 
-    if (pty) {
-        lv_obj_t* hint = make_label(btn, "pty", dg::text3());
+    if (hint_text) {
+        lv_obj_t* hint = make_label(btn, hint_text, dg::text3());
         lv_obj_align(hint, LV_ALIGN_RIGHT_MID, -4, 0);
     }
 
@@ -230,12 +253,15 @@ void tabs_render(const dirigible::LeeContext* ctx)
     if (!a.tab_list) return;
 
     auto* m = a.machines ? a.machines->activeMachine() : nullptr;
-    if (m) chrome_set_title(m->config.name.c_str());
+    // The header belongs to whichever view is showing; context updates keep
+    // arriving under Files, the viewer and Hester, so only write it here.
+    const bool showing = a.view == View::Tabs;
+    if (m && showing) chrome_set_title(m->config.name.c_str());
 
     auto* conn = a.machines ? a.machines->activeConnection() : nullptr;
     const bool online = conn && conn->isConnected();
 
-    if (ctx && ctx->activity) {
+    if (showing && ctx && ctx->activity) {
         char buf[32];
         snprintf(buf, sizeof(buf), "idle %ds", (int)ctx->activity->idle_seconds);
         chrome_set_centre(buf);
@@ -269,7 +295,7 @@ void tabs_render(const dirigible::LeeContext* ctx)
                      "No machine stored.\nRe-pair to add one.");
         }
         tabs_state_panel(m ? m->config.name.c_str() : "Not paired", body, true);
-        chrome_set_centre("disconnected");
+        if (showing) chrome_set_centre("disconnected");
         return;
     }
 

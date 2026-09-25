@@ -195,6 +195,44 @@ void LeeConnection::spawnTui(const char* type, const char* cwd) {
 }
 
 // ---------------------------------------------------------------------------
+// Filesystem
+// ---------------------------------------------------------------------------
+
+void LeeConnection::fsList(const std::string& path,
+                           std::function<void(const FsListResult&)> cb) {
+    if (!http_) {
+        FsListResult r;
+        fs_list_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    std::string url = buildHttpUrl("/fs/list");
+    if (!path.empty()) url += "?path=" + url_encode(path);
+    http_->get(url, [cb](int status, cJSON* resp) {
+        FsListResult r;
+        fs_list_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::fsRead(const std::string& path, bool stat_only,
+                           std::function<void(const FsReadResult&)> cb) {
+    if (!http_) {
+        FsReadResult r;
+        fs_read_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    std::string url = buildHttpUrl("/fs/read") + "?path=" + url_encode(path);
+    if (stat_only) url += "&stat=1";
+    http_->get(url, [cb](int status, cJSON* resp) {
+        FsReadResult r;
+        fs_read_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Health check
 // ---------------------------------------------------------------------------
 

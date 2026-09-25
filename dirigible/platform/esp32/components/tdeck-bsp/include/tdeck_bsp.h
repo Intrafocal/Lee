@@ -82,7 +82,9 @@ void tdeck_bsp_set_key_hook(tdeck_key_hook_t hook, void *user);
  * Raw trackball interception.  While a delta hook is installed the trackball
  * stops driving the LVGL cursor and reports quantised steps instead
  * (dx/dy in units of one detent), which is what terminal mode maps to arrow
- * keys.  Pass NULL to return to pointer mode.
+ * keys.  `click` is true once, on release of a plain press — never for a hold
+ * that fired the long-press callback or rolled while held.  Pass NULL to
+ * return to pointer mode.
  */
 typedef void (*tdeck_ball_hook_t)(int dx, int dy, bool click, void *user);
 void tdeck_bsp_set_ball_hook(tdeck_ball_hook_t hook, void *user);

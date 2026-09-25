@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace dirigible_app {
 
@@ -138,5 +139,12 @@ private:
     bool     dirty_ = true;
     bool     row_dirty_[VT_MAX_ROWS] = {};
 };
+
+/// Fold one line of UTF-8 to the ASCII the unscii fonts can draw, using the
+/// same one-cell-per-codepoint rules as VtScreen (box drawing to -|+, quotes
+/// and dashes to their ASCII shapes, wide codepoints to two cells, anything
+/// unknown to '?').  Tabs expand to `tab_width`-column stops; other control
+/// bytes are dropped.  Used by the file viewer.
+std::string fold_utf8_line(const char* s, size_t n, int tab_width = 4);
 
 }  // namespace dirigible_app

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dirigible/fs.hpp"
 #include "dirigible/models.hpp"
 #include "dirigible/transport.hpp"
 #include <cstdint>
@@ -59,6 +60,14 @@ public:
     void openFile(const char* path);
     void saveFile();
     void spawnTui(const char* type, const char* cwd = nullptr);
+
+    // Read-only filesystem (GET /fs/list, GET /fs/read).  Results are
+    // non-owning, valid only for the callback, which fires on the UI thread.
+    // An empty `path` lists the focused window's workspace.
+    void fsList(const std::string& path,
+                std::function<void(const FsListResult&)> cb);
+    void fsRead(const std::string& path, bool stat_only,
+                std::function<void(const FsReadResult&)> cb);
 
     // Health check
     void healthCheck(std::function<void(bool online)> cb);

@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(dirigible-core STATIC
     src/models.cpp
+    src/fs.cpp
     src/lee_client.cpp
     src/pty_client.cpp
     src/hester_client.cpp

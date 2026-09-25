@@ -113,6 +113,24 @@ LeeContext* context_parse(cJSON* json) {
     ctx->editor = parse_editor(
         cJSON_GetObjectItemCaseSensitive(json, "editor"));
 
+    // Per-tab editors: { "<tabId>": EditorContext, ... } (optional)
+    cJSON* editors_obj = cJSON_GetObjectItemCaseSensitive(json, "editors");
+    if (editors_obj && cJSON_IsObject(editors_obj)) {
+        int n = cJSON_GetArraySize(editors_obj);
+        if (n > 0) {
+            ctx->editors = new EditorEntry[n];
+            cJSON* item = nullptr;
+            cJSON_ArrayForEach(item, editors_obj) {
+                if (!item->string) continue;
+                EditorContext* e = parse_editor(item);
+                if (!e) continue;
+                ctx->editors[ctx->editor_count].tab_id = atoi(item->string);
+                ctx->editors[ctx->editor_count].editor = e;
+                ctx->editor_count++;
+            }
+        }
+    }
+
     // Activity (optional)
     ctx->activity = parse_activity(
         cJSON_GetObjectItemCaseSensitive(json, "activity"));
@@ -152,8 +170,29 @@ void context_free(LeeContext* ctx) {
     }
 
     free_editor(ctx->editor);
+    for (int i = 0; i < ctx->editor_count; i++) free_editor(ctx->editors[i].editor);
+    delete[] ctx->editors;
     delete ctx->activity;
     delete ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Lookups
+// ---------------------------------------------------------------------------
+
+bool tab_is_editor_like(const char* type) {
+    if (!type) return false;
+    return strcmp(type, "editor") == 0 || strcmp(type, "editor-panel") == 0 ||
+           strcmp(type, "file") == 0;
+}
+
+const EditorContext* context_editor_for(const LeeContext* ctx, const TabContext& tab) {
+    if (!ctx) return nullptr;
+    for (int i = 0; i < ctx->editor_count; i++) {
+        if (ctx->editors[i].tab_id == tab.id) return ctx->editors[i].editor;
+    }
+    if (ctx->editor_count == 0 && tab_is_editor_like(tab.type)) return ctx->editor;
+    return nullptr;
 }
 
 }  // namespace dirigible

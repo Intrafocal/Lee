@@ -52,7 +52,8 @@ Pin assignments and the empirically derived display/touch transforms live in
 ```
 dirigible/
 ├── core/                       portable C++17, no ESP-IDF
-│   ├── LeeConnection           /context/stream WebSocket + POST /command
+│   ├── LeeConnection           /context/stream WebSocket + POST /command,
+│   │                           GET /fs/list + /fs/read (fs.hpp models)
 │   ├── PTYClient               /pty/<id>/stream WebSocket
 │   ├── HesterClient            POST /context/stream, SSE phase/response parser
 │   ├── MachineManager          multi-machine state, health pings, tokens
@@ -207,7 +208,9 @@ provisioned device stays paired.
 
 | Screen | What it does |
 |--------|--------------|
-| **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; if the tab owns a PTY it also opens the terminal on it. |
+| **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; a tab that owns a PTY also opens the terminal on it, a `files` tab opens **Files**, and an editor-like tab (`editor`, `editor-panel`, `file`) opens the **Viewer** on its file. The right-hand hint says which: `pty`, `tree`, `file`. |
+| **Files** | The workspace tree over `GET /fs/list` — also on the menu, so it works with no `files` tab open. |
+| **Viewer** | One file over `GET /fs/read`, read-only. |
 | **Terminal** | A character grid over the PTY WebSocket. ESC, the header **X** or a trackball hold returns to Tabs. |
 | **Hester** | One input line. Enter streams the ReAct phases, then the answer. |
 | **Pairing** | The flow above. |
@@ -236,6 +239,7 @@ a row of text or left the terminal without a button.
 | trackball click | activates whatever the pointer is over |
 | trackball hold (0.8 s) | back — closes the menu, or steps the screen back; on Tabs it opens the menu |
 | trackball in Terminal | acts as a d-pad, one detent per arrow key |
+| trackball in Files / Viewer | acts as a d-pad: see below |
 | ESC | same as the hold |
 | header button | same as the hold |
 | touch | works anywhere the pointer does |
@@ -290,6 +294,71 @@ budget. A translucent block follows the cursor.
 Still absent: underline and blink as distinct attributes, alternate-screen
 bookkeeping, scrollback, mouse reporting.
 
+### Files and the viewer
+
+Both mirror Aeronaut (`files_screen.dart`, `file_viewer_screen.dart`,
+`editor_screen.dart`) and are adapted to a 40-column screen rather than
+reinvented, so a file looks and fails the same way on both clients.
+
+**Files** (`firmware/main/screen_files.cpp`) is rooted at the active window's
+workspace (or, when the context has none yet, whatever `/fs/list` with no path
+picks — the focused window). Directories come first, each is fetched the first
+time it is expanded and cached after that, and returning from the viewer keeps
+the expansion and selection. A different workspace starts a fresh tree.
+
+```
+./src/renderer/                          <- crumb: the selection's directory
+- src
+ - renderer
+  + components
+    App.tsx                     12.3K
+```
+
+`+`/`-` closed and open directories, `@` a symlink, `~` loading, `!` an error
+(select it to retry). The tree is flattened and only the visible 11 rows are
+drawn from a fixed pool, so a large expanded directory costs strings, not LVGL
+objects; more than 500 entries in one directory end in a `... N more` row.
+
+| Input | Files | Viewer |
+|-------|-------|--------|
+| ball up/down, `j`/`k` | move selection | scroll a line |
+| ball right, `l` | expand directory | pan code right |
+| ball left, `h`, Backspace | collapse, or jump to the parent | pan code left |
+| ball click, Enter | open directory / file | toggle wrap (code) · Enter scrolls |
+| Space / `b` | page down / up | page down / up |
+| `g` / `G` | | top / bottom |
+| `w` | | toggle wrap (code) |
+| `r`, **Refresh** / **Reload** | drop the cache and refetch | reload |
+| `o`, **Open** / **Focus** | | open the file in Lee (or focus its tab) |
+| swipe up/down, swipe right | page, back | page, back |
+
+The ball's d-pad click fires on *release* and never after a hold, so holding to
+go back doesn't also open the row under the selection.
+
+**Viewer** (`firmware/main/screen_viewer.cpp`) classifies by extension with the
+same sets as Aeronaut (`dirigible/fs.hpp`): code gets a line-number gutter and
+pans horizontally (click or `w` wraps it instead), markdown and plain text wrap
+at word boundaries, and markdown headings render in phosphor without their
+`#`s. The strip above the text shows size, mtime (UTC), and kind; the header
+centre shows `L<line>/<lines>`.
+
+It asks for `?stat=1` first. Images and PDFs stop there, with metadata and an
+**Open** that shows them in Lee, because the device has no decoder for them.
+Text over **256 KB** is refused at this point too, instead of being pulled
+through the JSON parser into PSRAM (Lee's own cap is 2 MB). What does load is
+folded to ASCII once, with the terminal's codepoint rules, into one flat buffer
+plus a line index. There are no per-line heap allocations, which on this chip
+would land in internal RAM. Lee's errors each get their own message: outside the
+workspace (403), not found (404), over 2 MB (413), binary (415), token
+rejected (401).
+
+Opened from an editor-like tab, the viewer **follows the tab** the way
+Aeronaut's EditorScreen does. It reads `editors[tabId]`, the per-tab map
+`context_editor_for()` now parses, falling back to the legacy single `editor`
+on an older Lee. It reloads when the tab switches file or is saved, marks
+unsaved changes with `*`, shows `Ln N`, and opens scrolled to the cursor with
+its line number lit.
+
 ## Wire protocol
 
 Everything is authenticated with Lee's persistent API token
@@ -301,6 +370,8 @@ Everything is authenticated with Lee's persistent API token
 | device → Lee | `ws://host:9001/pty/<id>/stream?token=…` | token query param |
 | device → Lee | `POST http://host:9001/command` | `Authorization: Bearer …` |
 | device → Lee | `GET http://host:9001/health` | open (used for the 15 s liveness ping) |
+| device → Lee | `GET http://host:9001/fs/list?path=…` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/fs/read?path=…[&stat=1]` | `Authorization: Bearer …` |
 | device → Lee | `POST http://host:9001/pair/request` | **open** — pairing, pre-token (E19) |
 | device → Lee | `GET http://host:9001/pair/poll?nonce=…` | **open** — pairing, pre-token (E19) |
 | device → Hester | `POST http://host:9000/context/stream` | `Authorization: Bearer …` |

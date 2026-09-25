@@ -97,16 +97,18 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
-| Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair |
+| Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair |
+| Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
+| Viewer   | read-only file view: code with a line gutter (pans, or wraps on click), markdown/text wrapped; follows an editor tab's file, cursor line and unsaved mark |
 | Terminal | character grid over the PTY WebSocket; ESC returns to Tabs. Keeps the whole content band — the footer legend flashes for 2 s on entry, then collapses so no character row is lost |
 | Hester   | chat-shaped: question at the bottom, scrolling answer above, ReAct phases in the header's status slot |
 | Pairing  | WiFi → Lee host → approve a 6-digit code (or type the token)      |
 
 | Input                   | Effect                                          |
 |-------------------------|-------------------------------------------------|
-| trackball roll          | moves the LVGL pointer (arrow keys in Terminal) |
-| trackball click         | activates what's under the pointer              |
-| trackball hold (0.8 s)  | opens the menu: Tabs / Hester / Pairing / Reconnect |
+| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Files and Viewer) |
+| trackball click         | activates what's under the pointer (the selected row in Files; wrap toggle in Viewer) |
+| trackball hold (0.8 s)  | back; on Tabs it opens the menu: Tabs / Files / Hester / Pairing / Reconnect |
 | ESC                     | leaves Terminal, steps back in Pairing          |
 | Tab                     | moves focus within a screen (reaches the password `show` toggle and the footer buttons) |
 | touch                   | works everywhere the pointer does               |
@@ -124,6 +126,7 @@ Everything is authenticated with Lee's persistent API token (`~/.lee/api-token`)
 | device → Lee  | `ws://host:9001/context/stream?token=…` — live `LeeContext` |
 | device → Lee  | `ws://host:9001/pty/<id>/stream?token=…` — PTY bytes out, raw text in, `{"type":"resize","cols":C,"rows":R}` to resize |
 | device → Lee  | `POST http://host:9001/command` with `Authorization: Bearer …` |
+| device → Lee  | `GET http://host:9001/fs/list?path=…`, `GET /fs/read?path=…[&stat=1]` — bearer; read-only, workspace-scoped |
 | device → Lee  | `POST http://host:9001/pair/request` — **no auth**; `{device,kind,code,nonce}` → `{status:"pending",expires_in}` |
 | device → Lee  | `GET http://host:9001/pair/poll?nonce=…` — **no auth**; → `pending` / `denied` / `expired` / `approved` + `{token,hester_port,name}` |
 | device → Hester | `POST http://host:9000/context/stream` with the same bearer → SSE |

@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Tabs, Terminal, Hester, Pairing };
+enum class View { Tabs, Terminal, Hester, Pairing, Files, Viewer };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -84,6 +84,8 @@ struct App {
     lv_obj_t* view_terminal = nullptr;
     lv_obj_t* view_hester   = nullptr;
     lv_obj_t* view_pairing  = nullptr;
+    lv_obj_t* view_files    = nullptr;
+    lv_obj_t* view_viewer   = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
     View view = View::Tabs;
@@ -190,6 +192,27 @@ void pairing_build(lv_obj_t* parent);
 void pairing_begin();                      // restart the flow at step 0
 void pairing_back();                       // one step back (ESC / Back button)
 bool pairing_key(uint8_t ascii);
+
+// Files: the workspace tree over GET /fs/list (Aeronaut's FilesBrowserBody).
+// Its own state lives in screen_files.cpp.
+void files_build(lv_obj_t* parent);
+void files_open();                         // show the tree for the workspace
+bool files_key(uint8_t ascii);
+void files_ball(int dx, int dy, bool click);
+
+// Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen), paged to
+// the 40x21 cell window.  State lives in screen_viewer.cpp.
+void viewer_build(lv_obj_t* parent);
+/// Open `path`; back returns to `from` (Files or Tabs).
+void viewer_open_path(const std::string& path, View from);
+/// Follow an editor-like tab: shows `editors[tab_id].file`, reloads when the
+/// tab switches file, and tracks its modified flag and cursor line.
+void viewer_open_tab(int tab_id);
+void viewer_on_context(const dirigible::LeeContext* ctx);
+void viewer_close();                       // drop the file and any tab binding
+View viewer_return_view();
+bool viewer_key(uint8_t ascii);
+void viewer_ball(int dx, int dy, bool click);
 
 // Helpers -------------------------------------------------------------------
 const lv_font_t* mono_font();      // lv_font_unscii_8  — 8x9,  dense UI

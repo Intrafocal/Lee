@@ -266,9 +266,10 @@ static void menu_item_cb(lv_event_t* e)
     menu_close();
     switch (choice) {
     case 0: app_show(View::Tabs); break;
-    case 1: app_show(View::Hester); break;
-    case 2: pairing_begin(); break;
-    case 3:
+    case 1: files_open(); break;
+    case 2: app_show(View::Hester); break;
+    case 3: pairing_begin(); break;
+    case 4:
         if (auto* c = activeConn()) { c->disconnect(); c->connect(); }
         app_set_status("reconnecting...");
         break;
@@ -285,15 +286,15 @@ static void menu_open(void*)
     if (a.menu) { menu_close(); return; }
 
     a.menu = lv_list_create(a.screen);
-    lv_obj_set_size(a.menu, 180, 120);
+    lv_obj_set_size(a.menu, 180, 150);
     lv_obj_center(a.menu);
     lv_obj_set_style_bg_color(a.menu, dg::ground2(), 0);
     lv_obj_set_style_border_width(a.menu, 1, 0);
     lv_obj_set_style_border_color(a.menu, dg::ground4(), 0);
     lv_obj_set_style_text_font(a.menu, mono_font(), 0);
 
-    static const char* names[] = { "Tabs", "Hester", "Pairing", "Reconnect" };
-    for (intptr_t i = 0; i < 4; i++) {
+    static const char* names[] = { "Tabs", "Files", "Hester", "Pairing", "Reconnect" };
+    for (intptr_t i = 0; i < 5; i++) {
         lv_obj_t* btn = lv_list_add_btn(a.menu, nullptr, names[i]);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
@@ -315,8 +316,18 @@ void app_back()
         app_show(View::Tabs);
         return;
     case View::Hester:
+    case View::Files:
         app_show(View::Tabs);
         return;
+    case View::Viewer: {
+        // Back to wherever the file was opened from: the tree keeps its
+        // expansion and selection, the tab list is the tab list.
+        const View from = viewer_return_view();
+        viewer_close();
+        if (from == View::Files) files_open();
+        else                     app_show(View::Tabs);
+        return;
+    }
     case View::Pairing:
         pairing_back();
         return;
@@ -347,6 +358,8 @@ static bool key_hook(uint8_t ascii, void*)
     switch (a.view) {
     case View::Terminal: return terminal_key(ascii);
     case View::Pairing:  return pairing_key(ascii);
+    case View::Files:    return files_key(ascii);
+    case View::Viewer:   return viewer_key(ascii);
     case View::Hester:
         if (ascii == 0x1B) { app_back(); return true; }
         return false;
@@ -359,7 +372,12 @@ static bool key_hook(uint8_t ascii, void*)
 
 static void ball_hook(int dx, int dy, bool click, void*)
 {
-    if (app().view == View::Terminal) terminal_ball(dx, dy, click);
+    switch (app().view) {
+    case View::Terminal: terminal_ball(dx, dy, click); break;
+    case View::Files:    files_ball(dx, dy, click);    break;
+    case View::Viewer:   viewer_ball(dx, dy, click);   break;
+    default: break;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,10 +393,15 @@ void app_show(View v)
     lv_obj_add_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_hester,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_pairing,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(a.view_files,    LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(a.view_viewer,   LV_OBJ_FLAG_HIDDEN);
 
-    // The ball is a pointer everywhere except the terminal, where it is a
-    // d-pad feeding arrow keys to the PTY.
-    tdeck_bsp_set_ball_hook(v == View::Terminal ? ball_hook : nullptr, nullptr);
+    // The ball is a pointer on the tab list, Hester and pairing.  In the
+    // terminal it is a d-pad feeding arrow keys to the PTY; in Files and the
+    // viewer it is a d-pad moving the selection / scrolling, which on a long
+    // list beats steering a pointer onto 17 px rows.
+    const bool dpad = v == View::Terminal || v == View::Files || v == View::Viewer;
+    tdeck_bsp_set_ball_hook(dpad ? ball_hook : nullptr, nullptr);
 
     // Each view owns its legend; pairing replaces the buttons per step.
     if (v != View::Pairing) chrome_clear_footer_buttons();
@@ -391,6 +414,10 @@ void app_show(View v)
     if (a.lbl_machine) {
         lv_obj_set_width(a.lbl_machine, 84);
         lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
+    }
+    // Title defaults to the machine; Files and the viewer name themselves.
+    if (auto* m = a.machines ? a.machines->activeMachine() : nullptr) {
+        chrome_set_title(m->config.name.c_str());
     }
 
     // The back button is the same object everywhere; only its glyph changes,
@@ -422,6 +449,19 @@ void app_show(View v)
     case View::Pairing:
         lv_obj_clear_flag(a.view_pairing, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph("<");
+        break;
+    case View::Files:
+        lv_obj_clear_flag(a.view_files, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("<");
+        chrome_set_title("Files");
+        chrome_set_centre("");
+        chrome_set_footer("ball move/open  r", "files");
+        break;
+    case View::Viewer:
+        lv_obj_clear_flag(a.view_viewer, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("<");
+        chrome_set_centre("");
+        chrome_set_footer("ball scroll  spc pg", "view");
         break;
     }
 }
@@ -675,6 +715,8 @@ void app_start()
     terminal_build(a.content);
     hester_build(a.content);
     pairing_build(a.content);
+    files_build(a.content);
+    viewer_build(a.content);
 
     // ---- input ---------------------------------------------------------
     tdeck_bsp_set_key_hook(key_hook, nullptr);
@@ -693,7 +735,10 @@ void app_start()
     });
 
     dirigible::EventBus::instance().on(dirigible::Event::ContextUpdated, []() {
-        if (auto* c = activeConn()) tabs_render(c->currentContext());
+        if (auto* c = activeConn()) {
+            tabs_render(c->currentContext());
+            viewer_on_context(c->currentContext());
+        }
     });
     dirigible::EventBus::instance().on(dirigible::Event::ConnectionChanged, []() {
         tabs_render(activeConn() ? activeConn()->currentContext() : nullptr);

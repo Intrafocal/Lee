@@ -634,4 +634,42 @@ bool VtScreen::feed(const uint8_t* data, size_t len)
     return dirty_;
 }
 
+std::string fold_utf8_line(const char* s, size_t n, int tab_width)
+{
+    std::string out;
+    out.reserve(n);
+    size_t i = 0;
+    while (i < n) {
+        const uint8_t ch = (uint8_t)s[i];
+        uint32_t cp = ch;
+        int extra = 0;
+        if      (ch < 0x80)           extra = 0;
+        else if ((ch & 0xE0) == 0xC0) { cp = ch & 0x1Fu; extra = 1; }
+        else if ((ch & 0xF0) == 0xE0) { cp = ch & 0x0Fu; extra = 2; }
+        else if ((ch & 0xF8) == 0xF0) { cp = ch & 0x07u; extra = 3; }
+        else                          { out += '?'; i++; continue; }   // stray continuation
+
+        size_t j = i + 1;
+        for (int k = 0; k < extra; k++, j++) {
+            if (j >= n || ((uint8_t)s[j] & 0xC0) != 0x80) { cp = '?'; extra = -1; break; }
+            cp = (cp << 6) | ((uint8_t)s[j] & 0x3Fu);
+        }
+        i = (extra < 0) ? j : i + 1 + extra;
+
+        if (cp == '\t') {
+            const int w = tab_width > 0 ? tab_width : 4;
+            do { out += ' '; } while (out.size() % w);
+            continue;
+        }
+        if (cp < 0x20 || cp == 0x7F) continue;
+        if (cp < 0x80) { out += (char)cp; continue; }
+        if (is_zero_width(cp)) continue;
+
+        char folded = fold_symbol(cp);
+        out += folded ? folded : '?';
+        if (is_wide(cp)) out += ' ';
+    }
+    return out;
+}
+
 }  // namespace dirigible_app

@@ -41,6 +41,12 @@ struct ActivityContext {
     double session_duration = 0;
 };
 
+/// One entry of Lee's per-tab `editors` map (keyed by tab id on the wire).
+struct EditorEntry {
+    int            tab_id = 0;
+    EditorContext* editor = nullptr;   // owned
+};
+
 struct LeeContext {
     char* workspace      = nullptr;
     char* focused_panel  = nullptr;   // "center", "left", "right", "bottom"
@@ -51,7 +57,9 @@ struct LeeContext {
     int tab_count        = 0;
 
     // Optional sections (nullptr if absent)
-    EditorContext*   editor   = nullptr;
+    EditorContext*   editor   = nullptr;   // last-focused editor (legacy)
+    EditorEntry*     editors  = nullptr;   // every open editor, by tab id
+    int editor_count          = 0;
     ActivityContext* activity = nullptr;
 };
 
@@ -65,5 +73,14 @@ LeeContext* context_parse(cJSON* json);
 
 // Deep-free a LeeContext and all its owned strings/arrays.
 void context_free(LeeContext* ctx);
+
+// True for tab types whose content is a file buffer, not a process
+// ("editor", "editor-panel", "file") — Aeronaut's TabType.isEditorLike.
+bool tab_is_editor_like(const char* type);
+
+// The editor state for a tab: `editors[tab.id]` when Lee sent the per-tab
+// map, else the legacy single `editor` for an editor-like tab when the map is
+// absent entirely (older Lee builds).  Aeronaut's LeeContext.editorFor.
+const EditorContext* context_editor_for(const LeeContext* ctx, const TabContext& tab);
 
 }  // namespace dirigible
