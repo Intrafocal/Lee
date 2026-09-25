@@ -14,6 +14,7 @@ import { PTYManager } from './pty-manager';
 import { APIServer } from './api-server';
 import { initCopilotCore, attachCopilotWindow, shutdownCopilotCore, issueQrTicket } from './copilot/core';
 import { logEvent } from './copilot/bus';
+import { initCockpitOps, shutdownCockpitOps } from './cockpit/ops-main';
 import { PairingEntry } from './pairing-store';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -1992,6 +1993,7 @@ app.whenReady().then(() => {
     windowRegistry,
   });
   initCopilotCore({ apiServer, ptyManager });
+  initCockpitOps({ ptyManager });
   // mDNS advertisement (_lee._tcp) - lets Dirigible/other on-device clients
   // discover Lee without manual host/port entry (E5). Logs through
   // ptyManager's existing lee.log writer.
@@ -2112,6 +2114,7 @@ app.on('will-quit', (event) => {
   globalShortcut.unregisterAll();
   fsWatcher.closeAll();
   mdnsAdvertiser?.stop();
+  shutdownCockpitOps();
   machineManager?.dispose();
   shutdownCopilotCore();
 
