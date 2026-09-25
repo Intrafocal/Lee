@@ -247,7 +247,10 @@ export function registerCoreRoutes(app: Application, deps: CoreRoutesDeps): void
         { text: body.text as string, as: body.as },
         { actor: actorForPrincipal(p), source: captureSourceFor(p), workspace: ws.workspace, window_id: ws.window_id },
       );
-      res.status(result.success ? 200 : 400).json(result);
+      // Same {success, data} envelope as every other :9001 route; Aeronaut
+      // reads data, Dirigible accepts either shape.
+      if (result.success) res.json({ success: true, data: result });
+      else res.status(400).json({ success: false, error: result.error ?? 'Capture failed', data: result });
     } catch (err) {
       deps.log('ERROR', 'Capture failed', { error: String(err) });
       res.status(500).json({ success: false, error: 'Capture failed' });
