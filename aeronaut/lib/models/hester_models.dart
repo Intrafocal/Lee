@@ -139,6 +139,182 @@ class BundleSummary extends Equatable {
   List<Object?> get props => [id, title, tags, stale, sourceCount, updatedAt];
 }
 
+/// One verified win in the session-start digest (`GET /copilot/digest`,
+/// contracts §8.4). "Verified" means Lee/Hester checked it, not an agent's
+/// own claim — see [DigestAgentClaim] for those.
+class DigestWin extends Equatable {
+  final String kind; // commit | merge | decision | someday_decided
+  final String title;
+  final String? ref;
+  final DateTime? at;
+  final bool verified;
+  final bool related;
+
+  const DigestWin({
+    required this.kind,
+    required this.title,
+    this.ref,
+    this.at,
+    this.verified = false,
+    this.related = false,
+  });
+
+  factory DigestWin.fromJson(Map<String, dynamic> json) {
+    return DigestWin(
+      kind: json['kind'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      ref: json['ref'] as String?,
+      at: json['at'] != null ? DateTime.tryParse(json['at'] as String) : null,
+      verified: json['verified'] as bool? ?? false,
+      related: json['related'] as bool? ?? false,
+    );
+  }
+
+  @override
+  List<Object?> get props => [kind, title, ref, at, verified, related];
+}
+
+/// An agent's own claim about what it did — always unverified by
+/// definition (spec §2.3), shown separately from [DigestWin].
+class DigestAgentClaim extends Equatable {
+  final String sessionId;
+  final int? ptyId;
+  final String summary;
+  final DateTime? at;
+  final bool verified;
+  final bool related;
+
+  const DigestAgentClaim({
+    required this.sessionId,
+    this.ptyId,
+    this.summary = '',
+    this.at,
+    this.verified = false,
+    this.related = false,
+  });
+
+  factory DigestAgentClaim.fromJson(Map<String, dynamic> json) {
+    return DigestAgentClaim(
+      sessionId: json['session_id'] as String? ?? '',
+      ptyId: (json['pty_id'] as num?)?.toInt(),
+      summary: json['summary'] as String? ?? '',
+      at: json['at'] != null ? DateTime.tryParse(json['at'] as String) : null,
+      verified: json['verified'] as bool? ?? false,
+      related: json['related'] as bool? ?? false,
+    );
+  }
+
+  @override
+  List<Object?> get props => [sessionId, ptyId, summary, at, verified, related];
+}
+
+class DigestSomeday extends Equatable {
+  final int open;
+  final int untriagedOver7d;
+
+  const DigestSomeday({this.open = 0, this.untriagedOver7d = 0});
+
+  factory DigestSomeday.fromJson(Map<String, dynamic> json) {
+    return DigestSomeday(
+      open: (json['open'] as num?)?.toInt() ?? 0,
+      untriagedOver7d: (json['untriaged_over_7d'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  @override
+  List<Object?> get props => [open, untriagedOver7d];
+}
+
+class DigestRetro extends Equatable {
+  final bool due;
+  final String? week;
+
+  const DigestRetro({this.due = false, this.week});
+
+  factory DigestRetro.fromJson(Map<String, dynamic> json) {
+    return DigestRetro(
+      due: json['due'] as bool? ?? false,
+      week: json['week'] as String?,
+    );
+  }
+
+  @override
+  List<Object?> get props => [due, week];
+}
+
+/// `GET /copilot/digest` response (contracts §8.4) — the session-start
+/// digest, used by Aeronaut's Wins section (v1, §9.2).
+class DigestResult extends Equatable {
+  final DateTime? generatedAt;
+  final String? workspace;
+  final DateTime? since;
+  final String topLine;
+  final List<DigestWin> wins;
+  final List<DigestAgentClaim> agentClaims;
+  final int changedCommits;
+  final List<String> changedAgentFiles;
+  final DigestSomeday someday;
+  final DigestRetro retro;
+
+  const DigestResult({
+    this.generatedAt,
+    this.workspace,
+    this.since,
+    this.topLine = '',
+    this.wins = const [],
+    this.agentClaims = const [],
+    this.changedCommits = 0,
+    this.changedAgentFiles = const [],
+    this.someday = const DigestSomeday(),
+    this.retro = const DigestRetro(),
+  });
+
+  factory DigestResult.fromJson(Map<String, dynamic> json) {
+    final changed = json['changed'] as Map<String, dynamic>?;
+    return DigestResult(
+      generatedAt: json['generated_at'] != null
+          ? DateTime.tryParse(json['generated_at'] as String)
+          : null,
+      workspace: json['workspace'] as String?,
+      since: json['since'] != null ? DateTime.tryParse(json['since'] as String) : null,
+      topLine: json['top_line'] as String? ?? '',
+      wins: (json['wins'] as List<dynamic>?)
+              ?.map((w) => DigestWin.fromJson(w as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      agentClaims: (json['agent_claims'] as List<dynamic>?)
+              ?.map((c) => DigestAgentClaim.fromJson(c as Map<String, dynamic>))
+              .toList() ??
+          const [],
+      changedCommits: (changed?['commits'] as num?)?.toInt() ?? 0,
+      changedAgentFiles: (changed?['agent_files'] as List<dynamic>?)
+              ?.map((f) => f as String)
+              .toList() ??
+          const [],
+      someday: json['someday'] != null
+          ? DigestSomeday.fromJson(json['someday'] as Map<String, dynamic>)
+          : const DigestSomeday(),
+      retro: json['retro'] != null
+          ? DigestRetro.fromJson(json['retro'] as Map<String, dynamic>)
+          : const DigestRetro(),
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+        generatedAt,
+        workspace,
+        since,
+        topLine,
+        wins,
+        agentClaims,
+        changedCommits,
+        changedAgentFiles,
+        someday,
+        retro,
+      ];
+}
+
 /// Chat state held by HesterChatNotifier.
 class HesterChatState extends Equatable {
   final List<ChatMessage> messages;

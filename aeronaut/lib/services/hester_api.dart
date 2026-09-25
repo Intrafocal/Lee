@@ -258,6 +258,29 @@ class HesterApi {
     return null;
   }
 
+  /// `GET /copilot/digest?workspace=` (contracts §8.4) — verified wins,
+  /// agent claims, waiting items and Someday/retro counts since the last
+  /// away period. Used by Aeronaut's Wins section (v1). Null on any
+  /// failure, including a plain unreachable daemon ("Hester offline").
+  Future<DigestResult?> getDigest({required String workspace}) async {
+    if (_baseUrl == null) return null;
+    try {
+      final uri = Uri.parse('$_baseUrl/copilot/digest')
+          .replace(queryParameters: {'workspace': workspace});
+      final response =
+          await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
+      _isUnauthorized(response);
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = json['data'];
+        if (data is Map<String, dynamic>) return DigestResult.fromJson(data);
+      }
+    } catch (_) {
+      // Connection failed
+    }
+    return null;
+  }
+
   void dispose() {
     _client.close();
   }

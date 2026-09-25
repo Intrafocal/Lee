@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../models/attention.dart';
 import '../models/lee_context.dart';
 import '../models/machine.dart';
 import '../services/api_auth.dart';
@@ -91,6 +92,29 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     yield* _contextController.stream;
   }
 
+  /// Copilot queue snapshots (contracts §5.6): machine-wide, so unlike
+  /// [contextStream] these need no per-window filtering. Replays the last
+  /// value to new subscribers, same reasoning as [contextStream].
+  final _attentionController = StreamController<AttentionSnapshot>.broadcast();
+  AttentionSnapshot? _lastAttention;
+  Stream<AttentionSnapshot> get attentionStream async* {
+    if (_lastAttention != null) yield _lastAttention!;
+    yield* _attentionController.stream;
+  }
+
+  /// Presence pushes (contracts §3.3): also machine-wide and replayed.
+  final _presenceController = StreamController<PresenceState>.broadcast();
+  PresenceState? _lastPresence;
+  Stream<PresenceState> get presenceStream async* {
+    if (_lastPresence != null) yield _lastPresence!;
+    yield* _presenceController.stream;
+  }
+
+  /// "You're back" events (contracts §7.3) — a one-shot notice, not a
+  /// snapshot of standing state, so it's never replayed to a late listener.
+  final _returnController = StreamController<ReturnInfo>.broadcast();
+  Stream<ReturnInfo> get returnStream => _returnController.stream;
+
   /// Fetch `GET /context?window_id=` and publish it, unless the selection
   /// or machine moved on while the request was in flight.
   Future<void> _fetchWindowContext(int windowId) async {
@@ -173,7 +197,21 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
         final context = LeeContext.fromJson(contextData);
         _lastContext = context;
         _contextController.add(context);
+      } else if (type == 'attention_snapshot') {
+        final snapshot =
+            AttentionSnapshot.fromJson(json['data'] as Map<String, dynamic>);
+        _lastAttention = snapshot;
+        _attentionController.add(snapshot);
+      } else if (type == 'presence') {
+        final presence =
+            PresenceState.fromJson(json['data'] as Map<String, dynamic>);
+        _lastPresence = presence;
+        _presenceController.add(presence);
+      } else if (type == 'copilot_return') {
+        _returnController.add(ReturnInfo.fromJson(json['data'] as Map<String, dynamic>));
       }
+      // Other message types (e.g. future additions) are ignored, same as
+      // Hester's and Dirigible's clients on this socket (contracts §3.3).
     } catch (e) {
       debugPrint('Aeronaut WS parse error: $e');
     }
@@ -215,6 +253,8 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     _channel?.sink.close();
     _channel = null;
     _lastContext = null;
+    _lastAttention = null;
+    _lastPresence = null;
     state = const ConnectionState(
       status: ConnectionStatus.error,
       errorMessage: AuthFailure.message,
@@ -229,6 +269,8 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     _channel = null;
     _connectedMachineId = null;
     _lastContext = null;
+    _lastAttention = null;
+    _lastPresence = null;
     state = const ConnectionState();
   }
 
@@ -246,6 +288,9 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
   void dispose() {
     _disconnect();
     _contextController.close();
+    _attentionController.close();
+    _presenceController.close();
+    _returnController.close();
     super.dispose();
   }
 }
