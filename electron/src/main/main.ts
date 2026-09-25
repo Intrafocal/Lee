@@ -12,12 +12,13 @@ import * as yaml from 'js-yaml';
 import QRCode from 'qrcode';
 import { PTYManager } from './pty-manager';
 import { APIServer } from './api-server';
+import { PairingEntry } from './pairing-store';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
 import { RendererContextUpdate, UserActionType } from '../shared/context';
 import { saveDebugTrace, DebugTrace } from './debug-trace';
 import { MachineManager } from './machine-manager';
-import { MdnsAdvertiser } from './mdns-advertiser';
+import { MdnsAdvertiser, resolveInstanceName } from './mdns-advertiser';
 import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
 import { fsWatcher } from './fs-watcher';
 import {
@@ -375,6 +376,56 @@ function applyGlobalFocusShortcut(keybindings: Record<string, string> | null | u
 }
 
 /**
+ * Ask the user to approve a device pairing (E19).
+ *
+ * TV-style: the device shows a 6-digit code on its own screen and Lee shows
+ * the same code here. Approving hands the bearer token to whoever polls with
+ * that nonce, so the code has to be read off the device, not off the network.
+ * Deny is the default button - a stray Enter cannot pair anything.
+ */
+async function showPairingApprovalDialog(entry: PairingEntry): Promise<void> {
+  const statusId = `pairing-${entry.nonce}`;
+  pushStatus(
+    'warn',
+    `Pairing request from "${entry.device}" (${entry.kind}, ${entry.ip}) - code ${entry.code}. Approve in the dialog.`,
+    { id: statusId, ttl: 120 },
+  );
+
+  const parent =
+    windowRegistry.getFocused()?.browserWindow ||
+    windowRegistry.getAny()?.browserWindow ||
+    BrowserWindow.getAllWindows()[0] ||
+    null;
+
+  try {
+    const options: Electron.MessageBoxOptions = {
+      type: 'question',
+      buttons: ['Approve', 'Deny'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Pair a device',
+      message: `"${entry.device}" (${entry.kind}, ${entry.ip}) wants to pair with Lee.\n\nCode shown on the device: ${entry.code}\n\nApprove only if the code matches.`,
+    };
+    const result = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    const approved = result.response === 0;
+    apiServer.resolvePairing(entry.nonce, approved);
+    pushStatus(
+      approved ? 'success' : 'info',
+      approved
+        ? `Paired "${entry.device}" (${entry.ip})`
+        : `Denied pairing for "${entry.device}" (${entry.ip})`,
+      { id: statusId, ttl: 8 },
+    );
+  } catch (error: any) {
+    // A dialog that never opened must not leave the entry pending.
+    apiServer.resolvePairing(entry.nonce, false);
+    pushStatus('error', `Pairing dialog failed: ${error?.message || error}`, { id: statusId });
+  }
+}
+
+/**
  * Apply the parts of a merged config the main process itself owns: menu
  * accelerators and the optional system-wide focus chord.
  */
@@ -388,6 +439,14 @@ function applyConfigToMainProcess(config: any, workspace?: string): void {
   // Same hook A3 uses to notify the daemon of the focused workspace - reused
   // here to keep the mDNS `ws` TXT record and advertise_mdns opt-out current.
   mdnsAdvertiser?.applyConfig(config, workspace);
+  // ... and to keep the code-approval pairing switch (E19) current: the same
+  // `hester:` block owns `pairing_enabled`, the Hester port handed to an
+  // approved device, and the friendly name it files the machine under.
+  apiServer?.applyPairingConfig({
+    enabled: config?.hester?.pairing_enabled !== false,
+    hesterPort: Number(config?.hester?.listen_port) > 0 ? Number(config.hester.listen_port) : 9000,
+    name: resolveInstanceName(config),
+  });
 }
 
 /** Pretty chord for the Help > Keyboard Shortcuts listing. */
@@ -1929,6 +1988,14 @@ app.whenReady().then(() => {
   // discover Lee without manual host/port entry (E5). Logs through
   // ptyManager's existing lee.log writer.
   mdnsAdvertiser = new MdnsAdvertiser((level, message, details) => ptyManager.log(level, message, details));
+
+  // Device pairing by code approval (E19). The API server owns the pending
+  // state; this callback is the half that needs Electron - a native dialog on
+  // the focused window plus a status-bar line, in case the dialog opens behind
+  // something.
+  apiServer.setPairingRequestHandler((entry: PairingEntry) => {
+    void showPairingApprovalDialog(entry);
+  });
 
   apiServer.start().then(() => {
     mdnsAdvertiser.start(apiServer.getPort());

@@ -17,6 +17,14 @@ import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
 import { windowRegistry, WindowState } from './window-registry';
+import {
+  PairingStore,
+  PairingEntry,
+  PairingGrant,
+  validatePairingBody,
+  PAIRING_MAX_PENDING,
+  PAIRING_MAX_PENDING_PER_IP,
+} from './pairing-store';
 import { LeeContext } from '../shared/context';
 
 export interface APIServerConfig {
@@ -96,6 +104,16 @@ const FS_MIME_TYPES: Record<string, string> = {
   '.gltf': 'model/gltf+json',
 };
 
+/**
+ * Best-effort remote address for a request, with the IPv4-mapped IPv6 prefix
+ * (`::ffff:192.168.1.5`) trimmed so the per-IP pairing limit and the dialog
+ * text both read the way a user expects.
+ */
+function normalizeRemoteIp(req: Request): string {
+  const raw = req.socket?.remoteAddress || req.ip || 'unknown';
+  return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
+}
+
 function fsMimeFor(ext: string): string {
   return FS_MIME_TYPES[ext] || 'application/octet-stream';
 }
@@ -119,6 +137,18 @@ export class APIServer {
   private port: number;
   private leeState: LeeState = {};
   private authToken: string;
+
+  // ---- device pairing (E19) ------------------------------------------
+  /** Pending code-approval pairings, keyed by nonce. */
+  private pairing = new PairingStore();
+  /** `hester.pairing_enabled: false` turns both /pair routes into 404s. */
+  private pairingEnabled = true;
+  /** Handed to an approved device so it knows where Hester listens. */
+  private pairingHesterPort = 9000;
+  /** Friendly instance name for the device's machine list. */
+  private pairingName = os.hostname();
+  /** Raises the native approve/deny dialog; set by main.ts. */
+  private pairingRequestHandler: ((entry: PairingEntry) => void) | null = null;
   /** Pending editor.open requests awaiting the renderer's tab_id reply. */
   private pendingOpenResolvers: Map<string, (tabId: number | null) => void> = new Map();
 
@@ -130,6 +160,36 @@ export class APIServer {
   /** The port this server is actually listening on. */
   getPort(): number {
     return this.port;
+  }
+
+  /**
+   * Apply the `hester:` block's pairing-relevant settings (E19). Called from
+   * `applyConfigToMainProcess` on every config load/save, so the switch and
+   * the advertised Hester port stay current without a restart.
+   */
+  applyPairingConfig(opts: { enabled?: boolean; hesterPort?: number; name?: string }): void {
+    if (typeof opts.enabled === 'boolean') this.pairingEnabled = opts.enabled;
+    if (typeof opts.hesterPort === 'number' && opts.hesterPort > 0) this.pairingHesterPort = opts.hesterPort;
+    if (typeof opts.name === 'string' && opts.name.trim()) this.pairingName = opts.name.trim();
+  }
+
+  /**
+   * Register the callback that shows the approve/deny dialog. main.ts owns the
+   * Electron `dialog` call; this class only owns the state machine.
+   */
+  setPairingRequestHandler(handler: (entry: PairingEntry) => void): void {
+    this.pairingRequestHandler = handler;
+  }
+
+  /** Record the user's decision for a pending pairing (called by main.ts). */
+  resolvePairing(nonce: string, approved: boolean): void {
+    const entry = this.pairing.decide(nonce, approved);
+    if (!entry) return;
+    this.ptyManager.log('INFO', `Pairing ${approved ? 'approved' : 'denied'}`, {
+      device: entry.device,
+      kind: entry.kind,
+      ip: entry.ip,
+    });
   }
 
   /**
@@ -171,9 +231,15 @@ export class APIServer {
     this.app.use(express.json());
 
     // CORS - only allow localhost origins (Aeronaut, Flutter web, etc.)
+    //
+    // `/pair/*` is deliberately excluded from CORS entirely (E19): those two
+    // routes are unauthenticated, so handing a browser origin the response
+    // would let any page the user has open raise pairing dialogs and read the
+    // bearer token out of a poll. Devices are plain HTTP clients with no
+    // origin and no same-origin policy, so they are unaffected.
     this.app.use((req, res, next) => {
       const origin = req.headers.origin;
-      if (origin) {
+      if (origin && !req.path.startsWith('/pair/')) {
         // Allow any localhost origin (any port)
         try {
           const url = new URL(origin);
@@ -199,6 +265,18 @@ export class APIServer {
     // DB passwords, machine list) to anyone on the LAN who could reach :9001.
     this.app.use((req: Request, res: Response, next: NextFunction) => {
       if (req.method === 'OPTIONS' || (req.method === 'GET' && req.path === '/health')) {
+        next();
+        return;
+      }
+
+      // Device pairing (E19) is unauthenticated by definition - it is how a
+      // device without the token asks for one. Both routes are listed
+      // explicitly rather than by prefix so a future /pair/* route has to opt
+      // in on purpose.
+      if (
+        (req.method === 'POST' && req.path === '/pair/request') ||
+        (req.method === 'GET' && req.path === '/pair/poll')
+      ) {
         next();
         return;
       }
@@ -958,6 +1036,101 @@ export class APIServer {
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
+    });
+
+    // ============================================
+    // Device pairing by code approval (E19)
+    //
+    // Both routes are unauthenticated (see the auth middleware) and excluded
+    // from CORS: this is how a T-Deck or a phone gets the bearer token without
+    // anyone typing 36 characters on a thumb keyboard. The device shows a
+    // 6-digit code, Lee shows the same code in a native dialog, and only an
+    // Approve click releases the token - once.
+    //
+    // Turn the whole thing off with `hester: { pairing_enabled: false }`, in
+    // which case both routes 404 as though they were never registered.
+    // ============================================
+
+    // POST /pair/request  { device, kind, code, nonce }
+    //   200 { status: 'pending', expires_in }
+    //   400 { status: 'error', error }   malformed body
+    //   429 { status: 'error', error }   too many pending requests
+    //   404                              pairing disabled
+    this.app.post('/pair/request', (req: Request, res: Response) => {
+      if (!this.pairingEnabled) {
+        res.status(404).json({ success: false, error: 'Not found' });
+        return;
+      }
+
+      const parsed = validatePairingBody(req.body);
+      if (!parsed.ok) {
+        res.status(400).json({ status: 'error', error: parsed.reason });
+        return;
+      }
+
+      const ip = normalizeRemoteIp(req);
+      const created = this.pairing.create(parsed.value, ip);
+      if (!created.ok) {
+        this.ptyManager.log('WARN', 'Pairing request rejected', {
+          device: parsed.value.device,
+          ip,
+          reason: created.reason,
+        });
+        res.status(429).json({
+          status: 'error',
+          error: created.reason === 'duplicate_nonce'
+            ? 'That nonce is already pending'
+            : `Too many pending pairing requests (max ${PAIRING_MAX_PENDING} total, ${PAIRING_MAX_PENDING_PER_IP} per device)`,
+        });
+        return;
+      }
+
+      this.ptyManager.log('INFO', 'Pairing requested', {
+        device: created.entry.device,
+        kind: created.entry.kind,
+        ip,
+      });
+
+      res.json({ status: 'pending', expires_in: created.expiresIn });
+
+      // Ask the user after the response is on the wire, so the device can
+      // start polling while the dialog is up. claimDialog() guarantees one
+      // dialog per entry even if the device retries with the same nonce.
+      const claimed = this.pairing.claimDialog(created.entry.nonce);
+      if (claimed && this.pairingRequestHandler) {
+        try {
+          this.pairingRequestHandler(claimed);
+        } catch (err) {
+          console.error('[API] Pairing dialog failed:', err);
+        }
+      }
+    });
+
+    // GET /pair/poll?nonce=<nonce>
+    //   { status: 'pending' | 'denied' | 'expired' }
+    //   { status: 'approved', token, hester_port, name }   exactly once
+    //
+    // An unknown nonce, an expired one and one whose token was already
+    // collected are all reported as 'expired', so the endpoint can't be used
+    // to probe which nonces exist.
+    this.app.get('/pair/poll', (req: Request, res: Response) => {
+      if (!this.pairingEnabled) {
+        res.status(404).json({ success: false, error: 'Not found' });
+        return;
+      }
+
+      const nonce = typeof req.query.nonce === 'string' ? req.query.nonce : '';
+      if (!nonce) {
+        res.json({ status: 'expired' });
+        return;
+      }
+
+      const grant = (): PairingGrant => ({
+        token: this.authToken,
+        hester_port: this.pairingHesterPort,
+        name: this.pairingName,
+      });
+      res.json(this.pairing.poll(nonce, grant));
     });
 
     // ============================================

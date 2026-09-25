@@ -46,7 +46,7 @@ function isLocalHost(host: string): boolean {
 }
 
 /** Resolve the friendly instance name: a `machines:` entry for this host, else os.hostname(). */
-function resolveInstanceName(config: any): string {
+export function resolveInstanceName(config: any): string {
   const machines: any[] = Array.isArray(config?.machines) ? config.machines : [];
   const self = machines.find((m) => m && typeof m === 'object' && typeof m.host === 'string' && isLocalHost(m.host));
   if (self && typeof self.name === 'string' && self.name.trim()) {

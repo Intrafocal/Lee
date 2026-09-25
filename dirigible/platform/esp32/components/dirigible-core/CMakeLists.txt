@@ -12,6 +12,7 @@ idf_component_register(
         ${CORE_DIR}/src/lee_client.cpp
         ${CORE_DIR}/src/pty_client.cpp
         ${CORE_DIR}/src/hester_client.cpp
+        ${CORE_DIR}/src/pairing_client.cpp
         ${CORE_DIR}/src/machine.cpp
         ${CORE_DIR}/src/state.cpp
     INCLUDE_DIRS
