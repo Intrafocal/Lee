@@ -117,8 +117,13 @@ export function fetchDigest(query: DigestQuery): Promise<HesterResult<DigestResp
   return getJson<DigestResponse>(`/copilot/digest?${params.toString()}`);
 }
 
-export function fetchRetro(): Promise<HesterResult<RetroResponse>> {
-  return getJson<RetroResponse>('/copilot/retro');
+/**
+ * `peek` asks Hester for retro status without the side effect of marking the
+ * week's retro "shown" (use it for background polling; the RetroCard, which
+ * actually displays the retro, fetches without it).
+ */
+export function fetchRetro(opts: { peek?: boolean } = {}): Promise<HesterResult<RetroResponse>> {
+  return getJson<RetroResponse>(opts.peek ? '/copilot/retro?peek=1' : '/copilot/retro');
 }
 
 export interface RetroSaveRequest {

@@ -255,13 +255,16 @@ def create_copilot_router() -> APIRouter:
         return digest_mod.verified_wins(ws, since=start, until=min(end, datetime.now(timezone.utc)))
 
     @router.get("/copilot/retro")
-    async def copilot_retro_get(request: Request, workspace: Optional[str] = None):
+    async def copilot_retro_get(request: Request, workspace: Optional[str] = None, peek: Optional[str] = None):
         try:
             ws = resolve_workspace(workspace)
         except BadRequest as e:
             return _err(str(e), e.status)
         info = retro_mod.status()
-        if info["due"] and retro_mod.mark_shown(info["week"]):
+        # peek=1: status polling only (e.g. Lee's chip poller). No side effects,
+        # so a poll never marks the retro "shown" without it being displayed.
+        is_peek = (peek or "").lower() in ("1", "true", "yes")
+        if not is_peek and info["due"] and retro_mod.mark_shown(info["week"]):
             lee_events.ingest(
                 "retro.shown", {"week": info["week"], "answered": []},
                 workspace=None, actor=caller_actor(request),

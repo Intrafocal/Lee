@@ -56,14 +56,13 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({ workspace, copilot
   }, [focus]);
 
   // Poll only while not focused: the retro chip is hidden during focus anyway
-  // (`retroDue && !isFocused` below), and Hester's GET /copilot/retro marks
-  // the retro "shown" (once per week) as a side effect of being called, so
-  // polling while nothing would be shown skews that metric.
+  // (`retroDue && !isFocused` below). The poll uses ?peek=1 so it never marks
+  // the retro "shown"; only RetroCard's un-peeked fetch does that.
   useEffect(() => {
     if (!api || isFocused) return;
     let cancelled = false;
     const poll = () => {
-      fetchRetro().then((res) => {
+      fetchRetro({ peek: true }).then((res) => {
         if (!cancelled) setRetroDue(res.ok && res.data.due && !res.data.answered && !res.data.skipped);
       });
     };

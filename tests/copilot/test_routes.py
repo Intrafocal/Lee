@@ -98,6 +98,10 @@ def test_retro_get_and_post(client, tmp_path, isolated_copilot, monkeypatch):
     ws.mkdir()
     monkeypatch.setattr(retro, "load_copilot_config", lambda: {"retro": {"day": "mon", "time": "00:00"}})
 
+    r = client.get("/copilot/retro", headers=SHARED, params={"workspace": str(ws), "peek": "1"})
+    assert r.status_code == 200 and r.json()["data"]["due"] is True
+    assert not [e for e in queued(isolated_copilot) if e["type"] == "retro.shown"]
+
     r = client.get("/copilot/retro", headers=SHARED, params={"workspace": str(ws)})
     assert r.status_code == 200
     data = r.json()["data"]
