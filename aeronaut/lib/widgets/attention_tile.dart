@@ -10,9 +10,36 @@ import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import 'phosphor_icon.dart';
 
+/// Quick-reply chips offered on text-capable items (contracts §5.2:
+/// Aeronaut is strong at touch/buttons/swipes and weak at typing, so offer
+/// tap targets for anything common). Kept short (3-4 entries) by design —
+/// this is the one place to edit to change what's offered.
+const List<String> quickReplyChips = [
+  'Yes, go ahead',
+  'Stop and wait for me',
+  'Explain first',
+  'Show me the diff',
+];
+
+/// Item kinds that take a free-text reply and so get [quickReplyChips]
+/// (contracts §5.2: "waiting/question, blocker, decision, review" — not
+/// approval, which uses Approve/Deny, and not failure/summary, which don't
+/// take a reply in practice).
+const Set<AttentionKind> _chipKinds = {
+  AttentionKind.waiting,
+  AttentionKind.blocker,
+  AttentionKind.decision,
+  AttentionKind.review,
+};
+
 /// One row in the Now screen's Waiting list (contracts §9.2): title, source,
 /// the agent's own words, and inline actions per `item.actions` — approve/
 /// deny, reply, snooze, dismiss, wake — matching the Lee status bar flyout.
+///
+/// Also offers phone-appropriate gestures (contracts §5.2): quick-reply
+/// chips on text-capable items, and swipe-to-snooze/swipe-to-dismiss on the
+/// tile itself. Approve/Deny are never bound to a swipe — they stay
+/// explicit taps only (C3: a stray gesture must never approve something).
 class AttentionTile extends ConsumerStatefulWidget {
   final AttentionItem item;
   final bool awayActive;
@@ -56,11 +83,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
     final item = widget.item;
     final notifier = ref.read(attentionProvider.notifier);
 
-    return Container(
-      margin: const EdgeInsets.symmetric(
-        horizontal: AeronautTheme.spacingMd,
-        vertical: AeronautTheme.spacingXs,
-      ),
+    final card = Container(
       padding: const EdgeInsets.all(AeronautTheme.spacingMd),
       decoration: BoxDecoration(
         color: AeronautColors.bgSurface,
@@ -118,6 +141,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
             _ReplyField(
               controller: _replyController,
               busy: _busy,
+              showChips: item.canReply && _chipKinds.contains(item.kind),
               onCancel: () => setState(() => _replying = false),
               onSend: (text) {
                 final trimmed = text.trim();
@@ -164,7 +188,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
                     icon: PhosphorIcons.clock,
                     label: 'Snooze',
                     busy: _busy,
-                    onTap: () => _showSnoozeMenu(context, notifier, item),
+                    onTap: () => unawaited(_showSnoozeMenu(context, notifier, item)),
                   ),
                 if (item.canDismiss)
                   _ActionButton(
@@ -186,10 +210,70 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
         ],
       ),
     );
+
+    const margin = EdgeInsets.symmetric(
+      horizontal: AeronautTheme.spacingMd,
+      vertical: AeronautTheme.spacingXs,
+    );
+
+    // Swipe actions (contracts §5.2: buttons and swipes over typing on the
+    // phone). Snooze/dismiss only — approve/deny are never bound to a swipe
+    // direction, whatever actions an item supports, so a stray gesture can
+    // never approve something (C3).
+    final swipeSnooze = item.canSnooze;
+    final swipeDismiss = item.canDismiss;
+    if (!swipeSnooze && !swipeDismiss) {
+      return Padding(padding: margin, child: card);
+    }
+
+    final direction = swipeSnooze && swipeDismiss
+        ? DismissDirection.horizontal
+        : swipeSnooze
+            ? DismissDirection.startToEnd
+            : DismissDirection.endToStart;
+
+    return Padding(
+      padding: margin,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
+        child: Dismissible(
+          key: ValueKey('attention-${item.id}'),
+          direction: direction,
+          background: swipeSnooze
+              ? const _SwipeIndicator(
+                  icon: PhosphorIcons.clock,
+                  label: 'Snooze',
+                  color: AeronautColors.warning,
+                  alignRight: false,
+                )
+              : const SizedBox.shrink(),
+          secondaryBackground: swipeDismiss
+              ? const _SwipeIndicator(
+                  icon: PhosphorIcons.trash,
+                  label: 'Dismiss',
+                  color: AeronautColors.offline,
+                  alignRight: true,
+                )
+              : const SizedBox.shrink(),
+          confirmDismiss: (dismissDirection) async {
+            if (dismissDirection == DismissDirection.startToEnd) {
+              await _showSnoozeMenu(context, notifier, item);
+            } else {
+              await _run(() => notifier.dismiss(item.id));
+            }
+            // Never actually remove the tile here — same as the Snooze/
+            // Dismiss buttons above, the queue only drops it once the
+            // server confirms (next snapshot/refresh).
+            return false;
+          },
+          child: card,
+        ),
+      ),
+    );
   }
 
-  void _showSnoozeMenu(BuildContext context, AttentionNotifier notifier, AttentionItem item) {
-    showModalBottomSheet<void>(
+  Future<void> _showSnoozeMenu(BuildContext context, AttentionNotifier notifier, AttentionItem item) {
+    return showModalBottomSheet<void>(
       context: context,
       backgroundColor: AeronautColors.bgElevated,
       builder: (ctx) => SafeArea(
@@ -260,6 +344,52 @@ class _SeverityDot extends StatelessWidget {
   }
 }
 
+/// The colored panel revealed behind a tile while swiping (contracts §5.2).
+/// Same rounded shape as the card (clipped by the caller) so it reads as
+/// "underneath the card", not a full-bleed row.
+class _SwipeIndicator extends StatelessWidget {
+  final PhosphorIconData icon;
+  final String label;
+  final Color color;
+  final bool alignRight;
+
+  const _SwipeIndicator({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.alignRight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingLg),
+      color: color.withValues(alpha: 0.18),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (alignRight) ...[
+            Text(
+              label,
+              style: AeronautTheme.footnote.copyWith(color: color, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: AeronautTheme.spacingSm),
+          ],
+          PhosphorIcon(icon, size: 18, color: color),
+          if (!alignRight) ...[
+            const SizedBox(width: AeronautTheme.spacingSm),
+            Text(
+              label,
+              style: AeronautTheme.footnote.copyWith(color: color, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ActionButton extends StatelessWidget {
   final PhosphorIconData icon;
   final String label;
@@ -304,39 +434,63 @@ class _ActionButton extends StatelessWidget {
 class _ReplyField extends StatelessWidget {
   final TextEditingController controller;
   final bool busy;
+  final bool showChips;
   final VoidCallback onCancel;
   final ValueChanged<String> onSend;
 
   const _ReplyField({
     required this.controller,
     required this.busy,
+    this.showChips = false,
     required this.onCancel,
     required this.onSend,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            minLines: 1,
-            maxLines: 4,
-            textInputAction: TextInputAction.send,
-            onSubmitted: onSend,
-            decoration: const InputDecoration(hintText: 'Reply…', isDense: true),
+        if (showChips) ...[
+          Wrap(
+            spacing: AeronautTheme.spacingSm,
+            runSpacing: AeronautTheme.spacingXs,
+            children: [
+              for (final chip in quickReplyChips)
+                ActionChip(
+                  label: Text(chip),
+                  visualDensity: VisualDensity.compact,
+                  // Same call as a typed reply: text action, item's current
+                  // version, same success/stale/error feedback (_run).
+                  onPressed: busy ? null : () => onSend(chip),
+                ),
+            ],
           ),
-        ),
-        IconButton(
-          icon: const PhosphorIcon(PhosphorIcons.send, size: 18),
-          onPressed: busy ? null : () => onSend(controller.text),
-        ),
-        IconButton(
-          icon: const PhosphorIcon(PhosphorIcons.close, size: 18),
-          onPressed: onCancel,
+          const SizedBox(height: AeronautTheme.spacingSm),
+        ],
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                onSubmitted: onSend,
+                decoration: const InputDecoration(hintText: 'Reply…', isDense: true),
+              ),
+            ),
+            IconButton(
+              icon: const PhosphorIcon(PhosphorIcons.send, size: 18),
+              onPressed: busy ? null : () => onSend(controller.text),
+            ),
+            IconButton(
+              icon: const PhosphorIcon(PhosphorIcons.close, size: 18),
+              onPressed: onCancel,
+            ),
+          ],
         ),
       ],
     );
