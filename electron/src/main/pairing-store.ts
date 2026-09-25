@@ -42,6 +42,8 @@ export interface PairingGrant {
   token: string;
   hester_port: number;
   name: string;
+  /** The per-device token's id (Copilot v0); absent for a shared-token grant. */
+  device_id?: string;
 }
 
 export type PairingPollResult =
@@ -166,7 +168,7 @@ export class PairingStore {
    * Answer a poll. An unknown, expired or already-claimed nonce all look the
    * same from outside ('expired'), so polling can't be used to enumerate.
    */
-  poll(nonce: string, grant: () => PairingGrant): PairingPollResult {
+  poll(nonce: string, grant: (entry: PairingEntry) => PairingGrant): PairingPollResult {
     this.sweep();
     const entry = this.entries.get(nonce.trim().toLowerCase());
     if (!entry) return { status: 'expired' };
@@ -175,7 +177,7 @@ export class PairingStore {
     // Terminal states are delivered exactly once.
     this.entries.delete(entry.nonce);
     if (entry.decision === 'denied') return { status: 'denied' };
-    return { status: 'approved', ...grant() };
+    return { status: 'approved', ...grant(entry) };
   }
 
   /** Test/diagnostic helper. */

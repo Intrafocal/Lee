@@ -12,6 +12,8 @@ import * as yaml from 'js-yaml';
 import QRCode from 'qrcode';
 import { PTYManager } from './pty-manager';
 import { APIServer } from './api-server';
+import { initCopilotCore, attachCopilotWindow, shutdownCopilotCore, issueQrTicket } from './copilot/core';
+import { logEvent } from './copilot/bus';
 import { PairingEntry } from './pairing-store';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -172,6 +174,7 @@ function createWindow(workspace?: string): BrowserWindow {
 
   // Register with WindowRegistry
   windowRegistry.register(bw, workspace || null, contextBridge);
+  attachCopilotWindow(bw, contextBridge);
 
   // Rebuild menu to show new window in workspace list
   setupApplicationMenu();
@@ -411,6 +414,7 @@ async function showPairingApprovalDialog(entry: PairingEntry): Promise<void> {
       : await dialog.showMessageBox(options);
     const approved = result.response === 0;
     apiServer.resolvePairing(entry.nonce, approved);
+    logEvent({ type: 'ui.ceremony', actor: { kind: 'user', surface: 'lee' }, data: { action: 'confirm', target: 'pairing' } });
     pushStatus(
       approved ? 'success' : 'info',
       approved
@@ -1917,7 +1921,7 @@ function setupIPC(): void {
       // Alias of hostPort for forward compatibility - keep hostPort too so
       // existing Aeronaut/Dirigible parsers that read that key keep working.
       apiPort,
-      token: apiServer.getAuthToken(),
+      ...issueQrTicket(),
     };
 
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairingInfo), {
@@ -1984,6 +1988,7 @@ app.whenReady().then(() => {
     browserManager,
     windowRegistry,
   });
+  initCopilotCore({ apiServer, ptyManager });
   // mDNS advertisement (_lee._tcp) - lets Dirigible/other on-device clients
   // discover Lee without manual host/port entry (E5). Logs through
   // ptyManager's existing lee.log writer.
@@ -2105,6 +2110,7 @@ app.on('will-quit', (event) => {
   fsWatcher.closeAll();
   mdnsAdvertiser?.stop();
   machineManager?.dispose();
+  shutdownCopilotCore();
 
   // If the daemon is ours, ask it to exit cleanly first so it shuts down the
   // managed redis it started (both used to outlive Lee). A restart takes the

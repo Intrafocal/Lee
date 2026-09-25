@@ -13,6 +13,9 @@ import { Server, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Socket } from 'net';
 import { ipcMain } from 'electron';
+import { copilotAuthMiddleware, authenticateWsToken, noteDeviceWsInput, noteDeviceView, issueDeviceToken } from './copilot/auth';
+import { registerCoreRoutes } from './copilot/core-routes';
+import { copilotBus } from './copilot/bus';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -259,35 +262,12 @@ export class APIServer {
       next();
     });
 
-    // Auth middleware - require Bearer token on every route except the
-    // unauthenticated health check and CORS preflight. GET /context used to
-    // be exempt here too, which leaked the full workspace config (API keys,
-    // DB passwords, machine list) to anyone on the LAN who could reach :9001.
-    this.app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.method === 'OPTIONS' || (req.method === 'GET' && req.path === '/health')) {
-        next();
-        return;
-      }
-
-      // Device pairing (E19) is unauthenticated by definition - it is how a
-      // device without the token asks for one. Both routes are listed
-      // explicitly rather than by prefix so a future /pair/* route has to opt
-      // in on purpose.
-      if (
-        (req.method === 'POST' && req.path === '/pair/request') ||
-        (req.method === 'GET' && req.path === '/pair/poll')
-      ) {
-        next();
-        return;
-      }
-
-      const authHeader = req.headers.authorization;
-      if (!authHeader || authHeader !== `Bearer ${this.authToken}`) {
-        res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing token' });
-        return;
-      }
-      next();
-    });
+    // Auth middleware - require a Bearer token (the shared ~/.lee/api-token or
+    // a per-device token) on every route except the health check, CORS
+    // preflight and the /pair/* routes. Sets res.locals.principal and
+    // attributes device traffic into the event log. GET /context used to be
+    // exempt too, which leaked the full workspace config to the LAN.
+    this.app.use(copilotAuthMiddleware(() => this.authToken));
 
     // Track Lee state
     this.ptyManager.on('state', (_id: number, state: LeeState) => {
@@ -424,19 +404,21 @@ export class APIServer {
           this.wss = new WebSocketServer({ noServer: true });
           this.ptyWss = new WebSocketServer({ noServer: true });
           this.browserCastWss = new WebSocketServer({ noServer: true });
+          copilotBus.setBroadcaster((msg) => { const s = JSON.stringify(msg); this.wsClients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(s); }); });
 
           // Manual upgrade routing (with token auth via query parameter)
           this.server!.on('upgrade', (request: IncomingMessage, socket: Socket, head: Buffer) => {
             const url = new URL(request.url || '', `http://localhost:${this.port}`);
             const pathname = url.pathname;
 
-            // Verify auth token on WebSocket upgrade
-            const token = url.searchParams.get('token');
-            if (token !== this.authToken) {
+            // Verify auth token (shared or per-device) on WebSocket upgrade
+            const principal = authenticateWsToken(request, this.authToken);
+            if (!principal) {
               socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
               socket.destroy();
               return;
             }
+            (request as any)._principal = principal;
 
             if (pathname === '/context/stream') {
               this.wss!.handleUpgrade(request, socket, head, (ws) => {
@@ -486,6 +468,7 @@ export class APIServer {
                 data: ctx,
               }));
             }
+            copilotBus.runStreamConnect((msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); });
 
             ws.on('close', () => {
               console.log('WebSocket client disconnected');
@@ -502,6 +485,7 @@ export class APIServer {
           this.ptyWss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
             const ptyId = (request as any)._ptyId as number;
             console.log(`WebSocket client connected to /pty/${ptyId}/stream`);
+            noteDeviceView((request as any)._principal);
 
             // Track client
             if (!this.ptyClients.has(ptyId)) {
@@ -541,6 +525,7 @@ export class APIServer {
 
             // Forward client input to PTY (supports raw text or JSON commands)
             ws.on('message', (msg) => {
+              noteDeviceWsInput((request as any)._principal);
               const text = typeof msg === 'string' ? msg : msg.toString();
               // Try to parse as JSON command (e.g. resize)
               try {
@@ -969,6 +954,7 @@ export class APIServer {
   }
 
   private setupRoutes(): void {
+    registerCoreRoutes(this.app, { getHesterPort: () => this.pairingHesterPort, getPairingName: () => this.pairingName, isPairingEnabled: () => this.pairingEnabled, log: (level, message, details) => this.ptyManager.log(level, message, details) });
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
       res.json({
@@ -1114,7 +1100,8 @@ export class APIServer {
 
     // GET /pair/poll?nonce=<nonce>
     //   { status: 'pending' | 'denied' | 'expired' }
-    //   { status: 'approved', token, hester_port, name }   exactly once
+    //   { status: 'approved', token, device_id, hester_port, name }   exactly once;
+    //   the token is a fresh per-device token, not the shared one
     //
     // An unknown nonce, an expired one and one whose token was already
     // collected are all reported as 'expired', so the endpoint can't be used
@@ -1131,11 +1118,19 @@ export class APIServer {
         return;
       }
 
-      const grant = (): PairingGrant => ({
-        token: this.authToken,
-        hester_port: this.pairingHesterPort,
-        name: this.pairingName,
-      });
+      // The grant is built only when an approved entry is collected, so an
+      // approved-but-never-collected request issues nothing.
+      const grant = (entry: PairingEntry): PairingGrant => {
+        const base = { hester_port: this.pairingHesterPort, name: this.pairingName };
+        try {
+          const issued = issueDeviceToken({ name: entry.device, kind: entry.kind, via: 'code', ip: entry.ip });
+          this.ptyManager.log('INFO', 'Device paired by code', { device_id: issued.device_id, device: entry.device, ip: entry.ip });
+          return { token: issued.token, device_id: issued.device_id, ...base };
+        } catch (err) {
+          this.ptyManager.log('ERROR', 'Device token issuance failed; granting the shared token', { error: String(err) });
+          return { token: this.authToken, ...base };
+        }
+      };
       res.json(this.pairing.poll(nonce, grant));
     });
 
