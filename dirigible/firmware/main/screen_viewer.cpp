@@ -15,13 +15,21 @@
  *
  * Adapted for 320x204:
  *
- *   y   0..10   meta: size, mtime, kind  ............  Ln 42 *
- *   y  13..201  21 rows of unscii_8, a fixed pool of labels
+ *   y   0..15   meta: size, mtime, kind  ............  Ln 42 *   (Montserrat 12)
+ *   y  17..196  code: 20 rows x 9 px of unscii_8, gutter + column panning
+ *   y  17..203  prose (markdown, plain text): 11 rows x 17 px of Montserrat
+ *               14, wrapped by measured width; markdown headings in 16,
+ *               fenced code lines in unscii_8
+ *
+ * Both modes label the same fixed pool of ROWS labels; prose uses the first
+ * PROSE_ROWS of them at the taller pitch.  Code keeps the monospace font
+ * because its gutter, h/l panning and wrap are all column arithmetic.
  *
  * Before downloading anything it asks for `?stat=1`: images and PDFs stop at
  * metadata (there is no decoder on the device), and text over VIEW_CAP is
  * refused up front instead of being pulled into PSRAM.  What does load is
- * folded to ASCII once (the font has nothing above 0x7F) into one flat buffer
+ * folded to ASCII once (neither font has anything above 0x7F worth drawing
+ * here) into one flat buffer
  * with a line index — no per-line heap allocations, which on this chip would
  * land in internal RAM.
  *
@@ -39,6 +47,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 static const char* TAG = "dirigible.viewer";
 
@@ -46,10 +55,13 @@ namespace dirigible_app {
 
 namespace {
 
-constexpr int META_H  = 13;
-constexpr int LINE_H  = 9;                         // unscii_8 line height
-constexpr int ROWS    = (BODY_H - META_H) / LINE_H;   // 21
-constexpr int CHAR_W  = 8;
+constexpr int META_H  = 17;                        // 16 px strip: a Montserrat 12 line + hairline
+constexpr int LINE_H  = 9;                         // code: unscii_8 line height
+constexpr int ROWS    = (BODY_H - META_H) / LINE_H;   // 20 (code), also the pool size
+constexpr int CHAR_W  = 8;                         // code: unscii_8 advance
+constexpr int PROSE_LINE_H = 17;                   // Montserrat 14's 16 px line + 1
+constexpr int PROSE_ROWS   = (BODY_H - META_H) / PROSE_LINE_H;   // 11
+static_assert(PROSE_ROWS <= ROWS, "prose rows come out of the code row pool");
 /// Largest file the device will download.  Lee's own cap is 2 MB; a 2 MB
 /// JSON body plus its parse and a folded copy is more PSRAM churn and WiFi
 /// time than a 40-column screen is worth.
@@ -102,12 +114,28 @@ struct State {
     int  hoff = 0;
     int  gutter_cols = 0;
     int  text_cols   = 0;
+    bool prose       = false;      // Montserrat rows (not code)
 };
 
 State& st()
 {
     static State s;
     return s;
+}
+
+/// Rows on screen in the current mode.
+int rows()
+{
+    return st().prose ? PROSE_ROWS : ROWS;
+}
+
+/// Font for a display row: code files are all monospace; in prose, fenced
+/// code keeps monospace and headings step up to the title size.
+const lv_font_t* row_font(bool prose, LineStyle style)
+{
+    if (!prose || style == LineStyle::Code) return dg::mono_font();
+    if (style == LineStyle::Heading)        return dg::ui_font_title();
+    return dg::ui_font();
 }
 
 dirigible::LeeConnection* conn()
@@ -193,8 +221,8 @@ void show_message(const char* title, const std::string& body)
         lv_obj_add_flag(s.gutter[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s.text[i], LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(s.msg_title, title);
-    lv_label_set_text(s.msg_body, body.c_str());
+    ui_set_text(s.msg_title, title);
+    ui_set_text(s.msg_body, body);
     lv_obj_clear_flag(s.msg, LV_OBJ_FLAG_HIDDEN);
     render_meta();
 }
@@ -283,43 +311,52 @@ void layout()
         for (size_t n = s.line_off.size(); n >= 10; n /= 10) digits++;
         s.gutter_cols = digits < 2 ? 2 : digits;
     }
+    s.prose = !code;
     const int text_x = s.gutter_cols ? s.gutter_cols * CHAR_W + 6 : 3;
-    s.text_cols = (SCREEN_W - text_x - 2) / CHAR_W;
+    const int text_w = SCREEN_W - text_x - 2;
+    s.text_cols = text_w / CHAR_W;
 
     std::vector<Disp>().swap(s.disp);
     s.disp.reserve(s.line_off.size());
-    const int cols = s.text_cols;
 
     for (size_t i = 0; i < s.line_off.size(); i++) {
         const uint32_t off = s.line_off[i];
         const uint16_t len = s.line_len[i];
         const LineStyle style = s.line_style[i];
-        if (!s.wrap || len <= cols) {
+        if (!s.wrap || len == 0) {
             s.disp.push_back({ off, len, (int32_t)i, true, style });
             continue;
         }
-        // Soft wrap: break at the last space in the second half of the row,
-        // else hard-break at the column.
+        // Soft wrap by measured width (monospace is just 8 px a char): fill
+        // the row, then break at the last space in its second half, else
+        // hard-break where it overflowed.  Prose keeps 2 px of slack for
+        // rounding in the per-glyph advances.
+        const lv_font_t* font = row_font(s.prose, style);
+        const int max_w = s.prose ? text_w - 2 : s.text_cols * CHAR_W;
         uint32_t p = 0;
         bool first = true;
-        while (p < len) {
-            uint32_t take = len - p;
-            if ((int)take > cols) {
-                take = cols;
-                for (uint32_t k = cols; k > (uint32_t)cols / 2; k--) {
-                    if (s.buf[off + p + k - 1] == ' ') { take = k; break; }
-                }
+        do {
+            int w = 0;
+            uint32_t k = p, after_space = 0;
+            while (k < len) {
+                const int cw = ui_char_w(font, (unsigned char)s.buf[off + k]);
+                if (w + cw > max_w) break;
+                w += cw;
+                if (s.buf[off + k++] == ' ') after_space = k;
             }
+            uint32_t take = k - p;
+            if (k < len && after_space > p + take / 2) take = after_space - p;
+            if (take == 0) take = 1;   // a glyph wider than the row: never stall
             s.disp.push_back({ off + p, (uint16_t)take, (int32_t)i, first, style });
             first = false;
             p += take;
-        }
+        } while (p < len);
     }
 
     for (int r = 0; r < ROWS; r++) {
         lv_obj_set_width(s.gutter[r], s.gutter_cols * CHAR_W);
         lv_obj_set_x(s.text[r], text_x);
-        lv_obj_set_width(s.text[r], SCREEN_W - text_x - 2);
+        lv_obj_set_width(s.text[r], text_w);
     }
     s.hoff = 0;
 }
@@ -331,14 +368,16 @@ void render()
     lv_obj_add_flag(s.msg, LV_OBJ_FLAG_HIDDEN);
 
     const int n = (int)s.disp.size();
-    if (s.top > n - ROWS) s.top = n - ROWS;
+    const int nrows = rows();
+    const int pitch = s.prose ? PROSE_LINE_H : LINE_H;
+    if (s.top > n - nrows) s.top = n - nrows;
     if (s.top < 0) s.top = 0;
 
     std::string row;
     char num[12];
     for (int r = 0; r < ROWS; r++) {
         const int di = s.top + r;
-        if (di >= n) {
+        if (r >= nrows || di >= n) {
             lv_obj_add_flag(s.gutter[r], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s.text[r], LV_OBJ_FLAG_HIDDEN);
             continue;
@@ -358,12 +397,23 @@ void render()
 
         const int skip = s.wrap ? 0 : s.hoff;
         if (skip < d.len) {
-            const int take = d.len - skip < s.text_cols ? d.len - skip : s.text_cols;
+            // Wrapped rows already fit their width; an unwrapped code row
+            // shows the text_cols window from the pan offset.
+            const int take = s.wrap || d.len - skip < s.text_cols ? d.len - skip : s.text_cols;
             row.assign(s.buf, d.off + skip, take);
         } else {
             row.clear();
         }
         lv_label_set_text(s.text[r], row.c_str());
+
+        // Each row's font follows its style; in prose it is centred on the
+        // 17 px pitch (a 9 px code line gets 4 px above it).
+        const lv_font_t* font = row_font(s.prose, d.style);
+        lv_obj_set_style_text_font(s.text[r], font, 0);
+        const int lh = lv_font_get_line_height(font);
+        const int y = META_H + r * pitch + (s.prose && lh < pitch ? (pitch - lh) / 2 : 0);
+        lv_obj_set_y(s.text[r], y);
+        lv_obj_set_y(s.gutter[r], META_H + r * pitch);
 
         lv_color_t c = dg::text1();
         switch (d.style) {
@@ -384,7 +434,7 @@ void scroll_to_source(int line)
 {
     auto& s = st();
     for (int i = 0; i < (int)s.disp.size(); i++) {
-        if (s.disp[i].src >= line) { s.top = i - ROWS / 3; break; }
+        if (s.disp[i].src >= line) { s.top = i - rows() / 3; break; }
     }
 }
 
@@ -542,8 +592,8 @@ void view_gesture(lv_event_t*)
     lv_indev_t* indev = lv_indev_get_act();
     if (!indev) return;
     switch (lv_indev_get_gesture_dir(indev)) {
-    case LV_DIR_TOP:    scroll(ROWS - 1);    break;
-    case LV_DIR_BOTTOM: scroll(-(ROWS - 1)); break;
+    case LV_DIR_TOP:    scroll(rows() - 1);    break;
+    case LV_DIR_BOTTOM: scroll(-(rows() - 1)); break;
     case LV_DIR_RIGHT:  app_back();          break;
     default: break;
     }
@@ -603,7 +653,7 @@ void viewer_build(lv_obj_t* parent)
     lv_obj_t* strip = lv_obj_create(a.view_viewer);
     lv_obj_remove_style_all(strip);
     lv_obj_set_pos(strip, 0, 0);
-    lv_obj_set_size(strip, SCREEN_W, META_H - 2);
+    lv_obj_set_size(strip, SCREEN_W, META_H - 1);
     lv_obj_set_style_bg_color(strip, dg::ground1(), 0);
     lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(strip, LV_BORDER_SIDE_BOTTOM, 0);
@@ -613,44 +663,50 @@ void viewer_build(lv_obj_t* parent)
     lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(strip, LV_OBJ_FLAG_CLICKABLE);
 
-    s.meta = make_label(strip, "", dg::text3());
-    lv_label_set_long_mode(s.meta, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(s.meta, 232);
-    lv_obj_align(s.meta, LV_ALIGN_LEFT_MID, 3, 0);
+    // Montserrat 12 fills the strip's 15 rows above its hairline.  LVGL
+    // offsets children by the border width (it counts both sides even with
+    // only the bottom drawn), hence y -1.
+    s.meta = make_label(strip, "", dg::text3(), dg::ui_font_small());
+    lv_label_set_long_mode(s.meta, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s.meta, 240);
+    lv_obj_align(s.meta, LV_ALIGN_TOP_LEFT, 2, -1);
 
-    s.flag = make_label(strip, "", dg::ember());
-    lv_obj_align(s.flag, LV_ALIGN_RIGHT_MID, -3, 0);
+    s.flag = make_label(strip, "", dg::ember(), dg::ui_font_small());
+    lv_obj_align(s.flag, LV_ALIGN_TOP_RIGHT, -2, -1);
 
     for (int r = 0; r < ROWS; r++) {
-        s.gutter[r] = make_label(a.view_viewer, "", dg::text3());
+        s.gutter[r] = make_label(a.view_viewer, "", dg::text3(), dg::mono_font());
         lv_label_set_long_mode(s.gutter[r], LV_LABEL_LONG_CLIP);
         lv_obj_set_style_text_align(s.gutter[r], LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_pos(s.gutter[r], 2, META_H + r * LINE_H);
         lv_obj_add_flag(s.gutter[r], LV_OBJ_FLAG_HIDDEN);
 
-        s.text[r] = make_label(a.view_viewer, "", dg::text1());
+        s.text[r] = make_label(a.view_viewer, "", dg::text1(), dg::mono_font());
         lv_label_set_long_mode(s.text[r], LV_LABEL_LONG_CLIP);
         lv_obj_set_pos(s.text[r], 3, META_H + r * LINE_H);
         lv_obj_add_flag(s.text[r], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Message panel for loading / errors / metadata-only kinds.
+    // Message panel for loading / errors / metadata-only kinds: a column, so
+    // a title that wraps pushes the body down instead of overlapping it.
     s.msg = lv_obj_create(a.view_viewer);
     lv_obj_remove_style_all(s.msg);
     lv_obj_set_pos(s.msg, 0, META_H);
     lv_obj_set_size(s.msg, SCREEN_W, BODY_H - META_H);
+    lv_obj_set_style_pad_hor(s.msg, 8, 0);
+    lv_obj_set_style_pad_top(s.msg, 14, 0);
+    lv_obj_set_style_pad_row(s.msg, 6, 0);
+    lv_obj_set_flex_flow(s.msg, LV_FLEX_FLOW_COLUMN);
     lv_obj_clear_flag(s.msg, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s.msg, LV_OBJ_FLAG_CLICKABLE);
 
-    s.msg_title = make_label(s.msg, "", dg::text1());
+    s.msg_title = make_label(s.msg, "", dg::text1(), dg::ui_font_title());
     lv_label_set_long_mode(s.msg_title, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s.msg_title, SCREEN_W - 16);
-    lv_obj_set_pos(s.msg_title, 8, 16);
 
     s.msg_body = make_label(s.msg, "", dg::text2());
     lv_label_set_long_mode(s.msg_body, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s.msg_body, SCREEN_W - 16);
-    lv_obj_set_pos(s.msg_body, 8, 34);
 
     lv_obj_add_flag(a.view_viewer, LV_OBJ_FLAG_HIDDEN);
 }
@@ -731,8 +787,8 @@ bool viewer_key(uint8_t ascii)
     case 0x1B:           app_back();          return true;
     case 'j': case '\r': case '\n': scroll(1); return true;
     case 'k':            scroll(-1);          return true;
-    case ' ': case 'f':  scroll(ROWS - 1);    return true;
-    case 'b':            scroll(-(ROWS - 1)); return true;
+    case ' ': case 'f':  scroll(rows() - 1);    return true;
+    case 'b':            scroll(-(rows() - 1)); return true;
     case 'g':            scroll(-(1 << 30));  return true;
     case 'G':            scroll(1 << 30);     return true;
     case 'h':            pan(-PAN_STEP);      return true;

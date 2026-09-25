@@ -115,7 +115,7 @@ struct App {
     lv_obj_t*   pair_chip_lbl[4] = { nullptr, nullptr, nullptr, nullptr };
     lv_obj_t*   pair_chip_tick[4] = { nullptr, nullptr, nullptr, nullptr };
     lv_obj_t*   pair_card      = nullptr;   // persistent summary panel
-    lv_obj_t*   pair_card_lbl  = nullptr;
+    lv_obj_t*   pair_card_col  = nullptr;   // card rows, rebuilt by card_update()
     lv_obj_t*   pair_input     = nullptr;
     lv_obj_t*   pair_meter     = nullptr;   // token n/36 or password hint
     int         pair_step      = 0;
@@ -225,8 +225,9 @@ void files_open();                         // show the tree for the workspace
 bool files_key(uint8_t ascii);
 void files_ball(int dx, int dy, bool click);
 
-// Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen), paged to
-// the 40x21 cell window.  State lives in screen_viewer.cpp.
+// Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen): code in a
+// 40x20 monospace cell window, prose in 11 wrapped Montserrat rows.  State
+// lives in screen_viewer.cpp.
 void viewer_build(lv_obj_t* parent);
 /// Open `path`; back returns to `from` (Files or Tabs).
 void viewer_open_path(const std::string& path, View from);
@@ -240,10 +241,12 @@ bool viewer_key(uint8_t ascii);
 void viewer_ball(int dx, int dy, bool click);
 
 // Helpers -------------------------------------------------------------------
-const lv_font_t* mono_font();      // lv_font_unscii_8  — 8x9,  dense UI
-const lv_font_t* mono_font_big();  // lv_font_unscii_16 — 8x17, text entry
-const lv_font_t* sym_font();       // montserrat_14 — has the LV_SYMBOL glyphs
-lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour);
+// Fonts are named in theme.hpp (dg::ui_font*, dg::mono_font*).
+
+/// A label in `font` (nullptr: dg::ui_font(), Montserrat 14).  Text goes
+/// through ui_fold() unless the font is monospace, so wire text is safe here.
+lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour,
+                     const lv_font_t* font = nullptr);
 
 /// A 4-bar signal strength indicator, `level` of 4 filled.  Returns the
 /// container, sized SIGNAL_W x SIGNAL_H; caller positions it.

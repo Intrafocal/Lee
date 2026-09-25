@@ -30,12 +30,13 @@ CONFIG_LV_LOG_LEVEL_WARN=y
 CONFIG_LV_COLOR_16_SWAP=y
 CONFIG_LV_MEM_CUSTOM=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=512
-# The ASCII bitmap monospace fonts the terminal grid is measured against.
+# The ASCII bitmap monospace fonts: the terminal grid, code in the viewer, and
+# exact strings (pairing code, host:port, device id, token entry).
 CONFIG_LV_FONT_UNSCII_8=y
 CONFIG_LV_FONT_UNSCII_16=y
-# Montserrat for the Waiting view's proportional text: 12 for meta lines and
-# hints, 14 (LVGL's default, already on) for the agent's words and buttons,
-# 16 for titles.  About 45 KB of flash for the two extra sizes.
+# Montserrat, the UI's proportional face (theme.hpp dg::ui_font*): 12 for meta
+# lines, footer and hints, 14 (LVGL's default, already on) for body text and
+# rows, 16 for titles.  About 45 KB of flash for the two extra sizes.
 CONFIG_LV_FONT_MONTSERRAT_12=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_16=y

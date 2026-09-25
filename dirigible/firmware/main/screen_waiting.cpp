@@ -48,6 +48,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 #ifndef DIRIGIBLE_UI_DEMO
 #define DIRIGIBLE_UI_DEMO 0
@@ -65,10 +66,11 @@ using dirigible::AttentionSeverity;
 using dirigible::AttentionSnapshot;
 using dirigible::ReplyResult;
 
-// Montserrat for everything in this view (Latin only: agent text is folded).
-const lv_font_t* const F_META  = &lv_font_montserrat_12;
-const lv_font_t* const F_BODY  = &lv_font_montserrat_14;
-const lv_font_t* const F_TITLE = &lv_font_montserrat_16;
+// Montserrat for everything in this view (Latin only: agent text is folded
+// with ui_fold).  Short local names for the theme's accessors.
+const lv_font_t* const F_META  = dg::ui_font_small();
+const lv_font_t* const F_BODY  = dg::ui_font();
+const lv_font_t* const F_TITLE = dg::ui_font_title();
 
 constexpr int PAD        = 6;
 constexpr int META_Y     = 4;
@@ -304,38 +306,6 @@ const AttentionItem* current()
     return &snap->items[s.order[s.pos]];
 }
 
-/// Montserrat (as built into LVGL) is ASCII plus the bullet.  Fold the
-/// punctuation agents actually use and mark anything else, one '?' per code
-/// point.
-std::string fold(const std::string& in, bool keep_newlines)
-{
-    std::string out;
-    out.reserve(in.size());
-    for (size_t i = 0; i < in.size();) {
-        const unsigned char c = (unsigned char)in[i];
-        if (c < 0x80) {
-            if (c == '\n' && keep_newlines)                  out += '\n';
-            else if (c == '\t' || c == '\n' || c == '\r')   out += ' ';
-            else if (c >= 0x20 && c < 0x7F)                  out += (char)c;
-            i++;
-            continue;
-        }
-        int len = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
-        if (i + len > in.size()) len = (int)(in.size() - i);
-        const std::string cp = in.substr(i, len);
-        if      (cp == "\xE2\x80\x98" || cp == "\xE2\x80\x99") out += '\'';
-        else if (cp == "\xE2\x80\x9C" || cp == "\xE2\x80\x9D") out += '"';
-        else if (cp == "\xE2\x80\x93" || cp == "\xE2\x80\x94") out += '-';
-        else if (cp == "\xE2\x80\xA6")                           out += "...";
-        else if (cp == "\xC2\xB7" || cp == "\xE2\x80\xA2")       out += LV_SYMBOL_BULLET;
-        else if (cp == "\xE2\x86\x92")                           out += "->";
-        else if (cp == "\xC2\xA0")                               out += ' ';
-        else                                                     out += '?';
-        i += len;
-    }
-    return out;
-}
-
 std::string fmt_age(int64_t ms)
 {
     if (ms < 0) return "";
@@ -381,7 +351,7 @@ lv_color_t severity_colour(const AttentionItem& it)
 std::string source_of(const AttentionItem& it)
 {
     std::string src = "Claude";
-    if (!it.tab_label.empty()) src += "  " LV_SYMBOL_BULLET "  " + fold(it.tab_label, false);
+    if (!it.tab_label.empty()) src += "  " LV_SYMBOL_BULLET "  " + ui_fold(it.tab_label, false);
     return src;
 }
 
@@ -453,7 +423,7 @@ void footer()
         const std::string legend = "device " + id;
         chrome_set_footer(legend.c_str(), "queue");
     } else {
-        chrome_set_footer("= menu", "queue");
+        chrome_set_footer(LV_SYMBOL_LIST " menu", "queue");
     }
 }
 
@@ -837,8 +807,8 @@ void render_page(const AttentionItem& it)
     s.shown_actions = it.actions;
 
     lv_label_set_text(s.source, source_of(it).c_str());
-    lv_label_set_text(s.title, fold(it.title, false).c_str());
-    lv_label_set_text(s.words, it.text.empty() ? "(no text)" : fold(it.text, true).c_str());
+    lv_label_set_text(s.title, ui_fold(it.title, false).c_str());
+    lv_label_set_text(s.words, it.text.empty() ? "(no text)" : ui_fold(it.text, true).c_str());
     lv_obj_set_style_text_color(s.words, it.text.empty() ? dg::text3() : dg::text1(), 0);
     if (!same_item) lv_obj_scroll_to_y(s.scroll, 0, LV_ANIM_OFF);
     layout_buttons(it);
@@ -871,10 +841,10 @@ void render_empty(const char* title, const char* sub, bool with_recent)
         if (i >= n) { lv_obj_add_flag(row.obj, LV_OBJ_FLAG_HIDDEN); continue; }
         const auto& it = snap->items[s.recent[i]];
         lv_obj_clear_flag(row.obj, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(row.title, fold(it.title, false).c_str());
+        lv_label_set_text(row.title, ui_fold(it.title, false).c_str());
         std::string m = kind_chip(it.kind);
         for (auto& ch : m) ch = (char)((ch >= 'A' && ch <= 'Z') ? ch - 'A' + 'a' : ch);
-        if (!it.tab_label.empty()) m += "  " LV_SYMBOL_BULLET "  " + fold(it.tab_label, false);
+        if (!it.tab_label.empty()) m += "  " LV_SYMBOL_BULLET "  " + ui_fold(it.tab_label, false);
         const std::string age = fmt_age(live_age(it));
         if (!age.empty()) m += "  " LV_SYMBOL_BULLET "  " + age;
         lv_label_set_text(row.meta, m.c_str());

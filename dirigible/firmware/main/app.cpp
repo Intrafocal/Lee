@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "tdeck_bsp.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 static const char* TAG = "dirigible.app";
 
@@ -33,32 +34,6 @@ App& app()
 {
     static App a;
     return a;
-}
-
-const lv_font_t* mono_font()
-{
-    // lv_font_unscii_8 — the ASCII bitmap monospace LVGL ships, enabled via
-    // CONFIG_LV_FONT_UNSCII_8 in sdkconfig.defaults.  screenschema exposed the
-    // same font as SSFonts::monospace_8().  8 px advance, 9 px line height.
-    return &lv_font_unscii_8;
-}
-
-const lv_font_t* mono_font_big()
-{
-    // lv_font_unscii_16 (CONFIG_LV_FONT_UNSCII_16, already enabled): same 8 px
-    // advance, 17 px line height.  Used for text entry, where an 9 px glyph on
-    // a 2.8" panel is a squint.
-    return &lv_font_unscii_16;
-}
-
-const lv_font_t* sym_font()
-{
-    // The unscii fonts are ASCII 0x20-0x7F only — no LV_SYMBOL_* glyphs, no
-    // U+2026 '…', no U+00B7 '·'.  The Montserrat sizes (12/14/16; 14 is also
-    // LV_FONT_DEFAULT) carry the FontAwesome subset, so anything wanting a
-    // glyph uses this.  The Waiting view sets Montserrat directly for its
-    // proportional text; the rest of the chrome stays unscii.
-    return &lv_font_montserrat_14;
 }
 
 int rssi_to_level(int rssi)
@@ -92,30 +67,42 @@ lv_obj_t* make_signal(lv_obj_t* parent, int level)
     return box;
 }
 
-lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour)
+lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour,
+                     const lv_font_t* font)
 {
+    if (!font) font = dg::ui_font();
     lv_obj_t* l = lv_label_create(parent);
-    lv_label_set_text(l, text);
+    // Monospace callers show exact ASCII (host:port, ids); everything else may
+    // be wire text and is folded for Montserrat.
+    if (font == dg::mono_font() || font == dg::mono_font_big()) lv_label_set_text(l, text);
+    else                                                         ui_set_text(l, text);
     lv_obj_set_style_text_color(l, colour, 0);
-    lv_obj_set_style_text_font(l, mono_font(), 0);
+    lv_obj_set_style_text_font(l, font, 0);
     return l;
 }
 
+// Header and footer text is often from the wire (machine and window names,
+// file names, Hester phase details), so it is folded on the way in.
 void chrome_set_title(const char* t)
 {
-    if (app().lbl_machine && t) lv_label_set_text(app().lbl_machine, t);
+    if (app().lbl_machine && t) lv_label_set_text(app().lbl_machine, ui_fold(t).c_str());
 }
 
 void chrome_set_centre(const char* t)
 {
-    if (app().lbl_centre && t) lv_label_set_text(app().lbl_centre, t);
+    if (app().lbl_centre && t) lv_label_set_text(app().lbl_centre, ui_fold(t).c_str());
 }
+
+static void footer_fit_legend();
 
 void chrome_set_footer(const char* legend, const char* right)
 {
     auto& a = app();
-    if (legend && a.lbl_footer_l) lv_label_set_text(a.lbl_footer_l, legend);
-    if (right  && a.lbl_footer_r) lv_label_set_text(a.lbl_footer_r, right);
+    if (legend && a.lbl_footer_l) lv_label_set_text(a.lbl_footer_l, ui_fold(legend).c_str());
+    if (right  && a.lbl_footer_r) lv_label_set_text(a.lbl_footer_r, ui_fold(right).c_str());
+    // The legend's room depends on the right-hand hint's width now that it is
+    // proportional, so refit whenever either changes.
+    if (right) footer_fit_legend();
 }
 
 void chrome_set_back_glyph(const char* glyph)
@@ -131,7 +118,8 @@ void chrome_show_footer(bool show)
     else      lv_obj_add_flag(a.footer, LV_OBJ_FLAG_HIDDEN);
 }
 
-/// Shrink the key legend so it never runs under the button row.
+/// Size the key legend to whatever the right-hand slot (button row, else the
+/// hint label) leaves, so it ellipsises instead of running under it.
 static void footer_fit_legend()
 {
     auto& a = app();
@@ -149,11 +137,18 @@ static void footer_fit_legend()
     }
     if (n > 1) btn_w += (n - 1) * 3;                 // pad_column
     lv_obj_set_width(a.footer_btns, btn_w > 0 ? btn_w : 1);
-    lv_obj_set_pos(a.footer_btns, SCREEN_W - 2 - btn_w, 0);
+    lv_obj_set_pos(a.footer_btns, SCREEN_W - 3 - btn_w, 0);   // +1 border: x..317, y 1..15
 
-    lv_coord_t avail = SCREEN_W - 3 - btn_w - (btn_w ? 6 : 3);
+    // Right-hand slot: the buttons when there are any (the hint is hidden
+    // then), else the hint label; 8 px of air either way.
+    lv_coord_t right_w = btn_w + 2;
+    if (!btn_w && a.lbl_footer_r) {
+        lv_obj_update_layout(a.lbl_footer_r);
+        right_w = lv_obj_get_width(a.lbl_footer_r) + 3;
+    }
+    lv_coord_t avail = SCREEN_W - 3 - right_w - 8;
     if (avail < 0) avail = 0;
-    lv_obj_set_width(a.lbl_footer_l, avail < 168 ? avail : 168);
+    lv_obj_set_width(a.lbl_footer_l, avail);
 
     lv_obj_update_layout(a.footer);
     lv_area_t la, ba; lv_obj_get_coords(a.lbl_footer_l, &la); lv_obj_get_coords(a.footer_btns, &ba);
@@ -180,24 +175,26 @@ lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* use
     if (!a.footer_btns) return nullptr;
     if (a.lbl_footer_r) lv_obj_add_flag(a.lbl_footer_r, LV_OBJ_FLAG_HIDDEN);
 
+    // 15 px: the footer's 16 less its top hairline, which is exactly one
+    // Montserrat 12 line.
     lv_obj_t* btn = lv_btn_create(a.footer_btns);
     lv_obj_remove_style_all(btn);
-    lv_obj_set_height(btn, FOOTER_H - 2);
+    lv_obj_set_height(btn, FOOTER_H - 1);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_color(btn, dg::ground4(), 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(btn, DG_RADIUS, 0);
-    lv_obj_set_style_pad_hor(btn, 3, 0);
+    lv_obj_set_style_pad_hor(btn, 5, 0);
     lv_obj_set_style_pad_ver(btn, 0, 0);
     dg::style_focus(btn);
 
-    lv_obj_t* l = lv_label_create(btn);
-    lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, mono_font(), 0);
-    lv_obj_set_style_text_color(l, dg::text1(), 0);
-    lv_obj_center(l);
+    // The label is a full 15 px line in a 15 px box with a 1 px border; one
+    // pixel up keeps descenders (Retry, Open) off the bottom border, and the
+    // line's empty top row is what gets clipped instead.
+    lv_obj_t* l = make_label(btn, text, dg::text1(), dg::ui_font_small());
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, -1);
 
     if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user);
     if (a.group) lv_group_add_obj(a.group, btn);
@@ -225,7 +222,7 @@ void connect_active_machine()
 {
     auto& a = app();
     if (!a.machines || a.machines->machineCount() == 0) {
-        app_set_status("no machine — tap = for the menu");
+        app_set_status("no machine - " LV_SYMBOL_LIST " for the menu");
         return;
     }
 
@@ -239,7 +236,7 @@ void connect_active_machine()
     if (!token.empty()) conn->setToken(token);
     conn->connect();
 
-    lv_label_set_text(a.lbl_machine, m->config.name.c_str());
+    chrome_set_title(m->config.name.c_str());
     ESP_LOGI(TAG, "connecting to %s (%s:%d)", m->config.name.c_str(),
              m->config.host.c_str(), m->config.lee_port);
     char buf[48];
@@ -287,12 +284,12 @@ static void menu_style(lv_obj_t* list, int w)
     lv_obj_set_style_bg_color(list, dg::ground2(), 0);
     lv_obj_set_style_border_width(list, 1, 0);
     lv_obj_set_style_border_color(list, dg::ground4(), 0);
-    lv_obj_set_style_text_font(list, mono_font(), 0);
+    lv_obj_set_style_text_font(list, dg::ui_font(), 0);
 }
 
 static lv_obj_t* menu_add(lv_obj_t* list, const char* text, lv_event_cb_t cb, void* user)
 {
-    lv_obj_t* btn = lv_list_add_btn(list, nullptr, text);
+    lv_obj_t* btn = lv_list_add_btn(list, nullptr, ui_fold(text).c_str());
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
     lv_obj_set_style_text_color(btn, dg::text1(), 0);
@@ -349,17 +346,24 @@ void windows_open()
 
     a.menu = lv_list_create(a.screen);
     menu_style(a.menu, 240);
-    lv_list_add_text(a.menu, "Lee windows  * = focused");
+    lv_obj_t* head = lv_list_add_text(a.menu, "Lee windows  " LV_SYMBOL_BULLET " = focused on the host");
+    lv_obj_set_style_text_font(head, dg::ui_font_small(), 0);
 
     lv_obj_t* current = nullptr;
     for (const auto& w : c->windows()) {
-        // "> name *": current selection, then the host's focused window.
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s %s%s",
-                 w.id == c->activeWindowId() ? ">" : " ",
-                 w.name().c_str(), w.focused ? " *" : "");
-        lv_obj_t* btn = menu_add(a.menu, buf, window_pick_cb, (void*)(intptr_t)w.id);
-        if (w.id == c->activeWindowId()) current = btn;
+        // [mark] name  *  — the mark (the window Dirigible follows) sits in a
+        // fixed 14 px slot ahead of the label so names line up whether or not
+        // the row carries it; proportional text cannot pad with a space.
+        const bool following = w.id == c->activeWindowId();
+        std::string text = w.name();
+        if (w.focused) text += "  " LV_SYMBOL_BULLET;
+        lv_obj_t* btn = menu_add(a.menu, text.c_str(), window_pick_cb, (void*)(intptr_t)w.id);
+        lv_obj_t* mark = lv_label_create(btn);
+        lv_label_set_text(mark, following ? LV_SYMBOL_RIGHT : "");
+        lv_obj_set_width(mark, 14);
+        lv_obj_set_style_text_color(mark, dg::phosphor(), 0);
+        lv_obj_move_to_index(mark, 0);
+        if (following) current = btn;
     }
     if (current && a.group) lv_group_focus_obj(current);
 
@@ -500,22 +504,22 @@ void app_show(View v)
     switch (v) {
     case View::Waiting:
         lv_obj_clear_flag(a.view_waiting, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("=");          // root: back opens the menu
+        chrome_set_back_glyph(LV_SYMBOL_LIST);   // root: back opens the menu
         waiting_chrome();
         break;
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("<");
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);
         tabs_chrome();
         break;
     case View::Terminal:
         lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("X");          // back here closes the PTY
+        chrome_set_back_glyph(LV_SYMBOL_CLOSE);  // back here closes the PTY
         chrome_set_footer("Esc/hold exit  ball=arrows", "term");
         break;
     case View::Hester:
         lv_obj_clear_flag(a.view_hester, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("<");
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);
         chrome_set_footer("Enter ask  Esc tabs", "hester");
         // Make room for the 8x8 hare just left of the title: shift the title
         // from x=24 to x=34 and shrink it by the same 10 px it gave up.
@@ -528,18 +532,18 @@ void app_show(View v)
         break;
     case View::Pairing:
         lv_obj_clear_flag(a.view_pairing, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("<");
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);
         break;
     case View::Files:
         lv_obj_clear_flag(a.view_files, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("<");
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);
         chrome_set_title("Files");
         chrome_set_centre("");
         chrome_set_footer("ball move/open  r", "files");
         break;
     case View::Viewer:
         lv_obj_clear_flag(a.view_viewer, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("<");
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);
         chrome_set_centre("");
         chrome_set_footer("ball scroll  spc pg", "view");
         break;
@@ -626,17 +630,11 @@ static void splash_build()
     lv_img_set_src(img, &dg_img_airship);
     lv_obj_align(img, LV_ALIGN_CENTER, 0, -34);
 
-    lv_obj_t* title = lv_label_create(a.splash);
-    lv_label_set_text(title, "DIRIGIBLE");
-    lv_obj_set_style_text_font(title, mono_font_big(), 0);
-    lv_obj_set_style_text_color(title, dg::phosphor(), 0);
-    lv_obj_set_style_text_letter_space(title, 2, 0);
+    lv_obj_t* title = make_label(a.splash, "DIRIGIBLE", dg::phosphor(), dg::ui_font_title());
+    lv_obj_set_style_text_letter_space(title, 3, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 26);
 
-    lv_obj_t* sub = lv_label_create(a.splash);
-    lv_label_set_text(sub, "searching for lee");
-    lv_obj_set_style_text_font(sub, mono_font(), 0);
-    lv_obj_set_style_text_color(sub, dg::text3(), 0);
+    lv_obj_t* sub = make_label(a.splash, "searching for Lee", dg::text3(), dg::ui_font_small());
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, 48);
 
     lv_timer_t* t = lv_timer_create(splash_close_cb, 1200, nullptr);
@@ -662,7 +660,7 @@ void app_start()
     // fill, black text) regardless of the per-object colours screen_*.cpp
     // sets, since those only override what the theme already applied.
     lv_theme_default_init(tdeck_bsp_display(), dg::phosphor(), dg::ember(),
-                          true, mono_font());
+                          true, dg::ui_font());
 
     a.screen = lv_scr_act();
     lv_obj_set_style_bg_color(a.screen, dg::ground0(), 0);
@@ -704,13 +702,13 @@ void app_start()
     if (a.group) lv_group_add_obj(a.group, a.back_btn);
 
     a.back_lbl = lv_label_create(a.back_btn);
-    lv_label_set_text(a.back_lbl, "<");
-    lv_obj_set_style_text_font(a.back_lbl, mono_font(), 0);
+    lv_label_set_text(a.back_lbl, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(a.back_lbl, dg::ui_font(), 0);
     lv_obj_set_style_text_color(a.back_lbl, dg::text1(), 0);
     lv_obj_center(a.back_lbl);
 
-    // left: title, x 24..107.  Clipped to 10 chars so it can never run into
-    // the centre slot, which starts at x=112.
+    // left: title, x 24..107, Montserrat 14 with an ellipsis so it can never
+    // run into the centre slot, which starts at x=112.
     a.lbl_machine = make_label(a.header, "Dirigible", dg::text1());
     lv_label_set_long_mode(a.lbl_machine, LV_LABEL_LONG_DOT);
     lv_obj_set_width(a.lbl_machine, 84);
@@ -723,20 +721,25 @@ void app_start()
     lv_obj_align(a.hester_icon, LV_ALIGN_LEFT_MID, 24, 0);
     lv_obj_add_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
 
-    // centre: step / status.  x 112..239 (128 px, 16 chars).
-    a.lbl_centre = make_label(a.header, "", dg::text2());
+    // centre: step / status.  x 112..239 (128 px), Montserrat 12 so a status
+    // line ("focus: 3 waiting", Hester's phases) fits before the ellipsis.
+    a.lbl_centre = make_label(a.header, "", dg::text2(), dg::ui_font_small());
     lv_label_set_long_mode(a.lbl_centre, LV_LABEL_LONG_DOT);
     lv_obj_set_width(a.lbl_centre, 128);
     lv_obj_set_style_text_align(a.lbl_centre, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(a.lbl_centre, LV_ALIGN_LEFT_MID, 112, 0);
 
     // right: battery %, wifi glyph, link dot.  Laid out from the right edge.
-    a.lbl_battery = make_label(a.header, "", dg::text3());
-    lv_obj_align(a.lbl_battery, LV_ALIGN_RIGHT_MID, -4, 0);   // 4 chars = 32 px
+    // A fixed, right-aligned 34 px slot ("100%" is ~30 px in Montserrat 12)
+    // so the wifi glyph and dot to its left never shift as the digits change.
+    a.lbl_battery = make_label(a.header, "", dg::text3(), dg::ui_font_small());
+    lv_obj_set_width(a.lbl_battery, 34);
+    lv_obj_set_style_text_align(a.lbl_battery, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(a.lbl_battery, LV_ALIGN_RIGHT_MID, -4, 0);
 
     a.lbl_wifi = lv_label_create(a.header);
     lv_label_set_text(a.lbl_wifi, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_font(a.lbl_wifi, sym_font(), 0);
+    lv_obj_set_style_text_font(a.lbl_wifi, dg::ui_font(), 0);
     lv_obj_set_style_text_color(a.lbl_wifi, dg::text3(), 0);
     lv_obj_align(a.lbl_wifi, LV_ALIGN_RIGHT_MID, -42, 0);
 
@@ -769,19 +772,22 @@ void app_start()
     lv_obj_set_style_border_opa(a.footer, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.footer, LV_OBJ_FLAG_SCROLLABLE);
 
-    a.lbl_footer_l = make_label(a.footer, "", dg::text3());
+    // Footer text is Montserrat 12: its 15 px line is exactly the band under
+    // the hairline.  LVGL offsets children by the parent's border width, so
+    // TOP_* with no offset lands them at y=1, rows 1..15.
+    a.lbl_footer_l = make_label(a.footer, "", dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(a.lbl_footer_l, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(a.lbl_footer_l, 168);            // 21 chars
-    lv_obj_align(a.lbl_footer_l, LV_ALIGN_LEFT_MID, 3, 0);
+    lv_obj_set_width(a.lbl_footer_l, 168);            // refit by footer_fit_legend()
+    lv_obj_align(a.lbl_footer_l, LV_ALIGN_TOP_LEFT, 2, 0);
 
-    a.lbl_footer_r = make_label(a.footer, "", dg::text3());
-    lv_obj_align(a.lbl_footer_r, LV_ALIGN_RIGHT_MID, -3, 0);
+    a.lbl_footer_r = make_label(a.footer, "", dg::text3(), dg::ui_font_small());
+    lv_obj_align(a.lbl_footer_r, LV_ALIGN_TOP_RIGHT, -2, 0);
 
     // Right-hand action slot: a shrink-to-fit flex row, so buttons pack from
     // the right edge and never collide with the legend.
     a.footer_btns = lv_obj_create(a.footer);
     lv_obj_remove_style_all(a.footer_btns);
-    lv_obj_set_height(a.footer_btns, FOOTER_H);
+    lv_obj_set_height(a.footer_btns, FOOTER_H - 1);           // under the hairline
     lv_obj_set_width(a.footer_btns, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_column(a.footer_btns, 3, 0);
     lv_obj_set_flex_flow(a.footer_btns, LV_FLEX_FLOW_ROW);
@@ -790,7 +796,7 @@ void app_start()
     lv_obj_clear_flag(a.footer_btns, LV_OBJ_FLAG_SCROLLABLE);
     // Style-based align (not lv_obj_align) so the row is re-anchored to the
     // right edge every time its content width changes as buttons are added.
-    lv_obj_set_pos(a.footer_btns, SCREEN_W - 2, 0);   // repositioned by footer_fit_legend()
+    lv_obj_set_pos(a.footer_btns, SCREEN_W - 3, 0);   // repositioned by footer_fit_legend()
 
     // ---- views ---------------------------------------------------------
     waiting_build(a.content);

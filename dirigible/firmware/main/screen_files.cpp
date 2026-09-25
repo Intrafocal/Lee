@@ -10,11 +10,15 @@
  *
  * Adapted for 320x204:
  *
- *   y   0..11   crumb: the selected row's directory, relative to the root
- *   y  12..198  11 rows x 17 px, a fixed pool re-labelled as the window moves
+ *   y   0..14   crumb: the selected row's directory, relative to the root
+ *   y  15..201  11 rows x 17 px, a fixed pool re-labelled as the window moves
  *
- *   row:  [indent][+] name ............................ 12.3K
- *                  ^ + closed dir, - open dir, @ symlink, ~ loading, ! error
+ *   row:  [indent][>] name ............................ 12.3K
+ *                  ^ > closed dir, v open dir, @ symlink, loading, error
+ *
+ * Montserrat: 14 for names, 12 for the crumb and sizes, and the marker in a
+ * fixed 14 px slot so names line up whatever glyph it carries.  File names
+ * come off the wire and are folded (ui_fold) for Montserrat's Latin set.
  *
  * The tree is flattened into `rows` and only the visible window is drawn, so
  * an expanded node_modules-sized directory costs a vector of strings, not a
@@ -33,6 +37,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 static const char* TAG = "dirigible.files";
 
@@ -40,10 +45,12 @@ namespace dirigible_app {
 
 namespace {
 
-constexpr int CRUMB_H  = 12;
-constexpr int ROW_H    = 17;
+constexpr int CRUMB_H  = 15;                            // one Montserrat 12 line
+constexpr int ROW_H    = 17;                            // 16 px row: one Montserrat 14 line
 constexpr int ROWS     = (BODY_H - CRUMB_H) / ROW_H;   // 11
-constexpr int INDENT_W = 8;                             // one mono column per level
+constexpr int INDENT_W = 8;                             // px per level
+constexpr int MARK_W   = 14;                            // marker slot (widest: the 13.5 px warning glyph)
+constexpr int SIZE_W   = 44;                            // "999.9K" in Montserrat 12 is ~38 px
 constexpr int MAX_INDENT_LEVELS = 12;
 /// Entries drawn per directory before a "... N more" row.  Lee already skips
 /// .git / node_modules / build; this only bounds a pathological directory.
@@ -240,19 +247,19 @@ void render()
         lv_obj_set_style_bg_color(slot.btn, selected ? dg::ground3() : dg::ground2(), 0);
         lv_obj_set_style_border_width(slot.btn, selected ? 1 : 0, 0);
 
-        const char* mark = " ";
+        const char* mark = "";
         lv_color_t mark_c = dg::text3();
         lv_color_t name_c = dg::text2();
         switch (r.kind) {
         case RowKind::Dir:
-            mark = s.open.count(r.path) ? "-" : "+";
+            mark = s.open.count(r.path) ? LV_SYMBOL_DOWN : LV_SYMBOL_RIGHT;
             mark_c = dg::phosphor();
             name_c = dg::text1();
             break;
         case RowKind::File:    break;
         case RowKind::Link:    mark = "@"; break;
-        case RowKind::Loading: mark = "~"; mark_c = dg::ember(); name_c = dg::text3(); break;
-        case RowKind::Error:   mark = "!"; mark_c = dg::error(); name_c = dg::error(); break;
+        case RowKind::Loading: mark = LV_SYMBOL_REFRESH; mark_c = dg::ember(); name_c = dg::text3(); break;
+        case RowKind::Error:   mark = LV_SYMBOL_WARNING; mark_c = dg::error(); name_c = dg::error(); break;
         case RowKind::Empty:
         case RowKind::More:    name_c = dg::text3(); break;
         }
@@ -270,11 +277,12 @@ void render()
         } else {
             lv_obj_add_flag(slot.size, LV_OBJ_FLAG_HIDDEN);
         }
-        // name from x+10; 6 mono columns (48 px) reserved for "999.9K" + margin
-        lv_label_set_text(slot.name, r.name.c_str());
+        // name after the marker slot; SIZE_W + 8 reserved for the size.
+        const int name_x = x + MARK_W + 3;
+        lv_label_set_text(slot.name, ui_fold(r.name).c_str());
         lv_obj_set_style_text_color(slot.name, name_c, 0);
-        lv_obj_set_width(slot.name, SCREEN_W - 4 - (x + 10) - (sized ? 52 : 4));
-        lv_obj_align(slot.name, LV_ALIGN_LEFT_MID, x + 10, 0);
+        lv_obj_set_width(slot.name, SCREEN_W - 4 - name_x - (sized ? SIZE_W + 8 : 4));
+        lv_obj_align(slot.name, LV_ALIGN_LEFT_MID, name_x, 0);
     }
 
     // Crumb: where the selection lives, since indentation alone runs out of
@@ -288,9 +296,9 @@ void render()
     }
     crumb = "./" + crumb;
     if (crumb.size() > 2 && crumb.back() != '/') crumb += '/';
-    // Keep the tail — the nearest directory is the useful end.
-    constexpr size_t CRUMB_COLS = (SCREEN_W - 8) / 8;
-    if (crumb.size() > CRUMB_COLS) crumb = ".." + crumb.substr(crumb.size() - CRUMB_COLS + 2);
+    // Keep the tail — the nearest directory is the useful end — measured in
+    // the crumb's own proportional font.
+    crumb = ui_fit_tail(ui_fold(crumb), dg::ui_font_small(), SCREEN_W - 8);
     lv_label_set_text(s.crumb, crumb.c_str());
 
     if (app().view == View::Files && n) {
@@ -430,10 +438,10 @@ void files_build(lv_obj_t* parent)
     lv_obj_clear_flag(a.view_files, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(a.view_files, view_gesture, LV_EVENT_GESTURE, nullptr);
 
-    s.crumb = make_label(a.view_files, "./", dg::text3());
+    s.crumb = make_label(a.view_files, "./", dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(s.crumb, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(s.crumb, SCREEN_W - 8);
-    lv_obj_set_pos(s.crumb, 4, 2);
+    lv_obj_set_pos(s.crumb, 4, 0);
 
     for (int i = 0; i < ROWS; i++) {
         Slot& slot = s.slots[i];
@@ -449,10 +457,15 @@ void files_build(lv_obj_t* parent)
         lv_obj_clear_flag(slot.btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(slot.btn, slot_clicked, LV_EVENT_CLICKED, (void*)(intptr_t)i);
 
-        slot.mark = make_label(slot.btn, " ", dg::text3());
+        slot.mark = make_label(slot.btn, "", dg::text3(), dg::ui_font_small());
+        lv_obj_set_width(slot.mark, MARK_W);
+        lv_obj_set_style_text_align(slot.mark, LV_TEXT_ALIGN_CENTER, 0);
         slot.name = make_label(slot.btn, "", dg::text2());
         lv_label_set_long_mode(slot.name, LV_LABEL_LONG_DOT);
-        slot.size = make_label(slot.btn, "", dg::text3());
+        // Sizes right-aligned in a fixed slot so their right edges line up.
+        slot.size = make_label(slot.btn, "", dg::text3(), dg::ui_font_small());
+        lv_obj_set_width(slot.size, SIZE_W);
+        lv_obj_set_style_text_align(slot.size, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_align(slot.size, LV_ALIGN_RIGHT_MID, -4, 0);
         lv_obj_add_flag(slot.btn, LV_OBJ_FLAG_HIDDEN);
     }

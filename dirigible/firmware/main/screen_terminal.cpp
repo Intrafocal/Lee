@@ -64,7 +64,7 @@ void terminal_build(lv_obj_t* parent)
     lv_obj_set_style_bg_opa(a.view_terminal, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_SCROLLABLE);
 
-    const lv_font_t* f = mono_font();
+    const lv_font_t* f = dg::mono_font();   // the grid: stays monospace
     a.term_char_w = lv_font_get_glyph_width(f, 'M', 'M');
     if (a.term_char_w <= 0) a.term_char_w = 6;
     a.term_line_h = lv_font_get_line_height(f);

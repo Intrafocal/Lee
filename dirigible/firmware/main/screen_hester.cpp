@@ -9,8 +9,11 @@
  *
  * Layout (E14), chat-shaped inside the 320x204 body:
  *
- *   y   0..169  the answer, scrolling, wrapped at 38 mono columns
- *   y 172..203  the question, one line, 8x17 mono
+ *   y   0..169  the answer, scrolling, wrapped Montserrat 14
+ *   y 172..203  the question, one line, Montserrat 16
+ *
+ * Hester's answer is agent prose, so it is folded (ui_fold) for Montserrat's
+ * Latin-only glyph set rather than drawn in the terminal's monospace.
  *
  * The ReAct phases no longer overwrite the answer area: they run in the header
  * centre slot as `prep think act ...`, which is the one place every screen
@@ -22,6 +25,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 static const char* TAG = "dirigible.hester";
 
@@ -81,10 +85,10 @@ void hester_build(lv_obj_t* parent)
 
     a.hester_output = lv_label_create(out);
     lv_label_set_long_mode(a.hester_output, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(a.hester_output, SCREEN_W - 14);   // 38 mono columns
-    lv_obj_set_style_text_font(a.hester_output, mono_font(), 0);
+    lv_obj_set_width(a.hester_output, SCREEN_W - 14);   // inside the 4 px pad + border
+    lv_obj_set_style_text_font(a.hester_output, dg::ui_font(), 0);
     lv_obj_set_style_text_color(a.hester_output, dg::text1(), 0);
-    lv_label_set_text(a.hester_output, "Ask Hester a question.\nIt sees the tab Lee has\nfocused.");
+    lv_label_set_text(a.hester_output, "Ask Hester a question. It sees the tab Lee has focused.");
 
     // ---- question, below
     a.hester_input = lv_textarea_create(a.view_hester);
@@ -92,7 +96,7 @@ void hester_build(lv_obj_t* parent)
     lv_textarea_set_placeholder_text(a.hester_input, "ask hester");
     lv_obj_set_pos(a.hester_input, 2, BODY_H - input_h - 1);
     lv_obj_set_size(a.hester_input, SCREEN_W - 4, input_h);
-    lv_obj_set_style_text_font(a.hester_input, mono_font_big(), 0);
+    lv_obj_set_style_text_font(a.hester_input, dg::ui_font_title(), 0);
     lv_obj_set_style_text_color(a.hester_input, dg::text1(), 0);
     lv_obj_set_style_bg_color(a.hester_input, dg::ground3(), 0);
     lv_obj_set_style_border_width(a.hester_input, 1, 0);
@@ -152,11 +156,10 @@ void hester_submit()
         chrome_set_centre(b.hester_phases.c_str());
     });
     a.hester->onResponse([](const std::string& text) {
-        lv_label_set_text(app().hester_output, text.c_str());
+        ui_set_text(app().hester_output, text);
     });
     a.hester->onError([](const std::string& msg) {
-        std::string m2 = "error: " + msg;
-        lv_label_set_text(app().hester_output, m2.c_str());
+        ui_set_text(app().hester_output, "error: " + msg);
     });
     a.hester->onDone([](bool ok) {
         app().hester_busy = false;

@@ -36,7 +36,12 @@
  *                           complete and carries failures in red
  *
  * Everything in the interactive column is rebuilt per step; the chips and the
- * card are persistent, which is what makes progress legible.  `pair_gen` is
+ * card are persistent, which is what makes progress legible.
+ *
+ * Type: Montserrat for headings, rows, hints and the card's labels; unscii
+ * monospace for everything the user must read or type exactly — the approval
+ * code, the password / host / token entry fields, and the IP, host:port and
+ * device id in the card (a 36-char UUID is far easier to check in columns).  `pair_gen` is
  * still bumped on every rebuild so an async scan/discovery result that lands
  * after the user has moved on cannot touch a freed widget.
  *
@@ -62,6 +67,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 #ifndef DIRIGIBLE_UI_DEMO
 #define DIRIGIBLE_UI_DEMO 0
@@ -112,18 +118,12 @@ void step_save();
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/// LVGL's label recolour markup treats '#' as an escape, so any value coming
-/// off the wire (an SSID, a workspace name) is scrubbed before it lands in the
-/// summary card.
+/// A value off the wire (an SSID, a workspace name), folded for Montserrat and
+/// capped at `limit` bytes before it lands in the summary card.
 std::string safe(const std::string& in, size_t limit = 40)
 {
-    std::string out;
-    out.reserve(in.size());
-    for (char c : in) {
-        if (out.size() >= limit) break;
-        out += (c == '#' || (unsigned char)c < 0x20 || (unsigned char)c > 0x7E)
-             ? '+' : c;
-    }
+    std::string out = ui_fold(in);
+    if (out.size() > limit) out.resize(limit);
     if (out.empty()) out = "-";
     return out;
 }
@@ -171,66 +171,75 @@ void chips_update()
 
 // ---- summary card ---------------------------------------------------------
 
+/// One line of the summary card: a section header (Montserrat 12, text-3,
+/// with a little air above), a name (Montserrat 12) or an exact value
+/// (unscii_8, wrapped rather than ellipsised so none of it is hidden).
+lv_obj_t* card_line(const std::string& text, lv_color_t colour, const lv_font_t* font,
+                    bool wrap = false)
+{
+    lv_obj_t* l = make_label(app().pair_card_col, text.c_str(), colour, font);
+    lv_label_set_long_mode(l, wrap ? LV_LABEL_LONG_WRAP : LV_LABEL_LONG_DOT);
+    lv_obj_set_width(l, PAIR_CARD_W - 8);
+    return l;
+}
+
+void card_head(const std::string& text, bool first = false)
+{
+    lv_obj_t* l = card_line(text, dg::text3(), dg::ui_font_small());
+    if (!first) lv_obj_set_style_pad_top(l, 3, 0);
+}
+
 void card_update()
 {
     auto& a = app();
-    if (!a.pair_card_lbl) return;
+    if (!a.pair_card_col) return;
 
-    // Recolour markup is plain "#RRGGBB text#" — the tokens have to be
-    // formatted as literal hex here, lv_color_hex() has nothing to do with
-    // it.  Section headers and empty-value dashes use text-3 (muted hint);
-    // rssi/workspace secondary values use text-2 (one step brighter, same
-    // relationship the old 0x666666/0x888888 pair had); failures use error.
-    std::string t;
-    t.reserve(256);
+    // Rebuilt as a column of labels (it used to be one recoloured unscii
+    // label): headers and names in Montserrat 12, the IP, host:port and
+    // device id in monospace, failures in error red.  Secondary facts ride
+    // on their header line ("WIFI  -48 dBm") so the card still fits 184 px.
+    lv_obj_clean(a.pair_card_col);
+    const lv_font_t* small = dg::ui_font_small();
+    const lv_font_t* mono  = dg::mono_font();
+    char b[64];
 
-    char hdr[24];
-    snprintf(hdr, sizeof(hdr), "#%06X ", DG_TEXT_3);
-    char sec[24];
-    snprintf(sec, sizeof(sec), "#%06X ", DG_TEXT_2);
-
-    t += hdr; t += "WIFI#\n";
-    if (a.pair_ssid.empty()) {
-        t += hdr; t += "-#\n";
-    } else {
-        t += safe(a.pair_ssid, 30) + "\n";
-        if (a.pair_rssi != 0) {
-            char b[32];
-            snprintf(b, sizeof(b), "%s%d dBm#\n", sec, a.pair_rssi);
-            t += b;
-        }
+    std::string head = "WIFI";
+    if (!a.pair_ssid.empty() && a.pair_rssi != 0) {
+        snprintf(b, sizeof(b), "WIFI  %d dBm", a.pair_rssi);
+        head = b;
     }
+    card_head(head, true);
+    card_line(a.pair_ssid.empty() ? "-" : safe(a.pair_ssid, 30),
+              a.pair_ssid.empty() ? dg::text3() : dg::text1(), small);
 
-    t += hdr; t += "IP#\n";
-    t += a.pair_ip.empty() ? (std::string(hdr) + "-#\n") : safe(a.pair_ip, 24) + "\n";
+    card_head("IP");
+    if (a.pair_ip.empty()) card_line("-", dg::text3(), small);
+    else                   card_line(safe(a.pair_ip, 24), dg::text1(), mono, true);
 
-    t += hdr; t += "LEE#\n";
+    head = "LEE";
+    if (!a.pair_host.empty()) {
+        snprintf(b, sizeof(b), "LEE  hester %d", a.pair_hester_port);
+        head = b;
+    }
+    card_head(head);
     if (a.pair_host.empty()) {
-        t += hdr; t += "-#\n";
+        card_line("-", dg::text3(), small);
     } else {
-        if (!a.pair_name.empty()) t += safe(a.pair_name, 20) + "\n";
-        char b[64];
-        snprintf(b, sizeof(b), "%.30s:%d\n", safe(a.pair_host, 30).c_str(),
-                 a.pair_port);
-        t += b;
-        if (!a.pair_ws.empty()) t += std::string(sec) + safe(a.pair_ws, 20) + "#\n";
-        char h[48];
-        snprintf(h, sizeof(h), "%sHESTER %d#\n", hdr, a.pair_hester_port);
-        t += h;
+        if (!a.pair_name.empty()) card_line(safe(a.pair_name, 20), dg::text1(), small);
+        snprintf(b, sizeof(b), "%.30s:%d", safe(a.pair_host, 30).c_str(), a.pair_port);
+        card_line(b, dg::text1(), mono, true);
+        if (!a.pair_ws.empty()) card_line(safe(a.pair_ws, 20), dg::text2(), small);
     }
 
     if (!a.pair_device_id.empty()) {
-        t += hdr; t += "DEVICE#\n";
-        t += safe(a.pair_device_id, 20) + "\n";
+        card_head("DEVICE");
+        card_line(safe(a.pair_device_id, 40), dg::text1(), mono, true);
     }
 
     if (!a.pair_error.empty()) {
-        char err[16];
-        snprintf(err, sizeof(err), "#%06X ", DG_ERROR);
-        t += "\n"; t += err; t += safe(a.pair_error, 60) + "#";
+        lv_obj_t* e = card_line(safe(a.pair_error, 80), dg::error(), small, true);
+        lv_obj_set_style_pad_top(e, 6, 0);
     }
-
-    lv_label_set_text(a.pair_card_lbl, t.c_str());
 }
 
 void set_error(const char* msg)
@@ -288,7 +297,7 @@ lv_obj_t* add_list(lv_obj_t* parent)
     lv_obj_set_style_radius(list, DG_RADIUS, 0);
     lv_obj_set_style_pad_all(list, 1, 0);
     lv_obj_set_style_pad_row(list, 2, 0);
-    lv_obj_set_style_text_font(list, mono_font(), 0);
+    lv_obj_set_style_text_font(list, dg::ui_font(), 0);
     return list;
 }
 
@@ -310,17 +319,23 @@ lv_obj_t* add_row(lv_obj_t* list, int height)
     return btn;
 }
 
-/// A heading line at the top of the interactive column.
+/// A heading at the top of the interactive column: one Montserrat 14 line,
+/// y 0..15, ellipsised (an SSID or host in it can be any length).
 lv_obj_t* add_heading(lv_obj_t* parent, const char* text)
 {
     lv_obj_t* l = make_label(parent, text, dg::text2());
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_width(l, PAIR_LEFT_W - 4);
     lv_obj_set_pos(l, 2, 0);
     return l;
 }
 
-/// Text entry: 34 px tall, 8x17 mono, visible caret, placeholder.
+/// y of the entry field under a heading.
+constexpr int INPUT_Y = 20;
+
+/// Text entry: 34 px tall, visible caret, placeholder.  Deliberately unscii_16
+/// monospace: password, host:port and token are all typed exactly, and a
+/// fixed advance tells l from I and 0 from O and makes a count checkable.
 lv_obj_t* add_input(lv_obj_t* parent, const char* placeholder, bool password,
                     int y)
 {
@@ -331,7 +346,7 @@ lv_obj_t* add_input(lv_obj_t* parent, const char* placeholder, bool password,
     lv_textarea_set_placeholder_text(ta, placeholder);
     lv_obj_set_pos(ta, 2, y);
     lv_obj_set_size(ta, PAIR_LEFT_W - 4, 34);
-    lv_obj_set_style_text_font(ta, mono_font_big(), 0);
+    lv_obj_set_style_text_font(ta, dg::mono_font_big(), 0);
     lv_obj_set_style_text_color(ta, dg::text1(), 0);
     lv_obj_set_style_bg_color(ta, dg::ground3(), 0);
     lv_obj_set_style_border_width(ta, 1, 0);
@@ -346,15 +361,31 @@ lv_obj_t* add_input(lv_obj_t* parent, const char* placeholder, bool password,
     return ta;
 }
 
-/// The small line under an input: counter, validity, hint.
+/// The small line under an input: counter, validity, hint (Montserrat 12).
 lv_obj_t* add_meter(lv_obj_t* parent, int y)
 {
-    lv_obj_t* l = make_label(parent, "", dg::text3());
+    lv_obj_t* l = make_label(parent, "", dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, PAIR_LEFT_W - 4);
     lv_obj_set_pos(l, 2, y);
     app().pair_meter = l;
     return l;
+}
+
+/// A transparent column from `y` to the bottom of the interactive column, for
+/// stacked Montserrat text whose line count is not known up front (a meter
+/// that may carry a two-line failure, then a hint under it).
+lv_obj_t* add_text_column(lv_obj_t* parent, int y)
+{
+    lv_obj_t* col = lv_obj_create(parent);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_pos(col, 2, y);
+    lv_obj_set_size(col, PAIR_LEFT_W - 4, PAIR_ROW_H - y);
+    lv_obj_set_style_pad_row(col, 4, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
+    return col;
 }
 
 /// An indeterminate-looking progress strip, driven by an LVGL animation.
@@ -398,10 +429,13 @@ void wifi_row(lv_obj_t* list, const dirigible_esp::WifiEsp::AP& ap)
 {
     lv_obj_t* btn = add_row(list, 24);
 
-    lv_obj_t* lock = make_label(btn, ap.secured ? "*" : " ", dg::ember());
+    // Secured marker in a fixed 8 px slot, so open and secured SSIDs align.
+    lv_obj_t* lock = make_label(btn, ap.secured ? "*" : "", dg::ember());
+    lv_obj_set_width(lock, 8);
     lv_obj_align(lock, LV_ALIGN_LEFT_MID, 3, 0);
 
     // 3 + 8 (lock) + 3 = 14 left of the SSID; SIGNAL_W + 4 reserved right.
+    // SSIDs are arbitrary bytes; make_label folds them.
     lv_obj_t* name = make_label(btn, ap.ssid.c_str(), dg::text1());
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_set_width(name, PAIR_LEFT_W - 14 - SIGNAL_W - 10);
@@ -421,12 +455,10 @@ void wifi_row(lv_obj_t* list, const dirigible_esp::WifiEsp::AP& ap)
 
 void wifi_empty(lv_obj_t* list, const char* msg)
 {
-    lv_obj_t* row = lv_label_create(list);
-    lv_label_set_text(row, msg);
+    lv_obj_t* row = make_label(list, msg, dg::text2(), dg::ui_font_small());
     lv_label_set_long_mode(row, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(row, PAIR_LEFT_W - 8);
-    lv_obj_set_style_text_font(row, mono_font(), 0);
-    lv_obj_set_style_text_color(row, dg::text2(), 0);
+    lv_obj_set_style_pad_all(row, 3, 0);
 }
 
 void step_wifi()
@@ -453,7 +485,7 @@ void step_wifi()
             lv_obj_del(bar);
             lv_obj_clean(list);
             if (aps.empty()) {
-                wifi_empty(list, "No networks found.\nMove closer to the AP\nand press Rescan.");
+                wifi_empty(list, "No networks found. Move closer to the AP and press Rescan.");
                 return;
             }
             for (auto& ap : aps) wifi_row(list, ap);
@@ -495,7 +527,7 @@ void password_ready(lv_event_t* e)
             lv_obj_del(bar);
             if (!ok) {
                 set_centre("1/4 WiFi failed");
-                set_error("WiFi failed. Check the\npassword and press Enter\nto retry.");
+                set_error("WiFi failed. Check the password and press Enter to retry.");
                 if (app().pair_meter) {
                     lv_label_set_text(app().pair_meter,
                                       "wrong password? Enter to retry");
@@ -525,28 +557,26 @@ void step_password()
     add_back_button();
 
     char head[64];
-    snprintf(head, sizeof(head), "Password for\n%.24s", a.pair_ssid.c_str());
+    snprintf(head, sizeof(head), "Password for %.40s", safe(a.pair_ssid).c_str());
     add_heading(body, head);
 
-    lv_obj_t* ta = add_input(body, "wifi password", true, 24);
+    lv_obj_t* ta = add_input(body, "wifi password", true, INPUT_Y);
     lv_obj_add_event_cb(ta, password_ready, LV_EVENT_READY, nullptr);
 
     lv_obj_t* show = lv_btn_create(body);
-    lv_obj_set_pos(show, 2, 62);
-    lv_obj_set_size(show, 66, 20);
+    lv_obj_set_pos(show, 2, 60);
+    lv_obj_set_size(show, 72, 20);
+    lv_obj_set_style_pad_all(show, 0, 0);
     lv_obj_set_style_bg_opa(show, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(show, dg::ground3(), 0);
     lv_obj_set_style_radius(show, DG_RADIUS, 0);
     dg::style_focus(show);
-    lv_obj_t* sl = lv_label_create(show);
-    lv_label_set_text(sl, LV_SYMBOL_EYE_OPEN " show");
-    lv_obj_set_style_text_font(sl, sym_font(), 0);
-    lv_obj_set_style_text_color(sl, dg::text1(), 0);
+    lv_obj_t* sl = make_label(show, LV_SYMBOL_EYE_OPEN "  Show", dg::text1());
     lv_obj_center(sl);
     lv_obj_add_event_cb(show, password_show_cb, LV_EVENT_CLICKED, nullptr);
     if (a.group) lv_group_add_obj(a.group, show);
 
-    add_meter(body, 88);
+    add_meter(body, 86);
     lv_label_set_text(a.pair_meter,
                       "Enter connects and saves.\nTab reaches show / Back.");
 }
@@ -577,9 +607,14 @@ void discover_pick_cb(lv_event_t* e)
 
 void discover_row(lv_obj_t* list, const Found& f)
 {
-    // Three stacked lines in one 30 px row: name, host:port, workspace —
-    // columns side by side would give each about 6 characters at 184 px.
-    lv_obj_t* btn = add_row(list, 30);
+    // Three stacked lines in one 44 px row — columns side by side would give
+    // each a few characters at 184 px:
+    //   y  1..16  name       Montserrat 14
+    //   y 18..26  host:port  unscii_8 (exact: it is what you would type)
+    //   y 27..41  workspace  Montserrat 12
+    // (+1 px when focused: LVGL offsets children by the focus border, hence
+    // the 2 px spare at the bottom.)
+    lv_obj_t* btn = add_row(list, 44);
 
     lv_obj_t* name = make_label(btn, f.name.c_str(), dg::text1());
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
@@ -588,16 +623,16 @@ void discover_row(lv_obj_t* list, const Found& f)
 
     char sub[64];
     snprintf(sub, sizeof(sub), "%.24s:%d", f.host.c_str(), f.port);
-    lv_obj_t* hostl = make_label(btn, sub, dg::text2());
+    lv_obj_t* hostl = make_label(btn, sub, dg::text2(), dg::mono_font());
     lv_label_set_long_mode(hostl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(hostl, PAIR_LEFT_W - 8);
-    lv_obj_align(hostl, LV_ALIGN_TOP_LEFT, 3, 11);
+    lv_obj_align(hostl, LV_ALIGN_TOP_LEFT, 3, 18);
 
     lv_obj_t* wsl = make_label(btn, f.ws.empty() ? "-" : f.ws.c_str(),
-                               dg::text3());
+                               dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(wsl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(wsl, PAIR_LEFT_W - 8);
-    lv_obj_align(wsl, LV_ALIGN_TOP_LEFT, 3, 20);
+    lv_obj_align(wsl, LV_ALIGN_TOP_LEFT, 3, 27);
 
     auto* owned = new Found(f);
     lv_obj_add_event_cb(btn, discover_pick_cb, LV_EVENT_CLICKED, owned);
@@ -620,7 +655,7 @@ void step_discover()
     add_back_button();
 
     lv_obj_t* list = add_list(body);
-    wifi_empty(list, "looking for _lee._tcp...\n(3s)");
+    wifi_empty(list, "Looking for _lee._tcp (3 s)...");
     lv_obj_t* bar = add_progress(body, PAIR_ROW_H - 8, 3000);
 
     if (!g_discovery) g_discovery = a.factory->createDiscovery();
@@ -650,7 +685,7 @@ void step_discover()
             }
             if (shown == 0) {
                 wifi_empty(list,
-                    "No Lee found.\n\nIs Lee running with\nmDNS on? Press the\nManual button.");
+                    "No Lee found.\n\nIs Lee running with mDNS on? Press the Manual button.");
             }
         });
 }
@@ -695,12 +730,12 @@ void step_host()
     add_back_button();
 
     add_heading(body, "Lee host");
-    lv_obj_t* ta = add_input(body, "192.168.1.10:9001", false, 24);
+    lv_obj_t* ta = add_input(body, "192.168.1.10:9001", false, INPUT_Y);
     lv_obj_add_event_cb(ta, host_ready, LV_EVENT_READY, nullptr);
 
-    add_meter(body, 64);
+    add_meter(body, 60);
     lv_label_set_text(a.pair_meter,
-                      "host or host:port\n(Lee's API port is 9001,\nHester's 9000)");
+                      "host or host:port. Lee's API port is 9001, Hester's 9000.");
 }
 
 // ---------------------------------------------------------------------------
@@ -742,15 +777,15 @@ void save_machine(const std::string& token, const std::string& name,
 // step 4: approve  (E19 — the default path; step 6 is the typed fallback)
 //
 //   +-- left column, 184 x 184 ------------+
-//   | Approve on Lee                       |  y  0  heading
+//   | Approve on Lee                       |  y  0  heading, Montserrat 14
 //   | +----------------------------------+ |
-//   | |            4 8 3   9 1 0         | |  y 18  code box, 180 x 46
+//   | |            4 8 3   9 1 0         | |  y 20  code box, 180 x 44
 //   | +----------------------------------+ |         unscii_16, letter-spaced
-//   | 192.168.1.10:9001                    |  y 68  host line
-//   | [===========================-------] |  y 84  countdown bar, 120 s
-//   | waiting for approval    112s         |  y 94  meter
-//   | Lee will ask you to                  |  y 112 hint
-//   | approve this code.                   |
+//   | 192.168.1.10:9001                    |  y 68  host line, unscii_8
+//   | [===========================-------] |  y 81  countdown bar, 120 s
+//   | waiting for approval  112s           |  y 91  meter + hint, a column of
+//   | Lee will ask you to approve this     |        Montserrat 12 so a two-line
+//   | code. No token to type.              |        failure pushes the hint down
 //   +--------------------------------------+
 //   footer:  Approve on Lee | [Token] [Retry] [Back]
 // ---------------------------------------------------------------------------
@@ -792,7 +827,7 @@ void approve_set_meter(const char* text, lv_color_t colour)
 {
     auto& a = app();
     if (!a.pair_meter) return;
-    lv_label_set_text(a.pair_meter, text);
+    ui_set_text(a.pair_meter, text);   // may carry Lee's own error text
     lv_obj_set_style_text_color(a.pair_meter, colour, 0);
 }
 
@@ -903,8 +938,8 @@ void step_approve()
     // grouping 3+3 gets the block to ~104 px and makes it easy to read out.
     lv_obj_t* box = lv_obj_create(body);
     lv_obj_remove_style_all(box);
-    lv_obj_set_pos(box, 2, 18);
-    lv_obj_set_size(box, PAIR_LEFT_W - 4, 46);
+    lv_obj_set_pos(box, 2, 20);
+    lv_obj_set_size(box, PAIR_LEFT_W - 4, 44);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(box, dg::ground3(), 0);
     lv_obj_set_style_border_width(box, 1, 0);
@@ -919,36 +954,36 @@ void step_approve()
     g_code_lbl = lv_label_create(box);
     lv_label_set_text(g_code_lbl,
                       dirigible::PairingClient::formatCode(g_code).c_str());
-    lv_obj_set_style_text_font(g_code_lbl, mono_font_big(), 0);
+    lv_obj_set_style_text_font(g_code_lbl, dg::mono_font_big(), 0);
     lv_obj_set_style_text_color(g_code_lbl, dg::text1(), 0);
     lv_obj_set_style_text_letter_space(g_code_lbl, 8, 0);
     lv_obj_center(g_code_lbl);
 
     char hostline[64];
     snprintf(hostline, sizeof(hostline), "%.24s:%d", a.pair_host.c_str(), a.pair_port);
-    lv_obj_t* hl = make_label(body, hostline, dg::text2());
+    lv_obj_t* hl = make_label(body, hostline, dg::text2(), dg::mono_font());
     lv_label_set_long_mode(hl, LV_LABEL_LONG_DOT);
     lv_obj_set_width(hl, PAIR_LEFT_W - 4);
     lv_obj_set_pos(hl, 2, 68);
 
     // Countdown bar: value counts the seconds left, so it drains left to right.
     g_code_bar = lv_bar_create(body);
-    lv_obj_set_pos(g_code_bar, 2, 84);
+    lv_obj_set_pos(g_code_bar, 2, 81);
     lv_obj_set_size(g_code_bar, PAIR_LEFT_W - 4, 6);
     lv_obj_set_style_bg_color(g_code_bar, dg::ground3(), 0);
     lv_obj_set_style_bg_color(g_code_bar, dg::phosphor(), LV_PART_INDICATOR);
     lv_bar_set_range(g_code_bar, 0, APPROVE_WINDOW_S);
     lv_bar_set_value(g_code_bar, APPROVE_WINDOW_S, LV_ANIM_OFF);
 
-    add_meter(body, 94);
+    lv_obj_t* col = add_text_column(body, 91);
+    add_meter(col, 0);
     approve_set_meter("asking Lee...", dg::text2());
 
-    lv_obj_t* hint = make_label(body,
-        "Lee will ask you to\napprove this code.\nNo token to type.",
-        dg::text3());
+    lv_obj_t* hint = make_label(col,
+        "Lee will ask you to approve this code. No token to type.",
+        dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hint, PAIR_LEFT_W - 4);
-    lv_obj_set_pos(hint, 2, 112);
 
     if (!g_pairing) g_pairing = new dirigible::PairingClient(a.factory);
     g_pairing->setHost(a.pair_host, a.pair_port);
@@ -1036,7 +1071,7 @@ void token_ready(lv_event_t* e)
 
     // A non-UUID is still accepted — a future Lee may issue a different shape —
     // but it is worth flagging before the connection fails with a 401.
-    if (!token_valid(raw)) set_error("Saved, but that is not a\nUUID - expect a 401.");
+    if (!token_valid(raw)) set_error("Saved, but that is not a UUID - expect a 401.");
 
     // Nothing to learn from the wire here, so keep the name and Hester port
     // the discovery step found.
@@ -1056,23 +1091,28 @@ void step_token()
     add_back_button();
 
     char head[48];
-    snprintf(head, sizeof(head), "Token for\n%.22s", a.pair_host.c_str());
+    snprintf(head, sizeof(head), "Token for %.30s", a.pair_host.c_str());
     add_heading(body, head);
 
-    lv_obj_t* ta = add_input(body, "xxxxxxxx-xxxx-...", false, 24);
+    lv_obj_t* ta = add_input(body, "xxxxxxxx-xxxx-...", false, INPUT_Y);
     lv_textarea_set_max_length(ta, 36);
     lv_obj_add_event_cb(ta, token_ready, LV_EVENT_READY, nullptr);
     lv_obj_add_event_cb(ta, token_changed, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    add_meter(body, 62);
+    add_meter(body, 60);
     lv_label_set_text(a.pair_meter, "0/36  8-4-4-4-12 hex");
 
-    lv_obj_t* where = make_label(body,
-        "Fallback. On the Lee\nmachine:\n  cat ~/.lee/api-token\nCode is easier.",
-        dg::text3());
+    // The command is typed exactly on the host, so it is the one monospace
+    // line in the hint.
+    lv_obj_t* col = add_text_column(body, 84);
+    lv_obj_t* where = make_label(col, "Fallback. On the Lee machine, run:",
+                                 dg::text3(), dg::ui_font_small());
     lv_label_set_long_mode(where, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(where, PAIR_LEFT_W - 4);
-    lv_obj_set_pos(where, 2, 92);
+    lv_obj_t* cmd = make_label(col, "cat ~/.lee/api-token", dg::text2(), dg::mono_font());
+    lv_obj_set_style_pad_left(cmd, 8, 0);
+    lv_obj_t* easier = make_label(col, "The code is easier.", dg::text3(), dg::ui_font_small());
+    lv_obj_set_width(easier, PAIR_LEFT_W - 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,11 +1257,10 @@ void pairing_build(lv_obj_t* parent)
         lv_obj_t* l = make_label(c, chip_names[i], dg::text3());
         lv_obj_align(l, LV_ALIGN_LEFT_MID, 6, 0);
 
-        // The tick is the one glyph here that ASCII cannot do justice; it is
-        // the only montserrat_14 object in the chip, and 16 px in an 18 px box.
+        // Montserrat 14 label and tick: a 16 px line in the 18 px chip.
         lv_obj_t* tick = lv_label_create(c);
         lv_label_set_text(tick, LV_SYMBOL_OK);
-        lv_obj_set_style_text_font(tick, sym_font(), 0);
+        lv_obj_set_style_text_font(tick, dg::ui_font(), 0);
         lv_obj_set_style_text_color(tick, dg::phosphor(), 0);
         lv_obj_align(tick, LV_ALIGN_RIGHT_MID, -5, 0);
         lv_obj_add_flag(tick, LV_OBJ_FLAG_HIDDEN);
@@ -1251,14 +1290,19 @@ void pairing_build(lv_obj_t* parent)
     lv_obj_set_style_radius(a.pair_card, DG_RADIUS, 0);
     lv_obj_clear_flag(a.pair_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* card_title = make_label(a.pair_card, "SETUP", dg::text3());
-    lv_obj_set_pos(card_title, 4, 3);
+    lv_obj_t* card_title = make_label(a.pair_card, "SETUP", dg::text2(), dg::ui_font_small());
+    lv_obj_set_style_text_letter_space(card_title, 1, 0);
+    lv_obj_set_pos(card_title, 3, 1);
 
-    a.pair_card_lbl = make_label(a.pair_card, "", dg::text1());
-    lv_label_set_recolor(a.pair_card_lbl, true);
-    lv_label_set_long_mode(a.pair_card_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(a.pair_card_lbl, PAIR_CARD_W - 8);
-    lv_obj_set_pos(a.pair_card_lbl, 4, 15);
+    // Rows below the title, rebuilt by card_update(); a column so wrapped
+    // values (a host:port, a device id, an error) push the rest down.
+    a.pair_card_col = lv_obj_create(a.pair_card);
+    lv_obj_remove_style_all(a.pair_card_col);
+    lv_obj_set_pos(a.pair_card_col, 3, 18);
+    lv_obj_set_size(a.pair_card_col, PAIR_CARD_W - 8, PAIR_ROW_H - 21);
+    lv_obj_set_flex_flow(a.pair_card_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(a.pair_card_col, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(a.pair_card_col, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_add_flag(a.view_pairing, LV_OBJ_FLAG_HIDDEN);
 }

@@ -3,6 +3,7 @@ idf_component_register(
         "main.cpp"
         "app.cpp"
         "vt.cpp"
+        "ui_text.cpp"
         "screen_waiting.cpp"
         "screen_tabs.cpp"
         "screen_terminal.cpp"

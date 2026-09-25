@@ -10,9 +10,12 @@
  *
  * Layout (E14), inside the 320x204 body under the shared header:
  *
- *   row, 26 px:  [ type ] > label .......................... pty
+ *   row, 24 px:  [ type ] > label .......................... pty
  *                 ^badge  ^focused marker     ^what a click opens: pty,
  *                                              file (viewer), tree (Files)
+ *
+ * Montserrat throughout: 14 for the label, 12 for the badge code and hint.
+ * The label's width is what the measured hint leaves, and it ellipsises.
  *
  * When there is no connection the list is replaced by a plain state panel
  * naming the machine it is trying to reach and offering Re-pair, rather than
@@ -25,6 +28,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
+#include "ui_text.hpp"
 
 static const char* TAG = "dirigible.tabs";
 
@@ -133,7 +137,7 @@ void tabs_build(lv_obj_t* parent)
     lv_obj_set_style_border_width(a.tab_list, 0, 0);
     lv_obj_set_style_pad_all(a.tab_list, 0, 0);
     lv_obj_set_style_pad_row(a.tab_list, 2, 0);
-    lv_obj_set_style_text_font(a.tab_list, mono_font(), 0);
+    lv_obj_set_style_text_font(a.tab_list, dg::ui_font(), 0);
 
     lv_obj_add_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
 }
@@ -153,37 +157,42 @@ void tab_row(lv_obj_t* list, const dirigible::TabContext& t, int index)
     lv_obj_set_style_pad_all(btn, 0, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
-    // badge: x 3..33 (30 px: 24 px for 3 mono chars at unscii_8 + 3 px
-    // padding either side)
+    // badge: x 3..33, 16 px tall — a fixed box, so labels line up whatever
+    // the code's proportional width (widest, "k8s"/"dkr", is ~22 px at 12).
     lv_obj_t* badge = lv_obj_create(btn);
     lv_obj_remove_style_all(badge);
-    lv_obj_set_size(badge, 30, 14);
+    lv_obj_set_size(badge, 30, 16);
     lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(badge, dg::ground3(), 0);
     lv_obj_set_style_radius(badge, DG_RADIUS, 0);
     lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(badge, LV_ALIGN_LEFT_MID, 3, 0);
 
-    lv_obj_t* bl = make_label(badge, tab_code(t.type), dg::text2());
+    lv_obj_t* bl = make_label(badge, tab_code(t.type), dg::text2(), dg::ui_font_small());
     lv_obj_center(bl);
 
-    // focus marker at x 36, label from x 46
-    lv_obj_t* mark = make_label(btn, active ? ">" : " ", dg::phosphor());
-    lv_obj_align(mark, LV_ALIGN_LEFT_MID, 36, 0);
+    // focus marker at x 36 (a 12 px chevron), label from x 50
+    if (active) {
+        lv_obj_t* mark = make_label(btn, LV_SYMBOL_RIGHT, dg::phosphor(), dg::ui_font_small());
+        lv_obj_align(mark, LV_ALIGN_LEFT_MID, 36, 0);
+    }
 
+    // Right: the hint, measured, + 10 px of air; else a 4 px margin.  Tab
+    // labels are wire text (Claude Code titles itself with a U+2733), so
+    // make_label folds them.
     const char* hint_text = tab_hint(t);
+    int reserve = 4;
+    if (hint_text) {
+        lv_obj_t* hint = make_label(btn, hint_text, dg::text3(), dg::ui_font_small());
+        lv_obj_align(hint, LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_obj_update_layout(hint);
+        reserve = lv_obj_get_width(hint) + 4 + 10;
+    }
     lv_obj_t* label = make_label(btn, t.label ? t.label : "(unnamed)",
                                  active ? dg::text1() : dg::text2());
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    // 46 left; on the right, the hint (8 px a char) + 10 px, or a 4 px margin.
-    const int reserve = hint_text ? (int)strlen(hint_text) * 8 + 10 : 4;
-    lv_obj_set_width(label, SCREEN_W - 4 - 46 - reserve);
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 46, 0);
-
-    if (hint_text) {
-        lv_obj_t* hint = make_label(btn, hint_text, dg::text3());
-        lv_obj_align(hint, LV_ALIGN_RIGHT_MID, -4, 0);
-    }
+    lv_obj_set_width(label, SCREEN_W - 4 - 50 - reserve);
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, 50, 0);
 
     lv_obj_add_event_cb(btn, row_clicked, LV_EVENT_CLICKED,
                         (void*)(intptr_t)index);
@@ -194,51 +203,55 @@ void tab_row(lv_obj_t* list, const dirigible::TabContext& t, int index)
 void tabs_state_panel(const char* title, const char* body, bool offer_repair)
 {
     auto& a = app();
+    // A column, not fixed y offsets: the title and the wrapped body change
+    // height with proportional text, and the buttons follow whatever they need.
     lv_obj_t* panel = lv_obj_create(a.tab_list);
     lv_obj_remove_style_all(panel);
     lv_obj_set_width(panel, LV_PCT(100));
-    lv_obj_set_height(panel, 120);
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(panel, 6, 0);
+    lv_obj_set_style_pad_row(panel, 6, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* h = make_label(panel, title, dg::text1());
-    lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
+    lv_obj_t* h = make_label(panel, title, dg::text1(), dg::ui_font_title());
+    lv_label_set_long_mode(h, LV_LABEL_LONG_DOT);
     lv_obj_set_width(h, SCREEN_W - 20);
-    lv_obj_set_pos(h, 0, 0);
 
     lv_obj_t* b = make_label(panel, body, dg::text2());
     lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(b, SCREEN_W - 20);
-    lv_obj_set_pos(b, 0, 16);
 
     if (!offer_repair) return;
 
+    lv_obj_t* row = lv_obj_create(panel);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, SCREEN_W - 20, 24);
+    lv_obj_set_style_pad_top(row, 2, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
     // Re-pair is the primary action here (only way forward when the token is
     // stale); Reconnect is secondary.
-    lv_obj_t* btn = lv_btn_create(panel);
-    lv_obj_set_pos(btn, 0, 62);
+    lv_obj_t* btn = lv_btn_create(row);
+    lv_obj_set_pos(btn, 0, 0);
     lv_obj_set_size(btn, 90, 22);
+    lv_obj_set_style_pad_all(btn, 0, 0);   // 16 px line in 22: no theme padding
     dg::style_primary_btn(btn);
-    lv_obj_t* l = lv_label_create(btn);
-    lv_label_set_text(l, "Re-pair");
-    lv_obj_set_style_text_font(l, mono_font(), 0);
-    lv_obj_set_style_text_color(l, dg::on_phosphor(), 0);
+    lv_obj_t* l = make_label(btn, "Re-pair", dg::on_phosphor());
     lv_obj_center(l);
     lv_obj_add_event_cb(btn, [](lv_event_t*) { pairing_begin(); },
                         LV_EVENT_CLICKED, nullptr);
     if (a.group) lv_group_add_obj(a.group, btn);
 
-    lv_obj_t* btn2 = lv_btn_create(panel);
-    lv_obj_set_pos(btn2, 96, 62);
+    lv_obj_t* btn2 = lv_btn_create(row);
+    lv_obj_set_pos(btn2, 96, 0);
     lv_obj_set_size(btn2, 100, 22);
+    lv_obj_set_style_pad_all(btn2, 0, 0);
     lv_obj_set_style_bg_opa(btn2, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(btn2, dg::ground3(), 0);
     lv_obj_set_style_radius(btn2, DG_RADIUS, 0);
     dg::style_focus(btn2);
-    lv_obj_t* l2 = lv_label_create(btn2);
-    lv_label_set_text(l2, "Reconnect");
-    lv_obj_set_style_text_font(l2, mono_font(), 0);
-    lv_obj_set_style_text_color(l2, dg::text1(), 0);
+    lv_obj_t* l2 = make_label(btn2, "Reconnect", dg::text1());
     lv_obj_center(l2);
     lv_obj_add_event_cb(btn2, [](lv_event_t*) { connect_active_machine(); },
                         LV_EVENT_CLICKED, nullptr);
@@ -329,11 +342,12 @@ void tabs_render(const dirigible::LeeContext* ctx)
         char body[128];
         if (m) {
             snprintf(body, sizeof(body),
-                     "%s:%d is not answering.\nCheck Lee is running, then\nReconnect - or Re-pair if\nthe token changed.",
+                     "%s:%d is not answering. Check Lee is running, then "
+                     "Reconnect - or Re-pair if the token changed.",
                      m->config.host.c_str(), m->config.lee_port);
         } else {
             snprintf(body, sizeof(body),
-                     "No machine stored.\nRe-pair to add one.");
+                     "No machine stored. Re-pair to add one.");
         }
         tabs_state_panel(m ? m->config.name.c_str() : "Not paired", body, true);
         if (showing) chrome_set_centre("disconnected");

@@ -44,6 +44,36 @@ inline lv_color_t error() { return c(DG_ERROR); }   // errors, offline, destruct
 inline lv_color_t info()  { return c(DG_INFO); }    // neutral notices
 
 // ---------------------------------------------------------------------------
+// Fonts
+//
+// Two families, and every screen picks from these accessors rather than
+// naming an lv_font_* directly:
+//
+//   Montserrat (proportional; CONFIG_LV_FONT_MONTSERRAT_12/14/16) for the UI:
+//   chrome, lists, menus, prose, instructions.  Latin only — ASCII, U+00B0 and
+//   the LV_SYMBOL_* FontAwesome subset — so anything from the wire goes
+//   through ui_fold() (ui_text.hpp) before it lands in a label.
+//
+//     ui_font_small  12 px, 15 px line   meta, footer, hints, secondary lines
+//     ui_font        14 px, 16 px line   body text, rows, header title
+//     ui_font_title  16 px, 18 px line   page titles, free-text entry
+//
+//   unscii (ASCII bitmap monospace; CONFIG_LV_FONT_UNSCII_8/16) only where a
+//   fixed advance does a job: the terminal's character grid, code in the
+//   viewer (gutter + column panning), and exact strings the user must read or
+//   type — the pairing code, host:port, IP, device id, token and password
+//   entry.  A 36-char UUID is far easier to check in a monospace column.
+//
+//     mono_font      unscii_8:  8 px advance,  9 px line
+//     mono_font_big  unscii_16: 8 px advance, 17 px line (text entry)
+// ---------------------------------------------------------------------------
+inline const lv_font_t* ui_font_small() { return &lv_font_montserrat_12; }
+inline const lv_font_t* ui_font()       { return &lv_font_montserrat_14; }
+inline const lv_font_t* ui_font_title() { return &lv_font_montserrat_16; }
+inline const lv_font_t* mono_font()     { return &lv_font_unscii_8; }
+inline const lv_font_t* mono_font_big() { return &lv_font_unscii_16; }
+
+// ---------------------------------------------------------------------------
 // Shared style helpers
 // ---------------------------------------------------------------------------
 
