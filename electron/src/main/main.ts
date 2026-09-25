@@ -980,6 +980,7 @@ function setupIPC(): void {
 
   ipcMain.handle('pty:write', (_event, id: number, data: string) => {
     ptyManager.write(id, data);
+    ptyManager.noteUserInput(id, data);
   });
 
   ipcMain.handle('pty:resize', (_event, id: number, cols: number, rows: number) => {

@@ -15,8 +15,13 @@ export interface PendingTool {
   preview: string;
   signature: string;
   tool_use_id: string | null;
+  /** Subagent id from the hook input; null for the main agent. */
+  agent_id: string | null;
   files: string[];
 }
+
+/** Tool calls that have started (PreToolUse) and not finished yet, per session. */
+export const MAX_OPEN_TOOLS = 32;
 
 export type AgentActivity = 'busy' | 'idle' | 'waiting' | 'unknown';
 
@@ -35,6 +40,15 @@ export interface AgentSession {
   in_turn: boolean;
   activity: AgentActivity;
   pending_tool: PendingTool | null;
+  /** Started, unfinished tool calls (PreToolUse without PostToolUse[Failure]). */
+  open_tools: PendingTool[];
+  /**
+   * True while the agent is actually sitting on a permission prompt
+   * (PermissionRequest or an approval Notification), until the prompt is
+   * answered in the tab, the tool finishes, the turn ends or is interrupted.
+   * Device approve/deny is only written into the PTY while this is set.
+   */
+  awaiting_approval: boolean;
   files_written: string[];
   last_summary: string | null;
   last_lee_status: LeeStatusBlock | null;
@@ -77,6 +91,8 @@ export class AgentSessions {
         in_turn: false,
         activity: 'unknown',
         pending_tool: null,
+        open_tools: [],
+        awaiting_approval: false,
         files_written: [],
         last_summary: null,
         last_lee_status: null,
@@ -166,8 +182,49 @@ export class AgentSessions {
     s.busy_accum_ms = 0;
     s.in_turn = false;
     s.pending_tool = null;
+    s.open_tools = [];
+    s.awaiting_approval = false;
     s.activity = 'idle';
     return busy;
+  }
+
+  /**
+   * The turn ended without a Stop (Esc on a permission prompt interrupts the
+   * turn; Claude's idle_prompt Notification means it is back at the input).
+   */
+  interrupt(s: AgentSession, now: number): void {
+    this.endTurn(s, now);
+  }
+
+  /** PreToolUse: remember the started call. */
+  openTool(s: AgentSession, tool: PendingTool): void {
+    if (tool.tool_use_id) s.open_tools = s.open_tools.filter((t) => t.tool_use_id !== tool.tool_use_id);
+    s.open_tools.push(tool);
+    if (s.open_tools.length > MAX_OPEN_TOOLS) s.open_tools.shift();
+    s.pending_tool = tool;
+  }
+
+  /**
+   * PostToolUse[Failure]: forget the finished call, matched by tool_use_id,
+   * else by signature. Clears pending_tool only when it is that call.
+   */
+  closeTool(s: AgentSession, toolUseId: string | null, signature: string): void {
+    const same = (t: PendingTool) => (toolUseId && t.tool_use_id ? t.tool_use_id === toolUseId : t.signature === signature);
+    const idx = s.open_tools.findIndex(same);
+    if (idx >= 0) s.open_tools.splice(idx, 1);
+    if (s.pending_tool && same(s.pending_tool)) s.pending_tool = s.open_tools[s.open_tools.length - 1] ?? null;
+  }
+
+  /** The started call a permission prompt is about: by tool_use_id, else the latest with this signature. */
+  findOpenTool(s: AgentSession, toolUseId: string | null, signature: string | null): PendingTool | null {
+    if (toolUseId) {
+      const byId = s.open_tools.find((t) => t.tool_use_id === toolUseId);
+      if (byId) return byId;
+    }
+    if (signature) {
+      for (let i = s.open_tools.length - 1; i >= 0; i--) if (s.open_tools[i].signature === signature) return s.open_tools[i];
+    }
+    return null;
   }
 
   addWritten(s: AgentSession, files: string[]): void {
@@ -183,6 +240,8 @@ export class AgentSessions {
     s.busy_since = null;
     s.in_turn = false;
     s.pending_tool = null;
+    s.open_tools = [];
+    s.awaiting_approval = false;
     s.activity = 'unknown';
   }
 

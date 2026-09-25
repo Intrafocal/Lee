@@ -17,20 +17,28 @@ export const HOOK_SCRIPT = `#!/bin/sh
 # Usage (from --settings): /bin/sh claude-hook.sh <HookEventName>   (payload on stdin)
 EVENT="\${1:-unknown}"
 HDR="$HOME/.lee/hooks/auth-header"
-URL="\${LEE_API_URL:-http://127.0.0.1:9001}/agent/hook"
+# Lee sets LEE_API_URL for its own PTYs. The bearer token only ever goes to
+# Lee's loopback API: anything but http://127.0.0.1:<port> falls back to the default.
+BASE="\${LEE_API_URL:-http://127.0.0.1:9001}"
+PORT="\${BASE#http://127.0.0.1:}"
+case "$PORT" in ''|*[!0-9]*) BASE="http://127.0.0.1:9001" ;; esac
+URL="$BASE/agent/hook"
 if [ ! -r "$HDR" ]; then cat >/dev/null; exit 0; fi
-RESP=$(curl -sS --max-time 2 -X POST "$URL" \\
+# -f: an error status prints nothing, so an auth or server error body never
+# reaches Claude's context through the SessionStart output below.
+if RESP=$(curl -fsS --max-time 2 -X POST "$URL" \\
   -H @"$HDR" \\
   -H "Content-Type: application/json" \\
   -H "X-Lee-Hook-Event: $EVENT" \\
   -H "X-Lee-Pty-Id: \${LEE_PTY_ID:-}" \\
   -H "X-Lee-Window-Id: \${LEE_WINDOW_ID:-}" \\
-  --data-binary @- 2>/dev/null)
-if [ "$EVENT" = "SessionStart" ] && [ -n "$RESP" ]; then printf '%s\\n' "$RESP"; fi
+  --data-binary @- 2>/dev/null); then
+  if [ "$EVENT" = "SessionStart" ] && [ -n "$RESP" ]; then printf '%s\\n' "$RESP"; fi
+fi
 exit 0
 `;
 
-const MATCHER_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PermissionRequest']);
+const MATCHER_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']);
 
 export interface HookPaths {
   dir: string;
@@ -136,7 +144,7 @@ export function claudeSettingsPath(): string {
   return activePaths.settings;
 }
 
-function isClaude(cmd: string): boolean {
+export function isClaude(cmd: string): boolean {
   return path.basename(cmd) === 'claude';
 }
 
@@ -147,7 +155,9 @@ function isClaude(cmd: string): boolean {
 export function withClaudeHooks(cmd: string, args: string[]): string[] {
   try {
     if (!cmd || !isClaude(cmd)) return args;
-    if (args.some((a) => a === '--settings' || a.startsWith('--settings='))) return args;
+    const end = args.indexOf('--');
+    const opts = end >= 0 ? args.slice(0, end) : args;
+    if (opts.some((a) => a === '--settings' || a.startsWith('--settings='))) return args;
     const settings = activePaths.settings;
     if (!fs.existsSync(settings)) return args;
     return ['--settings', settings, ...args];

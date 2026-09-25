@@ -15,6 +15,7 @@ export const HOOK_EVENTS = [
   'UserPromptSubmit',
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
   'PermissionRequest',
   'Notification',
   'Stop',
@@ -39,6 +40,8 @@ export interface NormalizedHook {
   tool_name: string | null;
   tool_input: unknown;
   tool_use_id: string | null;
+  /** Set by Claude Code on hook inputs fired from a subagent. */
+  agent_id: string | null;
   message: string | null;
   notification_type: string | null;
   last_assistant_message: string | null;
@@ -73,6 +76,7 @@ export function normalizeHook(headerEvent: string | null | undefined, body: unkn
     tool_name: str(b.tool_name),
     tool_input: b.tool_input,
     tool_use_id: str(b.tool_use_id),
+    agent_id: str(b.agent_id),
     message: str(b.message),
     notification_type: str(b.notification_type),
     last_assistant_message: str(b.last_assistant_message),

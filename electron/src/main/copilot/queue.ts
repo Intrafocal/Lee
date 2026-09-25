@@ -65,6 +65,22 @@ const WS_DEBOUNCE_MS = 250;
 const SESSION_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_SNOOZE_MINUTES = 7 * 24 * 60;
 const PERMISSION_MODES = new Set<HandoffLaunch['permission_mode']>(['acceptEdits', 'default', 'plan']);
+/**
+ * A PreToolUse from the same agent (main or one subagent) arriving this long
+ * after an approval opened means the agent moved past that prompt. The grace
+ * covers parallel calls of one message, which start together.
+ */
+const NEWER_TOOL_GRACE_MS = 2_000;
+/** Keys that answer Claude Code's permission prompt when typed in the tab. */
+const PROMPT_ACCEPT_INPUT = /^(\r|[1-9])$/;
+const PROMPT_CANCEL_INPUT = '\x1b';
+
+/** What an approval item was opened for, to match the call that finishes it. */
+interface ApprovalMeta {
+  tool_use_id: string | null;
+  agent_id: string | null;
+  opened_at: number;
+}
 
 /** An HTTP-shaped outcome, shared by the routes and the IPC handlers. */
 export interface Outcome<T> {
@@ -124,6 +140,8 @@ export class CopilotQueue {
   private wsTimer: ReturnType<typeof setTimeout> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
+  /** Approval item id -> the tool call it is about. Pruned as items close. */
+  private approvalMeta = new Map<string, ApprovalMeta>();
 
   constructor(private ptyManager: PTYManager) {
     this.focus = new FocusTracker({
@@ -185,6 +203,14 @@ export class CopilotQueue {
       }
     });
 
+    this.ptyManager.on('user-input', (id: number, data: string) => {
+      try {
+        this.onUserInput(id, data);
+      } catch (err) {
+        console.error('[copilot] pty input handling failed:', err);
+      }
+    });
+
     this.ptyManager.on('exit', (id: number, code: number) => {
       try {
         this.onPtyExit(id, code);
@@ -213,6 +239,10 @@ export class CopilotQueue {
       this.queue.recompute(now);
       this.queue.prune(now);
       this.sessions.prune(now, SESSION_KEEP_MS);
+      for (const id of Array.from(this.approvalMeta.keys())) {
+        const item = this.queue.get(id);
+        if (!item || (item.state !== 'open' && item.state !== 'snoozed')) this.approvalMeta.delete(id);
+      }
     } catch (err) {
       console.error('[copilot] queue tick failed:', err);
     }
@@ -330,13 +360,19 @@ export class CopilotQueue {
   handleHook(headers: HookHeaders, body: unknown): Outcome<string | null> {
     const now = Date.now();
     const h = normalizeHook(headers.event, body);
-    const headerPty = parseId(headers.ptyId);
+    // X-Lee-Pty-Id is only believed for a PTY Lee spawned as Claude Code, so a
+    // hook POST can't point a Reply (paste + Enter) at a plain shell tab.
+    const claimedPty = parseId(headers.ptyId);
+    const headerPty = claimedPty != null && this.ptyManager.isClaudePty(claimedPty) ? claimedPty : null;
     const sessionId = h.session_id ?? (headerPty != null ? this.sessions.byPty(headerPty)?.session_id ?? null : null);
     if (!h.event || !sessionId) return { status: 204, body: null };
 
     const cfg = getCopilotConfig();
     const ptyId = this.sessions.resolvePty(sessionId, headerPty);
     const s = this.sessions.ensure(sessionId, ptyId, h.cwd, now);
+    // A hidden prewarmed Claude has no tab: keep its session (a tab adopts it
+    // later) and answer SessionStart, but open no items for it.
+    if (ptyId != null && h.event !== 'SessionStart' && this.ptyManager.isWarmPty(ptyId)) return { status: 204, body: null };
     const src = this.sourceFor(s, ptyId, h.cwd, parseId(headers.windowId));
     const key = sourceKey(src);
     const agent: Actor = { kind: 'agent', provider: 'claude', session_id: s.session_id, pty_id: ptyId };
@@ -361,6 +397,7 @@ export class CopilotQueue {
       case 'UserPromptSubmit': {
         ev('agent.prompt', { prompt_chars: h.prompt_chars ?? 0 });
         this.sessions.startBusy(s, now, true);
+        s.awaiting_approval = false;
         this.queue.resolveWhere(
           (i) => sourceKey(i.source) === key && ['approval', 'waiting', 'blocker', 'decision', 'review'].includes(i.kind),
           'answered_in_tab',
@@ -374,16 +411,39 @@ export class CopilotQueue {
         const writes = isWriteTool(tool);
         const signature = toolSignature(tool, h.tool_input);
         ev('agent.tool', { phase: 'pre', tool, files, writes, signature });
-        s.pending_tool = { name: tool, preview: toolPreview(tool, h.tool_input), signature, tool_use_id: h.tool_use_id, files };
+        this.sessions.openTool(s, {
+          name: tool,
+          preview: toolPreview(tool, h.tool_input),
+          signature,
+          tool_use_id: h.tool_use_id,
+          agent_id: h.agent_id,
+          files,
+        });
         if (writes) this.sessions.addWritten(s, files);
+        // The same agent started a newer call, so it is past its prompt.
+        const passed = this.queue.resolveWhere(
+          (i) => {
+            if (sourceKey(i.source) !== key || i.kind !== 'approval') return false;
+            const m = this.approvalMeta.get(i.id);
+            return (
+              !!m && !!m.tool_use_id && !!h.tool_use_id && m.tool_use_id !== h.tool_use_id &&
+              m.agent_id === h.agent_id && now - m.opened_at >= NEWER_TOOL_GRACE_MS
+            );
+          },
+          'answered_in_tab',
+          now,
+        );
+        if (passed > 0 && this.queue.findLive(key, ['approval']).length === 0) s.awaiting_approval = false;
         this.sessions.startBusy(s, now, false);
         break;
       }
       case 'PermissionRequest': {
+        const sig = h.tool_name ? toolSignature(h.tool_name, h.tool_input) : null;
+        const started = this.sessions.findOpenTool(s, h.tool_use_id, sig) ?? (h.tool_name ? null : s.pending_tool);
         const tool = h.tool_name
-          ? { name: h.tool_name, preview: toolPreview(h.tool_name, h.tool_input), signature: toolSignature(h.tool_name, h.tool_input) }
-          : s.pending_tool
-            ? { name: s.pending_tool.name, preview: s.pending_tool.preview, signature: s.pending_tool.signature }
+          ? { name: h.tool_name, preview: toolPreview(h.tool_name, h.tool_input), signature: sig as string }
+          : started
+            ? { name: started.name, preview: started.preview, signature: started.signature }
             : null;
         const item = this.queue.open(
           {
@@ -396,29 +456,45 @@ export class CopilotQueue {
           },
           now,
         );
+        this.noteApproval(item.id, h.tool_use_id ?? started?.tool_use_id ?? null, h.agent_id ?? started?.agent_id ?? null, now);
         ev('agent.waiting', { item_id: item.id, kind: 'approval' });
+        s.awaiting_approval = true;
         this.sessions.pauseBusy(s, now);
         break;
       }
-      case 'PostToolUse': {
+      case 'PostToolUse':
+      case 'PostToolUseFailure': {
+        const failed = h.event === 'PostToolUseFailure';
         const tool = h.tool_name ?? s.pending_tool?.name ?? 'unknown';
         const files = toolFiles(h.tool_input);
         const writes = isWriteTool(tool);
-        ev('agent.tool', { phase: 'post', tool, files, writes, signature: toolSignature(tool, h.tool_input) });
-        if (writes) this.sessions.addWritten(s, files);
+        const sig = toolSignature(tool, h.tool_input);
+        ev('agent.tool', { phase: 'post', tool, files, writes, signature: sig, ...(failed ? { failed: true } : {}) });
+        if (writes && !failed) this.sessions.addWritten(s, files);
+        // Only the approval for this call: parallel or subagent calls to the
+        // same tool must not clear a prompt that is still showing.
         this.queue.resolveWhere(
-          (i) => sourceKey(i.source) === key && i.kind === 'approval' && (!i.tool || i.tool.name === tool),
+          (i) => sourceKey(i.source) === key && i.kind === 'approval' && this.approvalMatches(i, h.tool_use_id, sig, tool),
           'answered_in_tab',
           now,
         );
-        s.pending_tool = null;
-        this.sessions.resumeBusy(s, now);
+        this.sessions.closeTool(s, h.tool_use_id, sig);
+        if (this.queue.findLive(key, ['approval']).length === 0) {
+          s.awaiting_approval = false;
+          this.sessions.resumeBusy(s, now);
+        }
         break;
       }
       case 'Notification': {
         const cls = classifyNotification(h.message, h.notification_type);
         if (cls === 'ignore') break;
         const nt = h.notification_type ? { notification_type: h.notification_type } : {};
+        if (cls !== 'approval' && h.notification_type === 'idle_prompt') {
+          // Claude is back at its input: any prompt is gone (Esc on a
+          // permission prompt interrupts the turn and fires no Stop).
+          this.queue.resolveWhere((i) => sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+          if (s.in_turn || s.awaiting_approval) this.sessions.interrupt(s, now);
+        }
         if (cls === 'approval') {
           const open = this.queue.findLive(key, ['approval'])[0];
           let item: AttentionItem | undefined;
@@ -438,7 +514,12 @@ export class CopilotQueue {
               now,
             );
           }
-          if (item) ev('agent.waiting', { ...nt, item_id: item.id, kind: 'approval' });
+          if (item) {
+            if (!open) this.noteApproval(item.id, s.pending_tool?.tool_use_id ?? null, s.pending_tool?.agent_id ?? null, now);
+            ev('agent.waiting', { ...nt, item_id: item.id, kind: 'approval' });
+          }
+          s.awaiting_approval = true;
+          this.sessions.pauseBusy(s, now);
         } else {
           const existing = this.queue.findLive(key, ['waiting', 'blocker', 'decision'])[0];
           const item =
@@ -455,16 +536,19 @@ export class CopilotQueue {
               now,
             );
           ev('agent.waiting', { ...nt, item_id: item.id, kind: 'waiting' });
+          // Outside a turn the agent is idle, not paused: a dismissed idle
+          // item must not keep it from taking a handoff follow-up.
+          if (s.in_turn) this.sessions.pauseBusy(s, now);
         }
-        this.sessions.pauseBusy(s, now);
         break;
       }
       case 'Stop': {
         const busyMs = this.sessions.endTurn(s, now);
-        let summary = h.last_assistant_message;
-        if (!summary && h.transcript_path) summary = readTranscriptTail(h.transcript_path);
-        summary = summary ? clip(summary.trim(), AGENT_TEXT_MAX) : null;
-        const lee = parseLeeStatus(summary);
+        const full = (h.last_assistant_message ?? (h.transcript_path ? readTranscriptTail(h.transcript_path) : null))?.trim() || null;
+        // The hint asks for the lee-status block at the END of the message, so
+        // parse the full text before clipping the stored summary.
+        const lee = parseLeeStatus(full);
+        const summary = full ? clip(full, AGENT_TEXT_MAX) : null;
         s.last_summary = summary;
         s.last_lee_status = lee;
         ev('agent.turn_end', { busy_ms: busyMs, ...(summary ? { summary } : {}), ...(lee ? { lee_status: lee } : {}) });
@@ -530,6 +614,51 @@ export class CopilotQueue {
         now,
       );
     }
+  }
+
+  private noteApproval(itemId: string, toolUseId: string | null, agentId: string | null, now: number): void {
+    const prev = this.approvalMeta.get(itemId);
+    this.approvalMeta.set(itemId, {
+      tool_use_id: toolUseId ?? prev?.tool_use_id ?? null,
+      agent_id: toolUseId ? agentId : prev?.agent_id ?? agentId,
+      opened_at: prev?.opened_at ?? now,
+    });
+  }
+
+  /** Does a finished call (PostToolUse[Failure]) belong to this approval? */
+  private approvalMatches(item: AttentionItem, toolUseId: string | null, signature: string, tool: string): boolean {
+    const m = this.approvalMeta.get(item.id);
+    if (m?.tool_use_id && toolUseId) return m.tool_use_id === toolUseId;
+    if (item.tool?.signature) return item.tool.signature === signature;
+    return !item.tool || item.tool.name === tool;
+  }
+
+  /**
+   * A person typed into a PTY. Enter, a digit or Esc while the agent sits on
+   * a permission prompt answers it in the tab: close the approval so a
+   * device can't later send a stale approve/deny into the running agent.
+   */
+  private onUserInput(ptyId: number, data: string): void {
+    const s = this.sessions.byPty(ptyId);
+    if (!s || !s.awaiting_approval) return;
+    const accept = PROMPT_ACCEPT_INPUT.test(data);
+    const cancel = data === PROMPT_CANCEL_INPUT;
+    if (!accept && !cancel) return;
+    const now = Date.now();
+    const key = `pty:${ptyId}`;
+    const open = this.queue
+      .findLive(key, ['approval'])
+      .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))[0];
+    if (open) this.queue.resolve(open.id, 'answered_in_tab', now);
+    if (cancel) {
+      // Esc declines and interrupts the turn; Claude fires no Stop for it.
+      this.queue.resolveWhere((i) => sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+      this.sessions.interrupt(s, now);
+    } else if (this.queue.findLive(key, ['approval']).length === 0) {
+      s.awaiting_approval = false;
+      this.sessions.resumeBusy(s, now);
+    }
+    this.changed();
   }
 
   // ---------------------------------------------------------------------------
@@ -602,7 +731,31 @@ export class CopilotQueue {
     if (ptyId == null || !this.ptyManager.get(ptyId)) {
       return { status: 410, body: { success: false, error: 'agent is gone' }, category };
     }
+    const s = item.source.session_id ? this.sessions.get(item.source.session_id) : this.sessions.byPty(ptyId);
+    if (check.action === 'approve' || check.action === 'deny') {
+      // Enter or Esc only mean approve/deny while the agent is actually on
+      // the prompt. Otherwise Esc would interrupt a running tool and Enter
+      // would submit whatever is in the input box (C3).
+      if (!s || s.ended || !s.awaiting_approval) {
+        this.queue.resolve(item.id, 'answered_in_tab', now);
+        return { status: 409, body: { success: false, error: 'stale', item: this.queue.get(item.id) }, category };
+      }
+    }
     writeReply((data) => this.ptyManager.write(ptyId, data), check.action, check.text);
+    if (s && check.action === 'deny') {
+      // Esc declines and interrupts the turn (no Stop follows), so every
+      // prompt of this agent is gone.
+      const key = sourceKey(item.source);
+      this.queue.resolveWhere((i) => i.id !== item.id && sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+      this.sessions.interrupt(s, now);
+    } else if (s && check.action === 'approve') {
+      // Another queued prompt (a parallel call) shows next: stay paused on it.
+      const others = this.queue.findLive(sourceKey(item.source), ['approval']).filter((i) => i.id !== item.id);
+      if (others.length === 0) {
+        s.awaiting_approval = false;
+        this.sessions.resumeBusy(s, now);
+      }
+    }
     this.log({
       type: 'attention.reply',
       workspace: item.source.workspace,
@@ -739,8 +892,10 @@ export class CopilotQueue {
   // ---------------------------------------------------------------------------
 
   private agentState(s: AgentSession): HandoffAgent['state'] {
+    // 'waiting' comes from open items only (§7.1): once the item is
+    // dismissed or snoozed away, an agent outside a turn is idle.
     if (s.pty_id != null && this.queue.findLive(`pty:${s.pty_id}`, ['approval', 'waiting']).length > 0) return 'waiting';
-    if (s.activity === 'waiting') return 'waiting';
+    if (s.activity === 'waiting') return s.in_turn ? 'busy' : 'idle';
     if (s.activity === 'busy' || s.in_turn) return 'busy';
     if (s.activity === 'idle') return 'idle';
     return 'unknown';
@@ -753,8 +908,10 @@ export class CopilotQueue {
     const live = this.sessions.live().sort((a, b) => b.last_event_at - a.last_event_at);
     for (const s of live) {
       if (s.pty_id == null || seen.has(s.pty_id) || !this.ptyManager.get(s.pty_id)) continue;
-      seen.add(s.pty_id);
+      // Hidden prewarmed Claudes (and any PTY no tab shows) are not agents yet.
       const tab = this.findTab(s.pty_id);
+      if (!tab || this.ptyManager.isWarmPty(s.pty_id)) continue;
+      seen.add(s.pty_id);
       const src = this.sourceFor(s, s.pty_id, null, null);
       agents.push({
         pty_id: s.pty_id,
@@ -824,7 +981,9 @@ export class CopilotQueue {
       }
       const title = (typeof l.title === 'string' && l.title.trim() ? l.title.trim() : prompt.slice(0, 40).trim()) || 'Claude';
       const slug = worktree ? slugify(title, Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')) : null;
-      const args = ['--permission-mode', mode, ...(slug ? ['--worktree', slug] : []), '-n', title, ...(prompt ? [prompt] : [])];
+      // '--' ends the options, so a prompt starting with '-' (a markdown
+      // bullet, say) stays the positional prompt instead of a CLI flag.
+      const args = ['--permission-mode', mode, ...(slug ? ['--worktree', slug] : []), '-n', title, ...(prompt ? ['--', prompt] : [])];
       target.browserWindow.webContents.send('system:create-tab', { type: 'terminal', label: title, command: 'claude', args });
       this.log({
         type: 'handoff.launch',
