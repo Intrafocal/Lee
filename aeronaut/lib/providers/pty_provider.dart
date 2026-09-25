@@ -119,9 +119,11 @@ class PtyNotifier extends StateNotifier<PtyState> {
 
 /// Family provider for PTY connections, keyed on PTY ID.
 ///
-/// NOT auto-dispose: PTY connections persist across tab switches
-/// so we don't re-connect and replay the buffer every time.
-final ptyProvider = StateNotifierProvider
+/// Auto-dispose: the stream is open only while a terminal is on screen.
+/// While it is open, Lee treats the tab as viewed on this device (it shows
+/// "phone connected" and sizes the PTY to this screen), so it must close as
+/// soon as the terminal isn't showing. Reconnecting replays Lee's buffer.
+final ptyProvider = StateNotifierProvider.autoDispose
     .family<PtyNotifier, PtyState, int>((ref, ptyId) {
   final machine = ref.watch(machinesProvider).activeMachine;
   final wsUrl = machine != null

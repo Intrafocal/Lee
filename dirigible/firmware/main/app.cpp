@@ -456,6 +456,10 @@ static void ball_hook(int dx, int dy, bool click, void*)
 void app_show(View v)
 {
     auto& a = app();
+    // Leaving the terminal by any route (menu, a jump to Waiting) must drop
+    // its PTY stream: while it is open Lee treats the tab as viewed here and
+    // sizes it to this screen.
+    if (v != View::Terminal && a.pty) terminal_close();
     a.view = v;
 
     lv_obj_add_flag(a.view_waiting,  LV_OBJ_FLAG_HIDDEN);
