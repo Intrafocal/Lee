@@ -92,12 +92,31 @@ async def _json_body(request: Request) -> Dict[str, Any]:
     return body
 
 
+COMPACT_TEXT_MAX = 280  # matches Lee's compact snapshot (attention-queue.ts)
+
+
+def _compact_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in item.items() if k not in ("files", "lee_status")}
+    text = out.get("text")
+    if isinstance(text, str) and len(text) > COMPACT_TEXT_MAX:
+        out["text"] = text[: COMPACT_TEXT_MAX - 1] + "\u2026"
+    return out
+
+
 async def fetch_attention_items(timeout: float = 2.0) -> Optional[List[Dict[str, Any]]]:
-    """Compact open items from Lee's ``GET /attention``; None when Lee is unreachable."""
+    """
+    Open items from Lee's ``GET /attention``, compacted here; None when Lee is
+    unreachable.
+
+    Lee's ``?compact=1`` caps the list at 25 across every workspace before the
+    digest can filter to one, so a busy window could hide this workspace's
+    items. Fetch the full live list and apply the same compaction (no snoozed,
+    no files, text <= 280) here; the digest caps after filtering.
+    """
     url = f"{lee_events.get_client().lee_url}/attention"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params={"compact": "1"}, headers=auth_headers())
+            resp = await client.get(url, headers=auth_headers())
     except Exception as e:
         logger.debug(f"Lee /attention unreachable: {e}")
         return None
@@ -106,7 +125,10 @@ async def fetch_attention_items(timeout: float = 2.0) -> Optional[List[Dict[str,
     try:
         data = resp.json().get("data") or {}
         items = data.get("items") or []
-        return [i for i in items if isinstance(i, dict)]
+        return [
+            _compact_item(i) for i in items
+            if isinstance(i, dict) and i.get("state") != "snoozed"
+        ]
     except Exception:
         return None
 

@@ -24,6 +24,7 @@ RETURN_MIN_AWAY_MS = 30 * 60 * 1000
 DEFAULT_LOOKBACK = timedelta(hours=12)
 SINCE_SCAN = timedelta(days=7)
 MAX_COMMITS = 500
+MAX_WAITING = 25
 MAX_AGENT_FILES = 50
 GIT_TIMEOUT_S = 5.0
 
@@ -449,6 +450,8 @@ def build_digest(
 
     parts = [_plural(len(wins), "win", "wins")]
     parts.append("Lee offline" if lee_offline else f"{len(waiting)} waiting")
+    # Same cap as Lee's compact snapshot, applied after the workspace filter.
+    waiting = waiting[:MAX_WAITING]
     parts.append(_plural(len(claims), "agent claim", "agent claims"))
 
     return {
