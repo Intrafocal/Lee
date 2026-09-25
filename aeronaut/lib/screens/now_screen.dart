@@ -18,7 +18,7 @@ import '../widgets/phosphor_icon.dart';
 import '../widgets/workspace_switcher.dart';
 
 /// The Now screen: steering, not monitoring (contracts §9.2). Waiting
-/// (Reply), quick Capture, the Focus toggle, Launch (v1 hand-off) and Wins
+/// (Reply), quick Capture, the Focus toggle, Launch (v1 hand-off) and Progress
 /// (v1 verified wins), all for the active machine.
 class NowScreen extends ConsumerWidget {
   const NowScreen({super.key});
@@ -355,7 +355,7 @@ class _WinsSectionState extends ConsumerState<_WinsSection> {
           ),
           child: Row(
             children: [
-              const Text('Wins', style: AeronautTheme.headline),
+              const Text('Progress', style: AeronautTheme.headline),
               const Spacer(),
               if (workspace != null)
                 IconButton(

@@ -158,7 +158,7 @@ G1 asks Lee to curate friction, not just remove it. That takes three distinction
 
 **No required reasons.** Nothing in Lee requires you to type a justification: not "Do it anyway", not pruning a branch. A reason field is always offered and always optional, and can be added later.
 
-**Wins are visible, and verified.** Finishing things is part of the fun. The digest (§8.1) and History lead with wins, but only **deterministic** ones: merged commits, operations that passed, goals whose metric moved, decisions recorded. An agent's own claim ("tests pass") is shown as the agent's claim, not as a win, until something confirms it.
+**Progress is visible, and verified.** Finishing things is part of the fun. The digest (§8.1) and History lead with progress, counting only **deterministic** evidence: merged commits, operations that passed, goals whose metric moved, decisions recorded. An agent's own claim ("tests pass") is shown as the agent's claim, not as a win, until something confirms it.
 
 ## 3. Steward mode
 
@@ -543,7 +543,7 @@ Commits and closed items, each showing its goal impact where known ("G1 +180 ms"
 
 The top of the rail has two parts, one per tier (§1.3):
 
-- **Digest** (preparation, automatic): a factual "since you left" list that leads with **wins** (what shipped, what got decided, which goals moved), then what changed, what's waiting, and Q2 candidates. It's assembled deterministically from the Cockpit model; after a copilot-mode period it also includes the local-model recaps prepared while you were idle (§11.3). It recommends nothing. It regenerates when you return after being idle and on a slow timer, and its top line goes to the status bar as an ambient message. Every line links to its item.
+- **Digest** (preparation, automatic): a factual "since you left" list that leads with **progress** (what shipped, what got decided, which goals moved), then what changed, what's waiting, and Q2 candidates. It's assembled deterministically from the Cockpit model; after a copilot-mode period it also includes the local-model recaps prepared while you were idle (§11.3). It recommends nothing. It regenerates when you return after being idle and on a slow timer, and its top line goes to the status bar as an ambient message. Every line links to its item.
 - **What next?** (thinking, on demand): a button that asks the steward to read the digest and the Cockpit model and recommend where to spend the next stretch of time, with evidence.
 
 After a copilot-mode period, the digest leads with what was prepared (§11.6).

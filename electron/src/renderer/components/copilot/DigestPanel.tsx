@@ -53,7 +53,7 @@ export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since,
 
               {digest.wins.length > 0 && (
                 <div className="copilot-digest-section">
-                  <div className="copilot-digest-section-title">Wins</div>
+                  <div className="copilot-digest-section-title">Progress</div>
                   {digest.wins.map((w, i) => (
                     <div className="copilot-digest-win" key={`${w.kind}-${w.ref ?? i}`}>
                       <span className="copilot-digest-win-title">{w.title}</span>
