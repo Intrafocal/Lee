@@ -272,7 +272,7 @@ void tabs_chrome()
     }
     if (buf[0]) chrome_set_centre(buf);
 
-    chrome_set_footer(multi ? "Click open  w window" : "Click open  Hold menu",
+    chrome_set_footer(multi ? "Click open  w window" : "Click open  Hold back",
                       "tabs");
 
     // One "Win" footer button while there is more than one window.  app_show

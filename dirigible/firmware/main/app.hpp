@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Tabs, Terminal, Hester, Pairing, Files, Viewer };
+enum class View { Waiting, Tabs, Terminal, Hester, Pairing, Files, Viewer };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -80,6 +80,7 @@ struct App {
     lv_group_t* group       = nullptr;
 
     // --- views ----------------------------------------------------------
+    lv_obj_t* view_waiting  = nullptr;
     lv_obj_t* view_tabs     = nullptr;
     lv_obj_t* view_terminal = nullptr;
     lv_obj_t* view_hester   = nullptr;
@@ -88,7 +89,7 @@ struct App {
     lv_obj_t* view_viewer   = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
-    View view = View::Tabs;
+    View view = View::Waiting;
 
     // --- tab list -------------------------------------------------------
     lv_obj_t*        tab_list = nullptr;
@@ -130,6 +131,7 @@ struct App {
     std::string pair_ip;        // device IP once WiFi is up
     int         pair_rssi   = 0;
     std::string pair_error;     // shown in red in the summary card
+    std::string pair_device_id; // from the grant; shown in the summary card
 };
 
 App& app();
@@ -140,8 +142,9 @@ void app_show(View v);
 
 /// The one way out of wherever you are.  Closes the menu if it is open,
 /// otherwise steps the current view back: the terminal drops its PTY and
-/// returns to the tab list, Hester and pairing unwind, and the tab list (which
-/// has nowhere further back) opens the menu.
+/// returns to the tab list, Hester and pairing unwind, the tab list returns to
+/// Waiting, and Waiting (which has nowhere further back once its detail or
+/// capture field is closed) opens the menu.
 ///
 /// Three things call this and they must stay in agreement: the header's
 /// on-screen button, the ESC key, and a trackball long-press.  Before E15 the
@@ -174,6 +177,21 @@ lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* use
 void app_set_status(const char* left, const char* right = nullptr);
 
 // Views ---------------------------------------------------------------------
+
+// Waiting: Lee's attention queue (Copilot v0, contracts §9.3), the default
+// view once connected.  Capture row on top, the waiting items below; an item
+// opens a detail with Approve/Deny or a reply field.  State lives in
+// screen_waiting.cpp.
+void waiting_build(lv_obj_t* parent);
+void waiting_open();                       // show it, refetch the queue
+void waiting_open_capture();               // show it with the capture field focused
+void waiting_render(bool new_snapshot = false);   // snapshot or link changed
+void waiting_chrome();                     // header centre, footer, rows
+bool waiting_back();                       // close detail/capture; false at root
+void waiting_alert();                      // an item's notify flipped: blink
+bool waiting_key(uint8_t ascii);
+void waiting_ball(int dx, int dy, bool click);
+
 void tabs_build(lv_obj_t* parent);
 void tabs_render(const dirigible::LeeContext* ctx);
 /// Tab-list header centre and footer: the active Lee window when there is

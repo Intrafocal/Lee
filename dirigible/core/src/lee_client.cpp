@@ -97,7 +97,18 @@ void LeeConnection::onWsMessage(cJSON* msg) {
     cJSON* type_item = cJSON_GetObjectItemCaseSensitive(msg, "type");
     if (!type_item || !cJSON_IsString(type_item)) return;
 
-    if (strcmp(type_item->valuestring, "context_update") != 0) return;
+    if (strcmp(type_item->valuestring, "context_update") != 0) {
+        // Copilot types share the socket (contracts §12 #2).
+        if (strcmp(type_item->valuestring, "attention_snapshot") == 0) {
+            AttentionSnapshot snap;
+            if (attention_snapshot_parse(
+                    cJSON_GetObjectItemCaseSensitive(msg, "data"), snap)) {
+                setAttention(std::move(snap));
+            }
+        }
+        if (on_copilot_message_) on_copilot_message_(msg);
+        return;
+    }
 
     // Every Lee window broadcasts here.  Drop the ones we aren't showing; an
     // untagged update (older Lee) is taken as-is, as Aeronaut does.
@@ -136,6 +147,7 @@ void LeeConnection::onWsConnected() {
     EventBus::instance().emit(Event::ConnectionChanged);
     // Windows may have opened or closed while we were away.
     refreshWindows();
+    fetchAttention();
 }
 
 void LeeConnection::onWsDisconnected() {
@@ -356,6 +368,88 @@ void LeeConnection::fsRead(const std::string& path, bool stat_only,
     http_->get(url, [cb](int status, cJSON* resp) {
         FsReadResult r;
         fs_read_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Copilot: attention queue, reply, capture
+// ---------------------------------------------------------------------------
+
+void LeeConnection::onCopilotMessage(std::function<void(cJSON*)> cb) {
+    on_copilot_message_ = std::move(cb);
+}
+
+void LeeConnection::setAttention(AttentionSnapshot&& snap) {
+    const bool rose = attention_ok_ && attention_notify_rose(attention_, snap);
+    attention_ = std::move(snap);
+    attention_ok_ = true;
+    attention_404_ = false;
+    EventBus::instance().emit(Event::AttentionChanged);
+    if (rose) EventBus::instance().emit(Event::AttentionAlert);
+}
+
+void LeeConnection::fetchAttention(std::function<void(bool ok)> cb) {
+    if (!http_) {
+        if (cb) cb(false);
+        return;
+    }
+    std::weak_ptr<int> alive = alive_;
+    http_->get(buildHttpUrl("/attention?compact=1"),
+               [this, alive, cb](int status, cJSON* resp) {
+        if (alive.expired()) return;
+        AttentionSnapshot snap;
+        const bool ok = status >= 200 && status < 300 &&
+                        attention_snapshot_parse(resp, snap);
+        if (ok) {
+            setAttention(std::move(snap));
+        } else if (status == 404 && !attention_ok_) {
+            attention_404_ = true;
+            EventBus::instance().emit(Event::AttentionChanged);
+        }
+        if (cb) cb(ok);
+    });
+}
+
+void LeeConnection::attentionReply(const std::string& id, const char* action,
+                                   const std::string& text, int version,
+                                   std::function<void(const ReplyResult&)> cb) {
+    if (!http_) {
+        ReplyResult r;
+        reply_result_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "action", action);
+    if (strcmp(action, "text") == 0) cJSON_AddStringToObject(body, "text", text.c_str());
+    cJSON_AddNumberToObject(body, "version", version);
+
+    const std::string url = buildHttpUrl("/attention/") + url_encode(id) + "/reply";
+    http_->post(url, body, [cb](int status, cJSON* resp) {
+        ReplyResult r;
+        reply_result_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::capture(const std::string& text,
+                            std::function<void(const CaptureOutcome&)> cb) {
+    if (!http_) {
+        CaptureOutcome r;
+        capture_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "text", text.c_str());
+    // Lee's default is the focused window; capture belongs to the one we follow.
+    if (const LeeWindow* w = activeWindow(); w && !w->workspace.empty()) {
+        cJSON_AddStringToObject(body, "workspace", w->workspace.c_str());
+    }
+    http_->post(buildHttpUrl("/capture"), body, [cb](int status, cJSON* resp) {
+        CaptureOutcome r;
+        capture_outcome_parse(status, resp, r);
         if (cb) cb(r);
     });
 }

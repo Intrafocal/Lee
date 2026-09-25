@@ -8,7 +8,7 @@
  *   2  Discover  mDNS PTR for _lee._tcp, pick a host — or "Manual entry"
  *   3  Host      "host" or "host:port" when discovery found nothing
  *   4  Approve   show a 6-digit code, poll until the user approves it on Lee
- *   5  Save      machine written to NVS, connection opened, view → Tabs
+ *   5  Save      machine written to NVS, connection opened, view → Waiting
  *   6  Token     fallback: type the 36-char bearer by hand
  *
  * Step 4 is the code-approval flow (E19).  The device invents a 6-digit code
@@ -217,6 +217,11 @@ void card_update()
         char h[48];
         snprintf(h, sizeof(h), "%sHESTER %d#\n", hdr, a.pair_hester_port);
         t += h;
+    }
+
+    if (!a.pair_device_id.empty()) {
+        t += hdr; t += "DEVICE#\n";
+        t += safe(a.pair_device_id, 20) + "\n";
     }
 
     if (!a.pair_error.empty()) {
@@ -705,8 +710,10 @@ void step_host()
 /// Both the approve step and the typed-token fallback end here.  `name`, when
 /// non-empty, is Lee's own friendly instance name from the pairing grant — it
 /// beats the mDNS label, and it is what the user will see in Lee's logs.
+/// `device_id` is set when Lee issued a per-device token (Copilot v0); it is
+/// empty for a typed token or an older Lee, and then any stale id is cleared.
 void save_machine(const std::string& token, const std::string& name,
-                  int hester_port)
+                  int hester_port, const std::string& device_id)
 {
     auto& a = app();
 
@@ -722,8 +729,11 @@ void save_machine(const std::string& token, const std::string& name,
 
     a.config->addMachine(m);
     a.config->setToken(m.name, token);
-    ESP_LOGI(TAG, "paired %s -> %s:%d (hester %d)", m.name.c_str(),
-             m.host.c_str(), m.lee_port, m.hester_port);
+    a.config->setDeviceId(m.name, device_id);
+    a.pair_device_id = device_id;
+    ESP_LOGI(TAG, "paired %s -> %s:%d (hester %d) device %s", m.name.c_str(),
+             m.host.c_str(), m.lee_port, m.hester_port,
+             device_id.empty() ? "(shared token)" : device_id.c_str());
 
     step_save();
 }
@@ -815,7 +825,7 @@ void approve_poll_done(int gen, dirigible::PairingClient::Status status,
         poll_timer_stop();
         set_centre("approved");
         approve_set_meter("approved - saving...", dg::phosphor());
-        save_machine(grant.token, grant.name, grant.hester_port);
+        save_machine(grant.token, grant.name, grant.hester_port, grant.device_id);
         return;
 
     case S::Denied:
@@ -1030,7 +1040,7 @@ void token_ready(lv_event_t* e)
 
     // Nothing to learn from the wire here, so keep the name and Hester port
     // the discovery step found.
-    save_machine(raw, "", a.pair_hester_port);
+    save_machine(raw, "", a.pair_hester_port, "");
 }
 
 void step_token()
@@ -1081,7 +1091,7 @@ void step_save()
     a.config->load();
     a.machines->loadFromConfig(a.config);
     connect_active_machine();
-    app_show(View::Tabs);
+    waiting_open();
 }
 
 // ---------------------------------------------------------------------------
@@ -1255,6 +1265,7 @@ void pairing_begin()
 {
     dirigible_esp::WifiEsp::instance().init();
     app().pair_error.clear();
+    app().pair_device_id.clear();
     app_show(View::Pairing);
     card_update();
 #if DIRIGIBLE_UI_DEMO
@@ -1270,14 +1281,14 @@ void pairing_back()
     case 0:
         // Nowhere further back; leave the flow only if there is something to
         // go back to.
-        if (a.config && a.config->machineCount() > 0) app_show(View::Tabs);
+        if (a.config && a.config->machineCount() > 0) waiting_open();
         return;
     case 1: step_wifi();     return;
     case 2: step_password(); return;
     case 3: step_discover(); return;
     case 4: step_discover(); return;   // approve -> back to the host list
     case 6: step_approve();  return;   // typed-token fallback -> back to the code
-    default: app_show(View::Tabs); return;
+    default: waiting_open(); return;
     }
 }
 
