@@ -319,6 +319,22 @@ Watching tabs and reading output is still possible, one level down. Devices are 
 
 Checking your phone makes you engaged but doesn't make you "at the machine", so it doesn't preempt copilot mode on the Mac.
 
+### 5.2 Device profiles
+
+The two devices share one data model (the attention queue, Someday, the digest) but are good at different things, so each surface is designed to its device's strengths rather than ported between them. From hands-on use:
+
+| | **Dirigible (T-Deck)** | **Aeronaut (phone)** |
+|---|---|---|
+| Strong | Trackball scrolling through long text; typing letters (a real keyboard, good for longer replies); touch and swipe | Visual display; touch, buttons and swipes |
+| Weak | Precise pointing (the trackball); symbols and numbers (non-standard key combos) | Typing |
+| Best for | Reading an agent's full words and writing a considered reply; capturing an idea in a sentence | Quick decisions at a glance; reviewing visual output (diffs, previews, possibly a canvas shared with Lee) |
+
+**Design rules that follow:**
+
+- **Dirigible:** one item per page, swipe or `j`/`k` between items, trackball scrolls the text. Actions are a few large touch buttons, each also bound to a **plain letter** (`y` approve, `n` deny, `r` reply, `d` dismiss, `c` capture, `f` focus). No shortcut needs a symbol or a digit. Replies get a large text box. Montserrat for text; monospace only in the terminal.
+- **Aeronaut:** buttons and swipes over typing. Offer **quick-reply chips** (e.g. "Yes, go ahead", "Stop and wait for me", "Explain first") alongside the text field; prefer tap targets to text entry for anything common. Use the larger, richer display for visual context (diffs, previews, wins).
+- **Both:** the terminal stream for a tab is open only while that terminal is on screen, since Lee treats an open stream as "viewed on this device" and sizes the PTY to it.
+
 ---
 
 # Part II: Cockpit
