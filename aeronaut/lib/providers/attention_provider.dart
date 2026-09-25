@@ -8,6 +8,23 @@ import '../services/copilot_api.dart';
 import 'connection_provider.dart';
 import 'machines_provider.dart';
 
+/// The ids of [snapshot]'s items whose `notify` is true.
+Set<String> notifyingIds(AttentionSnapshot snapshot) =>
+    {for (final item in snapshot.items) if (item.notify) item.id};
+
+/// Items in [snapshot] whose `notify` is true and whose id was not in
+/// [previouslyNotified] — the false→true edge contracts §9.2 alerts on
+/// (absent counts as false, same as [notifyingIds]). A pure function so the
+/// edge detection itself can be unit-tested without a live provider.
+Iterable<AttentionItem> notifyRoseItems(
+  Set<String> previouslyNotified,
+  AttentionSnapshot snapshot,
+) sync* {
+  for (final item in snapshot.items) {
+    if (item.notify && !previouslyNotified.contains(item.id)) yield item;
+  }
+}
+
 /// Live attention-queue state for the active machine's Now screen
 /// (contracts §9.2).
 class AttentionUiState {
@@ -46,6 +63,20 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
   StreamSubscription<AttentionSnapshot>? _wsSubscription;
   String? _machineId;
 
+  // Contracts §9.2: "In-app banner (and haptic) when an item's `notify`
+  // flips true." Quiet hours are already applied server-side (Lee only
+  // sets `notify: true` outside them), so the client's only job is to spot
+  // the false→true edge and alert exactly once per edge — never on the
+  // snapshot that first populates the queue (e.g. app launch, or switching
+  // to a machine that already has a notifying item), which is not a flip.
+  final _notifyRoseController = StreamController<AttentionItem>.broadcast();
+  Set<String> _notifiedIds = {};
+  bool _hasBaseline = false;
+
+  /// Emits the item each time its `notify` goes false→true (absent counts
+  /// as false). The UI (RootShell) turns this into a banner + haptic.
+  Stream<AttentionItem> get notifyRoseStream => _notifyRoseController.stream;
+
   AttentionNotifier(this._ref) : super(const AttentionUiState()) {
     _ref.listen<MachinesState>(machinesProvider, (prev, next) {
       final id = next.activeMachineId;
@@ -64,6 +95,8 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
   void _onMachineChanged(Machine? machine) {
     _wsSubscription?.cancel();
     _wsSubscription = null;
+    _notifiedIds = {};
+    _hasBaseline = false;
     if (machine == null) {
       state = const AttentionUiState();
       return;
@@ -72,9 +105,24 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
     _wsSubscription =
         _ref.read(connectionProvider.notifier).attentionStream.listen((snapshot) {
       if (_ref.read(machinesProvider).activeMachineId != machine.id) return;
+      _applyNotifyEdge(snapshot);
       state = state.copyWith(snapshot: snapshot, loading: false, clearError: true);
     });
     unawaited(refresh());
+  }
+
+  /// Diffs [snapshot] against the ids that were notifying last time we
+  /// looked, and emits any newly-notifying item on [notifyRoseStream]. The
+  /// very first snapshot after a machine (re)connect only establishes the
+  /// baseline; it never itself alerts.
+  void _applyNotifyEdge(AttentionSnapshot snapshot) {
+    if (_hasBaseline) {
+      for (final item in notifyRoseItems(_notifiedIds, snapshot)) {
+        _notifyRoseController.add(item);
+      }
+    }
+    _notifiedIds = notifyingIds(snapshot);
+    _hasBaseline = true;
   }
 
   Future<void> refresh() async {
@@ -86,6 +134,7 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
       final snapshot = await api.getSnapshot();
       if (!mounted || _ref.read(machinesProvider).activeMachineId != machine.id) return;
       if (snapshot != null) {
+        _applyNotifyEdge(snapshot);
         state = state.copyWith(snapshot: snapshot, loading: false, clearError: true);
       } else {
         state = state.copyWith(loading: false, error: 'Could not reach the queue.');
@@ -202,6 +251,7 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
   @override
   void dispose() {
     _wsSubscription?.cancel();
+    unawaited(_notifyRoseController.close());
     super.dispose();
   }
 }

@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/attention.dart';
+import '../providers/attention_provider.dart';
 import '../providers/machines_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
@@ -36,6 +41,7 @@ class _RootShellState extends ConsumerState<RootShell> {
   final _navigatorKeys = {
     for (final tab in RootTab.values) tab: GlobalKey<NavigatorState>(),
   };
+  StreamSubscription<AttentionItem>? _notifyRoseSub;
 
   static Widget _rootFor(RootTab tab) => switch (tab) {
         RootTab.now => const RequireMachine(child: NowScreen()),
@@ -57,6 +63,44 @@ class _RootShellState extends ConsumerState<RootShell> {
         ref.read(rootTabProvider.notifier).state = RootTab.now;
       }
     });
+    // Contracts §9.2: banner + haptic the moment an item's `notify` flips
+    // true, wherever the user currently is in the app — not just when
+    // they're already looking at Now.
+    _notifyRoseSub = ref.read(attentionProvider.notifier).notifyRoseStream.listen(_onNotifyRose);
+  }
+
+  @override
+  void dispose() {
+    _notifyRoseSub?.cancel();
+    super.dispose();
+  }
+
+  void _onNotifyRose(AttentionItem item) {
+    if (!mounted) return;
+    HapticFeedback.heavyImpact();
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentMaterialBanner();
+    messenger.showMaterialBanner(
+      MaterialBanner(
+        backgroundColor: AeronautColors.bgSurface,
+        contentTextStyle: AeronautTheme.subheadline.copyWith(color: AeronautColors.textPrimary),
+        leading: const PhosphorIcon(PhosphorIcons.bell, size: 20, color: AeronautColors.accent),
+        content: Text(item.title.isEmpty ? 'Lee needs you' : item.title),
+        actions: [
+          TextButton(
+            onPressed: () {
+              messenger.hideCurrentMaterialBanner();
+              ref.read(rootTabProvider.notifier).state = RootTab.now;
+            },
+            child: const Text('View'),
+          ),
+          TextButton(
+            onPressed: messenger.hideCurrentMaterialBanner,
+            child: const Text('Dismiss'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _select(RootTab tab) {
