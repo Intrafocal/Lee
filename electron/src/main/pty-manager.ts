@@ -16,7 +16,7 @@ import * as net from 'net';
 import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
-import { withClaudeHooks } from './copilot/hook-install';
+import { isClaude, withClaudeHooks } from './copilot/hook-install';
 
 /**
  * Check if a port is available (not in use).
@@ -242,6 +242,8 @@ export interface PTYProcess {
   pty: pty.IPty;
   state: LeeState;
   windowId: number | null;  // null = daemon/background
+  /** Spawned as Claude Code (so with Lee's hook settings when they exist). */
+  claude?: boolean;
 }
 
 /**
@@ -254,6 +256,8 @@ export interface PTYProcess {
  */
 export class PTYManager extends EventEmitter {
   private processes: Map<number, PTYProcess> = new Map();
+  /** Lee's API port, set by the APIServer; exported to PTYs as LEE_API_URL. */
+  apiPort = 9001;
   private nextId = 1;
   private shell: string;
   private config: LeeConfig;
@@ -843,10 +847,12 @@ export class PTYManager extends EventEmitter {
       }
     }
     finalArgs = withClaudeHooks(cmd, finalArgs);
+    const claude = isClaude(cmd);
 
     this.log('INFO', `Spawning PTY ${id}`, {
       command: cmd,
-      args: finalArgs,
+      // Claude argv can carry the user's prompt text (handoff launches); keep it out of lee.log.
+      args: claude ? `[${finalArgs.length} args]` : finalArgs,
       cwd: cwd || process.cwd(),
       name: name || cmd,
       loginShell: loginShell && !command,
@@ -863,7 +869,9 @@ export class PTYManager extends EventEmitter {
     }
     env.LEE_PTY_ID = String(id);
     if (windowId != null) env.LEE_WINDOW_ID = String(windowId);
-    if (!env.LEE_API_URL) env.LEE_API_URL = 'http://127.0.0.1:9001';
+    // Always Lee's own loopback API: an inherited or workspace-sourced value
+    // would send hook payloads and the shared token elsewhere.
+    env.LEE_API_URL = `http://127.0.0.1:${this.apiPort}`;
 
     const ptyProcess = pty.spawn(cmd, finalArgs, {
       name: 'xterm-256color',
@@ -879,6 +887,7 @@ export class PTYManager extends EventEmitter {
       pty: ptyProcess,
       state: {},
       windowId: windowId ?? null,
+      claude,
     };
 
     this.processes.set(id, proc);
@@ -1976,6 +1985,27 @@ export class PTYManager extends EventEmitter {
     } else {
       this.log('WARN', `Write to non-existent PTY ${id}`, { dataLength: data.length });
     }
+  }
+
+  /**
+   * Note keyboard input a person typed into a PTY (the renderer's pty:write
+   * IPC or a paired device's PTY stream), after it was written. Emits
+   * 'user-input' so the Copilot queue can see a permission prompt answered in
+   * the tab. Reply writes from the queue itself do not come through here.
+   */
+  noteUserInput(id: number, data: string): void {
+    if (this.processes.has(id)) this.emit('user-input', id, data);
+  }
+
+  /** True when the PTY was spawned as Claude Code. */
+  isClaudePty(id: number): boolean {
+    return this.processes.get(id)?.claude === true;
+  }
+
+  /** True while the PTY is a hidden prewarmed process no tab has adopted. */
+  isWarmPty(id: number): boolean {
+    const name = this.processes.get(id)?.name;
+    return !!name && name.endsWith(' (warm)');
   }
 
   /**

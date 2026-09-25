@@ -29,6 +29,7 @@ import {
   PAIRING_MAX_PENDING_PER_IP,
 } from './pairing-store';
 import { LeeContext } from '../shared/context';
+import type { Principal } from '../shared/copilot';
 import { registerQueueRoutes } from './copilot/queue-routes';
 
 export interface APIServerConfig {
@@ -229,9 +230,20 @@ export class APIServer {
     this.ptyManager = config.ptyManager;
     this.browserManager = config.browserManager;
     this.port = config.port;
+    this.ptyManager.apiPort = config.port;
     this.authToken = APIServer.loadOrCreateAuthToken();
 
     this.app = express();
+    // Claude Code hook bodies carry whole tool inputs (a large Write or Edit
+    // easily passes 100 KB) and come only from the local hook script, so
+    // /agent/hook from loopback gets a bigger limit. The global parser below
+    // skips a body that is already parsed.
+    const hookJson = express.json({ limit: '8mb' });
+    this.app.use('/agent/hook', (req, res, next) => {
+      const addr = req.socket?.remoteAddress ?? '';
+      if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') hookJson(req, res, next);
+      else next();
+    });
     this.app.use(express.json());
 
     // CORS - only allow localhost origins (Aeronaut, Flutter web, etc.)
@@ -525,8 +537,9 @@ export class APIServer {
             this.ptyManager.on('exit', onExit);
 
             // Forward client input to PTY (supports raw text or JSON commands)
+            const principal = (request as any)._principal as Principal | undefined;
             ws.on('message', (msg) => {
-              noteDeviceWsInput((request as any)._principal);
+              noteDeviceWsInput(principal);
               const text = typeof msg === 'string' ? msg : msg.toString();
               // Try to parse as JSON command (e.g. resize)
               try {
@@ -538,7 +551,17 @@ export class APIServer {
               } catch {
                 // Not JSON — treat as raw PTY input
               }
+              // Keystrokes into an agent PTY are a Reply-class action (C3,
+              // contract §4.4): Enter or Esc on a permission prompt approves
+              // or denies it. There only a paired device (a person) may type;
+              // the shared token (Hester, scripts, the agent itself, legacy
+              // LAN clients, Spyglass) can watch and resize but its input is
+              // dropped. Shells stay typable with the shared token (Spyglass),
+              // which can already run commands via /command. The renderer
+              // types over IPC.
+              if (principal?.kind !== 'device' && this.ptyManager.isClaudePty(ptyId)) return;
               this.ptyManager.write(ptyId, text);
+              if (principal?.kind === 'device') this.ptyManager.noteUserInput(ptyId, text);
             });
 
             // Cleanup on close/error
@@ -1128,11 +1151,17 @@ export class APIServer {
           this.ptyManager.log('INFO', 'Device paired by code', { device_id: issued.device_id, device: entry.device, ip: entry.ip });
           return { token: issued.token, device_id: issued.device_id, ...base };
         } catch (err) {
-          this.ptyManager.log('ERROR', 'Device token issuance failed; granting the shared token', { error: String(err) });
-          return { token: this.authToken, ...base };
+          // Never fall back to the shared token: it can't be listed or
+          // revoked. The approval is consumed; the device has to pair again.
+          this.ptyManager.log('ERROR', 'Device token issuance failed; pairing not completed', { error: String(err) });
+          throw err;
         }
       };
-      res.json(this.pairing.poll(nonce, grant));
+      try {
+        res.json(this.pairing.poll(nonce, grant));
+      } catch {
+        res.json({ status: 'expired' });
+      }
     });
 
     // ============================================
