@@ -38,14 +38,19 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (fn: () => Promise<{ success: boolean; error?: string }>) => {
+  const run = async (fn: () => Promise<{ success: boolean; error?: string }>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       const result = await fn();
-      if (!result.success) setError(result.error || 'failed');
+      if (!result.success) {
+        setError(result.error || 'failed');
+        return false;
+      }
+      return true;
     } catch {
       setError('failed');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -54,9 +59,14 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
   const sendReply = () => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    void run(() => api.reply(item.id, { action: 'text', text: trimmed, version: item.version })).then(() => {
-      setReplying(false);
-      setText('');
+    // Only clear/close on success - on a failure (e.g. a stale 409 from a
+    // version bump elsewhere) the user's typed reply must survive so they
+    // don't have to retype it.
+    void run(() => api.reply(item.id, { action: 'text', text: trimmed, version: item.version })).then((ok) => {
+      if (ok) {
+        setReplying(false);
+        setText('');
+      }
     });
   };
 

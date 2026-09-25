@@ -24,6 +24,7 @@
     "dist:linux": "npm run fetch-python && npm run fetch-redis && electron-builder --linux",
     "clean": "rm -rf dist out node_modules/.vite",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "test:copilot-renderer": "node scripts/copilot-renderer-smoke.mjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "npx @electron/rebuild"
   },

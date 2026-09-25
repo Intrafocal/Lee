@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { Icon } from '../Icon';
+import { resolveSummaryAtTime } from '../../lib/copilotAttention';
 import type { CopilotAPI, HandoffLaunch, HandoffProposals, SummaryPolicy } from '../../../shared/copilot';
 
 interface HandoffDialogProps {
@@ -75,13 +76,15 @@ export const HandoffDialog: React.FC<HandoffDialogProps> = ({ api, workspace, on
       return next;
     });
 
+  const summaryAtInvalid = summary.mode === 'at' && !summaryAt;
+
   const launch = async () => {
-    if (!proposals) return;
+    if (!proposals || summaryAtInvalid) return;
     setBusy(true);
     setError(null);
     try {
       const finalSummary: SummaryPolicy =
-        summary.mode === 'at' ? { mode: 'at', at: summaryAt ? new Date(summaryAt).toISOString() : new Date().toISOString() } : summary;
+        summary.mode === 'at' ? { mode: 'at', at: resolveSummaryAtTime(summaryAt) } : summary;
       const result = await api.handoffStart({
         followups: Object.entries(followups)
           .filter(([, text]) => text.trim())
@@ -281,7 +284,11 @@ export const HandoffDialog: React.FC<HandoffDialogProps> = ({ api, workspace, on
           <button className="copilot-btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button className="copilot-btn copilot-btn-primary" onClick={() => void launch()} disabled={busy || !proposals}>
+          <button
+            className="copilot-btn copilot-btn-primary"
+            onClick={() => void launch()}
+            disabled={busy || !proposals || summaryAtInvalid}
+          >
             Launch
           </button>
         </div>
