@@ -166,7 +166,7 @@ Field names are fixed. Optional fields are marked `?`. *Writer* is the package t
 | `handoff.launch` | B | `handoff_id`, `provider`, `workspace`, `worktree`, `permission_mode` | one per launched agent |
 | `away.summary` | B | `handoff_id`, `parked`, `waiting`, `turns_ended` | |
 | `handoff.end` | B | `handoff_id`, `reason: 'return'\|'manual'`, `away_ms` | |
-| `model.call` | D (via ingest) | `provider: 'gemini'\|'ollama'\|'other'`, `model`, `op: 'generate'\|'stream'\|'embed'\|'subprocess'`, `location: 'cloud'\|'local'`, `trigger: {kind: 'user'\|'automatic'\|'unknown', name?, surface?, request_path?}`, `ok`, `duration_ms?`, `ts_source` | |
+| `model.call` | D (via ingest) | `provider: 'gemini'\|'ollama'\|'other'`, `model`, `op: 'generate'\|'stream'\|'embed'\|'subprocess'`, `location: 'cloud'\|'local'`, `trigger: {kind: 'user'\|'automatic'\|'unknown', name?, surface?, request_path?}`, `ok`, `duration_ms?`, `ts_source` | For `op: 'subprocess'` the event is recorded before the run (§8.2), so `ok` means "launched" and `duration_ms` is absent |
 | `someday.triage` | D (via ingest) | `someday_id`, `action: 'explore'\|'promote'\|'drop'\|'keep'`, `age_ms` | actor = the human |
 | `digest.shown` | D (via ingest) | `since`, `wins`, `waiting`, `claims`, `surface` | actor = the viewer |
 | `retro.shown` / `retro.answered` | D (via ingest) | `week`, `answered: string[]` (question ids only) | answers themselves live in the retro file (§8.6) |
@@ -215,7 +215,7 @@ All metrics are computed over a window `[from, to)` from the event log alone. An
 | **focus_interruptions** | Per `focus.end`: its `interruptions` (cross-check: `attention.escalate surfaced=true during_focus=true` with that `ctx.focus_session_id`). |
 | **background_leverage** (v0: busy time only) | Σ `agent.turn_end.busy_ms` per hour of focus time (Σ `focus.end.duration_ms`). "Accepted result" needs v2 tasks; report busy time and mark accepted as unavailable. |
 | **device_creative_share** | Per device and overall: creative / (creative + managing) over `device.request` (categories §4.5) plus `device.views` minutes as managing. |
-| **capture_pickup** | Captures with `ctx.at_machine=false` (or a device actor) that got a `someday.triage` within 14 days / all such captures older than 14 days. |
+| **capture_pickup** | Captures with `ctx.at_machine=false` (or a device actor) that got a `someday.triage` with `action ∈ {explore, promote, drop}` (a `keep` doesn't count) within 14 days / all such captures older than 14 days. Spooled captures (`spooled: true`) with no `someday_id` can't be linked to a triage and are left out of both counts (formula_version 2). |
 | **attention_latency** | Median over `attention.resolve` with `kind ∈ {approval, waiting, decision, blocker}` and `resolution ∈ {reply, answered_in_tab}` of `latency_ms` (= resolve time − item `created_at`). |
 | **C1** | `model.call` with `location='cloud'` and `trigger.kind ≠ 'user'`. Target 0. |
 | **C2** | `model.call` with `trigger.kind ≠ 'user'` and `ctx.at_machine = true`. Target 0. |
@@ -363,12 +363,15 @@ export function noteDeviceWsInput(principal: Principal | undefined): void;  // P
 |---|---|---|---|---|
 | GET `/attention*`, `/focus`, `/away`, `/presence`, `/handoff/proposals` | ✓ | ✓ | ✓ | ✓ |
 | Reply, snooze, dismiss, wake, open, focus start/stop, handoff start/end | ✓ | ✓ | **403** | **403** |
+| Typed input on the `/pty/:id/stream` WebSocket into an agent PTY (one Lee spawned as `claude`) | ✓ (IPC) | ✓ | dropped | dropped |
 | `POST /capture` | ✓ | ✓ | ✓ (scripts) | ✓ |
 | `POST /agent/hook` | — | 403 | ✓ | 403 |
 | `POST /events/ingest` | — | 403 | ✓ | 403 |
 | `GET /devices`, `DELETE /devices/:id` | ✓ (IPC) | own id only | ✓ | 403 |
 
 Hester has only the shared token, so it structurally cannot reply or approve (C3). A legacy device that still holds the shared token can read but must re-pair to reply.
+
+Agent-PTY keystrokes over the PTY stream are Reply-class: with the shared token the stream still delivers output and accepts resize, and typed input into shell PTYs still works (Spyglass types into remote shells, and the shared token can already run commands through `/command`), but typed input into an agent PTY is silently dropped. Spyglass (which uses the remote machine's shared token) therefore can't answer remote agent prompts until it pairs for a device token.
 
 ### 4.5 Attribution into the event log
 
@@ -418,7 +421,7 @@ Devices call Hester :9000 directly (chat, digest). D extends `hester/shared/auth
 
 Notification classification (tolerant): `notification_type === 'permission_prompt'` or `/permission|approve|allow|wants to (use|run)/i` on `message` → approval; `notification_type === 'auth_success'` → ignore; otherwise waiting.
 
-**Resolution in the tab** (`answered_in_tab`): an open `approval` resolves on `PostToolUse` of the pending tool, `UserPromptSubmit`, or `Stop`. `waiting`/`blocker`/`decision`/`review` resolve on `UserPromptSubmit`. `review` also resolves on `tab.focus` of that agent's tab (you looked at a finished result, which is the good kind of reading), and expires after `attention.review_expiry_hours` (12). Any open item resolves `agent_exit` when its PTY exits.
+**Resolution in the tab** (`answered_in_tab`): an open `approval` resolves on `PostToolUse` or `PostToolUseFailure` of the pending tool (matched by `tool_use_id`, then tool signature, then tool name only when neither is known), a newer `PreToolUse` from the same agent with a different `tool_use_id` arriving ≥ 2 s after the approval opened, an `idle_prompt` Notification (which also ends the turn), in-tab Enter, a digit or Esc typed into the agent PTY while it is paused on the prompt (Esc also ends the turn), `UserPromptSubmit`, or `Stop`. A deny resolves that agent's other open approvals. Approve/deny when the session is no longer paused on a prompt returns **409 `stale`**, writes no keys, and resolves the item `answered_in_tab`. `waiting`/`blocker`/`decision`/`review` resolve on `UserPromptSubmit`. `review` also resolves on `tab.focus` of that agent's tab (you looked at a finished result, which is the good kind of reading), and expires after `attention.review_expiry_hours` (12). Any open item resolves `agent_exit` when its PTY exits.
 
 Order in lists: severity (blocking, needs-you, ambient), then `active_wait_ms` descending. Quadrants don't exist until v4.
 
@@ -550,16 +553,24 @@ Verified on this machine against `claude` 2.1.282 (`claude --help` and `~/.claud
 # Usage (from --settings): /bin/sh claude-hook.sh <HookEventName>   (payload on stdin)
 EVENT="${1:-unknown}"
 HDR="$HOME/.lee/hooks/auth-header"
-URL="${LEE_API_URL:-http://127.0.0.1:9001}/agent/hook"
+# Lee sets LEE_API_URL for its own PTYs. The bearer token only ever goes to
+# Lee's loopback API: anything but http://127.0.0.1:<port> falls back to the default.
+BASE="${LEE_API_URL:-http://127.0.0.1:9001}"
+PORT="${BASE#http://127.0.0.1:}"
+case "$PORT" in ''|*[!0-9]*) BASE="http://127.0.0.1:9001" ;; esac
+URL="$BASE/agent/hook"
 if [ ! -r "$HDR" ]; then cat >/dev/null; exit 0; fi
-RESP=$(curl -sS --max-time 2 -X POST "$URL" \
+# -f: an error status prints nothing, so an auth or server error body never
+# reaches Claude's context through the SessionStart output below.
+if RESP=$(curl -fsS --max-time 2 -X POST "$URL" \
   -H @"$HDR" \
   -H "Content-Type: application/json" \
   -H "X-Lee-Hook-Event: $EVENT" \
   -H "X-Lee-Pty-Id: ${LEE_PTY_ID:-}" \
   -H "X-Lee-Window-Id: ${LEE_WINDOW_ID:-}" \
-  --data-binary @- 2>/dev/null)
-if [ "$EVENT" = "SessionStart" ] && [ -n "$RESP" ]; then printf '%s\n' "$RESP"; fi
+  --data-binary @- 2>/dev/null); then
+  if [ "$EVENT" = "SessionStart" ] && [ -n "$RESP" ]; then printf '%s\n' "$RESP"; fi
+fi
 exit 0
 ```
    The script never parses JSON (Lee does), never prints anything for other events (so `PermissionRequest` makes no decision and the normal prompt shows), and always exits 0 (Lee being down never breaks Claude).
@@ -575,6 +586,7 @@ exit 0
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' UserPromptSubmit", "timeout": 5 }] }],
     "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' PreToolUse", "timeout": 5 }] }],
     "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' PostToolUse", "timeout": 5 }] }],
+    "PostToolUseFailure":[{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' PostToolUseFailure", "timeout": 5 }] }],
     "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' PermissionRequest", "timeout": 5 }] }],
     "Notification":      [{ "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' Notification", "timeout": 5 }] }],
     "Stop":              [{ "hooks": [{ "type": "command", "command": "/bin/sh '…/claude-hook.sh' Stop", "timeout": 5 }] }],
@@ -605,7 +617,7 @@ Headers: `X-Lee-Hook-Event` (authoritative event name; fall back to body `hook_e
 | `UserPromptSubmit` | `agent.prompt` (`prompt_chars` only); mark busy; resolve open items `answered_in_tab` (§5.1) |
 | `PreToolUse` | `agent.tool phase=pre`; remember as the pending tool (name, preview, signature); files = `tool_input.file_path \| path \| notebook_path`; `writes` for Edit/Write/MultiEdit/NotebookEdit; mark busy |
 | `PermissionRequest` | create/refresh `approval` (tool from payload `tool_name`/`tool_input`, else the pending tool); `agent.waiting kind=approval` |
-| `PostToolUse` | `agent.tool phase=post`; resolve an open approval for that tool `answered_in_tab`; resume busy |
+| `PostToolUse`, `PostToolUseFailure` | `agent.tool phase=post`; resolve the open approval for that call (§5.1 matching) `answered_in_tab`; resume busy only when no approval is left |
 | `Notification` | classify (§5.1); approval → merge into the open approval (sets its text) or create; waiting → create `waiting`; `agent.waiting`; pause busy |
 | `Stop` | summary = `last_assistant_message` if present, else the text blocks of the last `type: "assistant"` entry in `transcript_path` (read at most the last 256 KB; tolerate failure). Parse the **last** fenced block whose info string is `lee-status` (lines `key: value`; `files` comma-separated; unknown keys ignored). `agent.turn_end {busy_ms, summary, lee_status}`; create `blocker`/`decision`/`review` per §5.1 |
 | `SessionEnd` | `agent.session_end`; resolve that session's open items `superseded` except failures |
@@ -623,14 +635,14 @@ It is **deleted** by package D, along with its two exports in `hester/daemon/wor
 ### 7.1 Handoff flow
 
 1. User opens **Hand off…** (status bar flyout, the Focus-stop prompt, or Aeronaut's Launch). The surface calls `handoffProposals()` / `GET /handoff/proposals`:
-   - `agents`: every tracked agent session with its tab, state (`busy`, `idle` = after Stop with no open item, `waiting` = open approval/waiting item, `unknown`), and last summary.
+   - `agents`: every tracked agent session with its tab, state (`busy`, `idle` = after Stop with no open item, `waiting` = open approval/waiting item, derived from open items only, not from a leftover activity state, `unknown`), and last summary.
    - `waiting`: open items (for boundary triage now, or to leave parked).
    - `workspaces`: open windows' workspaces; `default_summary: {mode:'on_return'}`.
 2. The user fills in, all optional: follow-up text for idle agents, new background agents to launch (workspace, prompt, title, worktree default **on**, permission mode default **`acceptEdits`**: the `delegate` lead, spec §2.2), the summary policy, and "wake me" marks on items and agents.
 3. **Launch** calls `handoffStart(HandoffRequest)` / `POST /handoff/start`. B, in order:
    - ends any focus session (`reason: 'handoff'`);
    - sends each follow-up with the text Reply rule (§5.5), only to agents currently `idle` (others skipped and reported);
-   - launches each new agent by sending `system:create-tab` to the window whose workspace matches, `{ type: 'terminal', label: title || 'Claude', command: 'claude', args: ['--permission-mode', mode, ...(worktree ? ['--worktree', slug] : []), '-n', title, prompt] }` (`title` defaults to the first 40 characters of the prompt; `slug` = title lower-cased, `[^a-z0-9-]` → `-`, max 40, plus a 4-hex suffix). Hooks are injected by §6.3 because the command's basename is `claude`. Logs `handoff.launch`;
+   - launches each new agent by sending `system:create-tab` to the window whose workspace matches, `{ type: 'terminal', label: title || 'Claude', command: 'claude', args: ['--permission-mode', mode, ...(worktree ? ['--worktree', slug] : []), '-n', title, '--', prompt] }` (the `--` ends option parsing so a prompt starting with `-` is never read as a flag; `--settings` from §6.3 is inserted before it; lee.log records only the arg count for `claude` commands, never the prompt) (`title` defaults to the first 40 characters of the prompt; `slug` = title lower-cased, `[^a-z0-9-]` → `-`, max 40, plus a 4-hex suffix). Hooks are injected by §6.3 because the command's basename is `claude`. Logs `handoff.launch`;
    - activates the away state and logs `handoff.start` (counted as ceremony).
 
    Every step is caused by that one human click (C3).
@@ -754,7 +766,7 @@ def install_model_call_logging() -> None   # idempotent; called once in lifespan
             { "kind": "someday_decided", … } ],
   "agent_claims": [ { "session_id": "…", "pty_id": 12, "summary": "…", "lee_status": {…}, "at": "…", "verified": false, "related": true } ],
   "changed": { "agent_files": ["…"], "commits": 4 },
-  "waiting": [ /* compact AttentionItems from Lee GET /attention?compact=1, filtered to this workspace */ ],
+  "waiting": [ /* AttentionItems from full Lee GET /attention, compacted in Hester the way Lee's compact=1 does (no snoozed, no files/lee_status, text clipped to 280), filtered to this workspace, then capped at 25; top_line counts all */ ],
   "someday": { "open": 7, "untriaged_over_7d": 2 },
   "retro": { "due": true, "week": "2026-W39" }
 } }
@@ -769,7 +781,7 @@ def install_model_call_logging() -> None   # idempotent; called once in lifespan
 `copilot/metrics.py` implements §2.5. CLI: `hester goals metrics [--since 14d] [--until now] [--workspace PATH] [--write]` prints a table, and with `--write` appends one line to `<workspace>/.hester/goals/metrics.jsonl`:
 
 ```json
-{"ts":"…","from":"…","to":"…","formula_version":1,"workspace":null,
+{"ts":"…","from":"…","to":"…","formula_version":2,"workspace":null,
  "metrics":{"peek_rate":1.8,"attention_latency_ms":95000,"focus_interruptions_avg":0.4, "...": "..."},
  "unavailable":["background_leverage.accepted","toil_load.command_repeats"]}
 ```
@@ -785,7 +797,7 @@ Deterministic; no model. `workspace: null` means machine-wide.
   "answers": { "ideas_or_plumbing": "…", "stuck_good_bad": "…", "surprise": "yes: …" },
   "wins_count": 12 }
 ```
-- `GET /copilot/retro` → `{ week, due, answered, skipped, questions: [{id:'ideas_or_plumbing', text:'Ideas or plumbing?'}, {id:'stuck_good_bad', text:'Where were you stuck in a good way, and where in a bad way?'}, {id:'surprise', text:"Did Hester show you something about your work you didn't already know?"}], wins: [verified wins for the week] }`. Ingests `retro.shown` the first time it's returned while due.
+- `GET /copilot/retro` → `{ week, due, answered, skipped, questions: [{id:'ideas_or_plumbing', text:'Ideas or plumbing?'}, {id:'stuck_good_bad', text:'Where were you stuck in a good way, and where in a bad way?'}, {id:'surprise', text:"Did Hester show you something about your work you didn't already know?"}], wins: [verified wins for the week] }`. Ingests `retro.shown` the first time it's returned while due. With `?peek=1` it has no side effects (never marks shown); status pollers such as Lee's retro chip use it, and only the surface that renders the retro card fetches without it.
 - `POST /copilot/retro` `{ week, answers?, skipped? }` → saved file; ingests `retro.answered` with the answered question ids only. All answers optional.
 
 ---
