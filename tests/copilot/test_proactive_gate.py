@@ -79,12 +79,17 @@ def test_docs_subprocess_logged_as_model_call(tmp_path, monkeypatch, isolated_co
     set_presence(monkeypatch, False)
     watcher = make_watcher(tmp_path)
 
+    logged_before_run = []
+
     async def fake_run(cmd, timeout=30.0, cwd=None):
+        # Contract §8.2: the model.call is recorded before the subprocess runs.
+        logged_before_run.append(len([e for e in queued(isolated_copilot) if e["type"] == "model.call"]))
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(watcher, "_run_command", fake_run)
     monkeypatch.setattr(watcher, "_push_status", lambda *a, **k: asyncio.sleep(0))
     assert asyncio.run(watcher._run_task("docs_index", watcher.check_docs_index)) is True
+    assert logged_before_run == [1]
     evs = [e for e in queued(isolated_copilot) if e["type"] == "model.call"]
     assert len(evs) == 1
     d = evs[0]["data"]
