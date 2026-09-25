@@ -247,6 +247,47 @@ void tabs_state_panel(const char* title, const char* body, bool offer_repair)
 
 }  // namespace
 
+void tabs_chrome()
+{
+    auto& a = app();
+    auto* conn = a.machines ? a.machines->activeConnection() : nullptr;
+    const auto* ctx = conn ? conn->currentContext() : nullptr;
+    const bool multi = conn && conn->windows().size() > 1;
+
+    // Centre: which window we follow ("lee 1/2") when there is a choice,
+    // otherwise the host's idle time as before.
+    char buf[40];
+    buf[0] = '\0';
+    if (multi) {
+        const auto& ws = conn->windows();
+        int index = 0;
+        for (size_t i = 0; i < ws.size(); i++) {
+            if (ws[i].id == conn->activeWindowId()) index = (int)i + 1;
+        }
+        const auto* w = conn->activeWindow();
+        snprintf(buf, sizeof(buf), "%s %d/%d",
+                 w ? w->name().c_str() : "?", index, (int)ws.size());
+    } else if (ctx && ctx->activity) {
+        snprintf(buf, sizeof(buf), "idle %ds", (int)ctx->activity->idle_seconds);
+    }
+    if (buf[0]) chrome_set_centre(buf);
+
+    chrome_set_footer(multi ? "Click open  w window" : "Click open  Hold menu",
+                      "tabs");
+
+    // One "Win" footer button while there is more than one window.  app_show
+    // clears the footer row, which deletes it, hence the validity check.
+    static lv_obj_t* win_btn = nullptr;
+    const bool have = win_btn && lv_obj_is_valid(win_btn);
+    if (multi && !have) {
+        win_btn = chrome_add_footer_button("Win",
+            [](lv_event_t*) { windows_open(); }, nullptr);
+    } else if (!multi && have) {
+        chrome_clear_footer_buttons();
+        win_btn = nullptr;
+    }
+}
+
 void tabs_render(const dirigible::LeeContext* ctx)
 {
     auto& a = app();
@@ -261,18 +302,17 @@ void tabs_render(const dirigible::LeeContext* ctx)
     auto* conn = a.machines ? a.machines->activeConnection() : nullptr;
     const bool online = conn && conn->isConnected();
 
-    if (showing && ctx && ctx->activity) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "idle %ds", (int)ctx->activity->idle_seconds);
-        chrome_set_centre(buf);
-    }
+    if (showing) tabs_chrome();
 
     // Rebuilding the list drops LVGL focus; only do it when the tab set
     // actually changed (or the link state flipped, which swaps the whole view
-    // for the disconnected panel).
+    // for the disconnected panel, or we moved to another Lee window, whose
+    // tab ids can coincide with the last one's).
     static bool was_online = false;
+    static int  was_window = -1;
+    const int window = conn ? conn->activeWindowId() : -1;
     bool changed = !ctx || (int)a.tab_ids.size() != ctx->tab_count ||
-                   online != was_online;
+                   online != was_online || window != was_window;
     if (!changed && ctx) {
         for (int i = 0; i < ctx->tab_count; i++) {
             if (a.tab_ids[i] != ctx->tabs[i].id) { changed = true; break; }
@@ -280,6 +320,7 @@ void tabs_render(const dirigible::LeeContext* ctx)
     }
     if (!changed) return;
     was_online = online;
+    was_window = window;
 
     lv_obj_clean(a.tab_list);
     a.tab_ids.clear();

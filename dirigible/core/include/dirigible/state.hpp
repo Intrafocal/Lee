@@ -15,6 +15,7 @@ namespace dirigible {
 enum class Event {
     ContextUpdated,     // LeeContext changed on active machine
     ConnectionChanged,  // WS connect/disconnect on active machine
+    WindowsChanged,     // Lee window list or active window changed
     MachineSwitched,    // active machine changed
     MachineOnline,      // a machine came online
     MachineOffline,     // a machine went offline

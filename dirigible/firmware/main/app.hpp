@@ -176,6 +176,13 @@ void app_set_status(const char* left, const char* right = nullptr);
 // Views ---------------------------------------------------------------------
 void tabs_build(lv_obj_t* parent);
 void tabs_render(const dirigible::LeeContext* ctx);
+/// Tab-list header centre and footer: the active Lee window when there is
+/// more than one (with a Win button), otherwise the idle time.
+void tabs_chrome();
+
+/// Overlay listing the host's Lee windows; picking one makes it the window
+/// Dirigible follows (tabs, files, commands).  'w' on the tab list, or Menu.
+void windows_open();
 
 void terminal_build(lv_obj_t* parent);
 void terminal_open(int pty_id, const char* label);

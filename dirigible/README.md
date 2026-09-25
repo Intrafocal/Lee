@@ -97,7 +97,7 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
-| Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair |
+| Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a `Win` button / `w` picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
 | Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
 | Viewer   | read-only file view: code with a line gutter (pans, or wraps on click), markdown/text wrapped; follows an editor tab's file, cursor line and unsaved mark |
 | Terminal | character grid over the PTY WebSocket; ESC returns to Tabs. Keeps the whole content band — the footer legend flashes for 2 s on entry, then collapses so no character row is lost |
@@ -108,8 +108,9 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 |-------------------------|-------------------------------------------------|
 | trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Files and Viewer) |
 | trackball click         | activates what's under the pointer (the selected row in Files; wrap toggle in Viewer) |
-| trackball hold (0.8 s)  | back; on Tabs it opens the menu: Tabs / Files / Hester / Pairing / Reconnect |
+| trackball hold (0.8 s)  | back; on Tabs it opens the menu: Tabs / Files / Hester / Windows / Pairing / Reconnect |
 | ESC                     | leaves Terminal, steps back in Pairing          |
+| w (on Tabs)             | pick which Lee window to follow                 |
 | Tab                     | moves focus within a screen (reaches the password `show` toggle and the footer buttons) |
 | touch                   | works everywhere the pointer does               |
 

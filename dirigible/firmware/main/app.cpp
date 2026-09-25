@@ -268,13 +268,36 @@ static void menu_item_cb(lv_event_t* e)
     case 0: app_show(View::Tabs); break;
     case 1: files_open(); break;
     case 2: app_show(View::Hester); break;
-    case 3: pairing_begin(); break;
-    case 4:
+    case 3: windows_open(); break;
+    case 4: pairing_begin(); break;
+    case 5:
         if (auto* c = activeConn()) { c->disconnect(); c->connect(); }
         app_set_status("reconnecting...");
         break;
     default: break;
     }
+}
+
+static void menu_style(lv_obj_t* list, int w)
+{
+    lv_obj_set_size(list, w, 150);
+    lv_obj_center(list);
+    lv_obj_set_style_bg_color(list, dg::ground2(), 0);
+    lv_obj_set_style_border_width(list, 1, 0);
+    lv_obj_set_style_border_color(list, dg::ground4(), 0);
+    lv_obj_set_style_text_font(list, mono_font(), 0);
+}
+
+static lv_obj_t* menu_add(lv_obj_t* list, const char* text, lv_event_cb_t cb, void* user)
+{
+    lv_obj_t* btn = lv_list_add_btn(list, nullptr, text);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
+    lv_obj_set_style_text_color(btn, dg::text1(), 0);
+    dg::style_focus(btn);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user);
+    if (app().group) lv_group_add_obj(app().group, btn);
+    return btn;
 }
 
 /// Opened from the tab list's back affordance — the tab list is the root, so
@@ -286,23 +309,60 @@ static void menu_open(void*)
     if (a.menu) { menu_close(); return; }
 
     a.menu = lv_list_create(a.screen);
-    lv_obj_set_size(a.menu, 180, 150);
-    lv_obj_center(a.menu);
-    lv_obj_set_style_bg_color(a.menu, dg::ground2(), 0);
-    lv_obj_set_style_border_width(a.menu, 1, 0);
-    lv_obj_set_style_border_color(a.menu, dg::ground4(), 0);
-    lv_obj_set_style_text_font(a.menu, mono_font(), 0);
+    menu_style(a.menu, 180);
 
-    static const char* names[] = { "Tabs", "Files", "Hester", "Pairing", "Reconnect" };
-    for (intptr_t i = 0; i < 5; i++) {
-        lv_obj_t* btn = lv_list_add_btn(a.menu, nullptr, names[i]);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
-        lv_obj_set_style_text_color(btn, dg::text1(), 0);
-        dg::style_focus(btn);
-        lv_obj_add_event_cb(btn, menu_item_cb, LV_EVENT_CLICKED, (void*)i);
-        if (a.group) lv_group_add_obj(a.group, btn);
+    static const char* names[] = { "Tabs", "Files", "Hester", "Windows", "Pairing", "Reconnect" };
+    for (intptr_t i = 0; i < 6; i++) {
+        menu_add(a.menu, names[i], menu_item_cb, (void*)i);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Window picker — every Lee window on the host shares one API port, so this
+// is Aeronaut's WorkspaceSwitcher: pick which window's tabs, files and
+// commands Dirigible follows.  Shares the menu overlay slot, so ESC, back and
+// a long-press all close it the same way.
+// ---------------------------------------------------------------------------
+
+static void window_pick_cb(lv_event_t* e)
+{
+    const int id = (int)(intptr_t)lv_event_get_user_data(e);
+    menu_close();
+    if (auto* c = activeConn()) c->setActiveWindow(id);
+    app_show(View::Tabs);
+}
+
+void windows_open()
+{
+    auto& a = app();
+    if (a.menu) menu_close();
+
+    auto* c = activeConn();
+    if (!c || c->windows().empty()) {
+        app_set_status(c && c->isConnected() ? "no windows" : "not connected");
+        if (c) c->refreshWindows();
+        return;
+    }
+
+    a.menu = lv_list_create(a.screen);
+    menu_style(a.menu, 240);
+    lv_list_add_text(a.menu, "Lee windows  * = focused");
+
+    lv_obj_t* current = nullptr;
+    for (const auto& w : c->windows()) {
+        // "> name *": current selection, then the host's focused window.
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s %s%s",
+                 w.id == c->activeWindowId() ? ">" : " ",
+                 w.name().c_str(), w.focused ? " *" : "");
+        lv_obj_t* btn = menu_add(a.menu, buf, window_pick_cb, (void*)(intptr_t)w.id);
+        if (w.id == c->activeWindowId()) current = btn;
+    }
+    if (current && a.group) lv_group_focus_obj(current);
+
+    // The list is also fetched every ping; ask now so a window opened a moment
+    // ago shows up next time without waiting.
+    c->refreshWindows();
 }
 
 void app_back()
@@ -365,6 +425,7 @@ static bool key_hook(uint8_t ascii, void*)
         return false;
     case View::Tabs:
         if (ascii == 0x1B) { app_back(); return true; }
+        if (ascii == 'w')  { windows_open(); return true; }
         return false;   // Enter activates the focused list row
     }
     return false;
@@ -426,7 +487,7 @@ void app_show(View v)
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph("=");          // root: back opens the menu
-        chrome_set_footer("Click open  Hold menu", "tabs");
+        tabs_chrome();
         break;
     case View::Terminal:
         lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
@@ -499,6 +560,8 @@ static void chrome_timer_cb(lv_timer_t*)
 static void ping_timer_cb(lv_timer_t*)
 {
     if (app().machines) app().machines->pingAll();
+    // Track Lee windows opening and closing (Aeronaut polls every 10 s).
+    if (auto* c = activeConn(); c && c->isConnected()) c->refreshWindows();
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +805,9 @@ void app_start()
     });
     dirigible::EventBus::instance().on(dirigible::Event::ConnectionChanged, []() {
         tabs_render(activeConn() ? activeConn()->currentContext() : nullptr);
+    });
+    dirigible::EventBus::instance().on(dirigible::Event::WindowsChanged, []() {
+        if (app().view == View::Tabs) tabs_chrome();
     });
 
     lv_timer_create(chrome_timer_cb, 2000, nullptr);
