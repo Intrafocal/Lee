@@ -13,6 +13,7 @@
  */
 
 import type { LeeContext, TUIDefinition, AgentDefinition, MachineConfig } from './context';
+import type { CopilotAPI } from './copilot';
 
 export interface OpenDialogResult {
   canceled: boolean;
@@ -287,6 +288,8 @@ export interface LeeAPI {
     getPairingQR: () => Promise<{ qrDataUrl: string; pairingInfo: any }>;
     onShowPairing: (callback: () => void) => Unsubscribe;
   };
+  /** Copilot v0/v1 (docs/plans/2026-09-25-copilot-v0-v1-contracts.md). */
+  copilot: CopilotAPI;
 }
 
 /** Re-exported so components can annotate TUI lists without a deep import. */

@@ -21,6 +21,7 @@ import type {
   FileChangedEvent,
   StatusMessagePayload,
 } from '../shared/lee-api';
+import { copilotApi } from './preload-copilot';
 
 export type {
   LeeAPI,
@@ -517,6 +518,7 @@ const api: LeeAPI = {
       return () => ipcRenderer.removeListener('aeronaut:show-pairing', listener);
     },
   },
+  copilot: copilotApi,
 };
 
 contextBridge.exposeInMainWorld('lee', api);
