@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 from .store import KnowledgeStore
 from .buffer import WarmContextBuffer, WarmContext
 from ..semantic.router import SemanticRouter
+from ..copilot.model_log import set_trigger
 
 logger = logging.getLogger("hester.daemon.knowledge.engine")
 
@@ -142,6 +143,10 @@ class KnowledgeEngine:
         self._debounce_task: Optional[asyncio.Task] = None
         self._idle_task: Optional[asyncio.Task] = None
         self._redis_warning_shown = False
+        # Automatic knowledge matching embeds editor context with a cloud model
+        # on every context change, so it is off unless the user turns it on
+        # (hester.proactive.knowledge_auto_match; C1/C2).
+        self._auto_match = False
 
         # Metrics
         self.metrics = KnowledgeMetrics()
@@ -150,6 +155,17 @@ class KnowledgeEngine:
     def is_available(self) -> bool:
         """Check if engine is available (store and router ready)."""
         return self.store.is_available and self.router.is_available
+
+    @property
+    def auto_match(self) -> bool:
+        return self._auto_match
+
+    def set_auto_match(self, enabled: bool) -> None:
+        """Enable or disable automatic knowledge matching on Lee context changes."""
+        enabled = bool(enabled)
+        if enabled != self._auto_match:
+            logger.info(f"Knowledge auto-match {'enabled' if enabled else 'disabled'}")
+        self._auto_match = enabled
 
     async def start(self, session_id: str) -> None:
         """
@@ -196,6 +212,11 @@ class KnowledgeEngine:
         Args:
             context: Updated LeeContext from Lee editor
         """
+        if not self._auto_match:
+            # Keep the latest context for the (model-free) idle doc-gap check.
+            self._last_context = context
+            return
+
         if not self._running or not self._session_id:
             return
 
@@ -325,7 +346,8 @@ class KnowledgeEngine:
 
         self._last_trigger = trigger
 
-        # Match knowledge
+        # Match knowledge (an automatic model call: logged, and counts against C2)
+        set_trigger("automatic", name="knowledge.auto_match")
         try:
             match_result = await self.router.match_knowledge(
                 context=context_text,
