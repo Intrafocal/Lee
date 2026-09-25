@@ -23,6 +23,7 @@ import { MachineManager } from './machine-manager';
 import { MdnsAdvertiser, resolveInstanceName } from './mdns-advertiser';
 import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
 import { fsWatcher } from './fs-watcher';
+import { initCockpitLint, shutdownCockpitLint } from './cockpit/lint-main';
 import {
   SHORTCUTS,
   GLOBAL_FOCUS_ACTION,
@@ -1996,6 +1997,7 @@ app.whenReady().then(() => {
   // discover Lee without manual host/port entry (E5). Logs through
   // ptyManager's existing lee.log writer.
   mdnsAdvertiser = new MdnsAdvertiser((level, message, details) => ptyManager.log(level, message, details));
+  initCockpitLint();
 
   // Device pairing by code approval (E19). The API server owns the pending
   // state; this callback is the half that needs Electron - a native dialog on
@@ -2110,6 +2112,7 @@ app.on('before-quit', async (event) => {
 // Cleanup on quit
 app.on('will-quit', (event) => {
   globalShortcut.unregisterAll();
+  shutdownCockpitLint();
   fsWatcher.closeAll();
   mdnsAdvertiser?.stop();
   machineManager?.dispose();
