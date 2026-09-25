@@ -1549,6 +1549,20 @@ select:focus-visible,
   flex: 0 0 auto;
 }
 
+.tab-attention-needs {
+  color: var(--ember);
+}
+
+.status-needs-you {
+  color: var(--ember);
+}
+
+.daemon-context-menu .context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
 .status-item {
   display: flex;
   align-items: center;

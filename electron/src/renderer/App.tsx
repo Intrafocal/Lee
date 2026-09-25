@@ -32,6 +32,8 @@ import { useHotkeys } from './hooks/useHotkeys';
 import { rendererShortcuts, resolveChord, formatChord } from '../shared/shortcuts';
 import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
+import { useCopilot } from './hooks/useCopilot';
+import { attentionByPty } from './lib/copilotAttention';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -204,10 +206,26 @@ const App: React.FC = () => {
   }, [tabs]);
 
   // Filter tabs by dock position - memoize to prevent unnecessary re-renders
-  const centerTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'center'), [tabs]);
-  const leftTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'left'), [tabs]);
-  const rightTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'right'), [tabs]);
-  const bottomTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'bottom'), [tabs]);
+  // Copilot: each agent's state (needs you / finished) comes from its hooks and
+  // is shown on its own tab; the status bar mentions only what isn't on a tab here.
+  const copilot = useCopilot();
+  const tabAttention = useMemo(() => attentionByPty(copilot.snapshot?.items), [copilot.snapshot]);
+  const tabsWithAttention = useMemo(
+    () => tabs.map(t => {
+      const attention = t.ptyId != null ? tabAttention.get(t.ptyId) : undefined;
+      return attention === t.attention ? t : { ...t, attention };
+    }),
+    [tabs, tabAttention],
+  );
+  const visiblePtyIds = useMemo(
+    () => new Set(tabs.map(t => t.ptyId).filter((id): id is number => id != null)),
+    [tabs],
+  );
+
+  const centerTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'center'), [tabsWithAttention]);
+  const leftTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'left'), [tabsWithAttention]);
+  const rightTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'right'), [tabsWithAttention]);
+  const bottomTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'bottom'), [tabsWithAttention]);
 
   // Get localStorage key for workspace session
   const getSessionStorageKey = useCallback((ws: string) => `lee:session:${ws}`, []);
@@ -2377,10 +2395,14 @@ const App: React.FC = () => {
       if (focusedTab?.type === 'agent') toggleWatch(focusedTabId!);
     };
     handlers['cycle_idle'] = () => {
-      const idleTabs = tabs.filter(t => t.type === 'agent' && t.watched && t.isIdle);
+      // Tabs that need you first, then finished turns, then Watch's idle tabs
+      // (the fallback for agents without hooks).
+      const rank = (t: TabData) =>
+        t.attention === 'needs' ? 0 : t.attention === 'review' ? 1 : t.type === 'agent' && t.watched && t.isIdle ? 2 : -1;
+      const idleTabs = tabsWithAttention.filter(t => rank(t) >= 0).sort((a, b) => rank(a) - rank(b));
       if (idleTabs.length === 0) return;
 
-      const currentTab = tabs.find(t => {
+      const currentTab = tabsWithAttention.find(t => {
         switch (t.dockPosition) {
           case 'left': return t.id === activeLeftTabId;
           case 'right': return t.id === activeRightTabId;
@@ -2389,9 +2411,7 @@ const App: React.FC = () => {
         }
       });
 
-      const currentIdleIndex = currentTab && currentTab.isIdle
-        ? idleTabs.findIndex(t => t.id === currentTab.id)
-        : -1;
+      const currentIdleIndex = currentTab ? idleTabs.findIndex(t => t.id === currentTab.id) : -1;
 
       const nextIndex = (currentIdleIndex + 1) % idleTabs.length;
       const nextIdleTab = idleTabs[nextIndex];
@@ -2447,7 +2467,7 @@ const App: React.FC = () => {
     }
 
     return map;
-  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
+  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
   // Setup hotkeys
   useHotkeys(hotkeyMap);
@@ -2679,6 +2699,8 @@ const App: React.FC = () => {
         onDaemonAction={handleDaemonAction}
         onSpyglass={handleSpyglass}
         onBridge={handleBridge}
+        copilot={copilot}
+        visiblePtyIds={visiblePtyIds}
       />
       {showPairingDialog && (
         <PairingDialog onClose={() => setShowPairingDialog(false)} />

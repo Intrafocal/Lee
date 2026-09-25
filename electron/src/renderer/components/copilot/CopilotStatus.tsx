@@ -1,14 +1,12 @@
 /**
- * CopilotStatus - entry point mounted in StatusBar's status-bar-center.
- * Owns the needs-you pill, the flyout, the blocking banner and the
- * capture/digest/retro overlays (contracts §9.1). The focus indicator lives
- * in StatusBar's own message slot (it replaces "Ask Hester" while active),
- * and the handoff dialog is owned by StatusBar too, since both the flyout
- * footer and the focus chip's menu need to open it.
+ * CopilotStatus - mounted in StatusBar's right section. Owns the flyout, the
+ * blocking banner and the capture/digest/retro overlays (contracts §9.1).
+ * There is no pill: an agent's state shows on its own tab (lib/copilotAttention.ts),
+ * and StatusBar's centre slot replaces "Ask Hester" with "N need you" only
+ * for items not on a tab in this window; it opens the flyout from there.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon } from '../Icon';
 import { AttentionFlyout } from './AttentionFlyout';
 import { BlockingBanner } from './BlockingBanner';
 import { CapturePopover } from './CapturePopover';
@@ -21,21 +19,35 @@ interface CopilotStatusProps {
   workspace: string;
   copilot: UseCopilotResult;
   onOpenHandoff: () => void;
+  /** The flyout is opened from StatusBar's centre slot (or its context menu) and anchored to it. */
+  attentionOpen: boolean;
+  onAttentionClose: () => void;
+  anchorRef: React.RefObject<HTMLElement>;
+  captureOpen: boolean;
+  onOpenCapture: () => void;
+  onCaptureClose: () => void;
 }
 
 const RETRO_POLL_MS = 5 * 60 * 1000;
 
-export const CopilotStatus: React.FC<CopilotStatusProps> = ({ workspace, copilot, onOpenHandoff }) => {
-  const [flyoutOpen, setFlyoutOpen] = useState(false);
-  const [captureOpen, setCaptureOpen] = useState(false);
+export const CopilotStatus: React.FC<CopilotStatusProps> = ({
+  workspace,
+  copilot,
+  onOpenHandoff,
+  attentionOpen,
+  onAttentionClose,
+  anchorRef,
+  captureOpen,
+  onOpenCapture,
+  onCaptureClose,
+}) => {
   const [digestRequest, setDigestRequest] = useState<{ since: string | null; focus: FocusItem | null } | null>(null);
   const [digestReady, setDigestReady] = useState(false);
   const [retroDue, setRetroDue] = useState(false);
-  const pillRef = useRef<HTMLButtonElement>(null);
   const prevFocusRef = useRef<{ active: boolean; source: string | null }>({ active: false, source: null });
   const lastReturnNonce = useRef(0);
 
-  const { api, snapshot, focus, counts, lastReturn } = copilot;
+  const { api, snapshot, focus, lastReturn } = copilot;
   const isFocused = !!focus?.active;
 
   // Open the digest on return (handoff end, or presence returning from away).
@@ -76,25 +88,9 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({ workspace, copilot
 
   if (!api || !snapshot) return null;
 
-  const needsYouCount = (counts?.needs_you ?? 0) + (counts?.blocking ?? 0);
-
   return (
     <>
       <BlockingBanner items={snapshot.items} api={api} />
-
-      {!isFocused && (
-        <button
-          ref={pillRef}
-          className={`copilot-pill${
-            needsYouCount === 0 ? ' is-idle' : counts?.blocking ? '' : ' is-quiet'
-          }`}
-          onClick={() => setFlyoutOpen((v) => !v)}
-          title="Focus, Capture and Hand off"
-        >
-          <Icon name="bell" size={12} />
-          {needsYouCount > 0 ? `${needsYouCount} ${needsYouCount === 1 ? 'needs' : 'need'} you` : null}
-        </button>
-      )}
 
       {digestReady && !isFocused && (
         <button
@@ -114,24 +110,24 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({ workspace, copilot
         </button>
       )}
 
-      {flyoutOpen && pillRef.current && (
+      {attentionOpen && anchorRef.current && (
         <AttentionFlyout
           snapshot={snapshot}
           api={api}
-          anchorRect={pillRef.current.getBoundingClientRect()}
-          onClose={() => setFlyoutOpen(false)}
+          anchorRect={anchorRef.current.getBoundingClientRect()}
+          onClose={onAttentionClose}
           onOpenCapture={() => {
-            setFlyoutOpen(false);
-            setCaptureOpen(true);
+            onAttentionClose();
+            onOpenCapture();
           }}
           onOpenHandoff={() => {
-            setFlyoutOpen(false);
+            onAttentionClose();
             onOpenHandoff();
           }}
         />
       )}
 
-      {captureOpen && <CapturePopover api={api} workspace={workspace} onClose={() => setCaptureOpen(false)} />}
+      {captureOpen && <CapturePopover api={api} workspace={workspace} onClose={onCaptureClose} />}
 
       {digestRequest && (
         <DigestPanel

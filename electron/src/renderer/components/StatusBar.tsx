@@ -14,7 +14,8 @@ import { MachineStatus } from './MachineStatus';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 import { CopilotStatus } from './copilot/CopilotStatus';
 import { HandoffDialog } from './copilot/HandoffDialog';
-import { useCopilot } from '../hooks/useCopilot';
+import type { UseCopilotResult } from '../hooks/useCopilot';
+import { offscreenNeeds } from '../lib/copilotAttention';
 import './copilot/copilot.css';
 
 
@@ -42,6 +43,9 @@ interface StatusBarProps {
   onDaemonAction?: (action: 'start' | 'stop' | 'restart') => void;
   onSpyglass?: (machine: any) => void;
   onBridge?: (machine: any) => void;
+  copilot: UseCopilotResult;
+  /** PTYs with a tab in this window: their state shows on the tab, not here. */
+  visiblePtyIds: ReadonlySet<number>;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -57,6 +61,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onDaemonAction,
   onSpyglass,
   onBridge,
+  copilot,
+  visiblePtyIds,
 }) => {
   const [time, setTime] = useState(new Date());
   const [flyoutOpen, setFlyoutOpen] = useState(false);
@@ -64,11 +70,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [focusMenuOpen, setFocusMenuOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const hesterButtonRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const daemonMenuRef = useRef<HTMLDivElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
-  const copilot = useCopilot();
   const isFocused = !!copilot.focus?.active;
+  const offscreenCount = copilot.api ? offscreenNeeds(copilot.snapshot?.items, visiblePtyIds).length : 0;
 
   // Get the most recent message
   const currentMessage = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -210,6 +219,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       setFocusMenuOpen((v) => !v);
       return;
     }
+    if (offscreenCount > 0) {
+      setAttentionOpen((v) => !v);
+      return;
+    }
     if (currentMessage && onMessageClick) {
       onMessageClick(currentMessage);
     } else if (onHesterClick) {
@@ -277,6 +290,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <div className="status-bar-center">
         <div className="status-hester-container" ref={daemonMenuRef}>
           <button
+            ref={hesterButtonRef}
             className="status-item status-hester"
             onClick={handleHesterClick}
             onContextMenu={handleDaemonContextMenu}
@@ -300,6 +314,16 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   {copilot.focus?.source === 'inferred' ? ' (inferred)' : ''}
                 </span>
               </>
+            ) : offscreenCount > 0 ? (
+              <>
+                <span className="status-icon tab-attention-needs"><Icon name="bell" size={14} /></span>
+                <span className="status-text status-needs-you">
+                  {offscreenCount} {offscreenCount === 1 ? 'needs' : 'need'} you
+                </span>
+                <span className="status-shortcut status-shortcut-secondary" title="Ask something else">
+                  ⌘? Ask Hester
+                </span>
+              </>
             ) : currentMessage ? (
               <>
                 <span className="status-icon"><Icon name={getTypeIcon(currentMessage.type)} size={14} /></span>
@@ -321,6 +345,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           {/* Daemon context menu */}
           {daemonMenuOpen && !isFocused && (
             <div className="daemon-context-menu">
+              {copilot.api && (
+                <>
+                  <button onClick={() => { setDaemonMenuOpen(false); setAttentionOpen(true); }}>
+                    Waiting items…
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); void copilot.api?.focusStart(); }}>
+                    Start focus
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); setCaptureOpen(true); }}>
+                    Capture idea…
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); setHandoffOpen(true); }}>
+                    Hand off…
+                  </button>
+                  <div className="context-menu-separator" />
+                </>
+              )}
               {daemonStatus === 'unhealthy' ? (
                 <button onClick={() => handleDaemonMenuAction('start')}>
                   Start Daemon
@@ -360,8 +401,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             </div>
           )}
         </div>
-
-        <CopilotStatus workspace={workspace} copilot={copilot} onOpenHandoff={() => setHandoffOpen(true)} />
 
         {messages.length > 0 && (
           <div className="status-badge-container" ref={flyoutRef}>
@@ -408,6 +447,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-right">
+        <CopilotStatus
+          workspace={workspace}
+          copilot={copilot}
+          onOpenHandoff={() => setHandoffOpen(true)}
+          attentionOpen={attentionOpen}
+          onAttentionClose={() => setAttentionOpen(false)}
+          anchorRef={hesterButtonRef}
+          captureOpen={captureOpen}
+          onOpenCapture={() => setCaptureOpen(true)}
+          onCaptureClose={() => setCaptureOpen(false)}
+        />
         {onSpyglass && onBridge && (
           <MachineStatus onSpyglass={onSpyglass} onBridge={onBridge} />
         )}

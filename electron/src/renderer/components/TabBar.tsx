@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import type { TabAttention } from '../lib/copilotAttention';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
@@ -15,6 +16,7 @@ export interface Tab {
   watched?: boolean; // Whether this tab is being watched for idle state (agent tabs only)
   isIdle?: boolean; // Whether this tab is currently idle (no output for 10s)
   remoteCast?: boolean; // Whether this tab is being cast to a remote client (Aeronaut)
+  attention?: TabAttention; // From Copilot hooks: the agent needs you, or finished a turn
   // Agent-specific metadata (only for type='agent')
   provider?: string; // e.g. 'hester', 'claude', 'pi', 'codex'
   // File-specific metadata (only for type='file')
@@ -158,6 +160,13 @@ const TabDisplayIcon: React.FC<{ tab: Tab; size?: number }> = ({ tab, size = 16 
   // If being cast to a remote client (Aeronaut), show mobile phone
   if (tab.remoteCast) {
     return <Icon name="mobile" size={size} />;
+  }
+  // Copilot hooks know exactly what the agent is doing; no opt-in needed
+  if (tab.attention === 'needs') {
+    return <Icon name="bell" size={size} className="tab-attention-needs" title="Needs you" />;
+  }
+  if (tab.attention === 'review') {
+    return <Icon name="clock" size={size} title="Finished, ready for review" />;
   }
   // If watched and idle, show a clock
   if (tab.watched && tab.isIdle) {

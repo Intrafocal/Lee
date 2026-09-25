@@ -38,7 +38,7 @@ try {
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
-const { groupAttentionItems, resolveSummaryAtTime } = mod;
+const { groupAttentionItems, resolveSummaryAtTime, attentionByPty, offscreenNeeds } = mod;
 
 let passed = 0;
 function test(name, fn) {
@@ -117,6 +117,38 @@ test('resolveSummaryAtTime rolls to tomorrow when the time has already passed', 
   assert.equal(at.getDate(), 26);
   assert.equal(at.getHours(), 16);
   assert.equal(at.getMinutes(), 30);
+});
+
+const tabItem = (id, kind, pty, extra = {}) => ({
+  id, kind, state: 'open', severity: kind === 'review' ? 'ambient' : 'needs-you',
+  source: { pty_id: pty }, ...extra,
+});
+
+test('attentionByPty: needs beats review on the same tab; snoozed and resolved are ignored', () => {
+  const m = attentionByPty([
+    tabItem('a', 'review', 1),
+    tabItem('b', 'approval', 1),
+    tabItem('c', 'review', 2),
+    tabItem('d', 'approval', 3, { state: 'snoozed' }),
+    tabItem('e', 'waiting', 4, { state: 'resolved' }),
+    tabItem('f', 'failure', null),
+  ]);
+  assert.equal(m.get(1), 'needs');
+  assert.equal(m.get(2), 'review');
+  assert.equal(m.has(3), false);
+  assert.equal(m.has(4), false);
+  assert.equal(m.size, 2);
+});
+
+test('offscreenNeeds: only needs-you items not on a visible tab', () => {
+  const items = [
+    tabItem('a', 'approval', 1),
+    tabItem('b', 'approval', 9),
+    tabItem('c', 'review', 9),
+    tabItem('d', 'failure', null, { severity: 'needs-you' }),
+  ];
+  const off = offscreenNeeds(items, new Set([1]));
+  assert.deepEqual(off.map((i) => i.id), ['b', 'd']);
 });
 
 console.log(`\n${passed} test(s) passed`);
