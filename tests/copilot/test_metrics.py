@@ -113,7 +113,7 @@ def test_reader_sorts_and_filters(events_dir):
 
 
 def test_record_shape(record):
-    assert record["formula_version"] == 1
+    assert record["formula_version"] == 2
     assert record["workspace"] is None
     assert record["from"] == "2026-09-21T10:00:00.000Z"
     assert set(record["unavailable"]) == {"background_leverage.accepted", "toil_load.command_repeats"}
@@ -177,7 +177,7 @@ def test_capture_pickup(events_dir):
     device = {"kind": "user", "surface": "device", "device_id": "dev_a", "device_kind": "aeronaut"}
     evs = [
         E("capture", at(hours=-24 * 20), {"someday_id": "sd_a", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
-        E("someday.triage", at(hours=-24 * 15), {"someday_id": "sd_a", "action": "keep", "age_ms": 1}, source="hester"),
+        E("someday.triage", at(hours=-24 * 15), {"someday_id": "sd_a", "action": "explore", "age_ms": 1}, source="hester"),
         E("capture", at(hours=-24 * 19), {"someday_id": "sd_b", "text_chars": 3, "as": "someday", "spooled": False}, actor=USER, at_machine=False),
         E("someday.triage", at(hours=-24 * 1), {"someday_id": "sd_b", "action": "drop", "age_ms": 1}, source="hester"),
         # at the machine, from Lee: not eligible
@@ -224,6 +224,25 @@ def test_cli_write(events_dir, tmp_path):
     lines = (ws / ".hester" / "goals" / "metrics.jsonl").read_text().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["formula_version"] == 1
+    assert rec["formula_version"] == 2
     assert rec["workspace"] == str(ws.resolve())
     assert "peek_rate" in rec["metrics"]
+
+
+def test_capture_pickup_ignores_keep_and_unlinked_spool(events_dir):
+    E = make_event
+    device = {"kind": "user", "surface": "device", "device_id": "dev_a", "device_kind": "aeronaut"}
+    evs = [
+        # 'keep' defers the idea: reviewed, but not acted on
+        E("capture", at(hours=-24 * 20), {"someday_id": "sd_k", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+        E("someday.triage", at(hours=-24 * 19), {"someday_id": "sd_k", "action": "keep", "age_ms": 1}, source="hester"),
+        # promoted within 14 days: picked up
+        E("capture", at(hours=-24 * 20), {"someday_id": "sd_p", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+        E("someday.triage", at(hours=-24 * 18), {"someday_id": "sd_p", "action": "promote", "age_ms": 1}, source="hester"),
+        # spooled while Hester was down: no someday_id to join on, not eligible
+        E("capture", at(hours=-24 * 20), {"text_chars": 3, "as": "someday", "spooled": True}, actor=device, at_machine=False),
+    ]
+    write_events(events_dir, evs)
+    rec = metrics.run(T0 - timedelta(days=30), T0, events_dir=events_dir, now=T0)
+    assert rec["metrics"]["capture_pickup_eligible"] == 2
+    assert rec["metrics"]["capture_pickup"] == 0.5

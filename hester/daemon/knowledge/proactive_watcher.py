@@ -18,7 +18,6 @@ import logging
 import os
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -693,17 +692,18 @@ class ProactiveWatcher:
         model_cmd = " ".join(args[:2])
         if model_cmd not in MODEL_SUBCOMMANDS:
             return await self._run_command(hester_cmd)
-        start = time.monotonic()
-        result = await self._run_command(hester_cmd)
+        # Contract §8.2: record the call, then run. Logging at launch stamps
+        # ctx (at_machine) with the presence the gate saw, and the call is
+        # recorded even if the daemon dies mid-run. The outcome isn't known
+        # yet, so ok means "launched" and no duration is sent.
         record_model_call(
             provider="gemini",
             model=f"hester {model_cmd}",
             op="subprocess",
             location="cloud",
-            ok=result.returncode == 0,
-            duration_ms=(time.monotonic() - start) * 1000.0,
+            ok=True,
         )
-        return result
+        return await self._run_command(hester_cmd)
 
     async def _run_command(
         self,

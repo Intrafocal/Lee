@@ -301,6 +301,13 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
         app_state.knowledge_store._working_dir = resolved
     if app_state.knowledge_engine is not None:
         app_state.knowledge_engine._working_dir = resolved
+        # knowledge_auto_match is a per-workspace opt-in (automatic cloud
+        # embeddings; C1/C2). The new workspace's ProactiveConfigManager starts
+        # from defaults and only fires its callback when the parsed config
+        # differs from them, so an opt-in from the previous workspace would
+        # otherwise stick. Reset here; the new workspace re-enables it via its
+        # own config if it opted in.
+        app_state.knowledge_engine.set_auto_match(False)
         changes["knowledge"] = "rebound"
 
     # 4. Watchers — stop, rebuild against the new dir, restart if they were running

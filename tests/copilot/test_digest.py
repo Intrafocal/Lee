@@ -160,6 +160,40 @@ def test_waiting_filtered_and_lee_offline(repo, now, events_dir, agent_events, t
     assert "Lee offline" in offline["top_line"]
 
 
+def test_waiting_cap_applies_after_workspace_filter(repo, now, events_dir, agent_events, tmp_path):
+    others = [{"id": f"o_{n}", "kind": "blocker", "source": {"workspace": "/elsewhere"}} for n in range(30)]
+    mine = [{"id": f"m_{n}", "kind": "waiting", "source": {"workspace": str(repo)}} for n in range(27)]
+    d = build(repo, now, events_dir, tmp_path, attention_items=others + mine)
+    assert [i["id"] for i in d["waiting"]] == [f"m_{n}" for n in range(25)]
+    assert "27 waiting" in d["top_line"]
+
+
+def test_fetch_attention_items_compacts_locally(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from hester.daemon.copilot import routes
+
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"success": True, "data": {"items": [
+            {"id": "a", "state": "open", "text": "x" * 400, "files": ["f"], "lee_status": {"s": 1}},
+            {"id": "b", "state": "snoozed", "text": "zz"},
+        ]}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(routes.httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    items = asyncio.run(routes.fetch_attention_items())
+    assert "compact" not in seen["params"]
+    assert [i["id"] for i in items] == ["a"]
+    assert len(items[0]["text"]) == 280 and items[0]["text"].endswith("\u2026")
+    assert "files" not in items[0] and "lee_status" not in items[0]
+
+
 def test_since_detected_from_events(repo, now, events_dir, agent_events, tmp_path):
     write_events(events_dir, [make_event("handoff.start", now - minutes(100), {"handoff_id": "h"})])
     d = digest.build_digest(repo, now=now, events_dir=events_dir, attention_items=[], retro_config={}, retro_dir=tmp_path / "r")

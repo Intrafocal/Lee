@@ -124,6 +124,29 @@ def test_retro_get_and_post(client, tmp_path, isolated_copilot, monkeypatch):
 
     assert client.post("/copilot/retro", headers=SHARED, json={"week": "39"}).status_code == 400
     assert client.post("/copilot/retro", headers=SHARED, json={"answers": {"surprise": 3}}).status_code == 400
+    # matches the regex but is not an ISO week: 400, not 500
+    for bad in ("2025-W53", "2026-W00", "2026-W60"):
+        r = client.post("/copilot/retro", headers=SHARED, json={"week": bad, "workspace": str(ws)})
+        assert r.status_code == 400, (bad, r.text)
+
+
+def test_retro_past_week_wins_bounded_to_that_week(client, tmp_path, monkeypatch):
+    from hester.daemon.copilot import digest
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    calls = []
+
+    def fake_wins(workspace, since, until=None, **kw):
+        calls.append((since, until))
+        return []
+
+    monkeypatch.setattr(digest, "verified_wins", fake_wins)
+    r = client.post("/copilot/retro", headers=SHARED, json={"week": "2026-W30", "workspace": str(ws), "skipped": True})
+    assert r.status_code == 200, r.text
+    [(since, until)] = calls
+    assert until - since == timedelta(days=7)
+    assert since == retro.week_start("2026-W30").astimezone().astimezone(since.tzinfo)
 
 
 def test_retro_schedule_and_skip(tmp_path):
