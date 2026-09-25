@@ -92,7 +92,7 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({ workspace, copilot
           title="Focus, Capture and Hand off"
         >
           <Icon name="bell" size={12} />
-          {needsYouCount > 0 ? `${needsYouCount} need you` : null}
+          {needsYouCount > 0 ? `${needsYouCount} ${needsYouCount === 1 ? 'needs' : 'need'} you` : null}
         </button>
       )}
 
