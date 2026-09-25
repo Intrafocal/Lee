@@ -183,6 +183,22 @@ test('idle_prompt after a finished turn opens nothing unless Claude asked a ques
   assert.strictEqual(live('waiting').length, 1, 'a question needs you');
 });
 
+test('text reply to an item that moved on still reaches an idle agent, but not a busy one', () => {
+  const { pty, q, hook, live } = setup();
+  const user = { kind: 'user', surface: 'lee' };
+  hook('UserPromptSubmit', { prompt: 'x' });
+  hook('Stop', { last_assistant_message: 'done' });
+  const [review] = live('review');
+  q.dismiss(review.id, user); // e.g. resolved when the tab was focused on the Mac
+  const ok = q.reply(review.id, { action: 'text', text: 'next: add tests', version: review.version }, user);
+  assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  assert.ok(pty.writes.some(([, d]) => d.includes('next: add tests')), 'text pasted into the agent');
+
+  hook('UserPromptSubmit', { prompt: 'y' }); // agent busy again
+  const busy = q.reply(review.id, { action: 'text', text: 'late', version: review.version }, user);
+  assert.strictEqual(busy.status, 409, 'never typed into a running turn');
+});
+
 test('X-Lee-Pty-Id for a non-Claude PTY is ignored', () => {
   const { pty, q, live } = setup();
   pty.add(7, { claude: false, name: 'Terminal' });

@@ -734,15 +734,24 @@ export class CopilotQueue {
     const check = checkReply(item.kind, req);
     if (!check.ok) return { status: 400, body: { success: false, error: check.error } };
     const category = check.action === 'text' ? (item.kind === 'decision' || item.kind === 'blocker' ? 'decide' : 'reply') : 'approve';
-    if (item.state !== 'open' && item.state !== 'snoozed') return { status: 409, body: { success: false, error: 'stale', item }, category };
-    if (typeof req?.version !== 'number' || req.version !== item.version) {
+    const ptyId = item.source.pty_id;
+    const s = item.source.session_id
+      ? this.sessions.get(item.source.session_id)
+      : ptyId != null ? this.sessions.byPty(ptyId) : undefined;
+    const stale =
+      (item.state !== 'open' && item.state !== 'snoozed') ||
+      typeof req?.version !== 'number' || req.version !== item.version;
+    // Approve/deny keys only mean something on the exact prompt, so they need
+    // the current version. A text reply is just the next message: if the
+    // agent is idle at its input it's safe to send even when the item moved on
+    // (e.g. it was resolved when the tab was focused on the Mac).
+    const idleAtInput = !!s && !s.ended && !s.in_turn && !s.awaiting_approval;
+    if (stale && !(check.action === 'text' && idleAtInput)) {
       return { status: 409, body: { success: false, error: 'stale', item }, category };
     }
-    const ptyId = item.source.pty_id;
     if (ptyId == null || !this.ptyManager.get(ptyId)) {
       return { status: 410, body: { success: false, error: 'agent is gone' }, category };
     }
-    const s = item.source.session_id ? this.sessions.get(item.source.session_id) : this.sessions.byPty(ptyId);
     if (check.action === 'approve' || check.action === 'deny') {
       // Enter or Esc only mean approve/deny while the agent is actually on
       // the prompt. Otherwise Esc would interrupt a running tool and Enter
