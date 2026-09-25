@@ -487,6 +487,27 @@ The v0 queue will also see the check-in turn as a turn end (an ambient `review` 
 
 A keeps `pty_id → task_id` for tasks it launched (memory) and reports it as `TabRuntimeInfo.task_id`.
 
+### 5.6b Pi agent adapter (A) — added 2026-09-25
+
+Pi (`pi`, @earendil-works/pi-coding-agent) has an extension API: a TypeScript file exporting `default function (pi: ExtensionAPI)`, loaded per session with `pi --extension <path>` (jiti, no build). Its lifecycle events (`session_start`, `before_agent_start`, `tool_call`, `tool_result`, `message_end`, `turn_end`, `agent_settled`, `session_shutdown`; see `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md` and the exported event declarations) map onto the v0 Claude hooks, so Pi tabs get the same live tracking and check-ins become a fallback only.
+
+- **Extension file:** A writes `~/.lee/hooks/pi-lee.ts` at startup (next to the Claude hook files, same "rewrite if changed" rule). It reads `LEE_API_URL` (loopback only, same rule as the Claude hook script), `LEE_PTY_ID`, `LEE_WINDOW_ID` and the bearer from `~/.lee/hooks/auth-header`, and POSTs to Lee's existing `POST /agent/hook` with `X-Lee-Pty-Id`, a `provider: "pi"` field, and Claude-shaped fields so `handleHook` needs no second parser:
+
+  | Pi event | Posted as `hook_event_name` | Fields |
+  |---|---|---|
+  | `session_start` | `SessionStart` | `session_id` (Pi session id), `cwd` |
+  | `before_agent_start` | `UserPromptSubmit` | **no prompt text** |
+  | `tool_call` | `PreToolUse` | `tool_name`, `tool_use_id`, `tool_input` reduced to file paths only |
+  | `tool_result` | `PostToolUse` / `PostToolUseFailure` | `tool_name`, `tool_use_id` |
+  | `message_end` (assistant) | — | cache the text as the turn's last assistant message |
+  | `agent_settled` | `Stop` | `last_assistant_message` (clipped to 2000) |
+  | `session_shutdown` | `SessionEnd` | — |
+
+  Posts are fire-and-forget with a short timeout; failures are swallowed so Pi is never slowed or broken. No model is involved (C2); nothing but the agent's own last message leaves Pi (never-content rule).
+- **Install:** A adds `withPiExtension(cmd, args)` beside B's v0 `withClaudeHooks` and applies it in `PTYManager.spawn()` when the command's basename is `pi` (prepend `--extension ~/.lee/hooks/pi-lee.ts` before any `--`). Agents started by hand outside Lee are unaffected; `copilot.hooks.pi: false` disables it.
+- **Queue:** generalise the "hooked agent PTY" checks (today `isClaudePty`) to Claude **or** Pi PTYs, and store `provider` on the session so tiles and summaries say "Pi". Pi has no permission prompts by default, so it produces waiting/review/turn items but no approvals; if a Pi extension raises a confirm dialog, it is out of scope for v2.
+- **Acceptance:** a Pi tab launched from Lee shows `--extension …/pi-lee.ts` in `ps`; a turn produces `agent.prompt`, `agent.tool`, `agent.turn_end` with a summary in the event log; the Pi tab gets the clock icon after a turn and appears in the In flight list; killing Lee's API mid-turn doesn't disturb Pi.
+
 ### 5.7 IPC handlers (A)
 
 A registers every `COCKPIT_IPC` channel in Appendix A marked "Package A": `tabsList`, `tabRead`, `tabState`, `tabSend`, `tabFocus`, `checkin`, `launch`, `feedGet`, `feedAct`, `rendererEvent`, `createTabResult`, and pushes `tabsPush` (debounced 500 ms on state/label changes) and `feedPush` (debounced 250 ms on `cockpitBus.feed` `'change'`) to every window. `tabFocus(ptyId)` focuses the owning `BrowserWindow` and sends it `cockpit:go-into {pty_id, tab_id}`. IPC calls act as `{kind:'local-user'}` with `actor {kind:'user', surface:'lee'}` and `window_id` = the sender's.
