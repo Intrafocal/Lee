@@ -16,7 +16,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .event_reader import iso, read_events
 
-FORMULA_VERSION = 1
+# v2: capture_pickup counts only acting triages (explore/promote/drop, not
+# keep) and leaves out spooled captures that never got a someday_id.
+FORMULA_VERSION = 2
 
 UNAVAILABLE = ["background_leverage.accepted", "toil_load.command_repeats"]
 
@@ -28,6 +30,9 @@ PEEK_MIN_MS = 2000
 CREATIVE_TAB_TYPES = {"editor", "files"}
 TERMINAL_TAB_TYPES = {"terminal", "claude", "agent", "hester"}
 DEVICE_CREATIVE = {"capture", "decide", "reply", "launch", "start_work"}
+# GOALS.md: captures "reviewed and acted on (explored, promoted, or explicitly
+# dropped)". A 'keep' triage defers the idea, so it is not a pickup.
+PICKUP_ACTIONS = {"explore", "promote", "drop"}
 LATENCY_KINDS = {"approval", "waiting", "decision", "blocker"}
 LATENCY_RESOLUTIONS = {"reply", "answered_in_tab"}
 
@@ -333,7 +338,7 @@ def compute_metrics(
     for ev in events:
         if ev.get("type") == "someday.triage":
             sid = _data(ev).get("someday_id")
-            if sid:
+            if sid and _data(ev).get("action") in PICKUP_ACTIONS:
                 triaged[sid].append(ev["_ts"])
     eligible = picked = 0
     for ev in window:
@@ -343,8 +348,13 @@ def compute_metrics(
         away = _ctx(ev).get("at_machine") is False or actor.get("surface") == "device"
         if not away or ev["_ts"] > end - PICKUP_WINDOW:
             continue
-        eligible += 1
         sid = _data(ev).get("someday_id")
+        if not sid and _data(ev).get("spooled"):
+            # Spooled while Hester was down: Lee delivers it later but logs no
+            # event linking it to its Someday id, so it can never be joined to a
+            # triage. Leave it out rather than count it as never picked up.
+            continue
+        eligible += 1
         if sid and any(ev["_ts"] <= t <= ev["_ts"] + PICKUP_WINDOW for t in triaged.get(sid, ())):
             picked += 1
 
