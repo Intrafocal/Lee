@@ -17,14 +17,16 @@ class TaskConfig(BaseModel):
 
 
 class DocsIndexConfig(TaskConfig):
-    """Configuration for documentation indexing task."""
+    """Configuration for documentation indexing task (uses a model, so off by default)."""
 
+    enabled: bool = Field(default=False, description="Model-using task: off unless enabled (C1/C2)")
     interval: int = Field(default=1800, description="Indexing interval (30 min default)")
 
 
 class DriftCheckConfig(TaskConfig):
-    """Configuration for documentation drift checking task."""
+    """Configuration for documentation drift checking task (uses a model, so off by default)."""
 
+    enabled: bool = Field(default=False, description="Model-using task: off unless enabled (C1/C2)")
     interval: int = Field(default=1200, description="Drift check interval (20 min default)")
     threshold: float = Field(default=0.7, description="Drift score threshold")
 
@@ -51,13 +53,17 @@ class TestsConfig(TaskConfig):
 
 
 class BundlesConfig(TaskConfig):
-    """Configuration for context bundle refresh task."""
+    """Configuration for context bundle refresh task (uses a model, so off by default)."""
 
+    enabled: bool = Field(default=False, description="Model-using task: off unless enabled (C1/C2)")
     interval: int = Field(default=7200, description="Bundle refresh interval (2 hours default)")
 
 
 class IdeasConfig(TaskConfig):
-    """Configuration for ideas review surfacing task."""
+    """Ignored. The ideas task was removed with `hester ideas` (replaced by the Someday store).
+
+    Kept so existing `hester.proactive.tasks.ideas` configs still parse.
+    """
 
     enabled: bool = Field(default=False, description="Ideas surfacing disabled by default")
     interval: int = Field(default=1800, description="Ideas check interval (30 min default)")
@@ -105,6 +111,8 @@ class ProactiveConfig(BaseModel):
         hester:
           proactive:
             enabled: true
+            knowledge_auto_match: false
+            run_while_present: false
             tasks:
               docs_index:
                 enabled: true
@@ -119,6 +127,14 @@ class ProactiveConfig(BaseModel):
     """
 
     enabled: bool = Field(default=True, description="Master switch for all proactive tasks")
+    knowledge_auto_match: bool = Field(
+        default=False,
+        description="Match knowledge automatically on every Lee context change (embeds with a cloud model)",
+    )
+    run_while_present: bool = Field(
+        default=False,
+        description="Let model-using tasks run while you're at the machine (C2); by default they wait until you're away",
+    )
     tasks: BuiltInTasks = Field(default_factory=BuiltInTasks)
     custom: List[CustomTaskConfig] = Field(
         default_factory=list,

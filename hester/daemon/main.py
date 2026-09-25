@@ -36,9 +36,12 @@ from .redis_manager import ManagedRedis
 from .session import SessionManager, InMemorySessionManager, ExplorationSessionManager, InMemoryExplorationSessionManager
 from .settings import HesterDaemonSettings
 from ..shared.gemini_tools import PhaseUpdate, ReActPhase
-from ..shared.auth import auth_disabled, lee_api_token
+from ..shared.auth import auth_disabled, device_for_token, lee_api_token
 from ..shared.config import load_merged_config
 from ..shared.workspace import get_current_workspace, set_current_workspace, workspace_id
+from .copilot import lee_events, presence as copilot_presence
+from .copilot.model_log import install_model_call_logging, reset_trigger, set_trigger
+from .copilot.routes import create_copilot_router
 
 # Optional imports for knowledge management (graceful degradation if unavailable)
 try:
@@ -334,6 +337,8 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
                 def on_proactive_config_change(config: "ProactiveConfig") -> None:
                     if app_state.proactive_watcher:
                         app_state.proactive_watcher.update_config(config)
+                    if app_state.knowledge_engine:
+                        app_state.knowledge_engine.set_auto_match(config.knowledge_auto_match)
                 app_state.proactive_config_manager = ProactiveConfigManager(
                     working_dir=resolved,
                     on_config_change=on_proactive_config_change,
@@ -398,6 +403,11 @@ async def lifespan(app: FastAPI):
             "API auth: no ~/.lee/api-token found; requests are NOT authenticated. "
             "Start Lee once to generate the token."
         )
+
+    # Copilot: log every model call with its trigger into Lee's event log (C1/C2)
+    install_model_call_logging()
+    copilot_presence.configure(app_state.settings.lee_url)
+    lee_events.start_delivery(app_state.settings.lee_url)
 
     # Initialize Redis via ManagedRedis (tries external → existing managed → new managed)
     app_state.managed_redis = ManagedRedis(
@@ -531,6 +541,8 @@ async def lifespan(app: FastAPI):
                     if app_state.proactive_watcher:
                         app_state.proactive_watcher.update_config(config)
                         logger.info("Proactive watcher config updated via hot-reload")
+                    if app_state.knowledge_engine:
+                        app_state.knowledge_engine.set_auto_match(config.knowledge_auto_match)
 
                 app_state.proactive_config_manager = ProactiveConfigManager(
                     working_dir=working_dir,
@@ -658,6 +670,7 @@ async def lifespan(app: FastAPI):
 
     # Disconnect from Lee
     await app_state.lee_client.disconnect()
+    await lee_events.stop_delivery()
 
     # Shut down Redis (SHUTDOWN SAVE for managed, close for external)
     if app_state.managed_redis:
@@ -710,14 +723,28 @@ def _auth_is_disabled() -> bool:
     return auth_disabled()
 
 
+async def _call_as_user(request: Request, call_next, principal: Dict[str, Any]):
+    """Run the request with its principal and a `user` model-call trigger (C2 telemetry)."""
+    request.state.principal = principal
+    token = set_trigger(
+        "user",
+        surface=request.headers.get("x-lee-trigger") or "http",
+        request_path=request.url.path,
+    )
+    try:
+        return await call_next(request)
+    finally:
+        reset_trigger(token)
+
+
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
-    """Require `Authorization: Bearer <~/.lee/api-token>` on every endpoint."""
+    """Require `Authorization: Bearer <token>`: the shared ~/.lee/api-token or a paired device's token."""
     if request.method == "OPTIONS" or request.url.path in _AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
     if _auth_is_disabled():
-        return await call_next(request)
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
     expected = lee_api_token()
     if not expected:
@@ -727,20 +754,32 @@ async def require_bearer_token(request: Request, call_next):
             "No ~/.lee/api-token found; daemon API is UNAUTHENTICATED. "
             "Start Lee once to generate the token."
         )
-        return await call_next(request)
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
     header = request.headers.get("authorization") or ""
     supplied = header[7:].strip() if header.lower().startswith("bearer ") else ""
     if not supplied:
         supplied = (request.query_params.get("token") or "").strip()
 
-    if not secrets.compare_digest(supplied, expected):
-        return JSONResponse(
-            status_code=401,
-            content={"error": "unauthorized", "detail": "Missing or invalid bearer token"},
-        )
+    if supplied and secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
-    return await call_next(request)
+    device = device_for_token(supplied)
+    if device is not None:
+        return await _call_as_user(request, call_next, {
+            "kind": "device",
+            "device_id": device.get("device_id"),
+            "device_kind": device.get("kind"),
+            "name": device.get("name"),
+        })
+
+    return JSONResponse(
+        status_code=401,
+        content={"error": "unauthorized", "detail": "Missing or invalid bearer token"},
+    )
+
+
+app.include_router(create_copilot_router())
 
 
 def get_agent() -> HesterDaemonAgent:
@@ -863,13 +902,12 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
             "last_drift_check": status.last_drift_check.isoformat() if status.last_drift_check else None,
             "last_devops_check": status.last_devops_check.isoformat() if status.last_devops_check else None,
             "last_test_run": status.last_test_run.isoformat() if status.last_test_run else None,
-            "last_ideas_check": status.last_ideas_check.isoformat() if status.last_ideas_check else None,
             "last_bundle_refresh": status.last_bundle_refresh_check.isoformat() if status.last_bundle_refresh_check else None,
             "last_bundle_refresh_count": status.last_bundle_refresh_count,
             "total_failures": (
                 status.docs_index_failures + status.drift_failures +
                 status.devops_failures + status.test_failures +
-                status.ideas_failures + status.bundle_refresh_failures +
+                status.bundle_refresh_failures +
                 sum(status.custom_task_failures.values())
             ),
         }

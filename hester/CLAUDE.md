@@ -357,6 +357,17 @@ hester docs index --all --clear
 hester docs index-status
 ```
 
+### Someday and Goals Commands
+
+```bash
+# Capture an idea (writes <dir>/.hester/someday/sd_*.md; no daemon needed)
+hester someday capture "Try a CRDT for the queue" [--dir PATH] [--explore]
+hester someday list [--dir PATH] [--all]
+
+# GOALS.md metrics from Lee's event log (~/.lee/events/), deterministic
+hester goals metrics [--since 14d] [--until now] [--workspace PATH] [--write] [--json]
+```
+
 ### Ask Commands
 
 Ask questions using Gemini with web search.
@@ -516,6 +527,18 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/session/{id}` | Get session info |
 | DELETE | `/session/{id}` | Delete session |
 | GET | `/sessions` | List active sessions |
+| POST | `/someday` | Capture an idea into `<workspace>/.hester/someday/` |
+| GET | `/someday` | List Someday items (`?workspace=&status=open\|all`) |
+| POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`) |
+| GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
+| GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
+
+Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`). Copilot endpoints take an explicit `workspace` (absolute path) and fall back to the daemon's current one.
+
+### Copilot: C1/C2 gating and model-call logging
+
+- Every Gemini call in the daemon (class-level wrap of `google.genai` `Models`/`AsyncModels`) and every Ollama call in `prepare.py` is sent to Lee's event log (`POST :9001/events/ingest`) as `model.call` with its trigger: `user` inside an authenticated request (surface from `X-Lee-Trigger`), `automatic` for background loops, `unknown` otherwise.
+- Knowledge auto-match (`hester.proactive.knowledge_auto_match`) is off by default. The model-using proactive tasks (`docs_index`, `drift_check`, `bundles`) are off by default and, when enabled, run only while you're away from the machine (Lee's `GET /presence`) unless `hester.proactive.run_while_present` is true.
 
 ### Health Check Response
 

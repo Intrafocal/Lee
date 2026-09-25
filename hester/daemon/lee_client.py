@@ -17,6 +17,7 @@ import httpx
 import websockets
 from websockets.client import WebSocketClientProtocol
 
+from .copilot.presence import on_presence_message
 from .models import LeeContext
 
 logger = logging.getLogger("hester.daemon.lee_client")
@@ -201,6 +202,8 @@ class LeeContextClient:
                         # Call async callback if set (non-blocking)
                         if self._on_context_update_async:
                             asyncio.create_task(self._on_context_update_async(self._context))
+                    elif data.get("type") == "presence":
+                        on_presence_message(data.get("data"))
                 except json.JSONDecodeError as e:
                     logger.warning(f"Invalid JSON from Lee: {e}")
                 except Exception as e:
