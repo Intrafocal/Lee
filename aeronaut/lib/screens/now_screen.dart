@@ -12,19 +12,38 @@ import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../widgets/attention_tile.dart';
-import '../widgets/handoff_sheet.dart';
+import '../widgets/in_flight_section.dart';
 import '../widgets/machine_switcher.dart';
+import '../widgets/now_header_actions.dart';
 import '../widgets/phosphor_icon.dart';
 import '../widgets/workspace_switcher.dart';
 
 /// The Now screen: steering, not monitoring (contracts §9.2). Waiting
-/// (Reply), quick Capture, the Focus toggle, Launch (v1 hand-off) and Progress
-/// (v1 verified wins), all for the active machine.
-class NowScreen extends ConsumerWidget {
+/// (Reply) first, then In flight (every running agent), then Progress (v1
+/// verified wins), all for the active machine. Capture, Focus and Launch
+/// (v1 hand-off) live in the app bar next to the machine switcher.
+class NowScreen extends ConsumerStatefulWidget {
   const NowScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NowScreen> createState() => _NowScreenState();
+}
+
+class _NowScreenState extends ConsumerState<NowScreen> {
+  /// Keys of the Waiting tiles, so an In flight agent can scroll to its item.
+  final _itemKeys = <String, GlobalKey>{};
+
+  GlobalKey _keyFor(String id) => _itemKeys.putIfAbsent(id, GlobalKey.new);
+
+  void _showItem(String id) {
+    final ctx = _itemKeys[id]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final machine = ref.watch(machinesProvider.select((s) => s.activeMachine));
     // RootShell wraps this tab in RequireMachine, so this only happens for
     // the frame in which the active machine is removed.
@@ -42,15 +61,12 @@ class NowScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          const CaptureButton(),
+          const FocusMenuButton(),
           IconButton(
             icon: const PhosphorIcon(PhosphorIcons.send, size: 20),
             tooltip: 'Hand off…',
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (_) => const HandoffSheet(),
-            ),
+            onPressed: () => showHandoffSheet(context),
           ),
         ],
       ),
@@ -60,11 +76,11 @@ class NowScreen extends ConsumerWidget {
         onRefresh: () => ref.read(attentionProvider.notifier).refresh(),
         child: ListView(
           padding: const EdgeInsets.only(bottom: AeronautTheme.spacingXl),
-          children: const [
-            _FocusCard(),
-            _CaptureCard(),
-            _WaitingSection(),
-            _WinsSection(),
+          children: [
+            const _AwayBanner(),
+            _WaitingSection(keyFor: _keyFor),
+            InFlightSection(onShowItem: _showItem),
+            const _WinsSection(),
           ],
         ),
       ),
@@ -72,25 +88,15 @@ class NowScreen extends ConsumerWidget {
   }
 }
 
-class _FocusCard extends ConsumerWidget {
-  const _FocusCard();
+/// While a hand-off is running, a one-line reminder of it (the old Focus
+/// card carried this).
+class _AwayBanner extends ConsumerWidget {
+  const _AwayBanner();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final attention = ref.watch(attentionProvider);
-    final focus = attention.snapshot.focus;
-    final away = attention.snapshot.away;
-
-    final String label;
-    if (focus.active) {
-      final what = focus.item?.displayLabel ?? '';
-      label = what.isEmpty ? 'Focus · ${focus.quietCount} queued' : 'Focus · $what · ${focus.quietCount} queued';
-    } else if (away.active) {
-      label = 'Away · ${away.parkedCount} parked';
-    } else {
-      label = 'Not focused';
-    }
-
+    final away = ref.watch(attentionProvider.select((s) => s.snapshot.away));
+    if (!away.active) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AeronautTheme.spacingMd,
@@ -98,150 +104,24 @@ class _FocusCard extends ConsumerWidget {
         AeronautTheme.spacingMd,
         0,
       ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AeronautTheme.spacingMd,
-          vertical: AeronautTheme.spacingSm,
-        ),
-        decoration: BoxDecoration(
-          color: AeronautColors.bgSurface,
-          borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-          border: Border.all(color: AeronautColors.border),
-        ),
-        child: Row(
-          children: [
-            PhosphorIcon(
-              focus.active ? PhosphorIcons.eye : PhosphorIcons.eyeOff,
-              size: 20,
-              color: focus.active ? AeronautColors.accent : AeronautColors.textTertiary,
-            ),
-            const SizedBox(width: AeronautTheme.spacingSm),
-            Expanded(child: Text(label, style: AeronautTheme.subheadline)),
-            Switch.adaptive(
-              value: focus.active,
-              activeThumbColor: AeronautColors.accent,
-              onChanged: (value) {
-                final notifier = ref.read(attentionProvider.notifier);
-                if (value) {
-                  notifier.focusStart();
-                } else {
-                  notifier.focusStop();
-                }
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CaptureCard extends ConsumerStatefulWidget {
-  const _CaptureCard();
-
-  @override
-  ConsumerState<_CaptureCard> createState() => _CaptureCardState();
-}
-
-class _CaptureCardState extends ConsumerState<_CaptureCard> {
-  final _controller = TextEditingController();
-  bool _asExploration = false;
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _capture() async {
-    final text = _controller.text.trim();
-    if (text.isEmpty || _busy) return;
-    setState(() => _busy = true);
-    final workspace = ref.read(windowsProvider).activeWindow?.workspace;
-    final result =
-        await ref.read(attentionProvider.notifier).capture(text, workspace: workspace, asExploration: _asExploration);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (result.success) {
-      _controller.clear();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.spooled ? 'Saved; will sync when Hester is back' : 'Captured')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.error ?? 'Capture failed'),
-          backgroundColor: AeronautColors.offline,
-        ),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AeronautTheme.spacingMd,
-        AeronautTheme.spacingMd,
-        AeronautTheme.spacingMd,
-        0,
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-        decoration: BoxDecoration(
-          color: AeronautColors.bgSurface,
-          borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-          border: Border.all(color: AeronautColors.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const PhosphorIcon(PhosphorIcons.edit, size: 16, color: AeronautColors.textSecondary),
-                const SizedBox(width: 6),
-                Text('Capture', style: AeronautTheme.footnote.copyWith(fontWeight: FontWeight.w600)),
-              ],
-            ),
-            const SizedBox(height: AeronautTheme.spacingSm),
-            TextField(
-              controller: _controller,
-              minLines: 1,
-              maxLines: 3,
-              textInputAction: TextInputAction.done,
-              onSubmitted: (_) => _capture(),
-              decoration: const InputDecoration(hintText: 'Jot an idea for later…', isDense: true),
-            ),
-            Row(
-              children: [
-                Checkbox(
-                  value: _asExploration,
-                  onChanged: (v) => setState(() => _asExploration = v ?? false),
-                ),
-                const Text('As exploration', style: AeronautTheme.caption1),
-                const Spacer(),
-                ElevatedButton(
-                  onPressed: _busy ? null : _capture,
-                  child: _busy
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                        )
-                      : const Text('Capture'),
-                ),
-              ],
-            ),
-          ],
-        ),
+      child: Row(
+        children: [
+          const PhosphorIcon(PhosphorIcons.send, size: 14, color: AeronautColors.accent),
+          const SizedBox(width: AeronautTheme.spacingSm),
+          Text(
+            'Away · ${away.parkedCount} parked',
+            style: AeronautTheme.caption1.copyWith(color: AeronautColors.textSecondary),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _WaitingSection extends ConsumerWidget {
-  const _WaitingSection();
+  final GlobalKey Function(String id) keyFor;
+
+  const _WaitingSection({required this.keyFor});
 
   static const _severityOrder = {
     AttentionSeverity.blocking: 0,
@@ -291,7 +171,10 @@ class _WaitingSection extends ConsumerWidget {
           )
         else
           for (final item in items)
-            AttentionTile(item: item, awayActive: attention.snapshot.away.active),
+            KeyedSubtree(
+              key: keyFor(item.id),
+              child: AttentionTile(item: item, awayActive: attention.snapshot.away.active),
+            ),
       ],
     );
   }

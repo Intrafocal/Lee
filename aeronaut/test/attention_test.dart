@@ -169,6 +169,52 @@ void main() {
       expect(snapshot.away.active, isFalse);
     });
 
+    test('parses agents when present', () {
+      final snapshot = AttentionSnapshot.fromJson({
+        'items': [],
+        'agents': [
+          {
+            'pty_id': 3,
+            'window_id': 1,
+            'tab_id': 12,
+            'label': 'Claude: api',
+            'provider': 'claude',
+            'workspace': '/Users/ben/api',
+            'state': 'busy',
+            'busy_since': '2026-09-25T14:00:00.000Z',
+            'idle_since': null,
+            'last_tool': 'Edit',
+            'last_summary': null,
+            'files_touched_count': 4,
+          },
+          {'pty_id': 5, 'state': 'something-new'},
+        ],
+      });
+      expect(snapshot.agents, hasLength(2));
+      final a = snapshot.agents.first;
+      expect(a.ptyId, 3);
+      expect(a.windowId, 1);
+      expect(a.tabId, 12);
+      expect(a.label, 'Claude: api');
+      expect(a.state, AgentRunState.busy);
+      expect(a.busySince, DateTime.utc(2026, 9, 25, 14));
+      expect(a.idleSince, isNull);
+      expect(a.lastTool, 'Edit');
+      expect(a.filesTouchedCount, 4);
+      expect(a.workspaceName, 'api');
+      final b = snapshot.agents.last;
+      expect(b.state, AgentRunState.unknown, reason: 'unknown states are safe');
+      expect(b.label, 'Claude');
+      expect(b.tabId, isNull);
+    });
+
+    test('agents absent (older Lee) means none', () {
+      final snapshot = AttentionSnapshot.fromJson(const {'items': []});
+      expect(snapshot.agents, isEmpty);
+      final patched = snapshot.copyWith(focus: const FocusState(active: true));
+      expect(patched.agents, isEmpty);
+    });
+
     test('copyWith patches one field without touching the rest', () {
       const snapshot = AttentionSnapshot(counts: AttentionCounts(blocking: 1));
       final patched = snapshot.copyWith(focus: const FocusState(active: true));

@@ -580,11 +580,105 @@ class AttentionCounts extends Equatable {
   List<Object?> get props => [blocking, needsYou, ambient, parked];
 }
 
+// ---------------------------------------------------------------------------
+// Running agents ("In flight")
+// ---------------------------------------------------------------------------
+
+enum AgentRunState {
+  busy,
+  waiting,
+  idle,
+  unknown;
+
+  static AgentRunState fromWire(String? value) => switch (value) {
+        'busy' => AgentRunState.busy,
+        'waiting' => AgentRunState.waiting,
+        'idle' => AgentRunState.idle,
+        _ => AgentRunState.unknown,
+      };
+}
+
+/// One running agent from the snapshot's optional `agents` list (shared
+/// `AgentSummary`). Never carries prompt text or tool inputs; [lastSummary]
+/// is the agent's own words, clipped to ~280 chars in compact snapshots.
+class AgentSummary extends Equatable {
+  final int ptyId;
+  final int? windowId;
+  final int? tabId;
+  final String label;
+  final String provider;
+  final String? workspace;
+  final AgentRunState state;
+  final DateTime? busySince;
+  final DateTime? idleSince;
+  final String? lastTool;
+  final String? lastSummary;
+  final int filesTouchedCount;
+
+  const AgentSummary({
+    required this.ptyId,
+    this.windowId,
+    this.tabId,
+    this.label = 'Claude',
+    this.provider = 'claude',
+    this.workspace,
+    this.state = AgentRunState.unknown,
+    this.busySince,
+    this.idleSince,
+    this.lastTool,
+    this.lastSummary,
+    this.filesTouchedCount = 0,
+  });
+
+  factory AgentSummary.fromJson(Map<String, dynamic> json) {
+    final label = json['label'] as String?;
+    return AgentSummary(
+      ptyId: (json['pty_id'] as num?)?.toInt() ?? 0,
+      windowId: (json['window_id'] as num?)?.toInt(),
+      tabId: (json['tab_id'] as num?)?.toInt(),
+      label: (label == null || label.isEmpty) ? 'Claude' : label,
+      provider: json['provider'] as String? ?? 'claude',
+      workspace: json['workspace'] as String?,
+      state: AgentRunState.fromWire(json['state'] as String?),
+      busySince: _parseDate(json['busy_since']),
+      idleSince: _parseDate(json['idle_since']),
+      lastTool: json['last_tool'] as String?,
+      lastSummary: json['last_summary'] as String?,
+      filesTouchedCount: (json['files_touched_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// Basename of [workspace].
+  String? get workspaceName {
+    if (workspace == null || workspace!.isEmpty) return null;
+    return workspace!.split('/').last;
+  }
+
+  @override
+  List<Object?> get props => [
+        ptyId,
+        windowId,
+        tabId,
+        label,
+        provider,
+        workspace,
+        state,
+        busySince,
+        idleSince,
+        lastTool,
+        lastSummary,
+        filesTouchedCount,
+      ];
+}
+
 class AttentionSnapshot extends Equatable {
   final List<AttentionItem> items;
   final AttentionCounts counts;
   final FocusState focus;
   final AwayState away;
+
+  /// Running agents; empty when Lee is older and omits `agents`.
+  final List<AgentSummary> agents;
   final DateTime? generatedAt;
 
   const AttentionSnapshot({
@@ -592,6 +686,7 @@ class AttentionSnapshot extends Equatable {
     this.counts = AttentionCounts.empty,
     this.focus = FocusState.empty,
     this.away = AwayState.empty,
+    this.agents = const [],
     this.generatedAt,
   });
 
@@ -612,6 +707,11 @@ class AttentionSnapshot extends Equatable {
       away: json['away'] != null
           ? AwayState.fromJson(json['away'] as Map<String, dynamic>)
           : AwayState.empty,
+      agents: (json['agents'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(AgentSummary.fromJson)
+              .toList() ??
+          const [],
       generatedAt: _parseDate(json['generated_at']),
     );
   }
@@ -621,6 +721,7 @@ class AttentionSnapshot extends Equatable {
     AttentionCounts? counts,
     FocusState? focus,
     AwayState? away,
+    List<AgentSummary>? agents,
     DateTime? generatedAt,
   }) {
     return AttentionSnapshot(
@@ -628,12 +729,13 @@ class AttentionSnapshot extends Equatable {
       counts: counts ?? this.counts,
       focus: focus ?? this.focus,
       away: away ?? this.away,
+      agents: agents ?? this.agents,
       generatedAt: generatedAt ?? this.generatedAt,
     );
   }
 
   @override
-  List<Object?> get props => [items, counts, focus, away, generatedAt];
+  List<Object?> get props => [items, counts, focus, away, agents, generatedAt];
 }
 
 // ---------------------------------------------------------------------------
