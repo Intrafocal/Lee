@@ -26,6 +26,7 @@ import {
   PAIRING_MAX_PENDING_PER_IP,
 } from './pairing-store';
 import { LeeContext } from '../shared/context';
+import { registerQueueRoutes } from './copilot/queue-routes';
 
 export interface APIServerConfig {
   port: number;
@@ -1377,6 +1378,7 @@ export class APIServer {
         data: { killed: id },
       });
     });
+    registerQueueRoutes(this.app, { ptyManager: this.ptyManager });
 
   }
 

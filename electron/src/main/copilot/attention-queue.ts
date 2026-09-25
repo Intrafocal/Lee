@@ -1,0 +1,533 @@
+/**
+ * The machine-wide attention queue: items, supersede/resolve rules, severity,
+ * notify and snapshots (full and compact). Pure: no Electron.
+ *
+ * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.1, §5.2, §5.4, §7.2.
+ */
+
+import * as crypto from 'crypto';
+import type {
+  Actor,
+  AttentionActionName,
+  AttentionItem,
+  AttentionKind,
+  AttentionSeverity,
+  AttentionSnapshot,
+  AttentionSource,
+  AwayState,
+  FocusState,
+  LeeEventInput,
+  LeeStatusBlock,
+} from '../../shared/copilot';
+import type { CopilotConfig } from './config';
+import { AGENT_TEXT_MAX, clip } from './hook-payload';
+
+export const COMPACT_MAX_ITEMS = 25;
+export const COMPACT_TEXT_MAX = 280;
+const CLOSED_KEEP_MS = 24 * 60 * 60 * 1000;
+const MAX_ITEM_FILES = 50;
+
+export type Resolution = 'reply' | 'answered_in_tab' | 'superseded' | 'agent_exit' | 'dismissed' | 'expired';
+
+export const KIND_TITLES: Record<Exclude<AttentionKind, 'approval' | 'failure'>, string> = {
+  waiting: 'Claude is waiting for you',
+  blocker: 'Claude is blocked',
+  decision: 'Claude needs a decision',
+  review: 'Claude finished a turn',
+  summary: 'While you were away',
+};
+
+const KIND_ACTIONS: Record<AttentionKind, AttentionActionName[]> = {
+  approval: ['approve', 'deny', 'open', 'snooze', 'dismiss', 'wake'],
+  waiting: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
+  blocker: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
+  decision: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
+  failure: ['open', 'dismiss'],
+  review: ['reply', 'open', 'dismiss'],
+  summary: ['open', 'dismiss'],
+};
+
+const PTY_ACTIONS = new Set<AttentionActionName>(['approve', 'deny', 'reply', 'open']);
+
+const SEVERITY_RANK: Record<AttentionSeverity, number> = { blocking: 0, 'needs-you': 1, ambient: 2 };
+
+export function actionsFor(kind: AttentionKind, ptyId: number | null): AttentionActionName[] {
+  const all = KIND_ACTIONS[kind];
+  if (kind === 'summary') return [...all];
+  return ptyId == null ? all.filter((a) => !PTY_ACTIONS.has(a)) : [...all];
+}
+
+export function baseSeverity(kind: AttentionKind): AttentionSeverity {
+  return kind === 'review' || kind === 'summary' ? 'ambient' : 'needs-you';
+}
+
+/** Key for "one open item per agent session": the PTY, else the session. */
+export function sourceKey(source: AttentionSource): string {
+  if (source.pty_id != null) return `pty:${source.pty_id}`;
+  if (source.session_id) return `session:${source.session_id}`;
+  return `lee:${source.kind}`;
+}
+
+export interface NewItem {
+  kind: AttentionKind;
+  title: string;
+  text: string;
+  source: AttentionSource;
+  tool?: { name: string; preview: string; signature: string } | null;
+  lee_status?: LeeStatusBlock | null;
+  files?: string[];
+  wake?: boolean;
+}
+
+export interface QueueDeps {
+  log: (input: LeeEventInput) => void;
+  config: () => CopilotConfig;
+  quietHours: (at: Date) => boolean;
+  /** Focus tracker view. */
+  focus: {
+    readonly active: boolean;
+    readonly sessionId: string | null;
+    isRelated: (ptyId: number | null, filesWritten: string[]) => boolean;
+    noteInterruption: () => void;
+  };
+  away: {
+    readonly active: boolean;
+    isWoken: (item: { id: string; wake: boolean; source: { pty_id: number | null } }) => boolean;
+  };
+  /** Files the item's agent session wrote (for files-focus relation). */
+  sessionFiles: (item: AttentionItem) => string[];
+  /** True when some Lee window exists to show the blocking banner. */
+  hasSurface: () => boolean;
+}
+
+interface Entry {
+  item: AttentionItem;
+  key: string;
+  createdMs: number;
+  waitAccum: number;
+  waitSince: number | null;
+  snoozeUntilMs: number | null;
+  snoozeOnChange: boolean;
+  closedMs: number | null;
+  escalatedFor: Set<string>;
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
+function isLive(e: Entry): boolean {
+  return e.item.state === 'open' || e.item.state === 'snoozed';
+}
+
+function copyItem(item: AttentionItem): AttentionItem {
+  return JSON.parse(JSON.stringify(item));
+}
+
+export class AttentionQueue {
+  private entries = new Map<string, Entry>();
+
+  constructor(private deps: QueueDeps) {}
+
+  private ctx(item: AttentionItem): { workspace: string | null; window_id: number | null } {
+    return { workspace: item.source.workspace, window_id: item.source.window_id };
+  }
+
+  private bump(e: Entry, now: number): void {
+    e.item.version++;
+    e.item.updated_at = iso(now);
+  }
+
+  get(id: string): AttentionItem | undefined {
+    const e = this.entries.get(id);
+    return e ? copyItem(e.item) : undefined;
+  }
+
+  /** Live (open or snoozed) items, internal references. */
+  private live(): Entry[] {
+    return Array.from(this.entries.values()).filter(isLive);
+  }
+
+  liveItems(): AttentionItem[] {
+    return this.live().map((e) => copyItem(e.item));
+  }
+
+  findLive(key: string, kinds?: AttentionKind[]): AttentionItem[] {
+    return this.live()
+      .filter((e) => e.key === key && (!kinds || kinds.includes(e.item.kind)))
+      .map((e) => copyItem(e.item));
+  }
+
+  open(spec: NewItem, now: number): AttentionItem {
+    const key = sourceKey(spec.source);
+    const siblings = spec.kind === 'summary' ? [] : this.live().filter((e) => e.key === key);
+    for (const e of siblings) {
+      const isApproval = e.item.kind === 'approval';
+      if (spec.kind === 'approval' && isApproval) {
+        const sameTool = !spec.tool || !e.item.tool || e.item.tool.signature === spec.tool.signature;
+        if (sameTool) {
+          this.update(
+            e.item.id,
+            { text: spec.text || e.item.text, tool: spec.tool ?? e.item.tool ?? null, source: spec.source },
+            now,
+          );
+          return copyItem(e.item);
+        }
+      }
+      if (isApproval && spec.kind !== 'approval') continue;
+      if (e.item.kind === 'failure') continue;
+      this.resolve(e.item.id, 'superseded', now);
+    }
+
+    const id = `att_${now.toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+    const item: AttentionItem = {
+      id,
+      version: 1,
+      kind: spec.kind,
+      severity: baseSeverity(spec.kind),
+      state: 'open',
+      parked: false,
+      wake: !!spec.wake,
+      notify: false,
+      related_to_focus: false,
+      created_at: iso(now),
+      updated_at: iso(now),
+      active_wait_ms: 0,
+      title: spec.title,
+      text: clip(spec.text ?? '', AGENT_TEXT_MAX),
+      source: { ...spec.source },
+      files: (spec.files ?? []).slice(-MAX_ITEM_FILES),
+      tool: spec.tool ?? null,
+      lee_status: spec.lee_status ?? null,
+      actions: actionsFor(spec.kind, spec.source.pty_id),
+      snoozed_until: null,
+    };
+    const entry: Entry = {
+      item,
+      key: spec.kind === 'summary' ? `summary:${id}` : key,
+      createdMs: now,
+      waitAccum: 0,
+      waitSince: now,
+      snoozeUntilMs: null,
+      snoozeOnChange: false,
+      closedMs: null,
+      escalatedFor: new Set(),
+    };
+    this.entries.set(id, entry);
+    this.deps.log({
+      type: 'attention.open',
+      ...this.ctx(item),
+      data: {
+        item_id: id,
+        kind: item.kind,
+        severity: item.severity,
+        source: item.source,
+        ...(item.tool ? { tool_signature: item.tool.signature } : {}),
+      },
+    });
+    this.recompute(now, entry);
+    return copyItem(item);
+  }
+
+  update(
+    id: string,
+    changes: Partial<Pick<AttentionItem, 'text' | 'title' | 'tool' | 'lee_status' | 'files' | 'source'>>,
+    now: number,
+  ): AttentionItem | undefined {
+    const e = this.entries.get(id);
+    if (!e || !isLive(e)) return undefined;
+    const changed: string[] = [];
+    if (changes.text !== undefined) {
+      const text = clip(changes.text, AGENT_TEXT_MAX);
+      if (text !== e.item.text) {
+        e.item.text = text;
+        changed.push('text');
+      }
+    }
+    if (changes.title !== undefined && changes.title !== e.item.title) {
+      e.item.title = changes.title;
+      changed.push('title');
+    }
+    if (changes.tool !== undefined && JSON.stringify(changes.tool) !== JSON.stringify(e.item.tool ?? null)) {
+      e.item.tool = changes.tool;
+      changed.push('tool');
+    }
+    if (changes.lee_status !== undefined && JSON.stringify(changes.lee_status) !== JSON.stringify(e.item.lee_status ?? null)) {
+      e.item.lee_status = changes.lee_status;
+      changed.push('lee_status');
+    }
+    if (changes.files !== undefined) {
+      const files = changes.files.slice(-MAX_ITEM_FILES);
+      if (JSON.stringify(files) !== JSON.stringify(e.item.files ?? [])) {
+        e.item.files = files;
+        changed.push('files');
+      }
+    }
+    if (changes.source !== undefined) {
+      const merged: AttentionSource = { ...e.item.source };
+      for (const [k, v] of Object.entries(changes.source) as Array<[keyof AttentionSource, never]>) {
+        if (v !== null && v !== undefined) merged[k] = v;
+      }
+      if (JSON.stringify(merged) !== JSON.stringify(e.item.source)) {
+        e.item.source = merged;
+        e.item.actions = actionsFor(e.item.kind, merged.pty_id);
+        changed.push('source');
+      }
+    }
+    if (changed.length === 0) return copyItem(e.item);
+    this.bump(e, now);
+    this.logUpdate(e, changed);
+    this.recompute(now, e);
+    return copyItem(e.item);
+  }
+
+  private logUpdate(e: Entry, changes: string[]): void {
+    this.deps.log({
+      type: 'attention.update',
+      ...this.ctx(e.item),
+      data: { item_id: e.item.id, version: e.item.version, changes, severity: e.item.severity },
+    });
+  }
+
+  private close(e: Entry, state: 'resolved' | 'dismissed', resolution: Resolution, now: number, actor?: Actor): void {
+    e.item.state = state;
+    e.item.notify = false;
+    e.item.snoozed_until = null;
+    e.closedMs = now;
+    this.bump(e, now);
+    this.deps.log({
+      type: 'attention.resolve',
+      ...this.ctx(e.item),
+      actor,
+      data: { item_id: e.item.id, kind: e.item.kind, resolution, latency_ms: Math.max(0, now - e.createdMs) },
+    });
+  }
+
+  resolve(id: string, resolution: Exclude<Resolution, 'dismissed'>, now: number, actor?: Actor): boolean {
+    const e = this.entries.get(id);
+    if (!e || !isLive(e)) return false;
+    this.close(e, 'resolved', resolution, now, actor);
+    return true;
+  }
+
+  /** Resolve every live item matching `pred`. Returns how many. */
+  resolveWhere(pred: (item: AttentionItem) => boolean, resolution: Exclude<Resolution, 'dismissed'>, now: number): number {
+    let n = 0;
+    for (const e of this.live()) {
+      if (pred(e.item)) {
+        this.close(e, 'resolved', resolution, now);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  dismiss(id: string, now: number, actor: Actor): boolean {
+    const e = this.entries.get(id);
+    if (!e || !isLive(e)) return false;
+    this.deps.log({ type: 'attention.dismiss', ...this.ctx(e.item), actor, data: { item_id: id } });
+    this.close(e, 'dismissed', 'dismissed', now, actor);
+    return true;
+  }
+
+  /** `until` = epoch ms, or 'change' (until the source produces a new hook event). */
+  snooze(id: string, until: number | 'change', now: number, actor: Actor): boolean {
+    const e = this.entries.get(id);
+    if (!e || !isLive(e)) return false;
+    e.item.state = 'snoozed';
+    e.snoozeOnChange = until === 'change';
+    e.snoozeUntilMs = until === 'change' ? null : until;
+    e.item.snoozed_until = until === 'change' ? 'change' : iso(until);
+    e.item.notify = false;
+    this.bump(e, now);
+    this.deps.log({
+      type: 'attention.snooze',
+      ...this.ctx(e.item),
+      actor,
+      data: { item_id: id, until: e.item.snoozed_until },
+    });
+    this.recompute(now, e);
+    return true;
+  }
+
+  setWake(id: string, wake: boolean, now: number, actor: Actor): boolean {
+    const e = this.entries.get(id);
+    if (!e || !isLive(e)) return false;
+    if (e.item.wake !== wake) {
+      e.item.wake = wake;
+      this.bump(e, now);
+    }
+    this.deps.log({
+      type: 'attention.wake',
+      ...this.ctx(e.item),
+      actor,
+      data: { item_id: id, ...(e.item.source.pty_id != null ? { pty_id: e.item.source.pty_id } : {}), wake },
+    });
+    this.recompute(now, e);
+    return true;
+  }
+
+  /** The source produced a new hook event: wake items snoozed "until it changes". */
+  touchKey(key: string, now: number): boolean {
+    let changed = false;
+    for (const e of this.live()) {
+      if (e.key === key && e.item.state === 'snoozed' && e.snoozeOnChange) {
+        this.unsnooze(e, now);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private unsnooze(e: Entry, now: number): void {
+    e.item.state = 'open';
+    e.item.snoozed_until = null;
+    e.snoozeOnChange = false;
+    e.snoozeUntilMs = null;
+    this.bump(e, now);
+    this.logUpdate(e, ['state']);
+  }
+
+  /** Severity, parking, notify and expiry. Returns true if anything visible changed. */
+  recompute(now: number, only?: Entry): boolean {
+    const cfg = this.deps.config();
+    const limitMs = cfg.attention.waiting_limit_minutes * 60_000;
+    const reviewMs = cfg.attention.review_expiry_hours * 3_600_000;
+    const quiet = this.deps.quietHours(new Date(now));
+    let changed = false;
+
+    for (const e of only ? [only] : this.live()) {
+      if (!isLive(e)) continue;
+      const item = e.item;
+
+      if (item.state === 'snoozed' && e.snoozeUntilMs !== null && now >= e.snoozeUntilMs) {
+        this.unsnooze(e, now);
+        changed = true;
+      }
+      if (item.kind === 'review' && now - e.createdMs >= reviewMs) {
+        this.close(e, 'resolved', 'expired', now);
+        changed = true;
+        continue;
+      }
+
+      const parked = this.deps.away.active && !this.deps.away.isWoken(item);
+      if (parked && e.waitSince !== null) {
+        e.waitAccum += Math.max(0, now - e.waitSince);
+        e.waitSince = null;
+      } else if (!parked && e.waitSince === null) {
+        e.waitSince = now;
+      }
+      item.active_wait_ms = e.waitAccum + (e.waitSince !== null ? Math.max(0, now - e.waitSince) : 0);
+
+      const related = this.deps.focus.active && this.deps.focus.isRelated(item.source.pty_id, this.deps.sessionFiles(item));
+      const base = baseSeverity(item.kind);
+      const blocking =
+        base === 'needs-you' && item.state === 'open' && !parked && (related || item.active_wait_ms >= limitMs);
+      const severity: AttentionSeverity = blocking ? 'blocking' : base;
+      const woken = this.deps.away.isWoken(item);
+      const notify =
+        !quiet && item.state === 'open' && (this.deps.away.active ? woken : severity === 'blocking');
+
+      const changes: string[] = [];
+      const prevSeverity = item.severity;
+      if (severity !== item.severity) changes.push('severity');
+      if (parked !== item.parked) changes.push('parked');
+      if (related !== item.related_to_focus) changes.push('related_to_focus');
+      if (notify !== item.notify) changes.push('notify');
+      if (changes.length === 0) continue;
+
+      item.severity = severity;
+      item.parked = parked;
+      item.related_to_focus = related;
+      item.notify = notify;
+      this.bump(e, now);
+      this.logUpdate(e, changes);
+      changed = true;
+
+      if (severity === 'blocking' && prevSeverity !== 'blocking') {
+        const scope = this.deps.focus.sessionId ?? 'none';
+        if (!e.escalatedFor.has(scope)) {
+          e.escalatedFor.add(scope);
+          const surfaced = this.deps.hasSurface() || notify;
+          const duringFocus = this.deps.focus.active;
+          if (surfaced && duringFocus) this.deps.focus.noteInterruption();
+          this.deps.log({
+            type: 'attention.escalate',
+            ...this.ctx(item),
+            data: {
+              item_id: item.id,
+              from: prevSeverity,
+              to: 'blocking',
+              reason: related ? 'focus' : 'age',
+              surfaced,
+              during_focus: duringFocus,
+            },
+          });
+        }
+      }
+    }
+    return changed;
+  }
+
+  /** Drop closed items older than 24 h. */
+  prune(now: number): void {
+    for (const [id, e] of this.entries) {
+      if (e.closedMs !== null && now - e.closedMs > CLOSED_KEEP_MS) this.entries.delete(id);
+    }
+  }
+
+  counts(): AttentionSnapshot['counts'] {
+    const counts = { blocking: 0, needs_you: 0, ambient: 0, parked: 0 };
+    for (const e of this.live()) {
+      if (e.item.state !== 'open') continue;
+      if (e.item.parked) counts.parked++;
+      else if (e.item.severity === 'blocking') counts.blocking++;
+      else if (e.item.severity === 'needs-you') counts.needs_you++;
+      else counts.ambient++;
+    }
+    return counts;
+  }
+
+  /** Open, non-blocking items not related to focus (held quietly during focus). */
+  quietCount(): number {
+    let n = 0;
+    for (const e of this.live()) {
+      if (e.item.state === 'open' && e.item.severity !== 'blocking' && !e.item.related_to_focus) n++;
+    }
+    return n;
+  }
+
+  parkedCount(): number {
+    return this.live().filter((e) => e.item.state === 'open' && e.item.parked).length;
+  }
+
+  snapshot(
+    focus: FocusState,
+    away: AwayState,
+    opts: { compact?: boolean; all?: boolean } = {},
+    now: number = Date.now(),
+  ): AttentionSnapshot {
+    let entries = Array.from(this.entries.values()).filter((e) => {
+      if (isLive(e)) return !(opts.compact && e.item.state === 'snoozed');
+      return !!opts.all && e.closedMs !== null && now - e.closedMs <= CLOSED_KEEP_MS;
+    });
+    entries.sort((a, b) => {
+      const la = isLive(a) ? 0 : 1;
+      const lb = isLive(b) ? 0 : 1;
+      if (la !== lb) return la - lb;
+      const s = SEVERITY_RANK[a.item.severity] - SEVERITY_RANK[b.item.severity];
+      return s !== 0 ? s : b.item.active_wait_ms - a.item.active_wait_ms;
+    });
+    if (opts.compact) entries = entries.slice(0, COMPACT_MAX_ITEMS);
+    const items = entries.map((e) => {
+      const item = copyItem(e.item);
+      if (opts.compact) {
+        item.text = clip(item.text, COMPACT_TEXT_MAX);
+        delete item.files;
+        delete item.lee_status;
+      }
+      return item;
+    });
+    return { items, counts: this.counts(), focus, away, generated_at: iso(now) };
+  }
+}
