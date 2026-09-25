@@ -11,6 +11,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { MachineStatus } from './MachineStatus';
+import { LintStatus } from './lint/LintStatus';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 import { CopilotStatus } from './copilot/CopilotStatus';
 import { HandoffDialog } from './copilot/HandoffDialog';
@@ -447,6 +448,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-right">
+        <LintStatus workspace={workspace} />
         <CopilotStatus
           workspace={workspace}
           copilot={copilot}
