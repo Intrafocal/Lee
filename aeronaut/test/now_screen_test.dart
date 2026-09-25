@@ -17,6 +17,10 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   String? capturedText;
   bool? capturedAsExploration;
 
+  /// What the next `capture()` call returns — tests override this to
+  /// exercise the spooled/error feedback paths, not just success.
+  CaptureResult captureResult = const CaptureResult(success: true);
+
   void setSnapshot(AttentionSnapshot snapshot) {
     state = AttentionUiState(snapshot: snapshot);
   }
@@ -26,7 +30,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
     calls.add('capture');
     capturedText = text;
     capturedAsExploration = asExploration;
-    return const CaptureResult(success: true);
+    return captureResult;
   }
 
   @override
@@ -164,6 +168,43 @@ void main() {
       expect(notifier.capturedAsExploration, isTrue);
       expect(find.byKey(const ValueKey('capture-field')), findsNothing, reason: 'sheet closes');
       expect(find.text('Captured'), findsOneWidget);
+    });
+
+    testWidgets('capture sheet shows the spooled message and still closes', (tester) async {
+      final notifier = await _pump(tester, actions: const [CaptureButton()]);
+      notifier.captureResult = const CaptureResult(success: true, spooled: true);
+      await tester.tap(find.byTooltip('Capture'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const ValueKey('capture-field')), 'try sqlite for the cache');
+      await tester.tap(find.byKey(const ValueKey('capture-send')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('capture-field')),
+        findsNothing,
+        reason: 'sheet closes on spooled success too — Lee accepted the capture',
+      );
+      expect(find.text('Saved; will sync when Hester is back'), findsOneWidget);
+    });
+
+    testWidgets('capture sheet keeps the sheet and text on error so nothing is lost', (tester) async {
+      final notifier = await _pump(tester, actions: const [CaptureButton()]);
+      notifier.captureResult = const CaptureResult(success: false, error: 'HTTP 500');
+      await tester.tap(find.byTooltip('Capture'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byKey(const ValueKey('capture-field')), 'try sqlite for the cache');
+      await tester.tap(find.byKey(const ValueKey('capture-send')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('capture-field')),
+        findsOneWidget,
+        reason: 'sheet stays open on failure so the idea is not lost',
+      );
+      expect(find.text('try sqlite for the cache'), findsOneWidget, reason: 'entered text is preserved');
+      expect(find.text('HTTP 500'), findsOneWidget);
     });
 
     testWidgets('focus menu starts and stops focus', (tester) async {

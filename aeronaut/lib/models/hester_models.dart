@@ -139,6 +139,52 @@ class BundleSummary extends Equatable {
   List<Object?> get props => [id, title, tags, stale, sourceCount, updatedAt];
 }
 
+/// One captured idea from `GET /someday` (Hester daemon,
+/// `hester/daemon/copilot/someday.py`'s `SomedayItem.to_dict()`): id,
+/// created_at, text, status, as ("someday" | "explore"), source (surface +
+/// optional device_id) and tags. The daemon already returns items newest
+/// first (`SomedayStore.list` sorts by `(created_at, id)` descending), so
+/// this model doesn't re-sort.
+class SomedayItem extends Equatable {
+  final String id;
+  final DateTime? createdAt;
+  final String text;
+  final String status; // open | explored | promoted | dropped | kept
+  final String as; // someday | explore
+  final String sourceSurface; // lee | aeronaut | dirigible | device | cli | shared
+  final List<String> tags;
+
+  const SomedayItem({
+    required this.id,
+    this.createdAt,
+    this.text = '',
+    this.status = 'open',
+    this.as = 'someday',
+    this.sourceSurface = 'shared',
+    this.tags = const [],
+  });
+
+  /// The "as exploration" marker (contracts: captured with the exploration
+  /// toggle on in [CaptureSheet]).
+  bool get asExploration => as == 'explore';
+
+  factory SomedayItem.fromJson(Map<String, dynamic> json) {
+    final source = json['source'] as Map<String, dynamic>?;
+    return SomedayItem(
+      id: json['id'] as String? ?? '',
+      createdAt: json['created_at'] != null ? DateTime.tryParse(json['created_at'] as String) : null,
+      text: json['text'] as String? ?? '',
+      status: json['status'] as String? ?? 'open',
+      as: json['as'] as String? ?? 'someday',
+      sourceSurface: source?['surface'] as String? ?? 'shared',
+      tags: (json['tags'] as List<dynamic>?)?.map((t) => t as String).toList() ?? const [],
+    );
+  }
+
+  @override
+  List<Object?> get props => [id, createdAt, text, status, as, sourceSurface, tags];
+}
+
 /// One verified win in the session-start digest (`GET /copilot/digest`,
 /// contracts §8.4). "Verified" means Lee/Hester checked it, not an agent's
 /// own claim — see [DigestAgentClaim] for those.

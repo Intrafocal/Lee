@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/attention_provider.dart';
 import '../providers/windows_provider.dart';
+import '../screens/someday_screen.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
@@ -229,6 +230,24 @@ class _CaptureSheetState extends ConsumerState<CaptureSheet> {
                   const PhosphorIcon(PhosphorIcons.edit, size: 16, color: AeronautColors.textSecondary),
                   const SizedBox(width: 6),
                   Text('Capture', style: AeronautTheme.footnote.copyWith(fontWeight: FontWeight.w600)),
+                  const Spacer(),
+                  TextButton.icon(
+                    key: const ValueKey('capture-view-someday'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: () {
+                      final workspace = ref.read(windowsProvider).activeWindow?.workspace;
+                      final navigator = Navigator.of(context);
+                      navigator.pop();
+                      navigator.push(
+                        MaterialPageRoute<void>(builder: (_) => SomedayScreen(workspace: workspace)),
+                      );
+                    },
+                    icon: const PhosphorIcon(PhosphorIcons.list, size: 14),
+                    label: const Text('Someday'),
+                  ),
                 ],
               ),
               const SizedBox(height: AeronautTheme.spacingSm),
