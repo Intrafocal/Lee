@@ -55,6 +55,40 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
   bool _busy = false;
   final _replyController = TextEditingController();
 
+  /// Expand state for [AttentionItem.text]: while collapsed the card shows
+  /// the (possibly clipped) `item.text` at 4 lines; expanding shows the full
+  /// text once [_fullText] arrives (fetched via `GET /attention/:id` — see
+  /// [AttentionNotifier.fetchFullItem]), and the clipped text until then.
+  bool _textExpanded = false;
+  String? _fullText;
+
+  /// The full (unclipped) `question` for a `kind: question` item whose
+  /// compact strings looked truncated — same fetch-on-demand idea as
+  /// [_fullText], triggered as soon as the tile is built rather than on a
+  /// separate expand tap, since there's no other affordance to hang it off.
+  QuestionSet? _fullQuestion;
+
+  /// Which option index is mid-flight for a `choose` reply, so only that
+  /// button shows "Sending…" and the others stay put until it resolves.
+  int? _choosingIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _maybeFetchFullQuestion(widget.item);
+  }
+
+  @override
+  void didUpdateWidget(covariant AttentionTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.id != widget.item.id || oldWidget.item.version != widget.item.version) {
+      _fullText = null;
+      _textExpanded = false;
+      _fullQuestion = null;
+      _maybeFetchFullQuestion(widget.item);
+    }
+  }
+
   @override
   void dispose() {
     _replyController.dispose();
@@ -78,10 +112,71 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
     }
   }
 
+  Future<void> _toggleTextExpand(AttentionItem item) async {
+    setState(() => _textExpanded = !_textExpanded);
+    if (_textExpanded && _fullText == null) {
+      final full = await ref.read(attentionProvider.notifier).fetchFullItem(item);
+      if (mounted && full != null) setState(() => _fullText = full.text);
+    }
+  }
+
+  /// True if any string inside [question] looks like the compact snapshot's
+  /// ~120-char clip truncated it.
+  bool _questionLooksClipped(QuestionSet? question) {
+    if (question == null) return false;
+    for (final q in question.questions) {
+      if (looksClipped(q.question, kCompactQuestionClipLength)) return true;
+      if (q.header != null && looksClipped(q.header!, kCompactQuestionClipLength)) return true;
+      for (final o in q.options) {
+        if (looksClipped(o.label, kCompactQuestionClipLength)) return true;
+        if (o.description != null && looksClipped(o.description!, kCompactQuestionClipLength)) return true;
+      }
+    }
+    return false;
+  }
+
+  void _maybeFetchFullQuestion(AttentionItem item) {
+    if (item.kind != AttentionKind.question) return;
+    if (!_questionLooksClipped(item.question)) return;
+    unawaited(_fetchFullQuestion(item));
+  }
+
+  Future<void> _fetchFullQuestion(AttentionItem item) async {
+    final full = await ref.read(attentionProvider.notifier).fetchFullItem(item);
+    if (mounted && full?.question != null) setState(() => _fullQuestion = full!.question);
+  }
+
+  Future<void> _choose(AttentionItem item, int index) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _choosingIndex = index;
+    });
+    final result = await ref
+        .read(attentionProvider.notifier)
+        .reply(item.id, action: 'choose', choice: index, version: item.version);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _choosingIndex = null;
+    });
+    if (!result.success) {
+      final message = switch (result.error) {
+        'stale' => 'This item changed — refreshing.',
+        'gone' => 'That agent session has ended.',
+        _ => result.error ?? 'Action failed.',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      unawaited(ref.read(attentionProvider.notifier).refresh());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
     final notifier = ref.read(attentionProvider.notifier);
+    final isQuestion = item.kind == AttentionKind.question;
+    final legacyAskQuestion = item.isLegacyAskQuestionApproval;
 
     final card = Container(
       padding: const EdgeInsets.all(AeronautTheme.spacingMd),
@@ -127,13 +222,39 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
               style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
             ),
           ],
-          if (item.text.isNotEmpty) ...[
+          if (isQuestion) ...[
+            const SizedBox(height: AeronautTheme.spacingSm),
+            _QuestionBody(
+              question: _fullQuestion ?? item.question,
+              // Lee only puts `choose` in `actions` for a single-select,
+              // single-question, option-preview-free question — trust that
+              // over guessing from shape alone (it's the server's call, not
+              // ours: C3).
+              canChoose: item.canChoose,
+              busy: _busy,
+              choosingIndex: _choosingIndex,
+              onChoose: (i) => unawaited(_choose(item, i)),
+              onOpenTab: () => _run(() => notifier.open(item.id)),
+            ),
+          ],
+          if (!isQuestion && item.text.isNotEmpty) ...[
+            const SizedBox(height: AeronautTheme.spacingSm),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => unawaited(_toggleTextExpand(item)),
+              child: Text(
+                _textExpanded && _fullText != null ? _fullText! : item.text,
+                style: AeronautTheme.footnote,
+                maxLines: _textExpanded ? null : 4,
+                overflow: _textExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+          if (legacyAskQuestion) ...[
             const SizedBox(height: AeronautTheme.spacingSm),
             Text(
-              item.text,
-              style: AeronautTheme.footnote,
-              maxLines: 4,
-              overflow: TextOverflow.ellipsis,
+              'Claude is asking a question — open the tab to answer.',
+              style: AeronautTheme.footnote.copyWith(color: AeronautColors.warning),
             ),
           ],
           const SizedBox(height: AeronautTheme.spacingSm),
@@ -156,7 +277,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
               spacing: AeronautTheme.spacingSm,
               runSpacing: 4,
               children: [
-                if (item.canApproveDeny) ...[
+                if (item.canApproveDeny && !legacyAskQuestion) ...[
                   _ActionButton(
                     icon: PhosphorIcons.check,
                     label: 'Approve',
@@ -175,7 +296,19 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
                     ),
                   ),
                 ],
-                if (item.canReply)
+                // Safety net for an older Lee that still files AskUserQuestion
+                // as a plain approval: Approve there would silently accept
+                // whatever option is highlighted (C3), so offer only a path
+                // to the real answer UI instead.
+                if (legacyAskQuestion)
+                  _ActionButton(
+                    icon: PhosphorIcons.external,
+                    label: 'Open tab',
+                    filled: true,
+                    busy: _busy,
+                    onTap: () => _run(() => notifier.open(item.id)),
+                  ),
+                if (item.canReply && !isQuestion)
                   _ActionButton(
                     icon: PhosphorIcons.send,
                     label: 'Reply',
@@ -327,6 +460,175 @@ String _age(DateTime? createdAt) {
   if (diff.inMinutes < 60) return '${diff.inMinutes}m';
   if (diff.inHours < 24) return '${diff.inHours}h';
   return '${diff.inDays}d';
+}
+
+/// Body of a `kind: question` tile (Claude's `AskUserQuestion`). Shows a
+/// tappable button per option only when [canChoose] is true — Lee sets
+/// `choose` in `actions` only for a single, single-select question with
+/// options and no option previews, and that's the server's call to make,
+/// not a shape guess on this side (C3). Anything else (including the shape
+/// not qualifying) falls back to a read-only view of whatever question text
+/// is available, plus an "Open tab" action.
+class _QuestionBody extends StatelessWidget {
+  final QuestionSet? question;
+  final bool canChoose;
+  final bool busy;
+  final int? choosingIndex;
+  final ValueChanged<int> onChoose;
+  final VoidCallback onOpenTab;
+
+  const _QuestionBody({
+    required this.question,
+    required this.canChoose,
+    required this.busy,
+    required this.choosingIndex,
+    required this.onChoose,
+    required this.onOpenTab,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final answerable = canChoose ? question?.singleAnswerable : null;
+    if (answerable != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (answerable.header != null && answerable.header!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                answerable.header!,
+                style: AeronautTheme.caption1.copyWith(
+                  color: AeronautColors.textTertiary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          Text(answerable.question, style: AeronautTheme.footnote),
+          for (var i = 0; i < answerable.options.length; i++)
+            _QuestionOptionButton(
+              option: answerable.options[i],
+              sending: choosingIndex == i,
+              disabled: busy,
+              onTap: () => onChoose(i),
+            ),
+        ],
+      );
+    }
+
+    // Read-only: not offered as a tap-to-choose (multi-question,
+    // multi-select, options with previews, or Lee simply didn't offer
+    // `choose`) — show whatever question text is available and steer to
+    // the desktop for the actual answer.
+    final questions = question?.questions ?? const <Question>[];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (questions.isEmpty)
+          Text(
+            'Claude is asking a question — open the tab to answer.',
+            style: AeronautTheme.footnote.copyWith(color: AeronautColors.textSecondary),
+          )
+        else
+          for (final q in questions) ...[
+            if (q.header != null && q.header!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  q.header!,
+                  style: AeronautTheme.caption1.copyWith(
+                    color: AeronautColors.textTertiary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: AeronautTheme.spacingXs),
+              child: Text(q.question, style: AeronautTheme.footnote),
+            ),
+          ],
+        const SizedBox(height: AeronautTheme.spacingSm),
+        _ActionButton(
+          icon: PhosphorIcons.external,
+          label: 'Open tab',
+          filled: true,
+          busy: busy,
+          onTap: onOpenTab,
+        ),
+      ],
+    );
+  }
+}
+
+/// One tappable option row. Tapping sends `choose` immediately (contracts
+/// §5.2: buttons over typing) and shows a brief "sending" state on that
+/// option only, so the choice made is never ambiguous (C3).
+class _QuestionOptionButton extends StatelessWidget {
+  final QuestionOption option;
+  final bool sending;
+  final bool disabled;
+  final VoidCallback onTap;
+
+  const _QuestionOptionButton({
+    required this.option,
+    required this.sending,
+    required this.disabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: AeronautTheme.spacingXs),
+      child: Material(
+        color: AeronautColors.bgElevated,
+        borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
+          onTap: disabled ? null : onTap,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AeronautTheme.spacingMd,
+              vertical: AeronautTheme.spacingSm,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        option.label,
+                        style: AeronautTheme.footnote.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      if (option.description != null && option.description!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            option.description!,
+                            style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: AeronautTheme.spacingSm),
+                if (sending)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  const PhosphorIcon(PhosphorIcons.chevronRight, size: 14, color: AeronautColors.textTertiary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SeverityDot extends StatelessWidget {

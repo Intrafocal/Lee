@@ -14,30 +14,38 @@ class _Call {
   final String itemId;
   final String? action;
   final String? text;
+  final int? choice;
   final int? version;
 
-  _Call(this.method, this.itemId, {this.action, this.text, this.version});
+  _Call(this.method, this.itemId, {this.action, this.text, this.choice, this.version});
 }
 
-/// Records reply/snooze/dismiss calls instead of making them. With no
-/// active machine (the default `machinesProvider` state in a test
-/// container), the real [AttentionNotifier] methods would already
-/// short-circuit before touching the network — this override exists so the
-/// tests can assert the exact params (item id, action, text, version) a
-/// chip tap or swipe gesture sent.
+/// Records reply/snooze/dismiss/open calls instead of making them, and
+/// serves canned data for [fetchFullItem]. With no active machine (the
+/// default `machinesProvider` state in a test container), the real
+/// [AttentionNotifier] methods would already short-circuit before touching
+/// the network — this override exists so the tests can assert the exact
+/// params (item id, action, text, choice, version) a tap or swipe gesture
+/// sent, and control what a full-text/full-question fetch returns.
 class _RecordingAttentionNotifier extends AttentionNotifier {
   _RecordingAttentionNotifier(super.ref);
 
   final calls = <_Call>[];
+
+  /// Set by a test to control what [fetchFullItem] resolves to; null means
+  /// "not arrived yet" (the caller keeps showing the clipped text).
+  AttentionItem? Function(AttentionItem item)? onFetchFullItem;
+  int fetchFullItemCalls = 0;
 
   @override
   Future<ActionResult> reply(
     String itemId, {
     required String action,
     String? text,
+    int? choice,
     required int version,
   }) async {
-    calls.add(_Call('reply', itemId, action: action, text: text, version: version));
+    calls.add(_Call('reply', itemId, action: action, text: text, choice: choice, version: version));
     return const ActionResult(success: true);
   }
 
@@ -51,6 +59,18 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   Future<ActionResult> snooze(String itemId, {String? until, int? minutes}) async {
     calls.add(_Call('snooze', itemId));
     return const ActionResult(success: true);
+  }
+
+  @override
+  Future<ActionResult> open(String itemId) async {
+    calls.add(_Call('open', itemId));
+    return const ActionResult(success: true);
+  }
+
+  @override
+  Future<AttentionItem?> fetchFullItem(AttentionItem item) async {
+    fetchFullItemCalls++;
+    return onFetchFullItem?.call(item);
   }
 }
 
@@ -229,6 +249,195 @@ void main() {
       );
       await _pumpTile(tester, item);
       expect(find.byType(Dismissible), findsNothing);
+    });
+  });
+
+  group('full-text expand (a clipped item.text)', () {
+    final clippedText = '${'a' * 279}…'; // 280 chars, looks clipped
+    final clippedItem = AttentionItem(
+      id: 'att_clip',
+      version: 1,
+      kind: AttentionKind.review,
+      title: 'Review this diff',
+      text: clippedText,
+      actions: const [AttentionActionName.snooze, AttentionActionName.dismiss],
+    );
+
+    testWidgets('tapping the text fetches and shows the full text', (tester) async {
+      final notifier = await _pumpTile(tester, clippedItem);
+      notifier.onFetchFullItem = (item) => AttentionItem(
+            id: item.id,
+            version: item.version,
+            text: 'the real full text, much longer than the clipped preview',
+          );
+
+      await tester.tap(find.text(clippedText));
+      await tester.pumpAndSettle();
+
+      expect(notifier.fetchFullItemCalls, 1);
+      expect(find.text('the real full text, much longer than the clipped preview'), findsOneWidget);
+      expect(find.text(clippedText), findsNothing);
+    });
+
+    testWidgets('collapsing and re-expanding reuses the already-fetched text (no second call)', (tester) async {
+      final notifier = await _pumpTile(tester, clippedItem);
+      notifier.onFetchFullItem = (item) => AttentionItem(id: item.id, version: item.version, text: 'full text here');
+
+      await tester.tap(find.text(clippedText)); // expand
+      await tester.pumpAndSettle();
+      expect(notifier.fetchFullItemCalls, 1);
+      expect(find.text('full text here'), findsOneWidget);
+
+      await tester.tap(find.text('full text here')); // collapse — back to the clipped preview
+      await tester.pumpAndSettle();
+      expect(find.text(clippedText), findsOneWidget);
+
+      await tester.tap(find.text(clippedText)); // re-expand
+      await tester.pumpAndSettle();
+      expect(find.text('full text here'), findsOneWidget);
+      expect(notifier.fetchFullItemCalls, 1, reason: 'served from the tile\'s own already-fetched text');
+    });
+
+    testWidgets('while the fetch is pending, the clipped text keeps showing', (tester) async {
+      final notifier = await _pumpTile(tester, clippedItem);
+      notifier.onFetchFullItem = (item) => null; // simulates "not arrived yet" / gone
+
+      await tester.tap(find.text(clippedText));
+      await tester.pumpAndSettle();
+
+      expect(find.text(clippedText), findsOneWidget);
+    });
+  });
+
+  group('question kind (Claude\'s AskUserQuestion)', () {
+    const answerableItem = AttentionItem(
+      id: 'att_ask',
+      version: 1,
+      kind: AttentionKind.question,
+      title: 'Claude asks: which approach?',
+      actions: [AttentionActionName.choose, AttentionActionName.snooze, AttentionActionName.dismiss],
+      question: QuestionSet(questions: [
+        Question(
+          question: 'Which approach should I take?',
+          header: 'Approach',
+          options: [
+            QuestionOption(label: 'Rewrite', description: 'Start fresh'),
+            QuestionOption(label: 'Patch', description: 'Small fix'),
+          ],
+        ),
+      ]),
+    );
+
+    testWidgets('shows the question and tappable options; never Approve/Deny/Reply', (tester) async {
+      await _pumpTile(tester, answerableItem);
+
+      expect(find.text('Which approach should I take?'), findsOneWidget);
+      expect(find.text('Rewrite'), findsOneWidget);
+      expect(find.text('Patch'), findsOneWidget);
+      expect(find.text('Approve'), findsNothing);
+      expect(find.text('Deny'), findsNothing);
+      expect(find.text('Reply'), findsNothing);
+    });
+
+    testWidgets('tapping an option sends choose with its 0-based index and the item version', (tester) async {
+      final notifier = await _pumpTile(tester, answerableItem);
+
+      await tester.tap(find.text('Patch'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.calls, hasLength(1));
+      final call = notifier.calls.single;
+      expect(call.method, 'reply');
+      expect(call.itemId, 'att_ask');
+      expect(call.action, 'choose');
+      expect(call.choice, 1);
+      expect(call.version, 1);
+    });
+
+    testWidgets('no "choose" in actions (Lee\'s call) is read-only with Open tab, never a tap target', (tester) async {
+      const item = AttentionItem(
+        id: 'att_ask2',
+        version: 1,
+        kind: AttentionKind.question,
+        title: 'Claude asks: pick the files',
+        actions: [AttentionActionName.snooze, AttentionActionName.dismiss],
+        question: QuestionSet(questions: [
+          Question(question: 'Pick the files to change', options: [QuestionOption(label: 'a.ts')]),
+        ]),
+      );
+      final notifier = await _pumpTile(tester, item);
+
+      expect(find.text('Pick the files to change'), findsOneWidget);
+      expect(find.text('a.ts'), findsNothing, reason: 'not choosable — no tappable option button');
+      expect(find.text('Open tab'), findsOneWidget);
+
+      await tester.tap(find.text('Open tab'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.calls, hasLength(1));
+      expect(notifier.calls.single.method, 'open');
+      expect(notifier.calls.single.itemId, 'att_ask2');
+    });
+
+    testWidgets('no question payload yet is read-only with Open tab', (tester) async {
+      const item = AttentionItem(
+        id: 'att_ask3',
+        version: 1,
+        kind: AttentionKind.question,
+        title: 'Claude asks: …',
+        actions: [AttentionActionName.choose],
+      );
+      await _pumpTile(tester, item);
+
+      expect(find.text('Claude is asking a question — open the tab to answer.'), findsOneWidget);
+      expect(find.text('Open tab'), findsOneWidget);
+    });
+  });
+
+  group('legacy AskUserQuestion safety net (approval kind, older Lee)', () {
+    const legacyItem = AttentionItem(
+      id: 'att_legacy',
+      version: 1,
+      kind: AttentionKind.approval,
+      title: 'Claude wants to use AskUserQuestion',
+      tool: ToolPreview(name: 'AskUserQuestion', preview: '', signature: 's'),
+      actions: [
+        AttentionActionName.approve,
+        AttentionActionName.deny,
+        AttentionActionName.snooze,
+        AttentionActionName.dismiss,
+      ],
+    );
+
+    testWidgets('shows Open tab instead of Approve/Deny, with an explanation', (tester) async {
+      await _pumpTile(tester, legacyItem);
+
+      expect(find.text('Approve'), findsNothing);
+      expect(find.text('Deny'), findsNothing);
+      expect(find.text('Claude is asking a question — open the tab to answer.'), findsOneWidget);
+      expect(find.text('Open tab'), findsOneWidget);
+    });
+
+    testWidgets('tapping Open tab calls notifier.open, never approve/deny', (tester) async {
+      final notifier = await _pumpTile(tester, legacyItem);
+
+      await tester.tap(find.text('Open tab'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.calls, hasLength(1));
+      expect(notifier.calls.single.method, 'open');
+      expect(notifier.calls.any((c) => c.action == 'approve' || c.action == 'deny'), isFalse);
+    });
+
+    testWidgets('a swipe still only reaches dismiss, never approve/deny', (tester) async {
+      final notifier = await _pumpTile(tester, legacyItem);
+
+      expect(find.byType(Dismissible), findsOneWidget);
+      await tester.drag(find.byType(Dismissible), const Offset(-500, 0));
+      await tester.pumpAndSettle();
+
+      expect(notifier.calls, hasLength(1));
+      expect(notifier.calls.single.method, 'dismiss');
     });
   });
 }

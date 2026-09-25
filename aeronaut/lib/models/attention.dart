@@ -16,7 +16,8 @@ enum AttentionKind {
   decision,
   failure,
   review,
-  summary;
+  summary,
+  question;
 
   static AttentionKind fromWire(String? value) => switch (value) {
         'approval' => AttentionKind.approval,
@@ -26,6 +27,7 @@ enum AttentionKind {
         'failure' => AttentionKind.failure,
         'review' => AttentionKind.review,
         'summary' => AttentionKind.summary,
+        'question' => AttentionKind.question,
         _ => AttentionKind.waiting,
       };
 }
@@ -64,7 +66,8 @@ enum AttentionActionName {
   open,
   snooze,
   dismiss,
-  wake;
+  wake,
+  choose;
 
   static AttentionActionName? fromWire(String value) => switch (value) {
         'approve' => AttentionActionName.approve,
@@ -74,8 +77,92 @@ enum AttentionActionName {
         'snooze' => AttentionActionName.snooze,
         'dismiss' => AttentionActionName.dismiss,
         'wake' => AttentionActionName.wake,
+        'choose' => AttentionActionName.choose,
         _ => null,
       };
+}
+
+/// One option offered by an `AskUserQuestion` sub-question.
+class QuestionOption extends Equatable {
+  final String label;
+  final String? description;
+
+  const QuestionOption({required this.label, this.description});
+
+  factory QuestionOption.fromJson(Map<String, dynamic> json) {
+    return QuestionOption(
+      label: json['label'] as String? ?? '',
+      description: json['description'] as String?,
+    );
+  }
+
+  @override
+  List<Object?> get props => [label, description];
+}
+
+/// One sub-question of an `AskUserQuestion` call.
+class Question extends Equatable {
+  final String question;
+  final String? header;
+  final bool multiSelect;
+  final List<QuestionOption> options;
+
+  const Question({
+    required this.question,
+    this.header,
+    this.multiSelect = false,
+    this.options = const [],
+  });
+
+  factory Question.fromJson(Map<String, dynamic> json) {
+    return Question(
+      question: json['question'] as String? ?? '',
+      header: json['header'] as String?,
+      multiSelect: json['multi_select'] as bool? ?? false,
+      options: (json['options'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(QuestionOption.fromJson)
+              .toList() ??
+          const [],
+    );
+  }
+
+  @override
+  List<Object?> get props => [question, header, multiSelect, options];
+}
+
+/// `item.question` on a `question`-kind item (Claude's `AskUserQuestion`
+/// tool): one or more sub-questions from a single call. Aeronaut only offers
+/// a tap-to-answer UI ([singleAnswerable]) when there is exactly one
+/// sub-question, it isn't multi-select, and it has options to tap — the
+/// same "exactly one question and multi_select is false" rule the `choose`
+/// reply action requires server-side. Anything else falls back to a
+/// read-only view with an "Open tab" action (a human decision must stay
+/// explicit, never guessed at from a partial UI — C3).
+class QuestionSet extends Equatable {
+  final List<Question> questions;
+
+  const QuestionSet({this.questions = const []});
+
+  factory QuestionSet.fromJson(Map<String, dynamic> json) {
+    return QuestionSet(
+      questions: (json['questions'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(Question.fromJson)
+              .toList() ??
+          const [],
+    );
+  }
+
+  Question? get singleAnswerable {
+    if (questions.length != 1) return null;
+    final q = questions.single;
+    if (q.multiSelect || q.options.isEmpty) return null;
+    return q;
+  }
+
+  @override
+  List<Object?> get props => [questions];
 }
 
 class LeeStatusBlock extends Equatable {
@@ -218,6 +305,11 @@ class AttentionItem extends Equatable {
   final List<AttentionActionName> actions;
   final DateTime? snoozedUntil;
 
+  /// Present on `kind: question` items (Claude's `AskUserQuestion`). Null on
+  /// every other kind, and tolerated as absent even on a `question` item
+  /// from an older Lee that hasn't caught up yet.
+  final QuestionSet? question;
+
   const AttentionItem({
     required this.id,
     this.version = 0,
@@ -239,6 +331,7 @@ class AttentionItem extends Equatable {
     this.leeStatus,
     this.actions = const [],
     this.snoozedUntil,
+    this.question,
   });
 
   factory AttentionItem.fromJson(Map<String, dynamic> json) {
@@ -275,6 +368,9 @@ class AttentionItem extends Equatable {
               .toList() ??
           const [],
       snoozedUntil: _parseDate(json['snoozed_until']),
+      question: json['question'] != null
+          ? QuestionSet.fromJson(json['question'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -285,6 +381,14 @@ class AttentionItem extends Equatable {
   bool get canSnooze => actions.contains(AttentionActionName.snooze);
   bool get canDismiss => actions.contains(AttentionActionName.dismiss);
   bool get canWake => actions.contains(AttentionActionName.wake);
+  bool get canChoose => actions.contains(AttentionActionName.choose);
+
+  /// True for an `approval` item that is really Claude's `AskUserQuestion`
+  /// tool wearing the old approve/deny shape (an older Lee that hasn't sent
+  /// `kind: question` yet). Approve there silently accepts the highlighted
+  /// option — never safe to expose as a plain "Approve" button (C3).
+  bool get isLegacyAskQuestionApproval =>
+      kind == AttentionKind.approval && tool?.name == 'AskUserQuestion';
 
   /// "tab label · workspace basename", trimmed to whichever parts exist.
   String get sourceLabel {
@@ -316,6 +420,7 @@ class AttentionItem extends Equatable {
         leeStatus,
         actions,
         snoozedUntil,
+        question,
       ];
 }
 

@@ -1,7 +1,56 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aeronaut/models/attention.dart';
+import 'package:aeronaut/models/machine.dart';
 import 'package:aeronaut/models/pairing_payload.dart';
 import 'package:aeronaut/providers/attention_provider.dart';
+import 'package:aeronaut/providers/machines_provider.dart';
+import 'package:aeronaut/services/copilot_api.dart';
+import 'package:aeronaut/services/machine_store.dart';
+
+const _machine = Machine(id: 'm1', name: 'Dev', host: '127.0.0.1', token: 't');
+
+/// Puts [_machine] in place as the active machine without touching
+/// SharedPreferences or starting the health-check timer — same pattern as
+/// `someday_screen_test.dart` / `files_screen_test.dart`.
+class _FixedMachinesNotifier extends MachinesNotifier {
+  _FixedMachinesNotifier() : super(MachineStore()) {
+    state = const MachinesState(machines: [_machine], activeMachineId: 'm1');
+  }
+}
+
+/// Records calls and returns canned data instead of hitting the network, so
+/// [AttentionNotifier]'s fetch-and-cache logic can be tested directly.
+class _FakeCopilotApi extends CopilotApi {
+  _FakeCopilotApi({required super.machine});
+
+  int getItemCalls = 0;
+  int getSnapshotCalls = 0;
+  AttentionItem? Function(String id)? onGetItem;
+  AttentionSnapshot? Function()? onGetSnapshot;
+
+  @override
+  Future<AttentionItem?> getItem(String itemId) async {
+    getItemCalls++;
+    return onGetItem?.call(itemId);
+  }
+
+  @override
+  Future<AttentionSnapshot?> getSnapshot({bool compact = true}) async {
+    getSnapshotCalls++;
+    return onGetSnapshot?.call();
+  }
+
+  // The real dispose() closes the shared http.Client; this fake is reused
+  // across every call in a test so it must survive being "disposed" after
+  // each one.
+  @override
+  void dispose() {}
+}
+
+/// A clipped-looking item's text: exactly [kCompactTextClipLength] chars,
+/// ending in the clip marker — see `looksClipped`.
+String _clippedText([int max = kCompactTextClipLength]) => '${'a' * (max - 1)}…';
 
 void main() {
   group('AttentionItem.fromJson', () {
@@ -373,6 +422,244 @@ void main() {
       ]);
       final rose = notifyRoseItems({'a'}, snapshot).toList();
       expect(rose.map((i) => i.id), ['b']);
+    });
+  });
+
+  group('looksClipped', () {
+    test('a short string is never clipped', () {
+      expect(looksClipped('short'), isFalse);
+    });
+
+    test('a short string that happens to end in the clip marker is still short', () {
+      expect(looksClipped('hi…'), isFalse);
+    });
+
+    test('exactly the clip length, ending in the marker, looks clipped', () {
+      final text = _clippedText();
+      expect(text.length, kCompactTextClipLength);
+      expect(looksClipped(text), isTrue);
+    });
+
+    test('a full-length string NOT ending in the marker is not clipped', () {
+      final text = 'a' * kCompactTextClipLength;
+      expect(looksClipped(text), isFalse);
+    });
+
+    test('a custom max is honored (question strings clip at ~120)', () {
+      final text = _clippedText(kCompactQuestionClipLength);
+      expect(looksClipped(text, kCompactQuestionClipLength), isTrue);
+      // Shorter than the default 280-char item-text clip length.
+      expect(looksClipped(text), isFalse);
+    });
+  });
+
+  group('QuestionSet.singleAnswerable', () {
+    test('one single-select question with options is answerable', () {
+      const qs = QuestionSet(questions: [
+        Question(question: 'Pick one', options: [QuestionOption(label: 'A'), QuestionOption(label: 'B')]),
+      ]);
+      expect(qs.singleAnswerable?.question, 'Pick one');
+      expect(qs.singleAnswerable?.options, hasLength(2));
+    });
+
+    test('more than one question is not answerable', () {
+      const qs = QuestionSet(questions: [
+        Question(question: 'Q1', options: [QuestionOption(label: 'A')]),
+        Question(question: 'Q2', options: [QuestionOption(label: 'B')]),
+      ]);
+      expect(qs.singleAnswerable, isNull);
+    });
+
+    test('multi-select is not answerable', () {
+      const qs = QuestionSet(questions: [
+        Question(question: 'Q', multiSelect: true, options: [QuestionOption(label: 'A')]),
+      ]);
+      expect(qs.singleAnswerable, isNull);
+    });
+
+    test('no options is not answerable', () {
+      const qs = QuestionSet(questions: [Question(question: 'Q')]);
+      expect(qs.singleAnswerable, isNull);
+    });
+  });
+
+  group('AttentionItem question kind (Claude\'s AskUserQuestion)', () {
+    test('parses kind: question with a nested question set and choose action', () {
+      final item = AttentionItem.fromJson({
+        'id': 'att_q',
+        'kind': 'question',
+        'title': 'Claude asks: which approach?',
+        'actions': ['choose', 'snooze', 'dismiss'],
+        'question': {
+          'questions': [
+            {
+              'question': 'Which approach?',
+              'header': 'Approach',
+              'multi_select': false,
+              'options': [
+                {'label': 'A', 'description': 'first'},
+                {'label': 'B'},
+              ],
+            },
+          ],
+        },
+      });
+      expect(item.kind, AttentionKind.question);
+      expect(item.canChoose, isTrue);
+      expect(item.question?.singleAnswerable?.header, 'Approach');
+      expect(item.question?.singleAnswerable?.options.map((o) => o.label), ['A', 'B']);
+      expect(item.question?.singleAnswerable?.options.first.description, 'first');
+    });
+
+    test('question is null when absent, even on a question-kind item (tolerated as absent)', () {
+      final item = AttentionItem.fromJson({'id': 'att_q2', 'kind': 'question'});
+      expect(item.kind, AttentionKind.question);
+      expect(item.question, isNull);
+      expect(item.canChoose, isFalse);
+    });
+
+    test('choose is only offered when Lee put it in actions, not merely because the shape qualifies', () {
+      final item = AttentionItem.fromJson({
+        'id': 'att_q3',
+        'kind': 'question',
+        'actions': ['snooze', 'dismiss'], // no 'choose' — e.g. options carry previews
+        'question': {
+          'questions': [
+            {'question': 'Q', 'options': [{'label': 'A'}]},
+          ],
+        },
+      });
+      expect(item.canChoose, isFalse);
+      expect(item.question?.singleAnswerable, isNotNull, reason: 'shape alone is not the gate');
+    });
+
+    test('an approval whose tool is AskUserQuestion is flagged as a legacy ask (safety net)', () {
+      final item = AttentionItem.fromJson({
+        'id': 'att_legacy',
+        'kind': 'approval',
+        'tool': {'name': 'AskUserQuestion', 'preview': '', 'signature': 's'},
+        'actions': ['approve', 'deny'],
+      });
+      expect(item.isLegacyAskQuestionApproval, isTrue);
+    });
+
+    test('a plain approval (any other tool) is not flagged', () {
+      final item = AttentionItem.fromJson({
+        'id': 'att_plain',
+        'kind': 'approval',
+        'tool': {'name': 'Bash', 'preview': '', 'signature': 's'},
+        'actions': ['approve', 'deny'],
+      });
+      expect(item.isLegacyAskQuestionApproval, isFalse);
+    });
+  });
+
+  group('AttentionNotifier.fetchFullItem (expand-to-fetch-full-text)', () {
+    late _FakeCopilotApi fake;
+    late ProviderContainer container;
+
+    AttentionItem clipped({String id = 'att_1', int version = 1}) =>
+        AttentionItem(id: id, version: version, text: _clippedText());
+
+    setUp(() {
+      fake = _FakeCopilotApi(machine: _machine);
+      container = ProviderContainer(overrides: [
+        machinesProvider.overrideWith((ref) => _FixedMachinesNotifier()),
+        attentionProvider.overrideWith((ref) => AttentionNotifier(ref, apiFactory: (_) => fake)),
+      ]);
+      addTearDown(container.dispose);
+    });
+
+    test('a full fetch replaces the clipped text', () async {
+      final item = clipped();
+      fake.onGetItem = (id) => AttentionItem(id: id, version: item.version, text: 'the real, full text');
+      final full = await container.read(attentionProvider.notifier).fetchFullItem(item);
+      expect(full?.text, 'the real, full text');
+      expect(fake.getItemCalls, 1);
+    });
+
+    test('a second fetch for the same id:version is served from cache (no second request)', () async {
+      final item = clipped();
+      fake.onGetItem = (id) => AttentionItem(id: id, version: item.version, text: 'full');
+      final notifier = container.read(attentionProvider.notifier);
+      await notifier.fetchFullItem(item);
+      await notifier.fetchFullItem(item);
+      expect(fake.getItemCalls, 1);
+    });
+
+    test('a version bump fetches again (a new id:version key)', () async {
+      final notifier = container.read(attentionProvider.notifier);
+      fake.onGetItem = (id) => const AttentionItem(id: 'att_1', version: 1, text: 'full v1');
+      final full1 = await notifier.fetchFullItem(clipped(version: 1));
+      fake.onGetItem = (id) => const AttentionItem(id: 'att_1', version: 2, text: 'full v2');
+      final full2 = await notifier.fetchFullItem(clipped(version: 2));
+      expect(full1?.text, 'full v1');
+      expect(full2?.text, 'full v2');
+      expect(fake.getItemCalls, 2);
+    });
+
+    test('404/410 (item gone) resolves to null — caller keeps showing the clipped text', () async {
+      fake.onGetItem = (_) => null;
+      final full = await container.read(attentionProvider.notifier).fetchFullItem(clipped());
+      expect(full, isNull);
+      expect(fake.getItemCalls, 1);
+    });
+
+    test('short (unclipped) text never triggers a fetch', () async {
+      const short = AttentionItem(id: 'att_short', version: 1, text: 'short and sweet');
+      final full = await container.read(attentionProvider.notifier).fetchFullItem(short);
+      expect(full, isNull);
+      expect(fake.getItemCalls, 0);
+    });
+
+    test('empty text never triggers a fetch', () async {
+      const empty = AttentionItem(id: 'att_empty', version: 1, text: '');
+      final full = await container.read(attentionProvider.notifier).fetchFullItem(empty);
+      expect(full, isNull);
+      expect(fake.getItemCalls, 0);
+    });
+  });
+
+  group('AttentionNotifier.fetchFullSnapshot / fetchFullAgentSummary (In-flight full summary)', () {
+    late _FakeCopilotApi fake;
+    late ProviderContainer container;
+
+    setUp(() async {
+      fake = _FakeCopilotApi(machine: _machine);
+      container = ProviderContainer(overrides: [
+        machinesProvider.overrideWith((ref) => _FixedMachinesNotifier()),
+        attentionProvider.overrideWith((ref) => AttentionNotifier(ref, apiFactory: (_) => fake)),
+      ]);
+      addTearDown(container.dispose);
+      // Constructing the notifier (first read) fires its own (unawaited)
+      // refresh() — force that construction now, let it settle, and reset
+      // the counter so each test only counts the calls it actually makes.
+      container.read(attentionProvider.notifier);
+      await Future<void>.delayed(Duration.zero);
+      fake.getSnapshotCalls = 0;
+    });
+
+    test('returns the agent matching ptyId, with its unclipped summary', () async {
+      fake.onGetSnapshot = () => const AttentionSnapshot(
+            agents: [AgentSummary(ptyId: 3, lastSummary: 'the full unclipped summary')],
+          );
+      final agent = await container.read(attentionProvider.notifier).fetchFullAgentSummary(3);
+      expect(agent?.lastSummary, 'the full unclipped summary');
+      expect(fake.getSnapshotCalls, 1);
+    });
+
+    test('a second expand shortly after reuses the cached snapshot (no second request)', () async {
+      fake.onGetSnapshot = () => const AttentionSnapshot(agents: [AgentSummary(ptyId: 3, lastSummary: 'x')]);
+      final notifier = container.read(attentionProvider.notifier);
+      await notifier.fetchFullAgentSummary(3);
+      await notifier.fetchFullAgentSummary(3);
+      expect(fake.getSnapshotCalls, 1);
+    });
+
+    test('an unknown ptyId resolves to null without erroring', () async {
+      fake.onGetSnapshot = () => const AttentionSnapshot(agents: [AgentSummary(ptyId: 3, lastSummary: 'x')]);
+      final agent = await container.read(attentionProvider.notifier).fetchFullAgentSummary(99);
+      expect(agent, isNull);
     });
   });
 }

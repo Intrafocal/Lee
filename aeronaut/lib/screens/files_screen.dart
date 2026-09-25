@@ -12,6 +12,19 @@ import '../theme/phosphor_icons.generated.dart';
 import '../widgets/phosphor_icon.dart';
 import 'file_viewer_screen.dart';
 
+/// How a directory listing is fetched; overridden in tests with a fake that
+/// returns canned [FsListResult]s per path instead of hitting the network.
+typedef ListDirFn = Future<FsListResult> Function(Machine machine, String path);
+
+Future<FsListResult> _defaultListDir(Machine machine, String path) async {
+  final api = FsApi(machine: machine);
+  try {
+    return await api.listDir(path);
+  } finally {
+    api.dispose();
+  }
+}
+
 /// Files browser body for the active machine's current workspace, driven by
 /// `GET /fs/list`. Used two ways: embedded directly for a `files` tab
 /// (no extra chrome — the tab bar above it is enough), and wrapped in
@@ -22,7 +35,9 @@ import 'file_viewer_screen.dart';
 /// own children on first expansion); tapping a file pushes
 /// [FileViewerScreen].
 class FilesBrowserBody extends ConsumerWidget {
-  const FilesBrowserBody({super.key});
+  final ListDirFn listDir;
+
+  const FilesBrowserBody({this.listDir = _defaultListDir, super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -40,19 +55,21 @@ class FilesBrowserBody extends ConsumerWidget {
         ),
       );
     }
-    return _DirBody(machine: machine, path: workspace, isRoot: true);
+    return _DirBody(machine: machine, path: workspace, isRoot: true, listDir: listDir);
   }
 }
 
 /// Full-screen route for Files, pushed from the home screen's app bar.
 class FilesScreen extends StatelessWidget {
-  const FilesScreen({super.key});
+  final ListDirFn listDir;
+
+  const FilesScreen({this.listDir = _defaultListDir, super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Files')),
-      body: const FilesBrowserBody(),
+      body: FilesBrowserBody(listDir: listDir),
     );
   }
 }
@@ -68,8 +85,14 @@ class _DirBody extends ConsumerStatefulWidget {
   final Machine machine;
   final String path;
   final bool isRoot;
+  final ListDirFn listDir;
 
-  const _DirBody({required this.machine, required this.path, this.isRoot = false});
+  const _DirBody({
+    required this.machine,
+    required this.path,
+    this.isRoot = false,
+    this.listDir = _defaultListDir,
+  });
 
   @override
   ConsumerState<_DirBody> createState() => _DirBodyState();
@@ -91,9 +114,8 @@ class _DirBodyState extends ConsumerState<_DirBody> {
       _loading = true;
       _error = null;
     });
-    final api = FsApi(machine: widget.machine);
     try {
-      final result = await api.listDir(widget.path);
+      final result = await widget.listDir(widget.machine, widget.path);
       if (!mounted) return;
       setState(() {
         _result = result;
@@ -105,8 +127,6 @@ class _DirBodyState extends ConsumerState<_DirBody> {
         _error = e.message;
         _loading = false;
       });
-    } finally {
-      api.dispose();
     }
   }
 
@@ -138,29 +158,53 @@ class _DirBodyState extends ConsumerState<_DirBody> {
       );
     }
 
-    final content = ListView.builder(
-      padding: EdgeInsets.zero,
-      shrinkWrap: !widget.isRoot,
-      physics: widget.isRoot ? null : const NeverScrollableScrollPhysics(),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        final fullPath = '${widget.path}/${entry.name}';
-        if (entry.isDir) {
-          return _DirNode(machine: widget.machine, name: entry.name, path: fullPath);
-        }
-        return _FileTile(machine: widget.machine, name: entry.name, path: fullPath, entry: entry);
-      },
-    );
+    Widget tile(int index) {
+      final entry = entries[index];
+      final fullPath = '${widget.path}/${entry.name}';
+      if (entry.isDir) {
+        return _DirNode(
+          key: ValueKey('dir-$fullPath'),
+          machine: widget.machine,
+          name: entry.name,
+          path: fullPath,
+          listDir: widget.listDir,
+        );
+      }
+      return _FileTile(
+        key: ValueKey('file-$fullPath'),
+        machine: widget.machine,
+        name: entry.name,
+        path: fullPath,
+        entry: entry,
+      );
+    }
 
     if (widget.isRoot) {
       return RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         onRefresh: _load,
-        child: content,
+        child: ListView.builder(
+          padding: EdgeInsets.zero,
+          itemCount: entries.length,
+          itemBuilder: (context, index) => tile(index),
+        ),
       );
     }
-    return content;
+
+    // A nested body lives inside an ExpansionTile's `children`, itself
+    // already inside the root's scrollable ListView — it must not create
+    // its own Scrollable. Besides being unnecessary (it never scrolls on
+    // its own, hence the `shrinkWrap`/`NeverScrollableScrollPhysics` this
+    // used to carry on a ListView here), a Scrollable would inherit the
+    // ExpansionTile's `PageStorageKey` for its own scroll-offset storage —
+    // colliding with the bool the ExpansionTile keeps there for its own
+    // expanded state. Restoring throws `bool is not a subtype of double?`,
+    // which crashes this subtree's build; that crash is why an expanded
+    // folder used to show as blank rows instead of its real contents.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [for (var i = 0; i < entries.length; i++) tile(i)],
+    );
   }
 }
 
@@ -170,8 +214,15 @@ class _DirNode extends StatefulWidget {
   final Machine machine;
   final String name;
   final String path;
+  final ListDirFn listDir;
 
-  const _DirNode({required this.machine, required this.name, required this.path});
+  const _DirNode({
+    required this.machine,
+    required this.name,
+    required this.path,
+    this.listDir = _defaultListDir,
+    super.key,
+  });
 
   @override
   State<_DirNode> createState() => _DirNodeState();
@@ -195,7 +246,7 @@ class _DirNodeState extends State<_DirNode> {
         childrenPadding: const EdgeInsets.only(left: AeronautTheme.spacingMd),
         onExpansionChanged: (expanded) => setState(() => _expanded = expanded),
         children: _expanded
-            ? [_DirBody(machine: widget.machine, path: widget.path)]
+            ? [_DirBody(machine: widget.machine, path: widget.path, listDir: widget.listDir)]
             : const [],
       ),
     );
@@ -213,6 +264,7 @@ class _FileTile extends StatelessWidget {
     required this.name,
     required this.path,
     required this.entry,
+    super.key,
   });
 
   @override

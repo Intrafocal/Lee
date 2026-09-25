@@ -94,13 +94,36 @@ class CopilotApi {
     String itemId, {
     required String action,
     String? text,
+    int? choice,
     required int version,
   }) {
     return _postAction('/attention/${Uri.encodeComponent(itemId)}/reply', {
       'action': action,
       if (text != null) 'text': text,
+      if (choice != null) 'choice': choice,
       'version': version,
     });
+  }
+
+  /// `GET /attention/:id` — one item with its full (up to ~2000 char) text,
+  /// for expanding a clipped compact-snapshot item on demand (contracts
+  /// §5.6). Null on any non-200 (404/410 "gone", 401, connection failure) —
+  /// callers keep showing the clipped text they already have rather than
+  /// surfacing an error for what's just a nice-to-have expansion.
+  Future<AttentionItem?> getItem(String itemId) async {
+    try {
+      final uri = Uri.parse('${machine.hostUrl}/attention/${Uri.encodeComponent(itemId)}');
+      final response =
+          await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 6));
+      if (_isUnauthorized(response)) return null;
+      if (response.statusCode == 200) {
+        final data = _data(response);
+        if (data != null) return AttentionItem.fromJson(data);
+      }
+    } catch (_) {
+      // Connection failed
+    }
+    return null;
   }
 
   Future<ActionResult> snooze(String itemId, {String? until, int? minutes}) {

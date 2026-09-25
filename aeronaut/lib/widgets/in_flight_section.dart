@@ -224,8 +224,10 @@ class _InFlightSectionState extends ConsumerState<InFlightSection> {
 }
 
 /// One agent in In flight. Tapping the row opens its tab; tapping the
-/// summary expands it; a waiting agent links to its Waiting item.
-class AgentRow extends StatefulWidget {
+/// summary expands it (fetching the full, unclipped summary from Lee's
+/// non-compact snapshot if the compact one looked truncated); a waiting
+/// agent links to its Waiting item.
+class AgentRow extends ConsumerStatefulWidget {
   final AgentSummary agent;
   final DateTime now;
   final AttentionItem? waitingItem;
@@ -242,11 +244,35 @@ class AgentRow extends StatefulWidget {
   });
 
   @override
-  State<AgentRow> createState() => _AgentRowState();
+  ConsumerState<AgentRow> createState() => _AgentRowState();
 }
 
-class _AgentRowState extends State<AgentRow> {
+class _AgentRowState extends ConsumerState<AgentRow> {
   bool _expanded = false;
+
+  /// The unclipped `last_summary` for this agent, fetched from the full
+  /// snapshot on first expand — see [AttentionNotifier.fetchFullAgentSummary].
+  /// Null until it arrives (or if the compact summary was never clipped, or
+  /// the fetch failed), in which case the compact summary keeps showing.
+  String? _fullSummary;
+
+  @override
+  void didUpdateWidget(covariant AgentRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.agent.ptyId != widget.agent.ptyId ||
+        oldWidget.agent.lastSummary != widget.agent.lastSummary) {
+      _fullSummary = null;
+    }
+  }
+
+  Future<void> _toggleExpand() async {
+    setState(() => _expanded = !_expanded);
+    final summary = widget.agent.lastSummary;
+    if (_expanded && _fullSummary == null && summary != null && looksClipped(summary)) {
+      final full = await ref.read(attentionProvider.notifier).fetchFullAgentSummary(widget.agent.ptyId);
+      if (mounted && full?.lastSummary != null) setState(() => _fullSummary = full!.lastSummary);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -268,7 +294,7 @@ class _AgentRowState extends State<AgentRow> {
       if (a.filesTouchedCount > 0) '${a.filesTouchedCount} file${a.filesTouchedCount == 1 ? '' : 's'}',
       if (a.workspaceName != null && !a.label.contains(a.workspaceName!)) a.workspaceName!,
     ].join(' · ');
-    final summary = a.lastSummary?.trim() ?? '';
+    final summary = (_expanded ? _fullSummary : null)?.trim() ?? a.lastSummary?.trim() ?? '';
     final item = widget.waitingItem;
 
     return Padding(
@@ -348,7 +374,7 @@ class _AgentRowState extends State<AgentRow> {
                     padding: const EdgeInsets.only(left: 16, top: 6),
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => setState(() => _expanded = !_expanded),
+                      onTap: () => unawaited(_toggleExpand()),
                       child: Text(
                         summary,
                         maxLines: _expanded ? null : 2,
