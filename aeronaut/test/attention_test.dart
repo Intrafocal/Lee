@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aeronaut/models/attention.dart';
 import 'package:aeronaut/models/pairing_payload.dart';
+import 'package:aeronaut/providers/attention_provider.dart';
 
 void main() {
   group('AttentionItem.fromJson', () {
@@ -266,6 +267,66 @@ void main() {
     test('malformed JSON is invalid, not a throw', () {
       final payload = PairingPayload.parse('not json');
       expect(payload.kind, PairingPayloadKind.invalid);
+    });
+  });
+
+  group('notify edge detection (contracts §9.2)', () {
+    AttentionItem item(String id, {bool notify = false}) =>
+        AttentionItem(id: id, notify: notify);
+
+    test('notifyingIds collects only items with notify true', () {
+      final snapshot = AttentionSnapshot(items: [
+        item('a', notify: true),
+        item('b', notify: false),
+        item('c', notify: true),
+      ]);
+      expect(notifyingIds(snapshot), {'a', 'c'});
+    });
+
+    test('notifyRoseItems yields an item whose notify just went true', () {
+      final snapshot = AttentionSnapshot(items: [item('a', notify: true)]);
+      final rose = notifyRoseItems({}, snapshot).toList();
+      expect(rose.map((i) => i.id), ['a']);
+    });
+
+    test('notifyRoseItems does not re-fire for an item already notifying', () {
+      final snapshot = AttentionSnapshot(items: [item('a', notify: true)]);
+      final rose = notifyRoseItems({'a'}, snapshot).toList();
+      expect(rose, isEmpty);
+    });
+
+    test('notifyRoseItems ignores items whose notify is still false', () {
+      final snapshot = AttentionSnapshot(items: [item('a', notify: false)]);
+      final rose = notifyRoseItems({}, snapshot).toList();
+      expect(rose, isEmpty);
+    });
+
+    test('notifyRoseItems fires again after notify flips back on', () {
+      // Simulates the caller re-baselining with notifyingIds() between
+      // flips, as AttentionNotifier._applyNotifyEdge does on every snapshot.
+      final on = AttentionSnapshot(items: [item('a', notify: true)]);
+      final off = AttentionSnapshot(items: [item('a', notify: false)]);
+
+      var previously = notifyRoseItems({}, on).toList().isNotEmpty
+          ? notifyingIds(on)
+          : <String>{};
+      expect(previously, {'a'});
+
+      previously = notifyingIds(off);
+      expect(previously, isEmpty);
+
+      final roseAgain = notifyRoseItems(previously, on).toList();
+      expect(roseAgain.map((i) => i.id), ['a']);
+    });
+
+    test('a mixed snapshot only yields the items that newly flipped', () {
+      final snapshot = AttentionSnapshot(items: [
+        item('a', notify: true), // already notifying
+        item('b', notify: true), // newly notifying
+        item('c', notify: false), // never notified
+      ]);
+      final rose = notifyRoseItems({'a'}, snapshot).toList();
+      expect(rose.map((i) => i.id), ['b']);
     });
   });
 }

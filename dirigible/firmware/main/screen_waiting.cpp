@@ -84,6 +84,13 @@ struct State {
 
     std::string device_for;    // machine the cached device id belongs to
     std::string device_id;
+    // Set only once a reply actually comes back 403 (contracts §4.4): an
+    // empty `device_id` alone just means a typed token whose id we never
+    // learned (screen_pairing.cpp's manual-token path saves it with no
+    // device_id — see save_machine(raw, "", ...)), not necessarily the
+    // legacy shared token. Don't tell the user to re-pair until a write
+    // has actually been rejected.
+    bool        reply_forbidden = false;
 
     lv_timer_t* blink = nullptr;
     int         blink_left = 0;
@@ -325,7 +332,15 @@ void render_list()
     if (n == 0) {
         std::string body = "Nothing waiting on you.\n\nc  capture an idea\nt  tab list\n\n";
         const std::string& id = device_id();
-        body += id.empty() ? "shared token: re-pair to\nreply from this device" : "device " + id;
+        if (!id.empty()) {
+            body += "device " + id;
+        } else if (s.reply_forbidden) {
+            // Confirmed by an actual 403 on reply, not guessed from a
+            // blank id (contracts §4.4).
+            body += "shared token: re-pair to\nreply from this device";
+        } else {
+            body += "device id unknown";
+        }
         show_empty(body.c_str());
         return;
     }
@@ -500,6 +515,7 @@ void send_reply(const char* action)
                 chrome_set_centre("agent gone");
                 if (auto* c = conn()) c->fetchAttention();
             } else if (r.status == 403) {
+                s.reply_forbidden = true;
                 chrome_set_centre("re-pair to reply");
             } else if (r.status == 401) {
                 chrome_set_centre("token rejected");
@@ -727,6 +743,7 @@ void waiting_open()
     }
     s.mode = Mode::List;
     s.device_for.clear();   // re-read after a re-pair
+    s.reply_forbidden = false;   // give a fresh token the benefit of the doubt
 
     app_show(View::Waiting);
     if (auto* c = conn(); c && c->isConnected()) c->fetchAttention();

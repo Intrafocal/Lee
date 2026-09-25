@@ -13,6 +13,17 @@ import 'api_auth.dart';
 /// Same auth model as `LeeApi`/`FsApi`: bearer token, 401 reported through
 /// [ApiAuth] so the UI can say "Token rejected. Re-pair this machine."
 /// instead of a generic failure.
+///
+/// Unlike `LeeApi`/`FsApi`, a 403 here is *not* necessarily a rejected
+/// token: contracts §4.4 has copilot's write routes (reply/snooze/dismiss/
+/// wake/open/focus start-stop/handoff start-end) return 403 for a
+/// principal that authenticated fine but isn't allowed to act — a machine
+/// still on the legacy shared token, in particular. That must not be
+/// treated the same as a bad token: [ApiAuth.reportUnauthorized] tears down
+/// the whole machine connection (WS included), which would also kill the
+/// read-only Tabs/Files/Waiting views a 403'd write action has no bearing
+/// on. Only [_isUnauthorized] (401) reports through [ApiAuth]; a 403 is
+/// surfaced as a result-level error via [_reAuthMessage] instead.
 class CopilotApi {
   final Machine machine;
   final http.Client _client;
@@ -27,10 +38,16 @@ class CopilotApi {
       };
 
   bool _isUnauthorized(http.BaseResponse response) {
-    if (response.statusCode != 401 && response.statusCode != 403) return false;
+    if (response.statusCode != 401) return false;
     ApiAuth.reportUnauthorized(machine.id, ApiService.lee);
     return true;
   }
+
+  bool _isForbidden(http.BaseResponse response) => response.statusCode == 403;
+
+  /// Message for a 403 on a write action: the token is fine, but this
+  /// device (or the shared token it's using) isn't allowed to act.
+  static const _reAuthMessage = 'Re-pair this device to act from here.';
 
   /// Unwrap the `{ "success": true, "data": … }` envelope every Lee route
   /// on :9001 uses. Returns null on a non-map body or bad JSON.
@@ -119,6 +136,9 @@ class CopilotApi {
       if (_isUnauthorized(response)) {
         return const CaptureResult(success: false, error: 'Token rejected. Re-pair this machine.');
       }
+      if (_isForbidden(response)) {
+        return const CaptureResult(success: false, error: _reAuthMessage);
+      }
       final data = _data(response);
       if (response.statusCode == 200 && data != null) {
         return CaptureResult.fromJson(data);
@@ -206,6 +226,9 @@ class CopilotApi {
       if (_isUnauthorized(response)) {
         return const HandoffResult(success: false, error: 'Token rejected. Re-pair this machine.');
       }
+      if (_isForbidden(response)) {
+        return const HandoffResult(success: false, error: _reAuthMessage);
+      }
       final data = _data(response);
       if (response.statusCode == 200 && data != null) {
         return HandoffResult.fromJson(data);
@@ -239,6 +262,9 @@ class CopilotApi {
           .timeout(const Duration(seconds: 8));
       if (_isUnauthorized(response)) {
         return const ActionResult(success: false, error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) {
+        return const ActionResult(success: false, error: _reAuthMessage);
       }
       if (response.statusCode == 200) {
         final data = _data(response);
