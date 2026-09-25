@@ -341,7 +341,23 @@ The two devices share one data model (the attention queue, Someday, the digest) 
 
 ## 6. Layout
 
-Per workspace. One Cockpit tab per window, pinned first, not closable. It answers three questions: **Where are we heading?** (goals), **What's in flight?** (tasks, workstreams, explorations, operations, tabs), **What needs me?** (approvals, decisions, failures, drift).
+### 6.0 Two modes: Cockpit and Workbench
+
+*Decided 2026-09-25.* The Cockpit is a **mode**, not a tab among tabs. The babysitting habit is watching agent output, so the wall goes around the **agent terminals only**; your own editor, terminal and browser tabs are the creative work G1 wants more of, and stay one step away.
+
+| | **Cockpit mode** (steering) | **Workbench mode** (hands-on) |
+|---|---|---|
+| When | Default between focus sessions and on return | Entered by starting focus (§5.1) or opening something to work on |
+| Main area | The Cockpit, full window (layout below) | Today's tabs, centred on what you're working on |
+| Agents | **Live tiles**, not terminals: state, busy time, latest summary, Approve/Reply on the tile. Opening an agent's terminal is a deliberate "go into" action | Only the agent terminals you explicitly went into |
+| Your own tabs | A drawer along the bottom: names only, one click or keystroke to open | Normal tab strip |
+
+- Starting focus drops you into the workbench; ending focus or handing off returns you to the cockpit.
+- Starting an agent (⇧⌘C) stays instant: in cockpit mode it opens a tile, with one key to go into its terminal (G2 speed of one-offs).
+- Going into a *finished* agent to review its result is normal, not penalised ("less reading vs informed review" in `GOALS.md`).
+- The test is `peek_rate`: it should fall without `attention_latency` rising.
+
+Per workspace. The Cockpit answers three questions: **Where are we heading?** (goals), **What's in flight?** (tasks, workstreams, explorations, operations, tabs), **What needs me?** (approvals, decisions, failures, drift).
 
 ```
 ┌ tabs ────────────────────────────────────────────────────────────────┐
@@ -819,12 +835,14 @@ Ordered so the top-priority goals (G1, G4) move first, and so every phase is use
    - **Gate the C1/C2 violations** (§14) and log every model call with its trigger.
    - **Success test:** against a two-week baseline taken in the first days of v0, `peek_rate` and `attention_latency` fall and `focus_interruptions` stays ≤ 1 per session.
 2. **v1: Handoff and return.** Handoff with the away policy (§5.1); the deterministic session-start digest and verified wins (§8.1); the weekly retro.
-3. **v2: Cockpit and tasks.** The Cockpit tab (Feed, Tasks, Operations, Tabs, History); tasks with leads and confirmed links; check-ins and the `tab` domain; Hester running operations; the toil lint family with fixes; the daemon rework to hold several workspaces (§13).
+3. **v2: Cockpit and tasks.** Cockpit and Workbench modes (§6.0) with the Cockpit's sections (Feed, Tasks, Operations, Tabs, History); agent tiles; tasks with leads and confirmed links; check-ins and the `tab` domain; Hester running operations; the toil lint family with fixes; the daemon rework to hold several workspaces (§13).
 4. **v3: Explore.** Persisted explorations (fixes the broken promote and the 2 h Redis expiry), decision and spike nodes, working promotes.
 5. **v4: Goals and steward.** The Goals section and Evaluate; quadrants as ordering and the `human_balance` strip; steward mode, What next? and launch suggestions; the attention and agent-use lint rules; project rules.
 6. **v5: Copilot mode**, as specified in §11.
 7. **v6: Anywhere, complete.** Aeronaut and Dirigible render the full Cockpit model (reply and capture already shipped in v0).
 8. **Later:** PR checks against goals.
+
+*Decision 2026-09-25:* v2 is built immediately after v0/v1 rather than after the two-week v0 baseline. The v0 success test is therefore read against a confounded baseline: `peek_rate`, `attention_latency` and `focus_interruptions` will reflect v0–v2 together.
 
 ## 16. Open questions
 
