@@ -5,6 +5,8 @@ import '../models/machine.dart';
 import '../providers/machines_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
 /// Compact machine switcher for the app bar.
 ///
@@ -54,7 +56,7 @@ class MachineSwitcher extends ConsumerWidget {
                 Flexible(
                   child: Text(
                     machine.displayLabel,
-                    style: AeronautTheme.body.copyWith(
+                    style: AeronautTheme.subheadline.copyWith(
                       fontWeight:
                           isActive ? FontWeight.w600 : FontWeight.w400,
                     ),
@@ -93,12 +95,12 @@ class _ActiveMachineChip extends StatelessWidget {
         Flexible(
           child: Text(
             machine.name,
-            style: AeronautTheme.body.copyWith(fontWeight: FontWeight.w500),
+            style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w500),
             overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(width: 4),
-        const Icon(Icons.expand_more, size: 18, color: AeronautColors.textSecondary),
+        const PhosphorIcon(PhosphorIcons.chevronDown, size: 18, color: AeronautColors.textSecondary),
       ],
     );
   }

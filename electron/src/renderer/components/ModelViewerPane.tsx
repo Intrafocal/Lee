@@ -16,6 +16,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type * as ThreeTypes from 'three';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -324,7 +325,7 @@ export const ModelViewerPane: React.FC<ModelViewerPaneProps> = ({ active, filePa
     return (
       <div className={`model-pane ${active ? 'active' : ''}`}>
         <div className="viewer-toolbar">
-          <span className="viewer-toolbar-title">🧊 {fileName}</span>
+          <span className="viewer-toolbar-title"><Icon name="system" size={14} className="icon-inline" /> {fileName}</span>
         </div>
         <div className="viewer-body">
           <div className="viewer-message fusion-notice">
@@ -347,27 +348,27 @@ export const ModelViewerPane: React.FC<ModelViewerPaneProps> = ({ active, filePa
   return (
     <div className={`model-pane ${active ? 'active' : ''}`}>
       <div className="viewer-toolbar">
-        <span className="viewer-toolbar-title">🧊 {fileName ?? '3D Viewer'}</span>
+        <span className="viewer-toolbar-title"><Icon name="system" size={14} className="icon-inline" /> {fileName ?? '3D Viewer'}</span>
         {triangles !== null && (
           <span className="viewer-toolbar-info">{triangles.toLocaleString()} triangles</span>
         )}
         <div className="viewer-toolbar-actions">
           <button className="viewer-btn" onClick={fitView} title="Frame the model">
-            ⤢ Fit
+            <Icon name="external" size={14} className="icon-inline" /> Fit
           </button>
           <button
             className={`viewer-btn ${wireframe ? 'active' : ''}`}
             onClick={() => setWireframe((w) => !w)}
             title="Toggle wireframe"
           >
-            ◻ Wireframe
+            <Icon name="split" size={14} className="icon-inline" /> Wireframe
           </button>
           <button
             className="viewer-btn"
             onClick={() => setReloadCount((c) => c + 1)}
             title="Reload from disk"
           >
-            ↻ Reload
+            <Icon name="refresh" size={14} className="icon-inline" /> Reload
           </button>
         </div>
       </div>

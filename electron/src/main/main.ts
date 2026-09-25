@@ -1935,8 +1935,8 @@ app.whenReady().then(() => {
   // Set app name for macOS menu bar
   app.name = 'Lee';
 
-  // Configure About panel with splash image
-  const splashPath = path.join(__dirname, '..', 'renderer', 'splash.png');
+  // Configure About panel with the Lee app icon
+  const splashPath = path.join(__dirname, '..', 'renderer', 'app-icon.png');
   const aboutIcon = nativeImage.createFromPath(splashPath);
   app.setAboutPanelOptions({
     applicationName: 'Lee',

@@ -27,6 +27,7 @@ import { PdfPane } from './components/PdfPane';
 import { BridgePicker } from './components/BridgePicker';
 import { PairingDialog } from './components/PairingDialog';
 import { GlobalConfigEditorModal } from './components/GlobalConfigEditorModal';
+import { Icon } from './components/Icon';
 import { useHotkeys } from './hooks/useHotkeys';
 import { rendererShortcuts, resolveChord, formatChord } from '../shared/shortcuts';
 import { focusManager } from './hooks/useFocusManager';
@@ -2566,7 +2567,7 @@ const App: React.FC = () => {
                     className="workspace-selector-btn"
                     onClick={() => setShowWorkspaceModal(true)}
                   >
-                    <span className="workspace-icon">📁</span>
+                    <span className="workspace-icon"><Icon name="folder" size={14} /></span>
                     <span className="workspace-path">{workspace || 'No workspace selected'}</span>
                     <span className="workspace-change">Change</span>
                   </button>
@@ -2575,7 +2576,7 @@ const App: React.FC = () => {
                     onClick={() => setShowConfigEditor(true)}
                     title="Edit configuration"
                   >
-                    <span>⚙️</span>
+                    <span><Icon name="settings" size={14} /></span>
                     <span>Config</span>
                   </button>
                 </div>
@@ -2616,27 +2617,27 @@ const App: React.FC = () => {
                 <div className="shortcuts-bar">
                   {/* Hardcoded items */}
                   <div className="shortcut-chip" onClick={() => getOrCreateTab('files', undefined, workspace.split('/').pop() || 'Files')}>
-                    <span className="shortcut-icon">📂</span>
+                    <span className="shortcut-icon"><Icon name="folder" size={14} /></span>
                     <span className="shortcut-name">Files</span>
                     <kbd>{getDisplayKeybinding('files', 'meta+shift+e')}</kbd>
                   </div>
                   <div className="shortcut-chip" onClick={() => createTab('terminal')}>
-                    <span className="shortcut-icon">💻</span>
+                    <span className="shortcut-icon"><Icon name="terminal" size={14} /></span>
                     <span className="shortcut-name">Terminal</span>
                     <kbd>{getDisplayKeybinding('terminal', 'meta+shift+t')}</kbd>
                   </div>
                   <div className="shortcut-chip" onClick={() => createTab('browser')}>
-                    <span className="shortcut-icon">🌐</span>
+                    <span className="shortcut-icon"><Icon name="browser" size={14} /></span>
                     <span className="shortcut-name">Browser</span>
                     <kbd>{getDisplayKeybinding('browser', 'meta+shift+b')}</kbd>
                   </div>
                   <div className="shortcut-chip" onClick={() => getOrCreateTab('library')}>
-                    <span className="shortcut-icon">📚</span>
+                    <span className="shortcut-icon"><Icon name="book" size={14} /></span>
                     <span className="shortcut-name">Library</span>
                     <kbd>{getDisplayKeybinding('library', 'meta+shift+y')}</kbd>
                   </div>
                   <div className="shortcut-chip" onClick={() => handleBridge()}>
-                    <span className="shortcut-icon">🌉</span>
+                    <span className="shortcut-icon"><Icon name="link" size={14} /></span>
                     <span className="shortcut-name">Bridge</span>
                   </div>
                   {/* Dynamic TUI items from config */}
@@ -2645,7 +2646,7 @@ const App: React.FC = () => {
                     if (!keybinding) return null;  // Skip TUIs without keybindings
                     return (
                       <div key={key} className="shortcut-chip" onClick={() => createTab(key as any)}>
-                        <span className="shortcut-icon">{tui.icon || '🔧'}</span>
+                        <span className="shortcut-icon">{tui.icon || <Icon name="settings" size={14} />}</span>
                         <span className="shortcut-name">{tui.name}</span>
                         <kbd>{formatKeybinding(keybinding)}</kbd>
                       </div>
@@ -2654,9 +2655,11 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Splash image at bottom */}
+              {/* Lee mark + wordmark at bottom */}
               <div className="splash-fixed">
-                <img src="../splash.png" alt="Lee" />
+                <img className="splash-mark" src="../lee-mark.svg" alt="" />
+                <div className="splash-wordmark">Lee</div>
+                <div className="splash-tagline">Lightweight Editing Environment</div>
               </div>
             </div>
           )}

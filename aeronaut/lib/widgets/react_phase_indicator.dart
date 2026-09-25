@@ -109,7 +109,7 @@ class _PhaseContentState extends State<_PhaseContent>
           // Phase label
           Text(
             phase.phase.label,
-            style: AeronautTheme.caption.copyWith(
+            style: AeronautTheme.caption1.copyWith(
               color: color,
               fontWeight: FontWeight.w600,
             ),
@@ -118,7 +118,7 @@ class _PhaseContentState extends State<_PhaseContent>
           if (hasToolInfo) ...[
             Text(
               '  --  ',
-              style: AeronautTheme.caption.copyWith(
+              style: AeronautTheme.caption1.copyWith(
                 color: AeronautColors.textTertiary,
               ),
             ),
@@ -126,7 +126,6 @@ class _PhaseContentState extends State<_PhaseContent>
               child: Text(
                 phase.toolName!,
                 style: AeronautTheme.mono.copyWith(
-                  fontSize: 12,
                   color: AeronautColors.textSecondary,
                 ),
                 overflow: TextOverflow.ellipsis,
@@ -137,7 +136,7 @@ class _PhaseContentState extends State<_PhaseContent>
               Flexible(
                 child: Text(
                   '(${phase.toolContext})',
-                  style: AeronautTheme.caption.copyWith(
+                  style: AeronautTheme.caption1.copyWith(
                     color: AeronautColors.textTertiary,
                     fontStyle: FontStyle.italic,
                   ),
@@ -160,7 +159,7 @@ class _PhaseContentState extends State<_PhaseContent>
               ),
               child: Text(
                 '#${phase.iteration}',
-                style: AeronautTheme.caption.copyWith(fontSize: 10),
+                style: AeronautTheme.caption2,
               ),
             ),
         ],

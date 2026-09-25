@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Icon, type IconName } from './Icon';
 
 const lee = window.lee;
 
@@ -37,6 +38,9 @@ interface FileTreePaneProps {
   onSendToAgent?: (ptyId: number, text: string) => void;
   agentTabs?: AgentTabInfo[];
   active: boolean;
+  /** Path of the file currently open/focused elsewhere in the app, if the
+   *  host wants the tree to reflect it. Falls back to the last clicked row. */
+  selectedPath?: string;
 }
 
 export const FileTreePane: React.FC<FileTreePaneProps> = ({
@@ -47,7 +51,10 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
   onSendToAgent,
   agentTabs,
   active,
+  selectedPath: selectedPathProp,
 }) => {
+  const [clickedPath, setClickedPath] = useState<string | undefined>(undefined);
+  const selectedPath = selectedPathProp ?? clickedPath;
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [childrenCache, setChildrenCache] = useState<Map<string, FileEntry[]>>(new Map());
@@ -194,6 +201,7 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
 
   // Handle file click
   const handleFileClick = useCallback((filePath: string) => {
+    setClickedPath(filePath);
     onFileOpen(filePath);
   }, [onFileOpen]);
 
@@ -372,7 +380,7 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
       className={`file-tree-pane ${active ? 'active' : ''}`}
     >
       <div className="file-tree-filter">
-        <span className="filter-icon">🔍</span>
+        <span className="filter-icon"><Icon name="search" size={14} /></span>
         <input
           ref={filterInputRef}
           type="text"
@@ -387,7 +395,7 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
             onClick={() => setFilter('')}
             title="Clear filter"
           >
-            ×
+            <Icon name="close" size={14} />
           </button>
         )}
         <button
@@ -395,7 +403,7 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
           onClick={loadRoot}
           title="Refresh file tree"
         >
-          ↻
+          <Icon name="refresh" size={14} />
         </button>
       </div>
       <div className="file-tree-content">
@@ -409,6 +417,7 @@ export const FileTreePane: React.FC<FileTreePaneProps> = ({
             childrenCache={childrenCache}
             loading={loading}
             filter={filter}
+            selectedPath={selectedPath}
             onToggle={toggleDir}
             onFileClick={handleFileClick}
             onContextMenu={handleContextMenu}
@@ -486,6 +495,7 @@ interface FileTreeNodeProps {
   childrenCache: Map<string, FileEntry[]>;
   loading: Set<string>;
   filter: string;
+  selectedPath?: string;
   onToggle: (path: string) => void;
   onFileClick: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
@@ -499,6 +509,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   childrenCache,
   loading,
   filter,
+  selectedPath,
   onToggle,
   onFileClick,
   onContextMenu,
@@ -507,8 +518,11 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   const isDir = entry.type === 'directory';
   const isExpanded = expanded.has(entry.path);
   const isLoading = loading.has(entry.path);
+  const isSelected = !isDir && entry.path === selectedPath;
   const children = childrenCache.get(entry.path) || [];
-  const icon = getFileIcon(entry);
+  const icon: IconName = isDir
+    ? (isExpanded ? 'folder-open' : 'folder')
+    : getFileIcon(entry);
 
   // Filter children if there's a filter active
   const filteredChildren = filter.trim()
@@ -549,18 +563,18 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   return (
     <div className="file-tree-node">
       <div
-        className={`file-tree-item ${isDir ? 'directory' : 'file'}`}
+        className={`file-tree-item ${isDir ? 'directory' : 'file'} ${isSelected ? 'is-selected' : ''}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, entry)}
       >
         {isDir && (
           <span className={`expand-icon ${isLoading ? 'loading' : ''}`}>
-            {isLoading ? '⋯' : isExpanded ? '▼' : '▶'}
+            {isLoading ? '⋯' : <Icon name={isExpanded ? 'chevron-down' : 'chevron-right'} size={12} />}
           </span>
         )}
         {!isDir && <span className="expand-icon-spacer" />}
-        <span className="file-icon">{icon}</span>
+        <span className="file-icon"><Icon name={icon} size={14} /></span>
         <span className="file-name">{renderFileName()}</span>
       </div>
 
@@ -575,6 +589,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
               childrenCache={childrenCache}
               loading={loading}
               filter={filter}
+              selectedPath={selectedPath}
               onToggle={onToggle}
               onFileClick={onFileClick}
               onContextMenu={onContextMenu}
@@ -588,52 +603,50 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
 };
 
 // File icon mapper based on extension
-function getFileIcon(entry: FileEntry): string {
-  if (entry.type === 'directory') return '📁';
-
+function getFileIcon(entry: FileEntry): IconName {
   const ext = entry.name.split('.').pop()?.toLowerCase() || '';
-  const iconMap: Record<string, string> = {
+  const iconMap: Record<string, IconName> = {
     // Code files
-    ts: '📘',
-    tsx: '📘',
-    js: '📒',
-    jsx: '📒',
-    py: '🐍',
-    dart: '🎯',
-    rs: '🦀',
-    go: '🐹',
-    java: '☕',
+    ts: 'file-code',
+    tsx: 'file-code',
+    js: 'file-code',
+    jsx: 'file-code',
+    py: 'file-code',
+    dart: 'file-code',
+    rs: 'file-code',
+    go: 'file-code',
+    java: 'file-code',
 
     // Config/data
-    json: '📋',
-    yaml: '📋',
-    yml: '📋',
-    toml: '📋',
-    xml: '📋',
+    json: 'file-code',
+    yaml: 'file-code',
+    yml: 'file-code',
+    toml: 'file-code',
+    xml: 'file-code',
 
     // Markdown/docs
-    md: '📝',
-    txt: '📄',
+    md: 'book',
+    txt: 'file-code',
 
     // Styles
-    css: '🎨',
-    scss: '🎨',
-    less: '🎨',
+    css: 'file-code',
+    scss: 'file-code',
+    less: 'file-code',
 
     // Images
-    png: '🖼️',
-    jpg: '🖼️',
-    jpeg: '🖼️',
-    gif: '🖼️',
-    svg: '🖼️',
+    png: 'image',
+    jpg: 'image',
+    jpeg: 'image',
+    gif: 'image',
+    svg: 'image',
 
     // Others
-    html: '🌐',
-    sh: '💻',
-    bash: '💻',
+    html: 'file-code',
+    sh: 'terminal',
+    bash: 'terminal',
   };
 
-  return iconMap[ext] || '📄';
+  return iconMap[ext] || 'file-code';
 }
 
 export default FileTreePane;

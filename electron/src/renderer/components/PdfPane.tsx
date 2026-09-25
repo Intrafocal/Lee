@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -70,11 +71,11 @@ export const PdfPane: React.FC<PdfPaneProps> = ({ active, filePath }) => {
   return (
     <div className={`pdf-pane ${active ? 'active' : ''}`}>
       <div className="viewer-toolbar">
-        <span className="viewer-toolbar-title">📄 {fileName ?? 'PDF Viewer'}</span>
+        <span className="viewer-toolbar-title"><Icon name="file-code" size={14} className="icon-inline" /> {fileName ?? 'PDF Viewer'}</span>
         {loading && <span className="viewer-toolbar-info">Loading…</span>}
         <div className="viewer-toolbar-actions">
           <button className="viewer-btn" onClick={handleReload} title="Reload from disk">
-            ↻ Reload
+            <Icon name="refresh" size={14} className="icon-inline" /> Reload
           </button>
           {filePath && (
             <button

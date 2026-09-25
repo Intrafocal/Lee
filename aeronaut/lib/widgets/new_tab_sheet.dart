@@ -3,23 +3,28 @@ import 'package:flutter/material.dart';
 import '../models/lee_context.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
-/// Fallback icon mapping for TUI keys when no emoji icon is provided.
-const _tuiIcons = <String, IconData>{
-  'terminal': Icons.terminal,
-  'git': Icons.merge_type,
-  'docker': Icons.inventory_2_outlined,
-  'k8s': Icons.cloud_outlined,
-  'hester': Icons.cruelty_free,
-  'claude': Icons.psychology_outlined,
-  'pi': Icons.smart_toy_outlined,
-  'spyglass': Icons.travel_explore,
-  'bridge': Icons.swap_horiz,
-  'flutter': Icons.phone_android,
-  'devops': Icons.rocket_launch,
-  'hester-qa': Icons.science_outlined,
-  'system': Icons.monitor_heart_outlined,
-  'sql': Icons.storage,
+/// Icon per TUI key, mirroring the tab-type mapping in `widgets/tab_bar.dart`.
+/// Used for every tile here — including ones Lee sends an emoji icon for —
+/// so the sheet reads as one icon system instead of mixing emoji and
+/// glyphs. Unknown keys fall back to the generic tab glyph below.
+const _tuiIcons = <String, PhosphorIconData>{
+  'bridge': PhosphorIcons.link,
+  'terminal': PhosphorIcons.terminal,
+  'git': PhosphorIcons.git,
+  'docker': PhosphorIcons.docker,
+  'k8s': PhosphorIcons.kubernetes,
+  'hester': PhosphorIcons.hester,
+  'claude': PhosphorIcons.agent,
+  'pi': PhosphorIcons.agent,
+  'spyglass': PhosphorIcons.eye,
+  'flutter': PhosphorIcons.mobile,
+  'devops': PhosphorIcons.devops,
+  'hester-qa': PhosphorIcons.hester,
+  'system': PhosphorIcons.system,
+  'sql': PhosphorIcons.sql,
 };
 
 /// Bottom sheet for creating a new TUI tab.
@@ -58,9 +63,9 @@ class NewTabSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          Text(
+          const Text(
             'New Tab',
-            style: AeronautTheme.heading.copyWith(fontSize: 16),
+            style: AeronautTheme.headline,
           ),
           const SizedBox(height: AeronautTheme.spacingMd),
           GridView.count(
@@ -74,13 +79,12 @@ class NewTabSheet extends StatelessWidget {
               // Terminal is always available (not in availableTuis)
               _TuiTile(
                 label: 'Terminal',
-                icon: Icons.terminal,
+                icon: PhosphorIcons.terminal,
                 onTap: () => Navigator.of(context).pop('terminal'),
               ),
               ...availableTuis.map((tui) => _TuiTile(
                 label: tui.name,
-                icon: _tuiIcons[tui.key] ?? Icons.apps,
-                emoji: tui.icon,
+                icon: _tuiIcons[tui.key],
                 onTap: () => Navigator.of(context).pop(tui.key),
               )),
             ],
@@ -93,14 +97,15 @@ class NewTabSheet extends StatelessWidget {
 
 class _TuiTile extends StatelessWidget {
   final String label;
-  final IconData icon;
-  final String? emoji;
+
+  /// Null when the TUI key has no Phosphor icon — falls back to a generic
+  /// tab glyph so the tile grid still reads as one icon system.
+  final PhosphorIconData? icon;
   final VoidCallback onTap;
 
   const _TuiTile({
     required this.label,
     required this.icon,
-    this.emoji,
     required this.onTap,
   });
 
@@ -115,14 +120,11 @@ class _TuiTile extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (emoji != null)
-              Text(emoji!, style: const TextStyle(fontSize: 24))
-            else
-              Icon(icon, size: 28, color: AeronautColors.accent),
+            PhosphorIcon(icon ?? PhosphorIcons.tabs, size: 28, color: AeronautColors.accent),
             const SizedBox(height: AeronautTheme.spacingXs),
             Text(
               label,
-              style: AeronautTheme.caption.copyWith(
+              style: AeronautTheme.caption1.copyWith(
                 color: AeronautColors.textPrimary,
                 fontWeight: FontWeight.w500,
               ),

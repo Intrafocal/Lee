@@ -148,7 +148,7 @@ class _AddMachineScreenState extends ConsumerState<AddMachineScreen> {
               Text(
                 'Found in ~/.lee/api-token on the target machine, or paired '
                 'automatically by scanning Lee > View > Aeronaut Pairing.',
-                style: AeronautTheme.caption.copyWith(
+                style: AeronautTheme.caption1.copyWith(
                   color: AeronautColors.textTertiary,
                 ),
               ),
@@ -161,7 +161,7 @@ class _AddMachineScreenState extends ConsumerState<AddMachineScreen> {
                     ? const SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator.adaptive(strokeWidth: 2),
                       )
                     : const Text('Add Machine'),
               ),

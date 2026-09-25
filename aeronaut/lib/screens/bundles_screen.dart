@@ -8,6 +8,8 @@ import '../providers/machines_provider.dart';
 import '../services/hester_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Screen listing context bundles from Hester.
 ///
@@ -76,7 +78,7 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
       appBar: AppBar(
         title: const Text('Context Bundles'),
       ),
-      body: RefreshIndicator(
+      body: RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
         onRefresh: _loadBundles,
@@ -88,7 +90,7 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
   Widget _buildBody() {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: AeronautColors.accent),
+        child: CircularProgressIndicator.adaptive(),
       );
     }
 
@@ -97,9 +99,9 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: AeronautColors.offline),
+            const PhosphorIcon(PhosphorIcons.warning, size: 48, color: AeronautColors.offline),
             const SizedBox(height: AeronautTheme.spacingMd),
-            Text(_error!, style: AeronautTheme.caption),
+            Text(_error!, style: AeronautTheme.caption1),
             const SizedBox(height: AeronautTheme.spacingLg),
             ElevatedButton(
               onPressed: _loadBundles,
@@ -119,17 +121,17 @@ class _BundlesScreenState extends ConsumerState<BundlesScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.inventory_2_outlined,
+                  PhosphorIcon(
+                    PhosphorIcons.package,
                     size: 48,
                     color: AeronautColors.textTertiary,
                   ),
                   SizedBox(height: AeronautTheme.spacingMd),
-                  Text('No bundles', style: AeronautTheme.heading),
+                  Text('No bundles', style: AeronautTheme.headline),
                   SizedBox(height: AeronautTheme.spacingSm),
                   Text(
                     'Create bundles with: hester context create',
-                    style: AeronautTheme.caption,
+                    style: AeronautTheme.caption1,
                   ),
                 ],
               ),
@@ -163,13 +165,13 @@ class _BundleTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      leading: Icon(
-        Icons.inventory_2_outlined,
+      leading: PhosphorIcon(
+        PhosphorIcons.package,
         color: bundle.stale ? AeronautColors.warning : AeronautColors.accent,
       ),
       title: Text(
         bundle.title.isNotEmpty ? bundle.title : bundle.id,
-        style: AeronautTheme.body,
+        style: AeronautTheme.subheadline,
       ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -177,7 +179,7 @@ class _BundleTile extends StatelessWidget {
           Text(
             bundle.id,
             style: AeronautTheme.mono.copyWith(
-              fontSize: 11,
+              fontSize: AeronautTheme.caption2.fontSize,
               color: AeronautColors.textTertiary,
             ),
           ),
@@ -203,8 +205,7 @@ class _BundleTile extends StatelessWidget {
               ),
               child: Text(
                 'STALE',
-                style: AeronautTheme.caption.copyWith(
-                  fontSize: 10,
+                style: AeronautTheme.caption2.copyWith(
                   color: AeronautColors.warning,
                   fontWeight: FontWeight.w600,
                 ),
@@ -213,9 +214,9 @@ class _BundleTile extends StatelessWidget {
           const SizedBox(width: 4),
           Text(
             '${bundle.sourceCount} src',
-            style: AeronautTheme.caption.copyWith(fontSize: 11),
+            style: AeronautTheme.caption2,
           ),
-          const Icon(Icons.chevron_right, color: AeronautColors.textTertiary),
+          const PhosphorIcon(PhosphorIcons.chevronRight, color: AeronautColors.textTertiary),
         ],
       ),
       onTap: onTap,
@@ -239,7 +240,7 @@ class _Tag extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: AeronautTheme.caption.copyWith(fontSize: 10),
+        style: AeronautTheme.caption2,
       ),
     );
   }
@@ -313,7 +314,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
   Widget _buildBody() {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: AeronautColors.accent),
+        child: CircularProgressIndicator.adaptive(),
       );
     }
 
@@ -322,9 +323,9 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: AeronautColors.offline),
+            const PhosphorIcon(PhosphorIcons.warning, size: 48, color: AeronautColors.offline),
             const SizedBox(height: AeronautTheme.spacingMd),
-            Text(_error!, style: AeronautTheme.caption),
+            Text(_error!, style: AeronautTheme.caption1),
           ],
         ),
       );
@@ -332,7 +333,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
 
     if (_content == null) {
       return const Center(
-        child: Text('Bundle not found', style: AeronautTheme.caption),
+        child: Text('Bundle not found', style: AeronautTheme.caption1),
       );
     }
 
@@ -343,45 +344,7 @@ class _BundleDetailScreenState extends ConsumerState<_BundleDetailScreen> {
       onTapLink: (_, href, _) {
         if (href != null) launchUrl(Uri.parse(href));
       },
-      styleSheet: MarkdownStyleSheet(
-        p: AeronautTheme.body.copyWith(fontSize: 13, height: 1.6),
-        h1: AeronautTheme.heading.copyWith(fontSize: 20),
-        h2: AeronautTheme.heading.copyWith(fontSize: 17),
-        h3: AeronautTheme.heading.copyWith(fontSize: 15),
-        code: AeronautTheme.mono.copyWith(
-          fontSize: 12,
-          color: AeronautColors.accent,
-          backgroundColor: AeronautColors.bgPrimary,
-        ),
-        codeblockDecoration: BoxDecoration(
-          color: AeronautColors.bgPrimary,
-          borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
-          border: Border.all(color: AeronautColors.border),
-        ),
-        codeblockPadding: const EdgeInsets.all(AeronautTheme.spacingSm),
-        blockquoteDecoration: const BoxDecoration(
-          border: Border(
-            left: BorderSide(color: AeronautColors.accent, width: 3),
-          ),
-        ),
-        blockquotePadding: const EdgeInsets.only(left: AeronautTheme.spacingMd),
-        a: AeronautTheme.body.copyWith(
-          fontSize: 13,
-          color: AeronautColors.info,
-          decoration: TextDecoration.underline,
-        ),
-        tableBorder: TableBorder.all(color: AeronautColors.border),
-        tableHead: AeronautTheme.body.copyWith(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-        tableBody: AeronautTheme.body.copyWith(fontSize: 12),
-        horizontalRuleDecoration: const BoxDecoration(
-          border: Border(
-            top: BorderSide(color: AeronautColors.border),
-          ),
-        ),
-      ),
+      styleSheet: AeronautTheme.markdown(context, compact: true),
     );
   }
 }

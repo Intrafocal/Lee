@@ -6,16 +6,17 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Icon, HesterGlyph, type IconName } from './Icon';
 
 const HESTER_DAEMON_PORT = 9000;
 
 // Phase display names and icons
-const PHASE_DISPLAY: Record<string, { icon: string; label: string }> = {
-  preparing: { icon: '🔧', label: 'Preparing' },
-  thinking: { icon: '🤔', label: 'Thinking' },
-  acting: { icon: '⚡', label: 'Acting' },
-  observing: { icon: '👁️', label: 'Observing' },
-  responding: { icon: '💬', label: 'Responding' },
+const PHASE_DISPLAY: Record<string, { icon: IconName; label: string }> = {
+  preparing: { icon: 'settings', label: 'Preparing' },
+  thinking: { icon: 'more', label: 'Thinking' },
+  acting: { icon: 'play', label: 'Acting' },
+  observing: { icon: 'eye', label: 'Observing' },
+  responding: { icon: 'send', label: 'Responding' },
 };
 
 interface PhaseEvent {
@@ -328,7 +329,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       <div className="command-palette" onClick={(e) => e.stopPropagation()}>
         {/* Header with input */}
         <form onSubmit={handleSubmit} className="command-palette-header">
-          <span className="command-palette-icon">🐇</span>
+          <span className="command-palette-icon"><HesterGlyph size={16} /></span>
           <input
             ref={inputRef}
             type="text"
@@ -348,7 +349,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         {/* Daemon status warning */}
         {isDaemonHealthy === false && (
           <div className="command-palette-warning">
-            <span>⚠️</span>
+            <span><Icon name="warning" size={14} /></span>
             <span>Hester daemon is not running. Start it with: <code>hester daemon start</code></span>
           </div>
         )}
@@ -367,7 +368,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 <>
                   <div className={`command-palette-phase ${currentPhase.phase}`}>
                     <span className="phase-icon">
-                      {PHASE_DISPLAY[currentPhase.phase]?.icon || '•'}
+                      <Icon name={PHASE_DISPLAY[currentPhase.phase]?.icon || 'dot'} size={14} />
                     </span>
                     <span className="phase-label">
                       {PHASE_DISPLAY[currentPhase.phase]?.label || currentPhase.phase}
@@ -417,7 +418,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         {/* Error display */}
         {error && (
           <div className="command-palette-error">
-            <span>❌</span>
+            <span><Icon name="close" size={14} className="command-palette-error-icon" /></span>
             <span>{error}</span>
           </div>
         )}

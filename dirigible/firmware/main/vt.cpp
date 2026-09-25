@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "theme_tokens.h"
+
 namespace dirigible_app {
 
 namespace {
@@ -100,24 +102,6 @@ bool is_wide(uint32_t cp)
 // Colour
 // ---------------------------------------------------------------------------
 
-const uint32_t kPalette[16] = {
-    0x707070,  // 0 black   — lifted: black-on-colour would vanish (no bg)
-    0xE05252,  // 1 red
-    0x5FD75F,  // 2 green
-    0xD7C25F,  // 3 yellow
-    0x6F9FE8,  // 4 blue    — lifted off 0x0000AA, unreadable on black
-    0xD75FD7,  // 5 magenta
-    0x5FD7D7,  // 6 cyan
-    0xC8C8C8,  // 7 white   — the default foreground
-    0x909090,  // 8  bright black
-    0xFF8A8A,  // 9  bright red
-    0x9AF29A,  // 10 bright green
-    0xF5E58A,  // 11 bright yellow
-    0x9BC2FF,  // 12 bright blue
-    0xF29AF2,  // 13 bright magenta
-    0x9AF2F2,  // 14 bright cyan
-    0xFFFFFF,  // 15 bright white
-};
 
 /// Nearest of the 16 for a 24-bit colour: pick the hue by which channels are
 /// dominant, then the brightness tier.  A full CIE match is not worth the
@@ -156,7 +140,18 @@ uint8_t from_256(int n)
 
 }  // namespace
 
-uint32_t vt_palette(uint8_t index) { return kPalette[index & 0x0F]; }
+uint32_t vt_palette(uint8_t index)
+{
+    index &= 0x0F;
+    // Index 0 (ANSI black) is lifted to DG_TEXT_3 rather than the palette's
+    // own DG_GROUND_4: backgrounds are parsed and dropped (see the VtScreen
+    // class comment above), so black-on-colour text would otherwise render
+    // as black-on-nothing and vanish against this screen's dark backgrounds
+    // — the same workaround the old hand-picked table's 0x707070 did.
+    if (index == 0) return DG_TEXT_3;
+    static const uint32_t kPalette[16] = DG_ANSI_PALETTE;
+    return kPalette[index];
+}
 
 // ---------------------------------------------------------------------------
 

@@ -11,6 +11,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { MachineStatus } from './MachineStatus';
+import { Icon, HesterGlyph, type IconName } from './Icon';
 
 
 export interface StatusMessage {
@@ -152,33 +153,33 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     return parts[parts.length - 1] || path;
   };
 
-  const getTypeIcon = (type: StatusMessage['type']) => {
+  const getTypeIcon = (type: StatusMessage['type']): IconName => {
     switch (type) {
       case 'hint':
-        return '💬';
+        return 'send';
       case 'info':
-        return 'ℹ️';
+        return 'info';
       case 'success':
-        return '✓';
+        return 'check';
       case 'warning':
-        return '⚠️';
+        return 'warning';
       case 'error':
-        return '⛔';
+        return 'close';
       default:
-        return '💬';
+        return 'send';
     }
   };
 
   const getDaemonStatusIndicator = () => {
     switch (daemonStatus) {
       case 'healthy':
-        return { symbol: '●', className: 'daemon-healthy', title: 'Daemon running' };
+        return { dotClass: 'status-dot-running', className: 'daemon-healthy', title: 'Daemon running' };
       case 'unhealthy':
-        return { symbol: '○', className: 'daemon-unhealthy', title: 'Daemon stopped' };
+        return { dotClass: 'status-dot-error', className: 'daemon-unhealthy', title: 'Daemon stopped' };
       case 'checking':
-        return { symbol: '◐', className: 'daemon-checking', title: 'Checking daemon...' };
+        return { dotClass: 'status-dot-starting', className: 'daemon-checking', title: 'Checking daemon...' };
       default:
-        return { symbol: '○', className: 'daemon-unhealthy', title: 'Daemon status unknown' };
+        return { dotClass: 'status-dot-error', className: 'daemon-unhealthy', title: 'Daemon status unknown' };
     }
   };
 
@@ -238,7 +239,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             onClick={onWorkspaceClick}
             onContextMenu={handleWorkspaceContextMenu}
           >
-            <span className="status-icon">📁</span>
+            <span className="status-icon"><Icon name="folder" size={14} /></span>
             <span className="status-text">{formatWorkspace(workspace)}</span>
           </button>
 
@@ -273,13 +274,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   className={`daemon-indicator ${indicator.className}`}
                   title={indicator.title}
                 >
-                  {indicator.symbol}
+                  <span className={`status-dot ${indicator.dotClass}`} />
                 </span>
               );
             })()}
             {currentMessage ? (
               <>
-                <span className="status-icon">{getTypeIcon(currentMessage.type)}</span>
+                <span className="status-icon"><Icon name={getTypeIcon(currentMessage.type)} size={14} /></span>
                 <span className="status-message-text">{currentMessage.message}</span>
                 <span className="status-shortcut">⌘/</span>
                 <span className="status-shortcut status-shortcut-secondary" title="Ask something else">
@@ -288,7 +289,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               </>
             ) : (
               <>
-                <span className="status-icon">🐇</span>
+                <span className="status-icon"><HesterGlyph size={14} /></span>
                 <span className="status-text">Ask Hester</span>
                 <span className="status-shortcut">⌘? or ⌘/</span>
               </>
@@ -324,7 +325,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               title={`${messages.length} message${messages.length > 1 ? 's' : ''}`}
             >
               {messages.length}
-              <span className="badge-arrow">{flyoutOpen ? '▲' : '▼'}</span>
+              <span className="badge-arrow"><Icon name={flyoutOpen ? 'chevron-up' : 'chevron-down'} size={12} /></span>
             </button>
 
             {flyoutOpen && (

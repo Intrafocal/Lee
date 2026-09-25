@@ -5,6 +5,8 @@ import '../providers/machines_provider.dart';
 import '../services/api_auth.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
 /// Card showing a saved machine with status indicator.
 class MachineCard extends StatelessWidget {
@@ -82,7 +84,7 @@ class MachineCard extends StatelessWidget {
                   children: [
                     Text(
                       machine.name,
-                      style: AeronautTheme.body.copyWith(
+                      style: AeronautTheme.subheadline.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -91,14 +93,13 @@ class MachineCard extends StatelessWidget {
                       '${machine.host}:${machine.hostPort}',
                       style: AeronautTheme.mono.copyWith(
                         color: AeronautColors.textSecondary,
-                        fontSize: 12,
                       ),
                     ),
                     if (health == MachineHealth.unauthorized) ...[
                       const SizedBox(height: 2),
                       Text(
                         AuthFailure.message,
-                        style: AeronautTheme.caption.copyWith(
+                        style: AeronautTheme.caption1.copyWith(
                           color: AeronautColors.warning,
                         ),
                       ),
@@ -106,7 +107,7 @@ class MachineCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         machine.workspace!.split('/').last,
-                        style: AeronautTheme.caption.copyWith(
+                        style: AeronautTheme.caption1.copyWith(
                           color: AeronautColors.textTertiary,
                         ),
                       ),
@@ -129,10 +130,9 @@ class MachineCard extends StatelessWidget {
                   ),
                   child: Text(
                     'ACTIVE',
-                    style: AeronautTheme.caption.copyWith(
+                    style: AeronautTheme.caption2.copyWith(
                       color: AeronautColors.textPrimary,
                       fontWeight: FontWeight.w600,
-                      fontSize: 10,
                       letterSpacing: 0.5,
                     ),
                   ),
@@ -140,11 +140,11 @@ class MachineCard extends StatelessWidget {
               else if (machine.lastSeen != null)
                 Text(
                   _formatLastSeen(machine.lastSeen!),
-                  style: AeronautTheme.caption,
+                  style: AeronautTheme.caption1,
                 ),
               const SizedBox(width: AeronautTheme.spacingSm),
-              const Icon(
-                Icons.chevron_right,
+              const PhosphorIcon(
+                PhosphorIcons.chevronRight,
                 color: AeronautColors.textTertiary,
                 size: 20,
               ),

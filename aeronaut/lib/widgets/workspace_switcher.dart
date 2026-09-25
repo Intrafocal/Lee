@@ -5,6 +5,8 @@ import '../providers/windows_provider.dart';
 import '../services/lee_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
 /// Workspace switcher dropdown for the app bar.
 ///
@@ -24,7 +26,7 @@ class WorkspaceSwitcher extends ConsumerWidget {
       if (active == null) return const SizedBox.shrink();
       return Text(
         active.workspaceName,
-        style: AeronautTheme.caption.copyWith(
+        style: AeronautTheme.caption1.copyWith(
           color: AeronautColors.textSecondary,
         ),
         overflow: TextOverflow.ellipsis,
@@ -49,15 +51,17 @@ class WorkspaceSwitcher extends ConsumerWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  window.focused
-                      ? Icons.visibility
-                      : Icons.visibility_off_outlined,
-                  size: 14,
-                  color: window.focused
-                      ? AeronautColors.accent
-                      : AeronautColors.textTertiary,
-                ),
+                window.focused
+                    ? const PhosphorIcon(
+                        PhosphorIcons.eye,
+                        size: 14,
+                        color: AeronautColors.accent,
+                      )
+                    : const PhosphorIcon(
+                        PhosphorIcons.eyeOff,
+                        size: 14,
+                        color: AeronautColors.textTertiary,
+                      ),
                 const SizedBox(width: 10),
                 Flexible(
                   child: Column(
@@ -66,7 +70,7 @@ class WorkspaceSwitcher extends ConsumerWidget {
                     children: [
                       Text(
                         window.workspaceName,
-                        style: AeronautTheme.body.copyWith(
+                        style: AeronautTheme.subheadline.copyWith(
                           fontWeight:
                               isActive ? FontWeight.w600 : FontWeight.w400,
                         ),
@@ -75,9 +79,8 @@ class WorkspaceSwitcher extends ConsumerWidget {
                       if (window.workspace != null)
                         Text(
                           window.workspace!,
-                          style: AeronautTheme.caption.copyWith(
+                          style: AeronautTheme.caption2.copyWith(
                             color: AeronautColors.textTertiary,
-                            fontSize: 11,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -86,8 +89,8 @@ class WorkspaceSwitcher extends ConsumerWidget {
                 ),
                 if (isActive) ...[
                   const SizedBox(width: 8),
-                  const Icon(
-                    Icons.check,
+                  const PhosphorIcon(
+                    PhosphorIcons.check,
                     size: 16,
                     color: AeronautColors.accent,
                   ),
@@ -113,8 +116,8 @@ class _WorkspaceChip extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(
-          Icons.folder_outlined,
+        const PhosphorIcon(
+          PhosphorIcons.folder,
           size: 14,
           color: AeronautColors.textSecondary,
         ),
@@ -122,15 +125,15 @@ class _WorkspaceChip extends StatelessWidget {
         Flexible(
           child: Text(
             window!.workspaceName,
-            style: AeronautTheme.caption.copyWith(
+            style: AeronautTheme.caption1.copyWith(
               color: AeronautColors.textSecondary,
             ),
             overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(width: 2),
-        const Icon(
-          Icons.expand_more,
+        const PhosphorIcon(
+          PhosphorIcons.chevronDown,
           size: 14,
           color: AeronautColors.textTertiary,
         ),

@@ -21,6 +21,7 @@
 
 #include "app.hpp"
 #include "esp_log.h"
+#include "theme.hpp"
 
 static const char* TAG = "dirigible.hester";
 
@@ -55,7 +56,7 @@ void hester_build(lv_obj_t* parent)
     lv_obj_remove_style_all(a.view_hester);
     lv_obj_set_pos(a.view_hester, 0, 0);
     lv_obj_set_size(a.view_hester, SCREEN_W, BODY_H);
-    lv_obj_set_style_bg_color(a.view_hester, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(a.view_hester, dg::ground2(), 0);
     lv_obj_set_style_bg_opa(a.view_hester, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.view_hester, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -69,11 +70,11 @@ void hester_build(lv_obj_t* parent)
     lv_obj_set_pos(out, 2, 0);
     lv_obj_set_size(out, SCREEN_W - 4, out_h);
     lv_obj_set_style_bg_opa(out, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(out, lv_color_hex(0x0a0a0a), 0);
+    lv_obj_set_style_bg_color(out, dg::ground0(), 0);
     lv_obj_set_style_border_width(out, 1, 0);
-    lv_obj_set_style_border_color(out, lv_color_hex(0x262626), 0);
+    lv_obj_set_style_border_color(out, dg::ground4(), 0);
     lv_obj_set_style_border_opa(out, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(out, 2, 0);
+    lv_obj_set_style_radius(out, DG_RADIUS, 0);
     lv_obj_set_style_pad_all(out, 4, 0);
     lv_obj_set_scroll_dir(out, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(out, LV_SCROLLBAR_MODE_AUTO);
@@ -82,7 +83,7 @@ void hester_build(lv_obj_t* parent)
     lv_label_set_long_mode(a.hester_output, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(a.hester_output, SCREEN_W - 14);   // 38 mono columns
     lv_obj_set_style_text_font(a.hester_output, mono_font(), 0);
-    lv_obj_set_style_text_color(a.hester_output, lv_color_hex(0xDDDDDD), 0);
+    lv_obj_set_style_text_color(a.hester_output, dg::text1(), 0);
     lv_label_set_text(a.hester_output, "Ask Hester a question.\nIt sees the tab Lee has\nfocused.");
 
     // ---- question, below
@@ -92,20 +93,13 @@ void hester_build(lv_obj_t* parent)
     lv_obj_set_pos(a.hester_input, 2, BODY_H - input_h - 1);
     lv_obj_set_size(a.hester_input, SCREEN_W - 4, input_h);
     lv_obj_set_style_text_font(a.hester_input, mono_font_big(), 0);
-    lv_obj_set_style_text_color(a.hester_input, lv_color_white(), 0);
-    lv_obj_set_style_bg_color(a.hester_input, lv_color_hex(0x101010), 0);
+    lv_obj_set_style_text_color(a.hester_input, dg::text1(), 0);
+    lv_obj_set_style_bg_color(a.hester_input, dg::ground3(), 0);
     lv_obj_set_style_border_width(a.hester_input, 1, 0);
-    lv_obj_set_style_border_color(a.hester_input, lv_color_hex(0x3a3a3a), 0);
-    lv_obj_set_style_border_color(a.hester_input, lv_color_hex(0x6f9fe8),
-                                  LV_STATE_FOCUSED);
-    lv_obj_set_style_radius(a.hester_input, 2, 0);
-    lv_obj_set_style_pad_all(a.hester_input, 3, 0);
-    lv_obj_set_style_border_width(a.hester_input, 2, LV_PART_CURSOR);
-    lv_obj_set_style_border_side(a.hester_input, LV_BORDER_SIDE_BOTTOM,
-                                 LV_PART_CURSOR);
-    lv_obj_set_style_border_color(a.hester_input, lv_palette_main(LV_PALETTE_AMBER),
-                                  LV_PART_CURSOR);
-    lv_obj_set_style_anim_time(a.hester_input, 500, LV_PART_CURSOR);
+    lv_obj_set_style_border_color(a.hester_input, dg::ground4(), 0);
+    lv_obj_set_style_radius(a.hester_input, DG_RADIUS, 0);
+    lv_obj_set_style_pad_all(a.hester_input, 4, 0);
+    dg::style_input_focus(a.hester_input);
     lv_obj_add_event_cb(a.hester_input, input_event, LV_EVENT_READY, nullptr);
     if (a.group) lv_group_add_obj(a.group, a.hester_input);
 

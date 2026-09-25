@@ -17,11 +17,13 @@
 #include <cstdio>
 #include <cstring>
 
+#include "brand_images.h"
 #include "dirigible/state.hpp"
 #include "dirigible_esp/dispatch.hpp"
 #include "dirigible_esp/wifi_esp.hpp"
 #include "esp_log.h"
 #include "tdeck_bsp.h"
+#include "theme.hpp"
 
 static const char* TAG = "dirigible.app";
 
@@ -84,7 +86,7 @@ lv_obj_t* make_signal(lv_obj_t* parent, int level)
         lv_obj_set_pos(bar, i * 5, SIGNAL_H - h);
         lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(bar,
-            i < level ? lv_palette_main(LV_PALETTE_GREEN) : lv_color_hex(0x303030), 0);
+            i < level ? dg::phosphor() : dg::ground4(), 0);
         lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     }
     return box;
@@ -182,16 +184,19 @@ lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* use
     lv_obj_remove_style_all(btn);
     lv_obj_set_height(btn, FOOTER_H - 2);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x262626), 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2f5fa8), LV_STATE_FOCUSED);
-    lv_obj_set_style_radius(btn, 2, 0);
+    lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, dg::ground4(), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(btn, DG_RADIUS, 0);
     lv_obj_set_style_pad_hor(btn, 3, 0);
     lv_obj_set_style_pad_ver(btn, 0, 0);
+    dg::style_focus(btn);
 
     lv_obj_t* l = lv_label_create(btn);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_font(l, mono_font(), 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(0xDDDDDD), 0);
+    lv_obj_set_style_text_color(l, dg::text1(), 0);
     lv_obj_center(l);
 
     if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user);
@@ -282,12 +287,18 @@ static void menu_open(void*)
     a.menu = lv_list_create(a.screen);
     lv_obj_set_size(a.menu, 180, 120);
     lv_obj_center(a.menu);
-    lv_obj_set_style_bg_color(a.menu, lv_color_hex(0x202020), 0);
+    lv_obj_set_style_bg_color(a.menu, dg::ground2(), 0);
+    lv_obj_set_style_border_width(a.menu, 1, 0);
+    lv_obj_set_style_border_color(a.menu, dg::ground4(), 0);
     lv_obj_set_style_text_font(a.menu, mono_font(), 0);
 
     static const char* names[] = { "Tabs", "Hester", "Pairing", "Reconnect" };
     for (intptr_t i = 0; i < 4; i++) {
         lv_obj_t* btn = lv_list_add_btn(a.menu, nullptr, names[i]);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(btn, dg::ground3(), 0);
+        lv_obj_set_style_text_color(btn, dg::text1(), 0);
+        dg::style_focus(btn);
         lv_obj_add_event_cb(btn, menu_item_cb, LV_EVENT_CLICKED, (void*)i);
         if (a.group) lv_group_add_obj(a.group, btn);
     }
@@ -373,6 +384,15 @@ void app_show(View v)
     if (v != View::Pairing) chrome_clear_footer_buttons();
     chrome_show_footer(v != View::Terminal);
 
+    // The Hester hare only ever shows in the Hester view; every other view
+    // gets the title back at its usual x=24, 84 px wide.  Reset here so each
+    // case below only has to opt in.
+    if (a.hester_icon) lv_obj_add_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
+    if (a.lbl_machine) {
+        lv_obj_set_width(a.lbl_machine, 84);
+        lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
+    }
+
     // The back button is the same object everywhere; only its glyph changes,
     // so its position never moves under the thumb.
     switch (v) {
@@ -390,6 +410,13 @@ void app_show(View v)
         lv_obj_clear_flag(a.view_hester, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph("<");
         chrome_set_footer("Enter ask  Esc tabs", "hester");
+        // Make room for the 8x8 hare just left of the title: shift the title
+        // from x=24 to x=34 and shrink it by the same 10 px it gave up.
+        if (a.hester_icon) lv_obj_clear_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
+        if (a.lbl_machine) {
+            lv_obj_set_width(a.lbl_machine, 74);
+            lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 34, 0);
+        }
         hester_focus();
         break;
     case View::Pairing:
@@ -412,17 +439,17 @@ static void chrome_timer_cb(lv_timer_t*)
     snprintf(buf, sizeof(buf), "%d%%", (int)b.percent);
     lv_label_set_text(a.lbl_battery, buf);
     lv_obj_set_style_text_color(a.lbl_battery,
-        b.percent <= 15 ? lv_palette_main(LV_PALETTE_RED) : lv_color_hex(0x999999), 0);
+        b.percent <= 15 ? dg::error() : dg::text3(), 0);
 
     const bool wifi = dirigible_esp::WifiEsp::instance().isConnected();
-    lv_obj_set_style_text_color(a.lbl_wifi,
-        wifi ? lv_color_hex(0xBBBBBB) : lv_color_hex(0x554040), 0);
+    lv_obj_set_style_text_color(a.lbl_wifi, wifi ? dg::text2() : dg::text3(), 0);
 
     auto* conn = activeConn();
     bool online = conn && conn->isConnected();
+    // phosphor: Lee reachable.  ember: wifi is up but Lee is not answering.
+    // error: wifi itself is down.
     lv_obj_set_style_bg_color(a.conn_dot,
-        online ? lv_palette_main(LV_PALETTE_GREEN)
-               : (wifi ? lv_color_hex(0x806020) : lv_color_hex(0x555555)), 0);
+        online ? dg::phosphor() : (wifi ? dg::ember() : dg::error()), 0);
 
     // Don't stamp over the pairing flow's own step text: it is mid-WiFi by
     // definition.
@@ -435,6 +462,66 @@ static void ping_timer_cb(lv_timer_t*)
 }
 
 // ---------------------------------------------------------------------------
+// Boot splash — airship + wordmark for ~1.2 s while WiFi/pairing/tab-list
+// setup runs underneath.  Purely cosmetic: everything below app_start()'s
+// "first screen" section starts immediately, the splash just covers it.
+// ---------------------------------------------------------------------------
+
+static void splash_close_cb(lv_timer_t* t)
+{
+    auto& a = app();
+    if (a.header) lv_obj_clear_flag(a.header, LV_OBJ_FLAG_HIDDEN);
+    chrome_show_footer(a.view != View::Terminal);
+    if (a.splash) {
+        lv_obj_del(a.splash);
+        a.splash = nullptr;
+    }
+    lv_timer_del(t);
+}
+
+static void splash_build()
+{
+    auto& a = app();
+
+    // Header/footer are hidden for the duration rather than just covered:
+    // the splash is opaque so it makes no visual difference, but it keeps
+    // the chrome timer from drawing battery/wifi state behind a screen that
+    // is supposed to read as "not booted yet".
+    if (a.header) lv_obj_add_flag(a.header, LV_OBJ_FLAG_HIDDEN);
+    if (a.footer) lv_obj_add_flag(a.footer, LV_OBJ_FLAG_HIDDEN);
+
+    a.splash = lv_obj_create(a.screen);
+    lv_obj_remove_style_all(a.splash);
+    lv_obj_set_pos(a.splash, 0, 0);
+    lv_obj_set_size(a.splash, SCREEN_W, SCREEN_H);
+    lv_obj_set_style_bg_color(a.splash, dg::ground0(), 0);
+    lv_obj_set_style_bg_opa(a.splash, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(a.splash, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(a.splash);   // created after header/content/footer
+                                         // anyway, but be explicit
+
+    lv_obj_t* img = lv_img_create(a.splash);
+    lv_img_set_src(img, &dg_img_airship);
+    lv_obj_align(img, LV_ALIGN_CENTER, 0, -34);
+
+    lv_obj_t* title = lv_label_create(a.splash);
+    lv_label_set_text(title, "DIRIGIBLE");
+    lv_obj_set_style_text_font(title, mono_font_big(), 0);
+    lv_obj_set_style_text_color(title, dg::phosphor(), 0);
+    lv_obj_set_style_text_letter_space(title, 2, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 26);
+
+    lv_obj_t* sub = lv_label_create(a.splash);
+    lv_label_set_text(sub, "searching for lee");
+    lv_obj_set_style_text_font(sub, mono_font(), 0);
+    lv_obj_set_style_text_color(sub, dg::text3(), 0);
+    lv_obj_align(sub, LV_ALIGN_CENTER, 0, 48);
+
+    lv_timer_t* t = lv_timer_create(splash_close_cb, 1200, nullptr);
+    lv_timer_set_repeat_count(t, 1);
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -443,8 +530,20 @@ void app_start()
     auto& a = app();
 
     // ---- chrome --------------------------------------------------------
+    // Dark base theme, primary = phosphor, secondary = ember, applied before
+    // any widget below is created.  This is the explicit call, not the
+    // CONFIG_LV_THEME_DEFAULT_DARK Kconfig toggle: nothing in this codebase
+    // invokes the Kconfig-driven LV_THEME_DEFAULT_INIT() macro, so the
+    // sdkconfig flag alone has no effect — lv_disp_drv_register() never calls
+    // lv_theme_default_init() on its own.  Without this, stock lv_btn /
+    // lv_list / lv_textarea / lv_bar draw LVGL's unthemed base style (white
+    // fill, black text) regardless of the per-object colours screen_*.cpp
+    // sets, since those only override what the theme already applied.
+    lv_theme_default_init(tdeck_bsp_display(), dg::phosphor(), dg::ember(),
+                          true, mono_font());
+
     a.screen = lv_scr_act();
-    lv_obj_set_style_bg_color(a.screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(a.screen, dg::ground0(), 0);
     lv_obj_set_style_bg_opa(a.screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.screen, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -456,56 +555,67 @@ void app_start()
     lv_obj_remove_style_all(a.header);
     lv_obj_set_pos(a.header, 0, 0);
     lv_obj_set_size(a.header, SCREEN_W, HEADER_H);
-    lv_obj_set_style_bg_color(a.header, lv_color_hex(0x141414), 0);
+    lv_obj_set_style_bg_color(a.header, dg::ground1(), 0);
     lv_obj_set_style_bg_opa(a.header, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(a.header, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(a.header, 1, 0);
-    lv_obj_set_style_border_color(a.header, lv_color_hex(0x303030), 0);
+    lv_obj_set_style_border_color(a.header, dg::ground4(), 0);
     lv_obj_set_style_border_opa(a.header, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.header, LV_OBJ_FLAG_SCROLLABLE);
 
     // far left: the always-on back/close button, x 2..19.  Deliberately NOT in
-    // the input group — pairing and Hester focus their text fields on entry and
-    // a button ahead of them in the group steals that focus.  Touch and the
-    // trackball pointer reach it, ESC and a long-press do the same thing.
+    // the input group's *focus order* by default — pairing and Hester focus
+    // their text fields on entry and a button ahead of them in the group
+    // steals that focus — but it IS added to the group (task: give it the
+    // focus style) so Tab can still reach it; touch, the trackball pointer,
+    // ESC and a long-press all reach it regardless.
     a.back_btn = lv_btn_create(a.header);
     lv_obj_remove_style_all(a.back_btn);
     lv_obj_set_size(a.back_btn, 18, HEADER_H - 2);
     lv_obj_set_pos(a.back_btn, 2, 1);
     lv_obj_set_style_bg_opa(a.back_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(a.back_btn, lv_color_hex(0x2a2a2a), 0);
-    lv_obj_set_style_bg_color(a.back_btn, lv_color_hex(0x2f5fa8), LV_STATE_PRESSED);
-    lv_obj_set_style_radius(a.back_btn, 2, 0);
+    lv_obj_set_style_bg_color(a.back_btn, dg::ground3(), 0);
+    lv_obj_set_style_bg_color(a.back_btn, dg::ground3(), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(a.back_btn, DG_RADIUS, 0);
+    dg::style_focus(a.back_btn);
     lv_obj_add_event_cb(a.back_btn, back_btn_cb, LV_EVENT_CLICKED, nullptr);
+    if (a.group) lv_group_add_obj(a.group, a.back_btn);
 
     a.back_lbl = lv_label_create(a.back_btn);
     lv_label_set_text(a.back_lbl, "<");
     lv_obj_set_style_text_font(a.back_lbl, mono_font(), 0);
-    lv_obj_set_style_text_color(a.back_lbl, lv_color_hex(0xDDDDDD), 0);
+    lv_obj_set_style_text_color(a.back_lbl, dg::text1(), 0);
     lv_obj_center(a.back_lbl);
 
     // left: title, x 24..107.  Clipped to 10 chars so it can never run into
     // the centre slot, which starts at x=112.
-    a.lbl_machine = make_label(a.header, "Dirigible", lv_color_white());
+    a.lbl_machine = make_label(a.header, "Dirigible", dg::text1());
     lv_label_set_long_mode(a.lbl_machine, LV_LABEL_LONG_DOT);
     lv_obj_set_width(a.lbl_machine, 84);
     lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
 
+    // Hester's hare, 8x8, shown only while the Hester view is focused — see
+    // app_show().  Sits in the same 24..32 slot the title vacates for it.
+    a.hester_icon = lv_img_create(a.header);
+    lv_img_set_src(a.hester_icon, &dg_img_hester8);
+    lv_obj_align(a.hester_icon, LV_ALIGN_LEFT_MID, 24, 0);
+    lv_obj_add_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
+
     // centre: step / status.  x 112..239 (128 px, 16 chars).
-    a.lbl_centre = make_label(a.header, "", lv_color_hex(0xBBBBBB));
+    a.lbl_centre = make_label(a.header, "", dg::text2());
     lv_label_set_long_mode(a.lbl_centre, LV_LABEL_LONG_DOT);
     lv_obj_set_width(a.lbl_centre, 128);
     lv_obj_set_style_text_align(a.lbl_centre, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(a.lbl_centre, LV_ALIGN_LEFT_MID, 112, 0);
 
     // right: battery %, wifi glyph, link dot.  Laid out from the right edge.
-    a.lbl_battery = make_label(a.header, "", lv_color_hex(0x999999));
+    a.lbl_battery = make_label(a.header, "", dg::text3());
     lv_obj_align(a.lbl_battery, LV_ALIGN_RIGHT_MID, -4, 0);   // 4 chars = 32 px
 
     a.lbl_wifi = lv_label_create(a.header);
     lv_label_set_text(a.lbl_wifi, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_font(a.lbl_wifi, sym_font(), 0);
-    lv_obj_set_style_text_color(a.lbl_wifi, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_text_color(a.lbl_wifi, dg::text3(), 0);
     lv_obj_align(a.lbl_wifi, LV_ALIGN_RIGHT_MID, -42, 0);
 
     a.conn_dot = lv_obj_create(a.header);
@@ -513,7 +623,7 @@ void app_start()
     lv_obj_set_size(a.conn_dot, 8, 8);
     lv_obj_set_style_radius(a.conn_dot, 4, 0);
     lv_obj_set_style_bg_opa(a.conn_dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(a.conn_dot, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_bg_color(a.conn_dot, dg::ground5(), 0);
     lv_obj_clear_flag(a.conn_dot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(a.conn_dot, LV_ALIGN_RIGHT_MID, -64, 0);
 
@@ -529,20 +639,20 @@ void app_start()
     lv_obj_remove_style_all(a.footer);
     lv_obj_set_pos(a.footer, 0, SCREEN_H - FOOTER_H);
     lv_obj_set_size(a.footer, SCREEN_W, FOOTER_H);
-    lv_obj_set_style_bg_color(a.footer, lv_color_hex(0x141414), 0);
+    lv_obj_set_style_bg_color(a.footer, dg::ground1(), 0);
     lv_obj_set_style_bg_opa(a.footer, LV_OPA_COVER, 0);
     lv_obj_set_style_border_side(a.footer, LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_border_width(a.footer, 1, 0);
-    lv_obj_set_style_border_color(a.footer, lv_color_hex(0x303030), 0);
+    lv_obj_set_style_border_color(a.footer, dg::ground4(), 0);
     lv_obj_set_style_border_opa(a.footer, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.footer, LV_OBJ_FLAG_SCROLLABLE);
 
-    a.lbl_footer_l = make_label(a.footer, "", lv_color_hex(0x8A8A8A));
+    a.lbl_footer_l = make_label(a.footer, "", dg::text3());
     lv_label_set_long_mode(a.lbl_footer_l, LV_LABEL_LONG_DOT);
     lv_obj_set_width(a.lbl_footer_l, 168);            // 21 chars
     lv_obj_align(a.lbl_footer_l, LV_ALIGN_LEFT_MID, 3, 0);
 
-    a.lbl_footer_r = make_label(a.footer, "", lv_color_hex(0x8A8A8A));
+    a.lbl_footer_r = make_label(a.footer, "", dg::text3());
     lv_obj_align(a.lbl_footer_r, LV_ALIGN_RIGHT_MID, -3, 0);
 
     // Right-hand action slot: a shrink-to-fit flex row, so buttons pack from
@@ -591,6 +701,11 @@ void app_start()
 
     lv_timer_create(chrome_timer_cb, 2000, nullptr);
     lv_timer_create(ping_timer_cb,  15000, nullptr);
+
+    // ---- boot splash ------------------------------------------------------
+    // Covers the chrome for ~1.2 s while everything below sets itself up
+    // underneath; does not delay any of it.
+    splash_build();
 
     // ---- first screen ---------------------------------------------------
     if (a.config->machineCount() == 0) {

@@ -11,6 +11,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
+import { Icon, HesterGlyph, type IconName } from './Icon';
+import { xtermTheme, fontMono } from '../theme/tokens.generated';
 
 const lee = window.lee;
 
@@ -58,21 +60,26 @@ interface SpyglassPaneProps {
   };
 }
 
-const TAB_TYPE_ICONS: Record<string, string> = {
-  terminal: '💻',
-  editor: '📝',
-  'editor-panel': '📝',
-  file: '📄',
-  files: '📂',
-  browser: '🌐',
-  hester: '🐇',
-  claude: '🤖',
-  git: '🌿',
-  docker: '🐳',
-  library: '📚',
-  workstream: '📋',
-  spyglass: '🔭',
-  bridge: '🌉',
+const TAB_TYPE_ICONS: Record<string, IconName> = {
+  terminal: 'terminal',
+  editor: 'editor',
+  'editor-panel': 'editor',
+  file: 'file-code',
+  files: 'folder',
+  browser: 'browser',
+  claude: 'agent',
+  git: 'git',
+  docker: 'docker',
+  library: 'book',
+  workstream: 'list',
+  spyglass: 'search',
+  bridge: 'link',
+};
+
+/** Type icon, special-casing Hester's glyph over the generic icon set. */
+const SpyglassTypeIcon: React.FC<{ type: string; size?: number }> = ({ type, size = 14 }) => {
+  if (type === 'hester') return <HesterGlyph size={size} />;
+  return <Icon name={TAB_TYPE_ICONS[type] || 'settings'} size={size} />;
 };
 
 /**
@@ -98,30 +105,8 @@ const SpyglassTerminal: React.FC<{
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: 'JetBrains Mono, Noto Color Emoji, Menlo, Monaco, Courier New, monospace',
-      theme: {
-        background: '#0d1a14',
-        foreground: '#eee',
-        cursor: '#4a9',
-        cursorAccent: '#0d1a14',
-        selectionBackground: '#1a3028',
-        black: '#0d1a14',
-        red: '#e55',
-        green: '#4a9',
-        yellow: '#da3',
-        blue: '#5ad',
-        magenta: '#a6d',
-        cyan: '#5bc',
-        white: '#ddd',
-        brightBlack: '#456',
-        brightRed: '#f66',
-        brightGreen: '#5ca',
-        brightYellow: '#eb4',
-        brightBlue: '#6be',
-        brightMagenta: '#b7e',
-        brightCyan: '#6cd',
-        brightWhite: '#fff',
-      },
+      fontFamily: fontMono,
+      theme: xtermTheme,
       allowTransparency: false,
       scrollback: 10000,
       scrollOnUserInput: true,
@@ -389,7 +374,7 @@ const SpyglassBrowserViewer: React.FC<{
       {browserMeta?.url && (
         <div className="spyglass-browser-url-bar">
           <span className={`spyglass-browser-status ${connected ? 'connected' : 'disconnected'}`}>
-            {connected ? '●' : '○'}
+            <span className={`status-dot ${connected ? 'status-dot-connected' : 'status-dot-disconnected'}`} />
           </span>
           <span className="spyglass-browser-url">{browserMeta.url}</span>
         </div>
@@ -422,7 +407,7 @@ const SpyglassTabSummary: React.FC<{
   if (tab.type === 'spyglass') {
     return (
       <div className="spyglass-tab-summary">
-        <div className="spyglass-tab-summary-icon">🔭</div>
+        <div className="spyglass-tab-summary-icon"><Icon name="search" size={20} /></div>
         <div className="spyglass-tab-summary-title">Spyglass: {tab.label}</div>
         <div className="spyglass-tab-summary-desc">
           This tab is viewing another machine. Open a direct Spyglass tab to view that machine.
@@ -434,10 +419,10 @@ const SpyglassTabSummary: React.FC<{
   if (tab.type === 'editor-panel' && context.editor?.file) {
     return (
       <div className="spyglass-tab-summary">
-        <div className="spyglass-tab-summary-icon">📝</div>
+        <div className="spyglass-tab-summary-icon"><Icon name="editor" size={20} /></div>
         <div className="spyglass-tab-summary-title">
           {context.editor.file.split('/').pop()}
-          {context.editor.modified && <span className="spyglass-modified"> ●</span>}
+          {context.editor.modified && <span className="spyglass-modified status-dot status-dot-warning" />}
         </div>
         <div className="spyglass-tab-summary-desc">
           {context.editor.language} — Ln {context.editor.cursor.line}, Col {context.editor.cursor.column}
@@ -448,7 +433,7 @@ const SpyglassTabSummary: React.FC<{
 
   return (
     <div className="spyglass-tab-summary">
-      <div className="spyglass-tab-summary-icon">{TAB_TYPE_ICONS[tab.type] || '🔧'}</div>
+      <div className="spyglass-tab-summary-icon"><SpyglassTypeIcon type={tab.type} size={20} /></div>
       <div className="spyglass-tab-summary-title">{tab.label}</div>
       <div className="spyglass-tab-summary-desc">
         This tab type cannot be viewed remotely.
@@ -627,7 +612,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
         <span className="spyglass-machine-emoji">{machineConfig.emoji}</span>
         <span className="spyglass-machine-name">{machineConfig.name}</span>
         <span className={`spyglass-status ${connected ? 'connected' : 'disconnected'}`}>
-          {connected ? '●' : '○'}
+          <span className={`status-dot ${connected ? 'status-dot-connected' : 'status-dot-disconnected'}`} />
         </span>
         {context && (
           <span className="spyglass-idle">{formatIdle(context.activity.idleSeconds)}</span>
@@ -654,7 +639,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
                 title={tab.label}
               >
                 <span className="spyglass-tab-icon">
-                  {TAB_TYPE_ICONS[tab.type] || '🔧'}
+                  <SpyglassTypeIcon type={tab.type} />
                 </span>
                 <span className="spyglass-tab-label">{tab.label}</span>
               </div>
@@ -664,7 +649,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
               onClick={() => setShowTuiPicker(!showTuiPicker)}
               title="Spawn new tab"
             >
-              <span className="spyglass-tab-icon">+</span>
+              <span className="spyglass-tab-icon"><Icon name="plus" size={14} /></span>
             </div>
           </div>
 
@@ -674,7 +659,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
                 className="spyglass-tui-option"
                 onClick={() => spawnRemoteTui('terminal')}
               >
-                <span className="spyglass-tui-icon">💻</span>
+                <span className="spyglass-tui-icon"><Icon name="terminal" size={14} /></span>
                 <span className="spyglass-tui-name">Terminal</span>
               </div>
               {Object.entries(context.availableTuis).map(([key, tui]) => (
@@ -683,7 +668,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
                   className="spyglass-tui-option"
                   onClick={() => spawnRemoteTui(key)}
                 >
-                  <span className="spyglass-tui-icon">{tui.icon || TAB_TYPE_ICONS[key] || '🔧'}</span>
+                  <span className="spyglass-tui-icon">{tui.icon || <SpyglassTypeIcon type={key} />}</span>
                   <span className="spyglass-tui-name">{tui.name}</span>
                 </div>
               ))}
@@ -726,7 +711,7 @@ export const SpyglassPane: React.FC<SpyglassPaneProps> = ({ active, machineConfi
                 <div className="spyglass-editor">
                   <div className="spyglass-editor-file">
                     {context.editor.file.split('/').pop()}
-                    {context.editor.modified && <span className="spyglass-modified"> ●</span>}
+                    {context.editor.modified && <span className="spyglass-modified status-dot status-dot-warning" />}
                   </div>
                   <div className="spyglass-editor-meta">
                     {context.editor.language} — Ln {context.editor.cursor.line}, Col {context.editor.cursor.column}

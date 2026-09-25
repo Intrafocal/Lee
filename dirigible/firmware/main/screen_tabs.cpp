@@ -21,6 +21,7 @@
 
 #include "app.hpp"
 #include "esp_log.h"
+#include "theme.hpp"
 
 static const char* TAG = "dirigible.tabs";
 
@@ -40,18 +41,24 @@ bool tab_has_pty(const char* type)
            strcmp(type, "system")   == 0;
 }
 
-/// Badge tint per tab type, so a glance separates a git pane from an editor.
-lv_color_t tab_colour(const char* type)
+/// Three-letter badge code per tab type.  One neutral style now (ground-3 /
+/// text-2) replaces the old per-type tint — the code is the differentiator,
+/// not the colour.
+const char* tab_code(const char* type)
 {
-    if (!type) return lv_color_hex(0x404040);
-    if (strcmp(type, "editor")   == 0) return lv_color_hex(0x2f5fa8);
-    if (strcmp(type, "terminal") == 0) return lv_color_hex(0x2c6b3f);
-    if (strcmp(type, "git")      == 0) return lv_color_hex(0x8a5a1f);
-    if (strcmp(type, "docker")   == 0) return lv_color_hex(0x1f6a7a);
-    if (strcmp(type, "browser")  == 0) return lv_color_hex(0x6a3f8a);
-    if (strcmp(type, "hester")   == 0 || strcmp(type, "claude") == 0 ||
-        strcmp(type, "agent")    == 0) return lv_color_hex(0x8a2f5f);
-    return lv_color_hex(0x404040);
+    if (!type) return "tab";
+    if (strcmp(type, "editor")   == 0) return "edt";
+    if (strcmp(type, "terminal") == 0) return "trm";
+    if (strcmp(type, "git")      == 0) return "git";
+    if (strcmp(type, "docker")   == 0) return "dkr";
+    if (strcmp(type, "browser")  == 0) return "web";
+    if (strcmp(type, "hester")   == 0) return "hst";
+    if (strcmp(type, "claude")   == 0 || strcmp(type, "agent") == 0) return "agt";
+    if (strcmp(type, "k8s")      == 0) return "k8s";
+    if (strcmp(type, "sql")      == 0) return "sql";
+    if (strcmp(type, "devops")   == 0) return "ops";
+    if (strcmp(type, "system")   == 0) return "sys";
+    return "tab";
 }
 
 void row_clicked(lv_event_t* e)
@@ -93,14 +100,14 @@ void tabs_build(lv_obj_t* parent)
     lv_obj_remove_style_all(a.view_tabs);
     lv_obj_set_pos(a.view_tabs, 0, 0);
     lv_obj_set_size(a.view_tabs, SCREEN_W, BODY_H);
-    lv_obj_set_style_bg_color(a.view_tabs, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(a.view_tabs, dg::ground2(), 0);
     lv_obj_set_style_bg_opa(a.view_tabs, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_SCROLLABLE);
 
     a.tab_list = lv_list_create(a.view_tabs);
     lv_obj_set_pos(a.tab_list, 2, 2);
     lv_obj_set_size(a.tab_list, SCREEN_W - 4, BODY_H - 4);
-    lv_obj_set_style_bg_color(a.tab_list, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(a.tab_list, dg::ground2(), 0);
     lv_obj_set_style_border_width(a.tab_list, 0, 0);
     lv_obj_set_style_pad_all(a.tab_list, 0, 0);
     lv_obj_set_style_pad_row(a.tab_list, 2, 0);
@@ -111,7 +118,7 @@ void tabs_build(lv_obj_t* parent)
 
 namespace {
 
-/// One 26 px tab row: type badge, focus marker, label, PTY hint.
+/// One 24 px tab row: type badge, focus marker, label, PTY hint.
 void tab_row(lv_obj_t* list, const dirigible::TabContext& t, int index)
 {
     const bool active = t.state && strcmp(t.state, "active") == 0;
@@ -119,45 +126,39 @@ void tab_row(lv_obj_t* list, const dirigible::TabContext& t, int index)
     lv_obj_t* btn = lv_btn_create(list);
     lv_obj_remove_style_all(btn);
     lv_obj_set_width(btn, LV_PCT(100));
-    lv_obj_set_height(btn, 26);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x1c1c22)
-                                          : lv_color_hex(0x121212), 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2f5fa8), LV_STATE_FOCUSED);
-    lv_obj_set_style_radius(btn, 2, 0);
+    dg::style_row(btn, dg::ground1());   // idle rows stay ground-1
+    dg::style_focus(btn);
     lv_obj_set_style_pad_all(btn, 0, 0);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
-    // badge: x 3..57 (54 px, 6 mono chars + 3 px padding either side)
+    // badge: x 3..33 (30 px: 24 px for 3 mono chars at unscii_8 + 3 px
+    // padding either side)
     lv_obj_t* badge = lv_obj_create(btn);
     lv_obj_remove_style_all(badge);
-    lv_obj_set_size(badge, 54, 14);
+    lv_obj_set_size(badge, 30, 14);
     lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(badge, tab_colour(t.type), 0);
-    lv_obj_set_style_radius(badge, 2, 0);
+    lv_obj_set_style_bg_color(badge, dg::ground3(), 0);
+    lv_obj_set_style_radius(badge, DG_RADIUS, 0);
     lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(badge, LV_ALIGN_LEFT_MID, 3, 0);
 
-    char badge_text[8];
-    snprintf(badge_text, sizeof(badge_text), "%.6s", t.type ? t.type : "tab");
-    lv_obj_t* bl = make_label(badge, badge_text, lv_color_white());
+    lv_obj_t* bl = make_label(badge, tab_code(t.type), dg::text2());
     lv_obj_center(bl);
 
-    // focus marker at x 60, label from x 70
-    lv_obj_t* mark = make_label(btn, active ? ">" : " ",
-                                lv_palette_main(LV_PALETTE_GREEN));
-    lv_obj_align(mark, LV_ALIGN_LEFT_MID, 60, 0);
+    // focus marker at x 36, label from x 46
+    lv_obj_t* mark = make_label(btn, active ? ">" : " ", dg::phosphor());
+    lv_obj_align(mark, LV_ALIGN_LEFT_MID, 36, 0);
 
     const bool pty = tab_has_pty(t.type) && t.pty_id >= 0;
     lv_obj_t* label = make_label(btn, t.label ? t.label : "(unnamed)",
-                                 active ? lv_color_white() : lv_color_hex(0xBBBBBB));
+                                 active ? dg::text1() : dg::text2());
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    // 70 left, 34 px reserved on the right for the "pty" hint + 4 px margin.
-    lv_obj_set_width(label, SCREEN_W - 4 - 70 - (pty ? 34 : 4));
-    lv_obj_align(label, LV_ALIGN_LEFT_MID, 70, 0);
+    // 46 left, 34 px reserved on the right for the "pty" hint + 4 px margin.
+    lv_obj_set_width(label, SCREEN_W - 4 - 46 - (pty ? 34 : 4));
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, 46, 0);
 
     if (pty) {
-        lv_obj_t* hint = make_label(btn, "pty", lv_color_hex(0x707070));
+        lv_obj_t* hint = make_label(btn, "pty", dg::text3());
         lv_obj_align(hint, LV_ALIGN_RIGHT_MID, -4, 0);
     }
 
@@ -177,26 +178,28 @@ void tabs_state_panel(const char* title, const char* body, bool offer_repair)
     lv_obj_set_style_pad_all(panel, 6, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* h = make_label(panel, title, lv_color_white());
+    lv_obj_t* h = make_label(panel, title, dg::text1());
     lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(h, SCREEN_W - 20);
     lv_obj_set_pos(h, 0, 0);
 
-    lv_obj_t* b = make_label(panel, body, lv_color_hex(0x888888));
+    lv_obj_t* b = make_label(panel, body, dg::text2());
     lv_label_set_long_mode(b, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(b, SCREEN_W - 20);
     lv_obj_set_pos(b, 0, 16);
 
     if (!offer_repair) return;
 
+    // Re-pair is the primary action here (only way forward when the token is
+    // stale); Reconnect is secondary.
     lv_obj_t* btn = lv_btn_create(panel);
     lv_obj_set_pos(btn, 0, 62);
     lv_obj_set_size(btn, 90, 22);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2f5fa8), 0);
-    lv_obj_set_style_radius(btn, 2, 0);
+    dg::style_primary_btn(btn);
     lv_obj_t* l = lv_label_create(btn);
     lv_label_set_text(l, "Re-pair");
     lv_obj_set_style_text_font(l, mono_font(), 0);
+    lv_obj_set_style_text_color(l, dg::on_phosphor(), 0);
     lv_obj_center(l);
     lv_obj_add_event_cb(btn, [](lv_event_t*) { pairing_begin(); },
                         LV_EVENT_CLICKED, nullptr);
@@ -205,11 +208,14 @@ void tabs_state_panel(const char* title, const char* body, bool offer_repair)
     lv_obj_t* btn2 = lv_btn_create(panel);
     lv_obj_set_pos(btn2, 96, 62);
     lv_obj_set_size(btn2, 100, 22);
-    lv_obj_set_style_bg_color(btn2, lv_color_hex(0x262626), 0);
-    lv_obj_set_style_radius(btn2, 2, 0);
+    lv_obj_set_style_bg_opa(btn2, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn2, dg::ground3(), 0);
+    lv_obj_set_style_radius(btn2, DG_RADIUS, 0);
+    dg::style_focus(btn2);
     lv_obj_t* l2 = lv_label_create(btn2);
     lv_label_set_text(l2, "Reconnect");
     lv_obj_set_style_text_font(l2, mono_font(), 0);
+    lv_obj_set_style_text_color(l2, dg::text1(), 0);
     lv_obj_center(l2);
     lv_obj_add_event_cb(btn2, [](lv_event_t*) { connect_active_machine(); },
                         LV_EVENT_CLICKED, nullptr);

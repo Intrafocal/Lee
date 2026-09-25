@@ -8,6 +8,8 @@ import '../providers/machines_provider.dart';
 import '../services/fs_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 import 'file_viewer_screen.dart';
 
 /// Files browser body for the active machine's current workspace, driven by
@@ -34,7 +36,7 @@ class FilesBrowserBody extends ConsumerWidget {
       return const Center(
         child: Text(
           'No workspace open on this window',
-          style: AeronautTheme.caption,
+          style: AeronautTheme.caption1,
         ),
       );
     }
@@ -112,8 +114,7 @@ class _DirBodyState extends ConsumerState<_DirBody> {
   Widget build(BuildContext context) {
     if (_loading && _result == null) {
       return const Center(
-        child: CircularProgressIndicator(
-          color: AeronautColors.accent,
+        child: CircularProgressIndicator.adaptive(
           strokeWidth: 2,
         ),
       );
@@ -125,7 +126,7 @@ class _DirBodyState extends ConsumerState<_DirBody> {
           child: Text(
             _error!,
             textAlign: TextAlign.center,
-            style: AeronautTheme.caption,
+            style: AeronautTheme.caption1,
           ),
         ),
       );
@@ -133,7 +134,7 @@ class _DirBodyState extends ConsumerState<_DirBody> {
     final entries = _result?.entries ?? const <FsEntryInfo>[];
     if (entries.isEmpty) {
       return const Center(
-        child: Text('Empty directory', style: AeronautTheme.caption),
+        child: Text('Empty directory', style: AeronautTheme.caption1),
       );
     }
 
@@ -153,7 +154,7 @@ class _DirBodyState extends ConsumerState<_DirBody> {
     );
 
     if (widget.isRoot) {
-      return RefreshIndicator(
+      return RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         onRefresh: _load,
         child: content,
@@ -185,10 +186,10 @@ class _DirNodeState extends State<_DirNode> {
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
         key: PageStorageKey(widget.path),
-        leading: const Icon(Icons.folder_outlined, color: AeronautColors.accent, size: 20),
+        leading: const PhosphorIcon(PhosphorIcons.folder, color: AeronautColors.accent, size: 20),
         title: Text(
           widget.name,
-          style: AeronautTheme.body.copyWith(fontSize: 14),
+          style: AeronautTheme.subheadline,
         ),
         tilePadding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
         childrenPadding: const EdgeInsets.only(left: AeronautTheme.spacingMd),
@@ -218,13 +219,13 @@ class _FileTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       dense: true,
-      leading: Icon(
-        entry.isSymlink ? Icons.link : _iconFor(name),
+      leading: PhosphorIcon(
+        entry.isSymlink ? PhosphorIcons.link : _iconFor(name),
         size: 18,
         color: AeronautColors.textSecondary,
       ),
-      title: Text(name, style: AeronautTheme.body.copyWith(fontSize: 14)),
-      subtitle: Text(_formatSize(entry.size), style: AeronautTheme.caption.copyWith(fontSize: 11)),
+      title: Text(name, style: AeronautTheme.subheadline),
+      subtitle: Text(_formatSize(entry.size), style: AeronautTheme.caption2),
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -238,19 +239,20 @@ class _FileTile extends StatelessWidget {
     );
   }
 
-  IconData _iconFor(String name) {
+  PhosphorIconData _iconFor(String name) {
     switch (classifyFile(name)) {
       case FileViewKind.markdown:
-        return Icons.description_outlined;
+        return PhosphorIcons.book;
       case FileViewKind.code:
-        return Icons.code;
+        return PhosphorIcons.fileCode;
       case FileViewKind.image:
-        return Icons.image_outlined;
+        return PhosphorIcons.image;
       case FileViewKind.pdf:
-        return Icons.picture_as_pdf_outlined;
+        // No PDF icon in the Phosphor set; generic file is the closest fit.
+        return PhosphorIcons.fileCode;
       case FileViewKind.binary:
       case FileViewKind.text:
-        return Icons.insert_drive_file_outlined;
+        return PhosphorIcons.fileCode;
     }
   }
 

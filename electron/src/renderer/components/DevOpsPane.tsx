@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Icon } from './Icon';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -275,12 +276,12 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
   }, [services]);
 
   // Get status indicator
-  const getStatusIndicator = (status: ServiceState['status']) => {
+  const getStatusDotClass = (status: ServiceState['status']) => {
     switch (status) {
-      case 'running': return '🟢';
-      case 'starting': return '🟡';
-      case 'error': return '🔴';
-      default: return '⚪';
+      case 'running': return 'status-dot-running';
+      case 'starting': return 'status-dot-starting';
+      case 'error': return 'status-dot-error';
+      default: return 'status-dot-idle';
     }
   };
 
@@ -334,7 +335,7 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
                   onClick={() => setSelectedService(key)}
                 >
                   <span className="devops-service-status">
-                    {getStatusIndicator(state?.status || 'stopped')}
+                    <span className={`status-dot ${getStatusDotClass(state?.status || 'stopped')}`} />
                   </span>
                   <span className="devops-service-name">{service.name}</span>
                   {service.port && (
@@ -350,7 +351,7 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
                         }}
                         title="Stop"
                       >
-                        ⏹
+                        <Icon name="stop" size={12} />
                       </button>
                     ) : (
                       <button
@@ -362,7 +363,7 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
                         title="Start"
                         disabled={state?.status === 'starting'}
                       >
-                        ▶
+                        <Icon name="play" size={12} />
                       </button>
                     )}
                   </div>
@@ -385,7 +386,7 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
                     title="Hot Reload"
                     style={{ marginLeft: '8px', width: 'auto', padding: '0 8px' }}
                   >
-                    🔄 Hot Reload
+                    <Icon name="refresh" size={12} className="icon-inline" /> Hot Reload
                   </button>
                 )}
               </>
@@ -398,7 +399,7 @@ export const DevOpsPane: React.FC<DevOpsPaneProps> = ({ workspace, active }) => 
               <div key={i} className="devops-log-line">{log}</div>
             ))}
             {selectedState && selectedState.logs.length === 0 && (
-              <div className="devops-log-empty">No logs yet. Click ▶ to start the service.</div>
+              <div className="devops-log-empty">No logs yet. Click <Icon name="play" size={11} className="icon-inline" /> to start the service.</div>
             )}
             {!selectedService && (
               <div className="devops-log-empty">Select a service from the list to view its logs.</div>

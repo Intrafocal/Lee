@@ -14,6 +14,7 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { Icon } from './Icon';
 import { ExplorationTree } from './library/ExplorationTree';
 import { NodeChat } from './library/NodeChat';
 import { InputBar } from './library/InputBar';
@@ -193,7 +194,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       const node = session.nodes[id];
       if (!node) continue;
       const modeConfig = AGENT_MODE_CONFIG[node.agent_mode as AgentMode];
-      parts.push(`## ${modeConfig?.icon || ''} ${node.label}\n`);
+      parts.push(`## ${node.label}\n`);
       parts.push(`**Mode:** ${modeConfig?.label || node.agent_mode} | **Messages:** ${node.conversation_history.length}\n`);
       for (const msg of node.conversation_history) {
         if (msg.role === 'user') {
@@ -959,7 +960,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     <div className={`library-pane ${active ? 'active' : ''}`}>
       {error && (
         <div className="library-error-banner" onClick={() => setError(null)} title="Dismiss">
-          ⚠️ {error}
+          <Icon name="warning" size={14} className="icon-inline" /> {error}
         </div>
       )}
       {/* Top: Tree + Chat side by side */}

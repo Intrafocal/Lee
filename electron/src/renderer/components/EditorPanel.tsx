@@ -11,6 +11,7 @@
  */
 
 import React, { useEffect, useCallback, useRef, useMemo } from 'react';
+import { Icon, HesterGlyph } from './Icon';
 import { EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine, Decoration, DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -586,7 +587,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       <div className={`editor-panel ${active ? 'active' : ''}`}>
         <div className="editor-content">
           <div className="editor-empty">
-            <div className="editor-empty-icon">📝</div>
+            <div className="editor-empty-icon"><Icon name="editor" size={28} /></div>
             <div className="editor-empty-text">No file open</div>
             <div className="editor-empty-hint">
               Open a file from the file tree or use Cmd+O
@@ -607,7 +608,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             onClick={() => setPreviewMode(!previewMode)}
             title={previewMode ? 'Edit (Cmd+E)' : 'Preview (Cmd+E)'}
           >
-            {previewMode ? '✏️ Edit' : '👁️ Preview'}
+            {previewMode
+              ? <><Icon name="edit" size={14} className="icon-inline" /> Edit</>
+              : <><Icon name="eye" size={14} className="icon-inline" /> Preview</>}
           </button>
         </div>
       )}
@@ -639,7 +642,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             </>
           ) : (
             <button onClick={handleSendToHester}>
-              <span className="context-menu-icon">🐇</span>
+              <span className="context-menu-icon"><HesterGlyph size={14} /></span>
               <span className="context-menu-label">
                 {contextMenu.selectedText
                   ? `Send to Hester`
@@ -649,7 +652,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           )}
           {contextMenu.selectedText && (
             <button onClick={handleSearchDocs}>
-              <span className="context-menu-icon">📚</span>
+              <span className="context-menu-icon"><Icon name="book" size={14} /></span>
               <span className="context-menu-label">
                 Search docs for "{contextMenu.selectedText.slice(0, 20)}{contextMenu.selectedText.length > 20 ? '...' : ''}"
               </span>
@@ -659,7 +662,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
             <>
               <hr />
               <button onClick={handleOpenAsFile}>
-                <span className="context-menu-icon">📄</span>
+                <span className="context-menu-icon"><Icon name="file-code" size={14} /></span>
                 <span className="context-menu-label">
                   Open "{contextMenu.selectedText.slice(0, 30)}{contextMenu.selectedText.length > 30 ? '...' : ''}"
                 </span>

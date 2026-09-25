@@ -4,6 +4,7 @@
 
 import React, { useState } from 'react';
 import { WorkstreamPhase, PHASE_CONFIG, ResolvedTask } from './types';
+import { Icon } from '../Icon';
 
 const HESTER_DAEMON = 'http://127.0.0.1:9000';
 
@@ -23,7 +24,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
   onPhaseChanged,
 }) => {
   const [transitioning, setTransitioning] = useState(false);
-  const config = PHASE_CONFIG[phase] || { label: phase, color: '#666', icon: '?' };
+  const config = PHASE_CONFIG[phase] || { label: phase, color: '#666', icon: 'dot' as const };
   const completedCount = tasks.filter(t => t.status === 'completed').length;
 
   const advancePhase = async (target: WorkstreamPhase) => {
@@ -52,7 +53,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
     if (phase === 'execution') {
       buttons.push(
         <button key="pause" className="ws-phase-btn ws-phase-btn-secondary" onClick={() => advancePhase('paused')}>
-          ⏸ Pause
+          <Icon name="stop" size={12} className="icon-inline" /> Pause
         </button>,
       );
     }
@@ -61,7 +62,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
     if (phase === 'paused') {
       buttons.push(
         <button key="resume" className="ws-phase-btn ws-phase-btn-primary" onClick={() => advancePhase('execution')}>
-          ▶ Resume
+          <Icon name="play" size={12} className="icon-inline" /> Resume
         </button>,
       );
     }
@@ -83,7 +84,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
       <div className="ws-phase-left">
         <span className="ws-title">{title}</span>
         <span className="ws-phase-badge" style={{ background: config.color }}>
-          {config.icon} {config.label}
+          <Icon name={config.icon} size={12} className="icon-inline" /> {config.label}
         </span>
         {tasks.length > 0 && (
           <span className="ws-task-progress">

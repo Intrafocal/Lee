@@ -5,6 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../providers/browser_cast_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Remote browser tab that renders Lee's browser via CDP screencast.
 ///
@@ -179,8 +181,10 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.cast_connected,
+                      // No screencast-specific icon in the Phosphor set;
+                      // "browser" is the closest stand-in.
+                      const PhosphorIcon(
+                        PhosphorIcons.browser,
                         size: 14,
                         color: AeronautColors.accent,
                       ),
@@ -191,17 +195,15 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
                           focusNode: _urlFocus,
                           onSubmitted: (_) => _navigate(),
                           style: AeronautTheme.mono.copyWith(
-                            fontSize: 12,
                             color: AeronautColors.textSecondary,
                           ),
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             border: InputBorder.none,
                             contentPadding: EdgeInsets.zero,
                             isDense: true,
                             hintText: 'Enter URL...',
-                            hintStyle: TextStyle(
+                            hintStyle: AeronautTheme.mono.copyWith(
                               color: AeronautColors.textTertiary,
-                              fontSize: 12,
                             ),
                           ),
                           textInputAction: TextInputAction.go,
@@ -212,7 +214,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.open_in_browser, size: 18),
+                icon: const PhosphorIcon(PhosphorIcons.external, size: 18),
                 tooltip: 'Open in Safari',
                 color: AeronautColors.textSecondary,
                 onPressed: _openInSafari,
@@ -235,8 +237,8 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.error_outline,
+            const PhosphorIcon(
+              PhosphorIcons.warning,
               size: 48,
               color: AeronautColors.offline,
             ),
@@ -244,7 +246,7 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
             Text(
               castState.errorMessage ?? 'Connection failed',
               textAlign: TextAlign.center,
-              style: AeronautTheme.body.copyWith(
+              style: AeronautTheme.subheadline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -258,14 +260,13 @@ class _BrowserScreenState extends ConsumerState<BrowserScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(
-              color: AeronautColors.accent,
+            CircularProgressIndicator.adaptive(
               strokeWidth: 2,
             ),
             SizedBox(height: AeronautTheme.spacingMd),
             Text(
               'Connecting to browser...',
-              style: TextStyle(color: AeronautColors.textSecondary),
+              style: AeronautTheme.subheadline,
             ),
           ],
         ),

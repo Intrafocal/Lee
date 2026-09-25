@@ -1,20 +1,23 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/machines_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
 import '../widgets/auth_banner.dart';
 import '../widgets/machine_card.dart';
+import '../widgets/phosphor_icon.dart';
 import '../providers/auth_provider.dart';
 import 'add_machine_screen.dart';
-import 'home_screen.dart';
 import 'machine_detail_screen.dart';
 import 'qr_scanner_screen.dart';
+import 'root_shell.dart';
 
 /// List of saved machines with online/offline status.
 ///
-/// First screen on launch. Tap a machine to connect and enter Home.
+/// First tab on launch. Tap a machine to connect and jump to its Tabs.
 class MachinesScreen extends ConsumerWidget {
   const MachinesScreen({super.key});
 
@@ -24,70 +27,81 @@ class MachinesScreen extends ConsumerWidget {
     // Keep the 401 guard installed from the first screen onwards.
     ref.watch(authGuardProvider);
 
+    final notifier = ref.read(machinesProvider.notifier);
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Machines'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.qr_code_scanner),
-            tooltip: 'Scan QR',
-            onPressed: () => _navigateToScan(context),
+      body: CustomScrollView(
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
+        slivers: [
+          CupertinoSliverNavigationBar(
+            largeTitle: const Text('Machines'),
+            backgroundColor: AeronautColors.chrome,
+            border: const Border(
+              bottom: BorderSide(color: AeronautColors.border, width: 0.5),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _NavButton(
+                  icon: PhosphorIcons.qr,
+                  label: 'Scan QR',
+                  onPressed: () => _navigateToScan(context),
+                ),
+                _NavButton(
+                  icon: PhosphorIcons.plus,
+                  label: 'Add machine',
+                  onPressed: () => _navigateToAdd(context),
+                ),
+              ],
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Ping all',
-            onPressed: () =>
-                ref.read(machinesProvider.notifier).pingAll(),
-          ),
-        ],
-      ),
-      body: Column(children: [
-        const AuthBanner(),
-        Expanded(
-          child: machinesState.machines.isEmpty
-          ? _EmptyState(
-              onAdd: () => _navigateToAdd(context),
-              onScan: () => _navigateToScan(context),
+          CupertinoSliverRefreshControl(onRefresh: notifier.pingAll),
+          const SliverToBoxAdapter(child: AuthBanner()),
+          if (machinesState.machines.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyState(
+                onAdd: () => _navigateToAdd(context),
+                onScan: () => _navigateToScan(context),
+              ),
             )
-          : RefreshIndicator(
-              color: AeronautColors.accent,
-              onRefresh: () =>
-                  ref.read(machinesProvider.notifier).pingAll(),
-              child: ListView.separated(
-                padding: const EdgeInsets.all(AeronautTheme.spacingMd),
+          else ...[
+            const SliverToBoxAdapter(child: _SectionHeader('On this network')),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AeronautTheme.spacingMd,
+              ),
+              sliver: SliverList.separated(
                 itemCount: machinesState.machines.length,
                 separatorBuilder: (_, _) =>
                     const SizedBox(height: AeronautTheme.spacingSm),
                 itemBuilder: (context, index) {
                   final machine = machinesState.machines[index];
-                  final isActive =
-                      machine.id == machinesState.activeMachineId;
                   return MachineCard(
                     machine: machine,
                     health: machinesState.healthOf(machine.id),
-                    isActive: isActive,
+                    isActive: machine.id == machinesState.activeMachineId,
                     onTap: () => _connectToMachine(context, ref, machine.id),
-                    onLongPress: () => _showMachineActions(
-                      context,
-                      ref,
-                      machine.id,
-                    ),
+                    onLongPress: () =>
+                        _showMachineActions(context, ref, machine.id),
                   );
                 },
               ),
             ),
-        ),
-      ]),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _navigateToAdd(context),
-        child: const Icon(Icons.add),
+            const SliverToBoxAdapter(
+              child: SizedBox(height: AeronautTheme.spacingLg),
+            ),
+          ],
+        ],
       ),
     );
   }
 
   void _navigateToAdd(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      CupertinoPageRoute<void>(
         builder: (_) => const AddMachineScreen(),
       ),
     );
@@ -95,7 +109,7 @@ class MachinesScreen extends ConsumerWidget {
 
   void _navigateToScan(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute<bool>(
+      CupertinoPageRoute<bool>(
         builder: (_) => const QrScannerScreen(),
       ),
     );
@@ -103,11 +117,7 @@ class MachinesScreen extends ConsumerWidget {
 
   void _connectToMachine(BuildContext context, WidgetRef ref, String id) {
     ref.read(machinesProvider.notifier).setActiveMachine(id);
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => const HomeScreen(),
-      ),
-    );
+    ref.read(rootTabProvider.notifier).state = RootTab.tabs;
   }
 
   void _showMachineActions(
@@ -120,51 +130,84 @@ class MachinesScreen extends ConsumerWidget {
         .machines
         .where((m) => m.id == machineId)
         .firstOrNull;
-    showModalBottomSheet<void>(
+    showCupertinoModalPopup<void>(
       context: context,
-      backgroundColor: AeronautColors.bgElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (machine != null)
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('Health & workspace', style: AeronautTheme.body),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            MachineDetailScreen(machine: machine),
-                      ),
-                    );
-                  },
-                ),
-              ListTile(
-                leading: const Icon(Icons.delete_outline,
-                    color: AeronautColors.offline),
-                title: Text(
-                  'Remove machine',
-                  style: AeronautTheme.body.copyWith(
-                    color: AeronautColors.offline,
+      builder: (ctx) => CupertinoActionSheet(
+        title: machine != null ? Text(machine.name) : null,
+        actions: [
+          if (machine != null)
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  CupertinoPageRoute<void>(
+                    builder: (_) => MachineDetailScreen(machine: machine),
                   ),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  ref
-                      .read(machinesProvider.notifier)
-                      .removeMachine(machineId);
-                },
-              ),
-            ],
+                );
+              },
+              child: const Text('Health & workspace'),
+            ),
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            onPressed: () {
+              Navigator.pop(ctx);
+              ref.read(machinesProvider.notifier).removeMachine(machineId);
+            },
+            child: const Text('Remove machine'),
           ),
-        );
-      },
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+      ),
+    );
+  }
+}
+
+/// Grouped-list section header, iOS style.
+class _SectionHeader extends StatelessWidget {
+  final String text;
+
+  const _SectionHeader(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 20, 32, 6),
+      child: Text(
+        text.toUpperCase(),
+        style: AeronautTheme.footnote.copyWith(
+          color: AeronautColors.textTertiary,
+        ),
+      ),
+    );
+  }
+}
+
+/// 44pt icon button for the navigation bar.
+class _NavButton extends StatelessWidget {
+  final PhosphorIconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  const _NavButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: CupertinoButton(
+        padding: EdgeInsets.zero,
+        minimumSize: const Size.square(44),
+        onPressed: onPressed,
+        child: PhosphorIcon(icon, size: 22, color: AeronautColors.accent),
+      ),
     );
   }
 }
@@ -183,15 +226,15 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.computer,
+            const PhosphorIcon(
+              PhosphorIcons.machine,
               size: 64,
               color: AeronautColors.textTertiary,
             ),
             const SizedBox(height: AeronautTheme.spacingLg),
             Text(
               'No machines yet',
-              style: AeronautTheme.heading.copyWith(
+              style: AeronautTheme.headline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -199,20 +242,20 @@ class _EmptyState extends StatelessWidget {
             Text(
               'Add a Lee instance to connect to your IDE from your phone.',
               textAlign: TextAlign.center,
-              style: AeronautTheme.body.copyWith(
+              style: AeronautTheme.subheadline.copyWith(
                 color: AeronautColors.textTertiary,
               ),
             ),
             const SizedBox(height: AeronautTheme.spacingLg),
             ElevatedButton.icon(
               onPressed: onScan,
-              icon: const Icon(Icons.qr_code_scanner),
+              icon: const PhosphorIcon(PhosphorIcons.qr, color: AeronautColors.onAccent),
               label: const Text('Scan QR Code'),
             ),
             const SizedBox(height: AeronautTheme.spacingSm),
             OutlinedButton.icon(
               onPressed: onAdd,
-              icon: const Icon(Icons.add),
+              icon: const PhosphorIcon(PhosphorIcons.plus),
               label: const Text('Add Manually'),
             ),
           ],

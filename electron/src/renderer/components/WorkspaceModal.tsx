@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -103,7 +104,7 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip
                       className="workspace-item"
                       onClick={() => handleSelectRecent(workspace)}
                     >
-                      <span className="workspace-icon">📁</span>
+                      <span className="workspace-icon"><Icon name="folder" size={14} /></span>
                       <div className="workspace-info">
                         <span className="workspace-name">{workspace.name}</span>
                         <span className="workspace-path">{workspace.path}</span>
@@ -119,7 +120,7 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip
                         }}
                         title="Open in New Window"
                       >
-                        ⧉
+                        <Icon name="external" size={14} />
                       </button>
                     )}
                   </div>
@@ -130,7 +131,7 @@ export const WorkspaceModal: React.FC<WorkspaceModalProps> = ({ onSelect, onSkip
 
           <div className="workspace-actions">
             <button className="workspace-browse-btn" onClick={handleBrowse}>
-              <span className="btn-icon">📂</span>
+              <span className="btn-icon"><Icon name="folder-open" size={14} /></span>
               Browse for Folder...
             </button>
           </div>

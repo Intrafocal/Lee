@@ -12,9 +12,11 @@ import '../services/api_auth.dart';
 import '../services/lee_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
 import '../widgets/auth_banner.dart';
 import '../widgets/machine_switcher.dart';
 import '../widgets/new_tab_sheet.dart';
+import '../widgets/phosphor_icon.dart';
 import '../widgets/tab_bar.dart';
 import '../widgets/workspace_switcher.dart';
 import '../models/fs_entry.dart';
@@ -24,7 +26,6 @@ import 'editor_screen.dart';
 import 'files_screen.dart';
 import 'hester_screen.dart';
 import 'machine_detail_screen.dart';
-import 'machines_screen.dart';
 import 'terminal_screen.dart';
 
 /// Main screen shown when connected to a machine.
@@ -41,15 +42,9 @@ class HomeScreen extends ConsumerWidget {
     final contextAsync = ref.watch(leeContextProvider);
 
     final activeMachine = machinesState.activeMachine;
-    if (activeMachine == null) {
-      // No machine selected — go back to machines list
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(builder: (_) => const MachinesScreen()),
-        );
-      });
-      return const SizedBox.shrink();
-    }
+    // RootShell wraps this tab in RequireMachine, so this only happens for
+    // the frame in which the active machine is removed.
+    if (activeMachine == null) return const SizedBox.shrink();
 
     final windowsState = ref.watch(windowsProvider);
     ref.watch(authGuardProvider);
@@ -57,7 +52,6 @@ class HomeScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             const MachineSwitcher(),
@@ -65,42 +59,10 @@ class HomeScreen extends ConsumerWidget {
               const WorkspaceSwitcher(),
           ],
         ),
-        leading: IconButton(
-          icon: const Icon(Icons.dns_outlined),
-          tooltip: 'Machines',
-          onPressed: () {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute<void>(
-                builder: (_) => const MachinesScreen(),
-              ),
-            );
-          },
-        ),
         actions: [
-          // Files browser — reachable even when no `files` tab is open.
-          IconButton(
-            icon: const Icon(Icons.folder_outlined, size: 20),
-            tooltip: 'Files',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const FilesScreen()),
-            ),
-          ),
-          // Hester chat
-          IconButton(
-            icon: const Icon(Icons.cruelty_free, size: 20),
-            tooltip: 'Hester',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('Hester')),
-                  body: const HesterScreen(),
-                ),
-              ),
-            ),
-          ),
           // Machine health / details
           IconButton(
-            icon: const Icon(Icons.info_outline, size: 20),
+            icon: const PhosphorIcon(PhosphorIcons.info, size: 20),
             tooltip: 'Machine details',
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
@@ -110,7 +72,7 @@ class HomeScreen extends ConsumerWidget {
           ),
           // New tab button
           IconButton(
-            icon: const Icon(Icons.add),
+            icon: const PhosphorIcon(PhosphorIcons.plus),
             tooltip: 'New tab',
             onPressed: () => _showNewTabSheet(context, ref, activeMachine),
           ),
@@ -121,7 +83,7 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: RefreshIndicator(
+      body: RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
         onRefresh: () => _refreshContext(ref, activeMachine),
@@ -224,7 +186,7 @@ class _TabContent extends StatelessWidget {
       return Center(
         child: Text(
           'No active tab',
-          style: AeronautTheme.body.copyWith(
+          style: AeronautTheme.subheadline.copyWith(
             color: AeronautColors.textTertiary,
           ),
         ),
@@ -292,8 +254,8 @@ class _GenericTabView extends ConsumerWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              iconForTabType(tab.type),
+            tabTypeIcon(
+              tab.type,
               size: 48,
               color: AeronautColors.textTertiary,
             ),
@@ -301,7 +263,7 @@ class _GenericTabView extends ConsumerWidget {
             Text(
               tab.label,
               textAlign: TextAlign.center,
-              style: AeronautTheme.heading.copyWith(
+              style: AeronautTheme.headline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -319,8 +281,7 @@ class _GenericTabView extends ConsumerWidget {
               ),
               child: Text(
                 tab.typeLabel.toUpperCase(),
-                style: AeronautTheme.caption.copyWith(
-                  fontSize: 10,
+                style: AeronautTheme.caption2.copyWith(
                   letterSpacing: 0.5,
                   fontWeight: FontWeight.w600,
                 ),
@@ -334,7 +295,7 @@ class _GenericTabView extends ConsumerWidget {
                 'This tab has no remote view. Focus it to bring it forward '
                 'on the desktop.',
                 textAlign: TextAlign.center,
-                style: AeronautTheme.caption,
+                style: AeronautTheme.caption1,
               ),
             const SizedBox(height: AeronautTheme.spacingLg),
             Wrap(
@@ -356,7 +317,7 @@ class _GenericTabView extends ConsumerWidget {
                               )
                               .whenComplete(api.dispose);
                         },
-                  icon: const Icon(Icons.open_in_new, size: 16),
+                  icon: const PhosphorIcon(PhosphorIcons.external, size: 16),
                   label: const Text('Focus'),
                 ),
                 if (isFileBacked)
@@ -366,7 +327,7 @@ class _GenericTabView extends ConsumerWidget {
                         builder: (_) => const FilesScreen(),
                       ),
                     ),
-                    icon: const Icon(Icons.folder_outlined, size: 16),
+                    icon: const PhosphorIcon(PhosphorIcons.folder, size: 16),
                     label: const Text('Browse Files'),
                   ),
               ],
@@ -439,15 +400,14 @@ class _FileBackedMetaState extends State<_FileBackedMeta> {
         'yet, so there\'s nothing to fetch here. Browse to the file below, '
         'or Focus this tab on the desktop.',
         textAlign: TextAlign.center,
-        style: AeronautTheme.caption,
+        style: AeronautTheme.caption1,
       );
     }
     if (_loading) {
       return const SizedBox(
         height: 20,
         width: 20,
-        child: CircularProgressIndicator(
-          color: AeronautColors.accent,
+        child: CircularProgressIndicator.adaptive(
           strokeWidth: 2,
         ),
       );
@@ -456,7 +416,7 @@ class _FileBackedMetaState extends State<_FileBackedMeta> {
       return Text(
         _error!,
         textAlign: TextAlign.center,
-        style: AeronautTheme.caption,
+        style: AeronautTheme.caption1,
       );
     }
     final stat = _stat;
@@ -466,12 +426,12 @@ class _FileBackedMetaState extends State<_FileBackedMeta> {
         Text(
           stat.path,
           textAlign: TextAlign.center,
-          style: AeronautTheme.mono.copyWith(fontSize: 11),
+          style: AeronautTheme.mono,
         ),
         const SizedBox(height: 4),
         Text(
           '${_formatBytes(stat.size)} · ${stat.mime}',
-          style: AeronautTheme.caption.copyWith(fontSize: 11),
+          style: AeronautTheme.caption2,
         ),
       ],
     );
@@ -495,14 +455,13 @@ class _ConnectingView extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const CircularProgressIndicator(
-            color: AeronautColors.accent,
+          const CircularProgressIndicator.adaptive(
             strokeWidth: 2,
           ),
           const SizedBox(height: AeronautTheme.spacingLg),
           Text(
             'Connecting to $machineName...',
-            style: AeronautTheme.body.copyWith(
+            style: AeronautTheme.subheadline.copyWith(
               color: AeronautColors.textSecondary,
             ),
           ),
@@ -526,15 +485,15 @@ class _ErrorView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.error_outline,
+            const PhosphorIcon(
+              PhosphorIcons.warning,
               size: 48,
               color: AeronautColors.offline,
             ),
             const SizedBox(height: AeronautTheme.spacingMd),
             Text(
               'Connection failed',
-              style: AeronautTheme.heading.copyWith(
+              style: AeronautTheme.headline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -542,7 +501,7 @@ class _ErrorView extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: AeronautTheme.caption,
+              style: AeronautTheme.caption1,
             ),
             const SizedBox(height: AeronautTheme.spacingLg),
             ElevatedButton(

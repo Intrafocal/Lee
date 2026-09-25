@@ -15,6 +15,7 @@ import {
   AgentMode,
   SynthesisAction,
 } from './types';
+import { Icon } from '../Icon';
 
 interface ExplorationTreeProps {
   session: ExplorationSession | null;
@@ -160,14 +161,14 @@ export const ExplorationTree: React.FC<ExplorationTreeProps> = ({
             onClick={() => setShowSessionList(!showSessionList)}
             title="Switch session"
           >
-            ☰
+            <Icon name="list" size={14} />
           </button>
           <button
             className="library-tree-btn"
             onClick={() => setShowNewSession(!showNewSession)}
             title="New exploration"
           >
-            +
+            <Icon name="plus" size={14} />
           </button>
         </div>
       </div>
@@ -503,11 +504,11 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               onToggle(node.id);
             }}
           >
-            {isCollapsed ? '\u25B6' : '\u25BC'}
+            <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={12} />
           </span>
         )}
         {!hasChildren && <span className="library-tree-expand-spacer" />}
-        <span className="library-tree-icon">{modeConfig?.icon || '\uD83D\uDCA1'}</span>
+        <span className="library-tree-icon"><Icon name={modeConfig?.icon || 'edit'} size={13} /></span>
         {isRenaming ? (
           <RenameInput
             initialValue={node.label}

@@ -13,6 +13,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import type { ConsoleLogEntry, AgentGraphEvent, FrameSession } from '../../shared/context';
+import { Icon, HesterGlyph } from './Icon';
 
 const lee = window.lee;
 const isElectron = typeof lee !== 'undefined';
@@ -719,7 +720,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
             disabled={!canGoBack}
             title="Go Back (Cmd+[)"
           >
-            ◀
+            <Icon name="arrow-left" size={14} />
           </button>
           <button
             className="nav-btn"
@@ -727,14 +728,14 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
             disabled={!canGoForward}
             title="Go Forward (Cmd+])"
           >
-            ▶
+            <Icon name="arrow-right" size={14} />
           </button>
           <button
             className="nav-btn"
             onClick={isLoading ? stop : refresh}
             title={isLoading ? 'Stop' : 'Refresh (Cmd+R)'}
           >
-            {isLoading ? '✕' : '↻'}
+            <Icon name={isLoading ? 'close' : 'refresh'} size={14} />
           </button>
         </div>
 
@@ -784,7 +785,9 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
           onClick={() => setShowConsolePanel(!showConsolePanel)}
           title={`Console Logs (${consoleLogsRef.current.length})`}
         >
-          {errorCount > 0 ? `⚠️${errorCount}` : '📋'}
+          {errorCount > 0
+            ? <><Icon name="warning" size={14} className="icon-inline" />{errorCount}</>
+            : <Icon name="list" size={14} />}
         </button>
 
         {onAskHester && (
@@ -794,7 +797,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
             disabled={isCapturing}
             title="Capture Snapshot"
           >
-            {isCapturing ? '...' : '🐇'}
+            {isCapturing ? '...' : <HesterGlyph size={14} />}
           </button>
         )}
         {onSendToAgent && agentTabs && agentTabs.length > 0 && (
@@ -805,7 +808,7 @@ export const BrowserPane: React.FC<BrowserPaneProps> = ({
               disabled={isCapturing}
               title="Send to Agent"
             >
-              {isCapturing ? '...' : '📤'}
+              {isCapturing ? '...' : <Icon name="send" size={14} />}
             </button>
             {showSendToAgentMenu && (
               <div className="send-to-agent-menu" onMouseLeave={() => setShowSendToAgentMenu(false)}>

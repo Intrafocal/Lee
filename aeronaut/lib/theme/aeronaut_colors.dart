@@ -1,40 +1,54 @@
-import 'package:flutter/material.dart';
+import 'phosphor_tokens.dart';
 
-/// Aeronaut's color palette - terminal-inspired dark theme
+/// Aeronaut's color palette — re-pointed at the Phosphor design tokens
+/// (`theme/phosphor_tokens.dart`, generated from `design/tokens.json`).
 ///
-/// GitHub dark style backgrounds with terminal green accents.
-/// Terminal-inspired dark theme for the IDE companion.
+/// This keeps the original `AeronautColors` API (so every call site across
+/// the app keeps compiling unchanged) while the actual values now come from
+/// Phosphor. Mapping notes, since several old names had no 1:1 Phosphor
+/// token:
+/// - [chrome] (new) is `ground1` — title/tab/status/nav bar backgrounds.
+/// - [bgPrimary] is `ground2` — the main content/scaffold background, one
+///   step lighter than chrome so screens read as "inside" the chrome frame.
+/// - [bgSurface] / [bgInput] are both `ground3` — cards, sheets, list rows,
+///   and input fills all sit on the same "raised" plane.
+/// - [bgElevated] is `ground5` — popups, active/selected chips, badges: the
+///   most raised, highest-contrast surface short of a border.
+/// - [onAccent] (new) is `onPhosphor` — text/icons drawn on a phosphor fill
+///   (primary buttons, active badges).
 class AeronautColors {
   AeronautColors._();
 
-  // Backgrounds - Near-black grays (GitHub dark)
-  static const bgPrimary = Color(0xFF0D1117);
-  static const bgSurface = Color(0xFF161B22);
-  static const bgElevated = Color(0xFF21262D);
-  static const bgInput = Color(0xFF0D1117);
+  // Backgrounds
+  static const chrome = Phosphor.ground1;
+  static const bgPrimary = Phosphor.ground2;
+  static const bgSurface = Phosphor.ground3;
+  static const bgElevated = Phosphor.ground5;
+  static const bgInput = Phosphor.ground3;
 
   // Text
-  static const textPrimary = Color(0xFFE6EDF3);
-  static const textSecondary = Color(0xFF8B949E);
-  static const textTertiary = Color(0xFF484F58);
+  static const textPrimary = Phosphor.text1;
+  static const textSecondary = Phosphor.text2;
+  static const textTertiary = Phosphor.text3;
 
   // Status
-  static const online = Color(0xFF3FB950); // Terminal green
-  static const offline = Color(0xFFDA3633); // Red
-  static const warning = Color(0xFFD29922); // Amber
-  static const info = Color(0xFF58A6FF); // Blue
+  static const online = Phosphor.phosphor;
+  static const offline = Phosphor.error;
+  static const warning = Phosphor.ember;
+  static const info = Phosphor.info;
 
-  // Accent - terminal green
-  static const accent = Color(0xFF3FB950);
-  static const accentMuted = Color(0xFF238636);
+  // Accent — phosphor brand green
+  static const accent = Phosphor.phosphor;
+  static const accentMuted = Phosphor.phosphorDeep;
+  static const onAccent = Phosphor.onPhosphor;
 
   // Borders
-  static const border = Color(0xFF30363D);
-  static const borderFocused = Color(0xFF58A6FF);
+  static const border = Phosphor.ground4;
+  static const borderFocused = Phosphor.lit;
 
   // Divider
-  static Color get divider => Colors.white.withValues(alpha: 0.08);
+  static const divider = Phosphor.ground4;
 
   // Overlays
-  static Color get overlay => Colors.black.withValues(alpha: 0.5);
+  static const overlay = Phosphor.overlay;
 }

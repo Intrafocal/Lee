@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { Icon, HesterGlyph, type IconName } from './Icon';
 
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
 
@@ -30,7 +31,9 @@ export interface Tab {
 export interface NewTabOption {
   type: Tab['type'];
   label: string;
-  icon: string;
+  /** Our fixed options pass an <Icon>/<HesterGlyph> element; TUI options
+   *  fetched from the user's config pass their own emoji string as-is. */
+  icon: React.ReactNode;
   shortcut?: string;
   defaultDock?: DockPosition;
   provider?: string; // For agent tabs — which provider to spawn
@@ -38,20 +41,20 @@ export interface NewTabOption {
 
 /** Core tabs — always shown, fundamental IDE features */
 export const CORE_TAB_OPTIONS: NewTabOption[] = [
-  { type: 'files', label: 'Files', icon: '📂', shortcut: '⇧⌘E' },
-  { type: 'terminal', label: 'Terminal', icon: '💻', shortcut: '⇧⌘T' },
-  { type: 'browser', label: 'Browser', icon: '🌐', shortcut: '⇧⌘B' },
-  { type: 'agent', label: 'Hester', icon: '🐇', shortcut: '⇧⌘H', provider: 'hester' },
-  { type: 'agent', label: 'Claude', icon: '🤖', shortcut: '⇧⌘C', provider: 'claude' },
-  { type: 'agent', label: 'Pi', icon: '🥧', shortcut: '⇧⌘I', provider: 'pi' },
-  { type: 'bridge', label: 'Bridge', icon: '🌉' },
+  { type: 'files', label: 'Files', icon: <Icon name="folder" size={16} />, shortcut: '⇧⌘E' },
+  { type: 'terminal', label: 'Terminal', icon: <Icon name="terminal" size={16} />, shortcut: '⇧⌘T' },
+  { type: 'browser', label: 'Browser', icon: <Icon name="browser" size={16} />, shortcut: '⇧⌘B' },
+  { type: 'agent', label: 'Hester', icon: <HesterGlyph size={16} />, shortcut: '⇧⌘H', provider: 'hester' },
+  { type: 'agent', label: 'Claude', icon: <Icon name="agent" size={16} />, shortcut: '⇧⌘C', provider: 'claude' },
+  { type: 'agent', label: 'Pi', icon: <Icon name="circle" size={16} />, shortcut: '⇧⌘I', provider: 'pi' },
+  { type: 'bridge', label: 'Bridge', icon: <Icon name="link" size={16} /> },
 ];
 
 /** Feature tabs — React components, always shown */
 export const FEATURE_TAB_OPTIONS: NewTabOption[] = [
-  { type: 'devops', label: 'DevOps', icon: '🚀', shortcut: '⇧⌘O' },
-  { type: 'library', label: 'Library', icon: '📚', shortcut: '⇧⌘Y' },
-  { type: 'workstream', label: 'Workstream', icon: '📋', shortcut: '⇧⌘W' },
+  { type: 'devops', label: 'DevOps', icon: <Icon name="devops" size={16} />, shortcut: '⇧⌘O' },
+  { type: 'library', label: 'Library', icon: <Icon name="book" size={16} />, shortcut: '⇧⌘Y' },
+  { type: 'workstream', label: 'Workstream', icon: <Icon name="list" size={16} />, shortcut: '⇧⌘W' },
 ];
 
 interface TabBarProps {
@@ -70,115 +73,121 @@ interface TabBarProps {
   agentProviders?: Record<string, { name: string; icon?: string }>; // Available providers for switcher
 }
 
-export const TAB_ICONS: Record<Tab['type'], string> = {
-  terminal: '💻',
-  editor: '📝',
-  'editor-panel': '📝',
-  file: '📄', // Default file icon, actual icon determined by getFileTabIcon
-  files: '📂',
-  browser: '🌐',
-  hester: '🐇',
-  claude: '🤖',
-  git: '🌿',
-  docker: '🐳',
-  flutter: '📱',
-  k8s: '☸️',
-  sql: '🗄️',
-  devops: '🚀',
-  system: '📊',
-  'hester-qa': '🧪',
-  library: '📚',
-  workstream: '📋',
-  spyglass: '🔭',
-  bridge: '🌉',
-  custom: '🔧',
-  agent: '🤖',
-  kicad: '🔌',
-  model: '🧊',
-  pdf: '📄',
-  binary: '📦',
+export const TAB_ICONS: Record<Tab['type'], IconName> = {
+  terminal: 'terminal',
+  editor: 'editor',
+  'editor-panel': 'editor',
+  file: 'file-code', // Default file icon, actual icon determined by getFileTabIcon
+  files: 'folder',
+  hester: 'agent', // rendered as HesterGlyph, see TabDisplayIcon
+  browser: 'browser',
+  claude: 'agent',
+  git: 'git',
+  docker: 'docker',
+  flutter: 'mobile',
+  k8s: 'kubernetes',
+  sql: 'sql',
+  devops: 'devops',
+  system: 'system',
+  'hester-qa': 'check',
+  library: 'book',
+  workstream: 'list',
+  spyglass: 'search',
+  bridge: 'link',
+  custom: 'settings',
+  agent: 'agent',
+  kicad: 'machine',
+  model: 'system',
+  pdf: 'file-code',
+  binary: 'download',
 };
 
-// Default icons per known agent provider key
-const AGENT_PROVIDER_ICONS: Record<string, string> = {
-  hester: '🐇',
-  claude: '🤖',
-  pi: '🥧',
-  devops: '🚀',
-  codex: '🧠',
-  gemini: '♊',
+// Default icons per known agent provider key ('hester' is rendered as HesterGlyph)
+const AGENT_PROVIDER_ICONS: Record<string, IconName> = {
+  claude: 'agent',
+  pi: 'circle',
+  devops: 'devops',
+  codex: 'agent',
+  gemini: 'circle',
 };
 
 // File icon mapper based on extension (for file tabs)
-export function getFileTabIcon(filename: string): string {
+export function getFileTabIcon(filename: string): IconName {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
-  const iconMap: Record<string, string> = {
+  const iconMap: Record<string, IconName> = {
     // Code files
-    ts: '📘',
-    tsx: '📘',
-    js: '📒',
-    jsx: '📒',
-    py: '🐍',
-    dart: '🎯',
-    rs: '🦀',
-    go: '🐹',
-    java: '☕',
-    c: '©️',
-    cpp: '©️',
-    h: '©️',
-    hpp: '©️',
+    ts: 'file-code',
+    tsx: 'file-code',
+    js: 'file-code',
+    jsx: 'file-code',
+    py: 'file-code',
+    dart: 'file-code',
+    rs: 'file-code',
+    go: 'file-code',
+    java: 'file-code',
+    c: 'file-code',
+    cpp: 'file-code',
+    h: 'file-code',
+    hpp: 'file-code',
     // Config/data
-    json: '📋',
-    yaml: '📋',
-    yml: '📋',
-    toml: '📋',
-    xml: '📋',
-    sql: '🗄️',
+    json: 'file-code',
+    yaml: 'file-code',
+    yml: 'file-code',
+    toml: 'file-code',
+    xml: 'file-code',
+    sql: 'sql',
     // Markdown/docs
-    md: '📝',
-    txt: '📄',
+    md: 'book',
+    txt: 'file-code',
     // Styles
-    css: '🎨',
-    scss: '🎨',
-    less: '🎨',
-    html: '🌐',
+    css: 'file-code',
+    scss: 'file-code',
+    less: 'file-code',
+    html: 'file-code',
     // Shell
-    sh: '💻',
-    bash: '💻',
-    zsh: '💻',
+    sh: 'terminal',
+    bash: 'terminal',
+    zsh: 'terminal',
   };
-  return iconMap[ext] || '📄';
+  return iconMap[ext] || 'file-code';
 }
 
-// Get the display icon for a tab (handles cast state, idle state, watched state, checkpoint state, and file types)
-function getTabDisplayIcon(tab: Tab): string {
+// Render the display icon for a tab (handles cast state, idle state, watched
+// state, checkpoint state, file types, and Hester's glyph)
+const TabDisplayIcon: React.FC<{ tab: Tab; size?: number }> = ({ tab, size = 16 }) => {
   // If being cast to a remote client (Aeronaut), show mobile phone
   if (tab.remoteCast) {
-    return '📲';
+    return <Icon name="mobile" size={size} />;
   }
-  // If watched and idle, show moon emoji
+  // If watched and idle, show a clock
   if (tab.watched && tab.isIdle) {
-    return '🌙';
+    return <Icon name="clock" size={size} />;
   }
-  // Browser tab states: checkpoint ready (📸) > watched (👁) > default (🌐)
+  // Browser tab states: checkpoint ready > watched (eye) > default
   if (tab.type === 'browser') {
     if (tab.browserCheckpointReady) {
-      return '📸'; // Session+email captured, ready for checkpoint
+      return <Icon name="download" size={size} />; // Session+email captured, ready for checkpoint
     }
     if (tab.watched) {
-      return '👁'; // Watching but not yet ready for checkpoint
+      return <Icon name="eye" size={size} />; // Watching but not yet ready for checkpoint
     }
   }
   // For file tabs, use file-specific icon based on extension
   if (tab.type === 'file' && tab.label) {
-    return getFileTabIcon(tab.label);
+    return <Icon name={getFileTabIcon(tab.label)} size={size} />;
   }
-  // For agent tabs, use provider-specific icon
-  if (tab.type === 'agent' && tab.provider) {
-    return AGENT_PROVIDER_ICONS[tab.provider] ?? TAB_ICONS.agent;
+  // For agent tabs, use provider-specific icon (Hester gets its own glyph)
+  if (tab.type === 'agent') {
+    if (tab.provider === 'hester' || !tab.provider) {
+      return <HesterGlyph size={size} />;
+    }
+    return <Icon name={AGENT_PROVIDER_ICONS[tab.provider] ?? TAB_ICONS.agent} size={size} />;
   }
-  return TAB_ICONS[tab.type];
-}
+  if (tab.type === 'hester') {
+    return <HesterGlyph size={size} />;
+  }
+  return <Icon name={TAB_ICONS[tab.type]} size={size} />;
+};
 
 export const TabBar: React.FC<TabBarProps> = ({
   tabs,
@@ -325,7 +334,7 @@ export const TabBar: React.FC<TabBarProps> = ({
             onContextMenu={(e) => handleContextMenu(e, tab.id)}
             onMouseDown={(e) => e.preventDefault()} // Prevent focus stealing from terminal
           >
-            <span className="tab-icon">{getTabDisplayIcon(tab)}</span>
+            <span className="tab-icon"><TabDisplayIcon tab={tab} /></span>
             {editingTabId === tab.id ? (
               <input
                 ref={editInputRef}
@@ -347,7 +356,7 @@ export const TabBar: React.FC<TabBarProps> = ({
             ) : (
               <span className="tab-label" onDoubleClick={() => handleStartRename(tab.id)}>{tab.label}</span>
             )}
-            {tab.type === 'file' && tab.fileModified && <span className="tab-modified">●</span>}
+            {tab.type === 'file' && tab.fileModified && <span className="tab-modified status-dot status-dot-warning" />}
             {index < 9 && editingTabId !== tab.id && <span className="tab-shortcut">⌘{index + 1}</span>}
             {tab.closable && (
               <button
@@ -357,7 +366,7 @@ export const TabBar: React.FC<TabBarProps> = ({
                   onCloseTab(tab.id);
                 }}
               >
-                ×
+                <Icon name="close" size={12} />
               </button>
             )}
           </div>
@@ -369,7 +378,7 @@ export const TabBar: React.FC<TabBarProps> = ({
           onClick={() => setShowDropdown(!showDropdown)}
           title="New Tab"
         >
-          +
+          <Icon name="plus" size={14} />
         </button>
         {showDropdown && (
           <div className="new-tab-dropdown">
@@ -428,7 +437,7 @@ export const TabBar: React.FC<TabBarProps> = ({
                     setShowDropdown(false);
                   }}
                 >
-                  <span className="dropdown-icon">⚙️</span>
+                  <span className="dropdown-icon"><Icon name="settings" size={16} /></span>
                   <span className="dropdown-label">Configure TUIs...</span>
                 </button>
               </>
@@ -470,7 +479,7 @@ export const TabBar: React.FC<TabBarProps> = ({
                       onToggleWatch(contextMenu.tabId);
                       setContextMenu(null);
                     }}>
-                      {tab.watched ? '✓ Watching' : 'Watch'}
+                      {tab.watched ? <><Icon name="check" size={12} className="icon-inline" /> Watching</> : 'Watch'}
                     </button>
                     <hr />
                   </>
@@ -489,8 +498,12 @@ export const TabBar: React.FC<TabBarProps> = ({
                           setContextMenu(null);
                         }}
                       >
-                        {AGENT_PROVIDER_ICONS[key] ?? def.icon ?? '🤖'} {def.name}
-                        {tab.provider === key && ' ✓'}
+                        {key === 'hester'
+                          ? <HesterGlyph size={14} className="icon-inline" />
+                          : AGENT_PROVIDER_ICONS[key]
+                            ? <Icon name={AGENT_PROVIDER_ICONS[key]} size={14} className="icon-inline" />
+                            : (def.icon || <Icon name="agent" size={14} className="icon-inline" />)} {def.name}
+                        {tab.provider === key && <Icon name="check" size={12} className="icon-inline" />}
                       </button>
                     ))}
                     <hr />

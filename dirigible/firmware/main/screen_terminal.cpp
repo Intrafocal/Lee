@@ -31,6 +31,7 @@
 #include "app.hpp"
 #include "esp_log.h"
 #include "tdeck_bsp.h"
+#include "theme.hpp"
 
 static const char* TAG = "dirigible.term";
 
@@ -59,7 +60,7 @@ void terminal_build(lv_obj_t* parent)
     lv_obj_remove_style_all(a.view_terminal);
     lv_obj_set_pos(a.view_terminal, 0, 0);
     lv_obj_set_size(a.view_terminal, SCREEN_W, CONTENT_H);
-    lv_obj_set_style_bg_color(a.view_terminal, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(a.view_terminal, dg::ground0(), 0);
     lv_obj_set_style_bg_opa(a.view_terminal, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -82,7 +83,7 @@ void terminal_build(lv_obj_t* parent)
         lv_obj_set_pos(l, 0, r * a.term_line_h);
         lv_obj_set_size(l, SCREEN_W, a.term_line_h);
         lv_obj_set_style_text_font(l, f, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(0xC8C8C8), 0);
+        lv_obj_set_style_text_color(l, dg::text1(), 0);
         // Colour arrives per span in the text itself; the style colour above
         // is only the fallback for a row that carries no markup.
         lv_label_set_recolor(l, true);
@@ -95,7 +96,7 @@ void terminal_build(lv_obj_t* parent)
     a.term_cursor = lv_obj_create(a.view_terminal);
     lv_obj_remove_style_all(a.term_cursor);
     lv_obj_set_size(a.term_cursor, a.term_char_w, a.term_line_h);
-    lv_obj_set_style_bg_color(a.term_cursor, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(a.term_cursor, dg::lit(), 0);
     lv_obj_set_style_bg_opa(a.term_cursor, LV_OPA_40, 0);
     lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_CLICKABLE);

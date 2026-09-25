@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Hester daemon badge">
+<defs>
+<linearGradient id="hesA-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b3429"></stop><stop offset="1" stop-color="#07110d"></stop></linearGradient>
+<filter id="hesA-shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"></feDropShadow></filter>
+<filter id="hesA-glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="22"></feGaussianBlur></filter>
+</defs>
+<circle cx="512" cy="512" r="420" fill="url(#hesA-bg)" filter="url(#hesA-shadow)"></circle>
+<circle cx="512" cy="512" r="416" fill="none" stroke="#3a6b58" stroke-width="3" opacity="0.7"></circle>
+<circle cx="512" cy="512" r="382" fill="none" stroke="#44aa99" stroke-width="4" stroke-dasharray="2 22" stroke-linecap="round" opacity="0.35"></circle>
+<g transform="translate(512 520) scale(0.9) translate(-520 -444)">
+<g stroke="#44aa99" stroke-width="5" stroke-linecap="round">
+<line x1="150" y1="812" x2="810" y2="812" opacity="0.35"></line>
+<line x1="220" y1="838" x2="740" y2="838" opacity="0.2"></line>
+</g>
+<g fill="#44aa99" opacity="0.4" filter="url(#hesA-glow)">
+<path d="M620 330C600 240 580 160 540 96C610 140 660 230 672 330Z"></path>
+<path d="M592 345C540 260 490 170 440 112C520 150 590 240 646 330Z"></path>
+<path d="M770 412C766 434 744 450 708 452L670 470L662 530L666 560L678 756C682 772 702 776 706 786C706 792 694 794 682 794L664 794C654 794 650 786 650 776L644 604L600 626L566 624L550 684L598 770C612 780 614 790 604 794L340 794L318 780L290 660L270 634L280 604L300 606L336 536L560 382C580 368 592 350 604 340C640 322 690 330 718 352C744 370 766 392 770 412Z"></path>
+</g>
+<path d="M620 330C600 240 580 160 540 96C610 140 660 230 672 330Z" fill="#2f8577"></path>
+<g fill="#44aa99">
+<path d="M592 345C540 260 490 170 440 112C520 150 590 240 646 330Z"></path>
+<path d="M770 412C766 434 744 450 708 452L670 470L662 530L666 560L678 756C682 772 702 776 706 786C706 792 694 794 682 794L664 794C654 794 650 786 650 776L644 604L600 626L566 624L550 684L598 770C612 780 614 790 604 794L340 794L318 780L290 660L270 634L280 604L300 606L336 536L560 382C580 368 592 350 604 340C640 322 690 330 718 352C744 370 766 392 770 412Z"></path>
+</g>
+<path d="M366 516L540 396" fill="none" stroke="#7fe0c0" stroke-width="10" stroke-linecap="round" opacity="0.45"></path>
+<g fill="none" stroke="#0d1a14" stroke-linecap="round">
+<path d="M468 148C520 205 562 265 604 326" stroke-width="10"></path>
+<path d="M340 770L320 694L394 624L500 612" stroke-width="9" opacity="0.7"></path>
+</g>
+<rect x="676" y="366" width="16" height="26" rx="3" fill="#7fe0c0"></rect>
+<circle cx="764" cy="410" r="8" fill="#f0a04b"></circle>
+</g>
+</svg>

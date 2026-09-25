@@ -4,6 +4,7 @@
 
 import React, { useState } from 'react';
 import { WarehouseResponse } from './types';
+import { Icon } from '../Icon';
 
 const HESTER_DAEMON = 'http://127.0.0.1:9000';
 
@@ -47,7 +48,7 @@ export const WarehouseBar: React.FC<WarehouseBarProps> = ({
       <div className="ws-warehouse-bundles">
         {bundles.map(id => (
           <span key={id} className="ws-warehouse-chip" title={id}>
-            📦 {id.length > 20 ? id.slice(0, 20) + '…' : id}
+            <Icon name="folder" size={12} className="icon-inline" /> {id.length > 20 ? id.slice(0, 20) + '…' : id}
           </span>
         ))}
         {adding ? (

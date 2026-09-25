@@ -33,6 +33,10 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=512
 # The ASCII bitmap monospace fonts the terminal grid is measured against.
 CONFIG_LV_FONT_UNSCII_8=y
 CONFIG_LV_FONT_UNSCII_16=y
+# Dark variant of the stock theme (Phosphor design refresh): without this,
+# stock lv_btn/lv_list/lv_textarea/lv_bar draw the light-theme palette
+# (white bg, black text) regardless of the colours screen_*.cpp sets.
+CONFIG_LV_THEME_DEFAULT_DARK=y
 
 # --- OTA ---
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

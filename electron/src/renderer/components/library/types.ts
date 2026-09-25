@@ -64,15 +64,17 @@ export interface ChatResponseEvent {
   tools_used?: string[];
 }
 
+import type { IconName } from '../Icon';
+
 // Agent mode display configuration
-export const AGENT_MODE_CONFIG: Record<AgentMode, { label: string; icon: string; color: string }> = {
-  ideate: { label: 'Ideate', icon: '💡', color: '#e8b04a' },
-  explore: { label: 'Explore', icon: '🔭', color: '#4a9' },
-  learn: { label: 'Learn', icon: '📚', color: '#6a8fd8' },
-  brainstorm: { label: 'Brainstorm', icon: '◎', color: '#e0882a' },
-  docs: { label: 'Docs', icon: '📄', color: '#9a7db8' },
-  web: { label: 'Web', icon: '🌐', color: '#c97db8' },
-  visualize: { label: 'Visualize', icon: '📊', color: '#d4845a' },
+export const AGENT_MODE_CONFIG: Record<AgentMode, { label: string; icon: IconName; color: string }> = {
+  ideate: { label: 'Ideate', icon: 'edit', color: '#e8b04a' },
+  explore: { label: 'Explore', icon: 'search', color: '#4a9' },
+  learn: { label: 'Learn', icon: 'book', color: '#6a8fd8' },
+  brainstorm: { label: 'Brainstorm', icon: 'circle', color: '#e0882a' },
+  docs: { label: 'Docs', icon: 'file-code', color: '#9a7db8' },
+  web: { label: 'Web', icon: 'browser', color: '#c97db8' },
+  visualize: { label: 'Visualize', icon: 'system', color: '#d4845a' },
 };
 
 // Search result types
@@ -103,9 +105,9 @@ export type SendIntent = 'continue' | 'branch' | 'new';
 export type SynthesisAction = 'summarize' | 'compare' | 'combine';
 
 // Node type display configuration
-export const NODE_TYPE_CONFIG: Record<NodeType, { icon: string }> = {
-  thought: { icon: '💡' },
-  source_file: { icon: '📄' },
-  source_web: { icon: '🌐' },
-  source_db: { icon: '🗄️' },
+export const NODE_TYPE_CONFIG: Record<NodeType, { icon: IconName }> = {
+  thought: { icon: 'edit' },
+  source_file: { icon: 'file-code' },
+  source_web: { icon: 'browser' },
+  source_db: { icon: 'sql' },
 };

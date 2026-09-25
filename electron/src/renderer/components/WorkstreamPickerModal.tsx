@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { WorkstreamResponse, WorkstreamPhase, PHASE_CONFIG } from './workstream/types';
+import { Icon } from './Icon';
 
 const HESTER_DAEMON = 'http://127.0.0.1:9000';
 
@@ -118,7 +119,7 @@ export const WorkstreamPickerModal: React.FC<WorkstreamPickerModalProps> = ({
           )}
           {filtered.map(ws => {
             const phase = ws.phase as WorkstreamPhase;
-            const config = PHASE_CONFIG[phase] || { label: phase, color: '#666', icon: '?' };
+            const config = PHASE_CONFIG[phase] || { label: phase, color: '#666', icon: 'dot' as const };
             const completed = ws.completed_task_ids?.length || 0;
             const total = ws.runbook?.tasks?.length || 0;
             return (
@@ -128,7 +129,7 @@ export const WorkstreamPickerModal: React.FC<WorkstreamPickerModalProps> = ({
                 onClick={() => onSelect(ws.id, ws.title)}
               >
                 <span className="ws-picker-phase" style={{ background: config.color }}>
-                  {config.icon}
+                  <Icon name={config.icon} size={14} />
                 </span>
                 <div className="ws-picker-info">
                   <span className="ws-picker-title">{ws.title}</span>

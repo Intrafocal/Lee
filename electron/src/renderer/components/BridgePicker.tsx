@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -119,8 +120,8 @@ export const BridgePicker: React.FC<BridgePickerProps> = ({
     <div className="bridge-picker-overlay" onClick={onCancel}>
       <div className="bridge-picker" onClick={(e) => e.stopPropagation()}>
         <div className="bridge-picker-header">
-          <span className="bridge-picker-title">🌉 Bridge</span>
-          <button className="bridge-picker-close" onClick={onCancel}>×</button>
+          <span className="bridge-picker-title"><Icon name="link" size={16} className="icon-inline" /> Bridge</span>
+          <button className="bridge-picker-close" onClick={onCancel}><Icon name="close" size={14} /></button>
         </div>
 
         {!selectedMachine && (
@@ -139,7 +140,7 @@ export const BridgePicker: React.FC<BridgePickerProps> = ({
                 <span>{m.config.emoji}</span>
                 <span>{m.config.name}</span>
                 <span className={`bridge-status-dot ${m.online ? 'online' : 'offline'}`}>
-                  {m.online ? '●' : '○'}
+                  <span className={`status-dot ${m.online ? 'status-dot-online' : 'status-dot-offline'}`} />
                 </span>
               </button>
             ))}

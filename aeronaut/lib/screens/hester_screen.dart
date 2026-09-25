@@ -8,6 +8,8 @@ import '../models/lee_context.dart';
 import '../providers/hester_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 import '../widgets/react_phase_indicator.dart';
 import 'bundles_screen.dart';
 import 'sessions_screen.dart';
@@ -148,19 +150,22 @@ class _ActionBar extends StatelessWidget {
       child: Row(
         children: [
           _ActionChip(
-            icon: Icons.add,
+            icon: PhosphorIcons.plus,
             label: 'New',
             onTap: onNewChat,
           ),
           const SizedBox(width: AeronautTheme.spacingSm),
           _ActionChip(
-            icon: Icons.history,
+            icon: PhosphorIcons.clock,
             label: 'Sessions',
             onTap: onSessions,
           ),
           const Spacer(),
           _ActionChip(
-            icon: Icons.inventory_2_outlined,
+            // No package/box icon in the Phosphor set; kept as the closest
+            // available role (folder) would be misleading, so this one stays
+            // Material — see the design-pass report.
+            icon: null,
             label: 'Bundles',
             onTap: onBundles,
           ),
@@ -171,7 +176,7 @@ class _ActionBar extends StatelessWidget {
 }
 
 class _ActionChip extends StatelessWidget {
-  final IconData icon;
+  final PhosphorIconData? icon;
   final String label;
   final VoidCallback onTap;
 
@@ -194,9 +199,11 @@ class _ActionChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: AeronautColors.textSecondary),
+            icon != null
+                ? PhosphorIcon(icon!, size: 14, color: AeronautColors.textSecondary)
+                : const PhosphorIcon(PhosphorIcons.package, size: 14, color: AeronautColors.textSecondary),
             const SizedBox(width: 4),
-            Text(label, style: AeronautTheme.caption),
+            Text(label, style: AeronautTheme.caption1),
           ],
         ),
       ),
@@ -221,7 +228,7 @@ class _ErrorBanner extends StatelessWidget {
       color: AeronautColors.offline.withValues(alpha: 0.15),
       child: Text(
         error,
-        style: AeronautTheme.caption.copyWith(color: AeronautColors.offline),
+        style: AeronautTheme.caption1.copyWith(color: AeronautColors.offline),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
@@ -241,17 +248,17 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.cruelty_free,
+          const PhosphorIcon(
+            PhosphorIcons.hester,
             size: 48,
             color: AeronautColors.accent,
           ),
           const SizedBox(height: AeronautTheme.spacingMd),
-          Text(tabLabel, style: AeronautTheme.heading),
+          Text(tabLabel, style: AeronautTheme.headline),
           const SizedBox(height: AeronautTheme.spacingSm),
           const Text(
             'Ask Hester anything about your codebase',
-            style: AeronautTheme.caption,
+            style: AeronautTheme.caption1,
           ),
         ],
       ),
@@ -286,9 +293,10 @@ class _MessageBubble extends StatelessWidget {
                 vertical: AeronautTheme.spacingSm,
               ),
               decoration: BoxDecoration(
-                color: isUser
-                    ? AeronautColors.accentMuted.withValues(alpha: 0.3)
-                    : AeronautColors.bgSurface,
+                // Task spec: user bubbles are a flat ground5 fill, no
+                // border; assistant stays on the surface plane with a
+                // hairline border, as before.
+                color: isUser ? AeronautColors.bgElevated : AeronautColors.bgSurface,
                 borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
                 border: isUser
                     ? null
@@ -297,10 +305,7 @@ class _MessageBubble extends StatelessWidget {
               child: isUser
                   ? SelectableText(
                       message.content,
-                      style: AeronautTheme.body.copyWith(
-                        fontSize: 14,
-                        height: 1.5,
-                      ),
+                      style: AeronautTheme.body,
                     )
                   : MarkdownBody(
                       data: message.content,
@@ -308,7 +313,7 @@ class _MessageBubble extends StatelessWidget {
                       onTapLink: (_, href, _) {
                         if (href != null) launchUrl(Uri.parse(href));
                       },
-                      styleSheet: _markdownStyle,
+                      styleSheet: AeronautTheme.markdown(context),
                     ),
             ),
           ),
@@ -321,48 +326,6 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 }
-
-/// Markdown stylesheet matching Aeronaut's dark theme.
-final _markdownStyle = MarkdownStyleSheet(
-  p: AeronautTheme.body.copyWith(fontSize: 14, height: 1.5),
-  h1: AeronautTheme.heading.copyWith(fontSize: 20),
-  h2: AeronautTheme.heading.copyWith(fontSize: 17),
-  h3: AeronautTheme.heading.copyWith(fontSize: 15),
-  code: AeronautTheme.mono.copyWith(
-    fontSize: 12,
-    color: AeronautColors.accent,
-    backgroundColor: AeronautColors.bgPrimary,
-  ),
-  codeblockDecoration: BoxDecoration(
-    color: AeronautColors.bgPrimary,
-    borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
-    border: Border.all(color: AeronautColors.border),
-  ),
-  codeblockPadding: const EdgeInsets.all(AeronautTheme.spacingSm),
-  blockquoteDecoration: const BoxDecoration(
-    border: Border(
-      left: BorderSide(color: AeronautColors.accent, width: 3),
-    ),
-  ),
-  blockquotePadding: const EdgeInsets.only(left: AeronautTheme.spacingMd),
-  listBullet: AeronautTheme.body.copyWith(fontSize: 14),
-  a: AeronautTheme.body.copyWith(
-    fontSize: 14,
-    color: AeronautColors.info,
-    decoration: TextDecoration.underline,
-  ),
-  tableBorder: TableBorder.all(color: AeronautColors.border),
-  tableHead: AeronautTheme.body.copyWith(
-    fontSize: 13,
-    fontWeight: FontWeight.w600,
-  ),
-  tableBody: AeronautTheme.body.copyWith(fontSize: 13),
-  horizontalRuleDecoration: const BoxDecoration(
-    border: Border(
-      top: BorderSide(color: AeronautColors.border),
-    ),
-  ),
-);
 
 /// Small avatar circle for user/assistant messages.
 class _Avatar extends StatelessWidget {
@@ -379,8 +342,8 @@ class _Avatar extends StatelessWidget {
         shape: BoxShape.circle,
         color: isUser ? AeronautColors.bgElevated : AeronautColors.accentMuted,
       ),
-      child: Icon(
-        isUser ? Icons.person : Icons.cruelty_free,
+      child: PhosphorIcon(
+        isUser ? PhosphorIcons.user : PhosphorIcons.hester,
         size: 16,
         color: isUser ? AeronautColors.textSecondary : AeronautColors.textPrimary,
       ),
@@ -424,12 +387,11 @@ class _InputBar extends StatelessWidget {
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => onSend(),
                 maxLines: null,
-                style: AeronautTheme.body.copyWith(fontSize: 14),
+                style: AeronautTheme.body,
                 decoration: InputDecoration(
                   hintText: isStreaming ? 'Hester is thinking...' : 'Ask Hester...',
                   hintStyle: AeronautTheme.body.copyWith(
                     color: AeronautColors.textTertiary,
-                    fontSize: 14,
                   ),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(
@@ -446,15 +408,12 @@ class _InputBar extends StatelessWidget {
                 child: SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AeronautColors.accent,
-                  ),
+                  child: CircularProgressIndicator.adaptive(strokeWidth: 2),
                 ),
               )
             else
               IconButton(
-                icon: const Icon(Icons.send, color: AeronautColors.accent),
+                icon: const PhosphorIcon(PhosphorIcons.send, color: AeronautColors.accent),
                 onPressed: onSend,
               ),
           ],

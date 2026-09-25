@@ -5,6 +5,8 @@ import '../models/lee_context.dart';
 import '../providers/context_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 import 'file_viewer_screen.dart';
 
 /// Screen for an editor-like tab (`editor`, `editor-panel`, `file`).
@@ -28,15 +30,15 @@ class EditorScreen extends ConsumerWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.code,
+            const PhosphorIcon(
+              PhosphorIcons.editor,
               size: 48,
               color: AeronautColors.textTertiary,
             ),
             const SizedBox(height: AeronautTheme.spacingMd),
             Text(
               'No file open',
-              style: AeronautTheme.body.copyWith(
+              style: AeronautTheme.subheadline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -71,14 +73,13 @@ class EditorScreen extends ConsumerWidget {
                   ),
                   child: Text(
                     editor.language!,
-                    style: AeronautTheme.caption.copyWith(fontSize: 11),
+                    style: AeronautTheme.caption2,
                   ),
                 ),
               const Spacer(),
               Text(
                 'Ln ${editor.cursor.line}, Col ${editor.cursor.column}',
                 style: AeronautTheme.mono.copyWith(
-                  fontSize: 11,
                   color: AeronautColors.textTertiary,
                 ),
               ),

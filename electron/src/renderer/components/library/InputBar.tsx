@@ -14,6 +14,7 @@ import {
   AGENT_MODE_CONFIG,
   SendIntent,
 } from './types';
+import { Icon } from '../Icon';
 
 interface InputBarProps {
   session: ExplorationSession | null;
@@ -161,7 +162,7 @@ export const InputBar: React.FC<InputBarProps> = ({
                 onClick={() => onModeChange(m)}
                 title={config.label}
               >
-                {config.icon} {config.label}
+                <Icon name={config.icon} size={13} className="icon-inline" /> {config.label}
               </button>
             );
           })}

@@ -8,7 +8,9 @@ import '../services/hester_api.dart';
 import '../services/lee_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
 import '../widgets/auth_banner.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Health and connection detail for one machine.
 ///
@@ -76,7 +78,7 @@ class _MachineDetailScreenState extends ConsumerState<MachineDetailScreen> {
         title: Text(machine.name),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const PhosphorIcon(PhosphorIcons.refresh),
             tooltip: 'Refresh',
             onPressed: _loading ? null : _refresh,
           ),
@@ -206,8 +208,7 @@ class _Section extends StatelessWidget {
         children: [
           Text(
             title.toUpperCase(),
-            style: AeronautTheme.caption.copyWith(
-              fontSize: 11,
+            style: AeronautTheme.caption2.copyWith(
               letterSpacing: 0.6,
               fontWeight: FontWeight.w600,
               color: AeronautColors.textSecondary,
@@ -236,15 +237,15 @@ class _Section extends StatelessWidget {
                           width: 110,
                           child: Text(
                             rows[i].label,
-                            style: AeronautTheme.caption,
+                            style: AeronautTheme.caption1,
                           ),
                         ),
                         Expanded(
                           child: SelectableText(
                             rows[i].value,
                             style: rows[i].mono
-                                ? AeronautTheme.mono.copyWith(fontSize: 12)
-                                : AeronautTheme.body.copyWith(fontSize: 13),
+                                ? AeronautTheme.mono
+                                : AeronautTheme.footnote.copyWith(color: AeronautColors.textPrimary),
                           ),
                         ),
                       ],

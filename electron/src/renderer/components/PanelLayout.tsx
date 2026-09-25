@@ -8,6 +8,7 @@
 import React from 'react';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { Tab } from './TabBar';
+import { Icon, HesterGlyph, type IconName } from './Icon';
 
 // Extended tab data with dock position
 export interface DockableTab extends Tab {
@@ -16,21 +17,20 @@ export interface DockableTab extends Tab {
 }
 
 // Get icon for tab type
-function getTabIcon(type: Tab['type']): string {
+function getTabIcon(type: Tab['type']): IconName {
   switch (type) {
-    case 'terminal': return '💻';
-    case 'editor': return '📝';
-    case 'files': return '📂';
-    case 'hester': return '🐇';
-    case 'claude': return '🤖';
-    case 'git': return '🌿';
-    case 'docker': return '🐳';
-    case 'flutter': return '📱';
-    case 'k8s': return '☸️';
-    case 'devops': return '🚀';
-    case 'system': return '📊';
-    case 'hester-qa': return '🧪';
-    default: return '📋';
+    case 'terminal': return 'terminal';
+    case 'editor': return 'editor';
+    case 'files': return 'folder';
+    case 'claude': return 'agent';
+    case 'git': return 'git';
+    case 'docker': return 'docker';
+    case 'flutter': return 'mobile';
+    case 'k8s': return 'kubernetes';
+    case 'devops': return 'devops';
+    case 'system': return 'system';
+    case 'hester-qa': return 'check';
+    default: return 'list';
   }
 }
 
@@ -155,14 +155,17 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
   );
 };
 
-// Get the display icon for a tab (handles idle state)
-function getTabDisplayIcon(tab: DockableTab): string {
-  // If watched and idle, show moon emoji
+// Render the display icon for a tab (handles idle state and Hester's glyph)
+const TabDisplayIcon: React.FC<{ tab: DockableTab }> = ({ tab }) => {
+  // Watched and idle overrides the type icon with a clock
   if (tab.watched && tab.isIdle) {
-    return '🌙';
+    return <Icon name="clock" size={14} />;
   }
-  return getTabIcon(tab.type);
-}
+  if (tab.type === 'hester') {
+    return <HesterGlyph size={14} />;
+  }
+  return <Icon name={getTabIcon(tab.type)} size={14} />;
+};
 
 // Mini tab bar for docked panels
 interface PanelTabsProps {
@@ -257,7 +260,7 @@ const PanelTabs: React.FC<PanelTabsProps> = ({
             onContextMenu={(e) => handleContextMenu(e, tab.id)}
             onMouseDown={(e) => e.preventDefault()} // Prevent focus stealing from terminal
           >
-            <span className="panel-tab-icon">{getTabDisplayIcon(tab)}</span>
+            <span className="panel-tab-icon"><TabDisplayIcon tab={tab} /></span>
             {editingTabId === tab.id ? (
               <input
                 ref={editInputRef}
@@ -338,7 +341,7 @@ const PanelTabs: React.FC<PanelTabsProps> = ({
                     onToggleWatch(contextMenu.tabId);
                     closeContextMenu();
                   }}>
-                    {tab.watched ? '✓ Watching' : 'Watch'}
+                    {tab.watched ? <><Icon name="check" size={12} className="icon-inline" /> Watching</> : 'Watch'}
                   </button>
                 </>
               );

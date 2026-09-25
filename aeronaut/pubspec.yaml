@@ -57,6 +57,8 @@ flutter_launcher_icons:
   android: false
   image_path: "icon.png"
   remove_alpha_ios: true
+  image_path_ios_dark_transparent: "assets/brand/icon-dark.png"
+  image_path_ios_tinted_grayscale: "assets/brand/icon-tinted.png"
 
 flutter:
   uses-material-design: true
@@ -66,3 +68,5 @@ flutter:
       fonts:
         - asset: assets/fonts/JetBrainsMono-Regular.ttf
           weight: 400
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700

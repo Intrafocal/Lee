@@ -14,22 +14,24 @@ export type WorkstreamPhase =
   | 'done'
   | 'paused';
 
+import type { IconName } from '../Icon';
+
 export interface PhaseConfig {
   label: string;
   color: string;
-  icon: string;
+  icon: IconName;
   next?: WorkstreamPhase;
   nextLabel?: string;
 }
 
 export const PHASE_CONFIG: Record<WorkstreamPhase, PhaseConfig> = {
-  exploration: { label: 'Exploration', color: '#7b68ee', icon: '🔍', next: 'design', nextLabel: 'Advance to Design' },
-  design:      { label: 'Design',      color: '#4a9',    icon: '📐', next: 'planning', nextLabel: 'Advance to Planning' },
-  planning:    { label: 'Planning',     color: '#e9a820', icon: '📋', next: 'execution', nextLabel: 'Advance to Execution' },
-  execution:   { label: 'Execution',    color: '#20b2aa', icon: '⚡', next: 'review', nextLabel: 'Advance to Review' },
-  review:      { label: 'Review',       color: '#da70d6', icon: '🔎', next: 'done', nextLabel: 'Mark Done' },
-  done:        { label: 'Done',         color: '#666',    icon: '✅' },
-  paused:      { label: 'Paused',       color: '#888',    icon: '⏸️' },
+  exploration: { label: 'Exploration', color: '#7b68ee', icon: 'search', next: 'design', nextLabel: 'Advance to Design' },
+  design:      { label: 'Design',      color: '#4a9',    icon: 'edit', next: 'planning', nextLabel: 'Advance to Planning' },
+  planning:    { label: 'Planning',     color: '#e9a820', icon: 'list', next: 'execution', nextLabel: 'Advance to Execution' },
+  execution:   { label: 'Execution',    color: '#20b2aa', icon: 'play', next: 'review', nextLabel: 'Advance to Review' },
+  review:      { label: 'Review',       color: '#da70d6', icon: 'eye', next: 'done', nextLabel: 'Mark Done' },
+  done:        { label: 'Done',         color: '#666',    icon: 'check' },
+  paused:      { label: 'Paused',       color: '#888',    icon: 'stop' },
 };
 
 // Task status computed client-side

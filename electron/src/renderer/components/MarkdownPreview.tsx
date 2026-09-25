@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import DOMPurify from 'dompurify';
+import { Icon } from './Icon';
 
 interface MarkdownPreviewProps {
   content: string;
@@ -147,7 +148,7 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
                 {...props}
               >
                 {children}
-                {isExternal && <span className="external-link-icon">↗</span>}
+                {isExternal && <span className="external-link-icon"><Icon name="external" size={11} /></span>}
               </a>
             );
           },

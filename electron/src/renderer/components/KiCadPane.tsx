@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -88,14 +89,14 @@ export const KiCadPane: React.FC<KiCadPaneProps> = ({ active, filePath, onOpenAs
   return (
     <div className={`kicad-pane ${active ? 'active' : ''}`}>
       <div className="viewer-toolbar">
-        <span className="viewer-toolbar-title">🔌 {fileName ?? 'KiCad Viewer'}</span>
+        <span className="viewer-toolbar-title"><Icon name="machine" size={14} className="icon-inline" /> {fileName ?? 'KiCad Viewer'}</span>
         <div className="viewer-toolbar-actions">
           <button
             className="viewer-btn"
             onClick={() => setReloadCount((c) => c + 1)}
             title="Reload from disk"
           >
-            ↻ Reload
+            <Icon name="refresh" size={14} className="icon-inline" /> Reload
           </button>
           {filePath && onOpenAsText && (
             <button

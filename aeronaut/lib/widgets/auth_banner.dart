@@ -7,6 +7,8 @@ import '../screens/qr_scanner_screen.dart';
 import '../services/api_auth.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
 /// Banner shown when Lee or Hester rejected the saved bearer token.
 ///
@@ -35,8 +37,8 @@ class AuthBanner extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.lock_outline,
+            const PhosphorIcon(
+              PhosphorIcons.lock,
               size: 18,
               color: AeronautColors.offline,
             ),
@@ -48,8 +50,8 @@ class AuthBanner extends ConsumerWidget {
                 children: [
                   Text(
                     AuthFailure.message,
-                    style: AeronautTheme.body.copyWith(
-                      fontSize: 13,
+                    style: AeronautTheme.footnote.copyWith(
+                      color: AeronautColors.textPrimary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -57,7 +59,7 @@ class AuthBanner extends ConsumerWidget {
                     machine == null
                         ? failure.detail
                         : '${failure.service.label} · ${machine.name}',
-                    style: AeronautTheme.caption,
+                    style: AeronautTheme.caption1,
                   ),
                 ],
               ),
@@ -74,7 +76,7 @@ class AuthBanner extends ConsumerWidget {
               child: const Text('Re-pair'),
             ),
             IconButton(
-              icon: const Icon(Icons.close, size: 16),
+              icon: const PhosphorIcon(PhosphorIcons.close, size: 16),
               tooltip: 'Dismiss',
               onPressed: () => ref.read(authGuardProvider.notifier).clear(),
             ),

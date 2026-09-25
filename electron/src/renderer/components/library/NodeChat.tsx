@@ -19,14 +19,15 @@ import {
   NodeType,
   SynthesisAction,
 } from './types';
+import { Icon, type IconName } from '../Icon';
 
 // Phase display
-const PHASE_DISPLAY: Record<string, { icon: string; label: string }> = {
-  preparing: { icon: '🔧', label: 'Preparing' },
-  thinking: { icon: '🤔', label: 'Thinking' },
-  acting: { icon: '⚡', label: 'Acting' },
-  observing: { icon: '👁️', label: 'Observing' },
-  responding: { icon: '💬', label: 'Responding' },
+const PHASE_DISPLAY: Record<string, { icon: IconName; label: string }> = {
+  preparing: { icon: 'settings', label: 'Preparing' },
+  thinking: { icon: 'more', label: 'Thinking' },
+  acting: { icon: 'play', label: 'Acting' },
+  observing: { icon: 'eye', label: 'Observing' },
+  responding: { icon: 'send', label: 'Responding' },
 };
 
 interface NodeChatProps {
@@ -155,14 +156,14 @@ export const NodeChat: React.FC<NodeChatProps> = ({
               : AGENT_MODE_CONFIG.web.color
             }}
           >
-            {searchResults.web ? '🌐 Web' : '📄 Docs'} Search
+            <Icon name={searchResults.web ? 'browser' : 'file-code'} size={13} className="icon-inline" /> {searchResults.web ? 'Web' : 'Docs'} Search
           </span>
           <span className="library-chat-node-label">{searchResults.query}</span>
         </div>
         <div className="library-chat-messages">
           {searchResults.isSearching && (
             <div className="library-chat-phase">
-              <span className="library-chat-phase-icon">🔍</span>
+              <span className="library-chat-phase-icon"><Icon name="search" size={13} /></span>
               <span className="library-chat-phase-label">Searching...</span>
             </div>
           )}
@@ -176,7 +177,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
           {searchResults.docs.map((result, i) => (
             <div key={i} className="library-search-item">
               <div className="library-search-item-header">
-                <span className="library-search-item-icon">📄</span>
+                <span className="library-search-item-icon"><Icon name="file-code" size={13} /></span>
                 <span className="library-search-item-path">{result.file_path}</span>
                 <span className="library-search-item-score">
                   {Math.round(result.similarity * 100)}%
@@ -209,7 +210,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
           {searchResults.web && (
             <div className="library-search-web">
               <div className="library-search-item-header">
-                <span className="library-search-item-icon">🌐</span>
+                <span className="library-search-item-icon"><Icon name="browser" size={13} /></span>
                 <span className="library-search-item-path">Web Research</span>
                 {onPromoteSource && (
                   <button
@@ -257,7 +258,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
     return (
       <div className="library-chat">
         <div className="library-chat-empty">
-          <div className="library-chat-empty-icon">📚</div>
+          <div className="library-chat-empty-icon"><Icon name="book" size={28} /></div>
           <div className="library-chat-empty-text">
             Select a node to view its conversation,
             or type below to start exploring.
@@ -297,7 +298,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
           className="library-chat-mode-badge"
           style={{ background: modeConfig?.color || 'var(--accent)' }}
         >
-          {modeConfig?.icon} {modeConfig?.label}
+          {modeConfig?.icon && <Icon name={modeConfig.icon} size={13} className="icon-inline" />} {modeConfig?.label}
         </span>
         <span className="library-chat-node-label">{node.label}</span>
       </div>
@@ -324,7 +325,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
         {isStreaming && currentPhase && (
           <div className="library-chat-phase">
             <span className="library-chat-phase-icon">
-              {PHASE_DISPLAY[currentPhase.phase]?.icon || '•'}
+              <Icon name={PHASE_DISPLAY[currentPhase.phase]?.icon || 'dot'} size={13} />
             </span>
             <span className="library-chat-phase-label">
               {PHASE_DISPLAY[currentPhase.phase]?.label || currentPhase.phase}
@@ -371,7 +372,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
             disabled={focusedMsgIndex === 0}
             title="Previous message"
           >
-            ▲
+            <Icon name="chevron-up" size={13} />
           </button>
           <span className="library-chat-nav-pos">
             {focusedMsgIndex != null ? focusedMsgIndex + 1 : '–'}/{msgCount}
@@ -382,7 +383,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
             disabled={focusedMsgIndex === msgCount - 1}
             title="Next message"
           >
-            ▼
+            <Icon name="chevron-down" size={13} />
           </button>
         </div>
       )}
@@ -565,7 +566,7 @@ const SessionOverview: React.FC<{
                   style={{ background: config?.color || 'var(--text-muted)' }}
                 />
                 <span className="library-overview-group-label">
-                  {config?.icon} {config?.label || mode}
+                  {config?.icon && <Icon name={config.icon} size={13} className="icon-inline" />} {config?.label || mode}
                 </span>
                 <span className="library-overview-group-count">{modeNodes.length}</span>
               </div>

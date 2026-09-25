@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/lee_context.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import 'phosphor_icon.dart';
 
 /// Horizontal scrollable tab strip rendering LeeContext.tabs[].
 class LeeTabBar extends StatelessWidget {
@@ -76,8 +78,8 @@ class _TabChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              _iconForTabType(tab.type),
+            tabTypeIcon(
+              tab.type,
               size: 14,
               color: isActive
                   ? AeronautColors.accent
@@ -86,7 +88,7 @@ class _TabChip extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               tab.label,
-              style: AeronautTheme.caption.copyWith(
+              style: AeronautTheme.caption1.copyWith(
                 color: isActive
                     ? AeronautColors.textPrimary
                     : AeronautColors.textSecondary,
@@ -98,64 +100,74 @@ class _TabChip extends StatelessWidget {
       ),
     );
   }
-
-  IconData _iconForTabType(TabType type) => iconForTabType(type);
 }
 
 /// Icon per tab type, mirroring `TAB_ICONS` in Lee's `TabBar.tsx`.
-IconData iconForTabType(TabType type) {
+Widget tabTypeIcon(TabType type, {double size = 24, Color? color}) {
+  switch (type) {
+    case TabType.bridge:
+      return PhosphorIcon(PhosphorIcons.link, size: size, color: color);
+    case TabType.kicad:
+      return PhosphorIcon(PhosphorIcons.chip, size: size, color: color);
+    case TabType.model:
+      return PhosphorIcon(PhosphorIcons.cube, size: size, color: color);
+    case TabType.pdf:
+      return PhosphorIcon(PhosphorIcons.document, size: size, color: color);
+    default:
+      return PhosphorIcon(_phosphorIconForTabType(type), size: size, color: color);
+  }
+}
+
+PhosphorIconData _phosphorIconForTabType(TabType type) {
   switch (type) {
     case TabType.editor:
     case TabType.editorPanel:
-      return Icons.code;
+      return PhosphorIcons.editor;
     case TabType.file:
-      return Icons.description_outlined;
+      return PhosphorIcons.fileCode;
     case TabType.terminal:
-      return Icons.terminal;
+      return PhosphorIcons.terminal;
     case TabType.git:
-      return Icons.merge_type;
+      return PhosphorIcons.git;
     case TabType.docker:
-      return Icons.widgets_outlined;
+      return PhosphorIcons.docker;
     case TabType.k8s:
-      return Icons.cloud_outlined;
+      return PhosphorIcons.kubernetes;
     case TabType.flutter:
-      return Icons.phone_android;
+      return PhosphorIcons.mobile;
     case TabType.hester:
     case TabType.hesterQa:
-      return Icons.cruelty_free;
+      return PhosphorIcons.hester;
     case TabType.claude:
-      return Icons.auto_awesome;
     case TabType.agent:
-      return Icons.smart_toy_outlined;
+      return PhosphorIcons.agent;
     case TabType.files:
-      return Icons.folder_outlined;
+      return PhosphorIcons.folder;
     case TabType.browser:
-      return Icons.public;
+      return PhosphorIcons.browser;
     case TabType.devops:
-      return Icons.rocket_launch_outlined;
+      return PhosphorIcons.devops;
     case TabType.system:
-      return Icons.monitor_heart_outlined;
+      return PhosphorIcons.system;
     case TabType.sql:
-      return Icons.storage;
+      return PhosphorIcons.sql;
     case TabType.library:
-      return Icons.library_books_outlined;
+      return PhosphorIcons.book;
     case TabType.workstream:
-      return Icons.checklist;
+      return PhosphorIcons.list;
     case TabType.spyglass:
-      return Icons.travel_explore;
-    case TabType.bridge:
-      return Icons.swap_horiz;
-    case TabType.kicad:
-      return Icons.memory;
-    case TabType.model:
-      return Icons.view_in_ar_outlined;
-    case TabType.pdf:
-      return Icons.picture_as_pdf_outlined;
+      return PhosphorIcons.eye;
     case TabType.binary:
-      return Icons.inventory_2_outlined;
+      return PhosphorIcons.fileCode;
     case TabType.custom:
-      return Icons.build_outlined;
+      return PhosphorIcons.settings;
     case TabType.unknown:
-      return Icons.tab_outlined;
+      return PhosphorIcons.tabs;
+    case TabType.bridge:
+    case TabType.kicad:
+    case TabType.model:
+    case TabType.pdf:
+      // Handled in tabTypeIcon before reaching here.
+      return PhosphorIcons.tabs;
   }
 }

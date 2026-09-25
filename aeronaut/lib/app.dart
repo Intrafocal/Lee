@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'providers/auth_provider.dart';
 import 'providers/machines_provider.dart';
-import 'screens/machines_screen.dart';
+import 'screens/root_shell.dart';
 import 'theme/aeronaut_theme.dart';
 
 /// Root Aeronaut application widget.
@@ -32,7 +32,7 @@ class _AeronautAppState extends ConsumerState<AeronautApp> {
       title: 'Aeronaut',
       debugShowCheckedModeBanner: false,
       theme: AeronautTheme.darkTheme,
-      home: const MachinesScreen(),
+      home: const RootShell(),
     );
   }
 }

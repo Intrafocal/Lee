@@ -137,9 +137,8 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
             child: Text(
               'Point your camera at the QR code shown in\nLee > View > Aeronaut Pairing',
               textAlign: TextAlign.center,
-              style: AeronautTheme.body.copyWith(
+              style: AeronautTheme.subheadline.copyWith(
                 color: AeronautColors.textSecondary,
-                fontSize: 14,
               ),
             ),
           ),

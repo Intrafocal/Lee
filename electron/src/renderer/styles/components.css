@@ -1,0 +1,173 @@
+/*
+ * components.css - Phosphor icon/brand refresh styles.
+ *
+ * New file so it can be edited independently of styles/index.css (which is
+ * being touched concurrently elsewhere). Imported in main.tsx right after
+ * index.css so these rules can override/extend it.
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Generic icon sizing helpers                                            */
+/* ---------------------------------------------------------------------- */
+
+.icon-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: -2px;
+}
+
+.viewer-toolbar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.viewer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* File tree                                                              */
+/* ---------------------------------------------------------------------- */
+
+.file-tree-item .file-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-3);
+}
+
+.file-tree-item .expand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+.file-tree-item.is-selected {
+  background: var(--ground-3);
+  color: var(--text-1);
+}
+
+.file-tree-item.is-selected .file-icon {
+  color: var(--lit);
+}
+
+.file-tree-filter .filter-icon,
+.file-tree-filter .filter-refresh,
+.file-tree-filter .filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tab bar / panel tab icons                                              */
+/* ---------------------------------------------------------------------- */
+
+.tab-icon,
+.dropdown-icon,
+.tui-icon,
+.shortcut-icon,
+.workspace-icon,
+.status-icon,
+.viewer-toolbar-title .icon-inline,
+.context-menu-icon,
+.editor-empty-icon,
+.library-chat-empty-icon,
+.spyglass-tab-summary-icon,
+.spyglass-tui-icon,
+.command-palette-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-2);
+}
+
+.tab.active .tab-icon,
+.dockable-tab.active .tab-icon {
+  color: var(--text-1);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Command palette                                                        */
+/* ---------------------------------------------------------------------- */
+
+.command-palette-warning svg {
+  color: var(--ember);
+}
+
+.command-palette-error-icon {
+  color: var(--error);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Status dots (DevOps service state, connection state, daemon health)    */
+/* ---------------------------------------------------------------------- */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+
+.status-dot.status-dot-running,
+.status-dot.status-dot-healthy,
+.status-dot.status-dot-connected,
+.status-dot.status-dot-online {
+  background: var(--phosphor);
+}
+
+.status-dot.status-dot-starting,
+.status-dot.status-dot-warning {
+  background: var(--ember);
+}
+
+.status-dot.status-dot-error,
+.status-dot.status-dot-unhealthy {
+  background: var(--error);
+}
+
+.status-dot.status-dot-idle,
+.status-dot.status-dot-stopped,
+.status-dot.status-dot-offline,
+.status-dot.status-dot-disconnected {
+  background: var(--text-3);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Empty-state splash (App.tsx welcome screen)                            */
+/* ---------------------------------------------------------------------- */
+
+.splash-fixed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  opacity: 0.9;
+}
+
+.splash-fixed .splash-mark {
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+}
+
+.splash-fixed .splash-wordmark {
+  font-family: var(--font-ui);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.01em;
+}
+
+.splash-fixed .splash-tagline {
+  font-size: 13px;
+  color: var(--text-3);
+}

@@ -8,6 +8,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { Icon } from './Icon';
 
 const lee = window.lee;
 
@@ -75,7 +76,7 @@ export const BinaryFilePane: React.FC<BinaryFilePaneProps> = ({ active, filePath
   return (
     <div className={`binary-pane ${active ? 'active' : ''}`}>
       <div className="viewer-toolbar">
-        <span className="viewer-toolbar-title">📦 {fileName ?? 'Binary file'}</span>
+        <span className="viewer-toolbar-title"><Icon name="download" size={14} className="icon-inline" /> {fileName ?? 'Binary file'}</span>
         {fileSize !== null && (
           <span className="viewer-toolbar-info">{formatSize(fileSize)} · binary</span>
         )}

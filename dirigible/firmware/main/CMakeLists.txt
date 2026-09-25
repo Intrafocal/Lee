@@ -7,6 +7,7 @@ idf_component_register(
         "screen_terminal.cpp"
         "screen_hester.cpp"
         "screen_pairing.cpp"
+        "brand_images.c"
     INCLUDE_DIRS
         "."
     REQUIRES

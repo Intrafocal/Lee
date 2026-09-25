@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,6 +7,8 @@ import '../providers/machines_provider.dart';
 import '../services/hester_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Screen listing active Hester sessions.
 ///
@@ -88,7 +91,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
       appBar: AppBar(
         title: const Text('Sessions'),
       ),
-      body: RefreshIndicator(
+      body: RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
         onRefresh: _loadSessions,
@@ -100,7 +103,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   Widget _buildBody() {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(color: AeronautColors.accent),
+        child: CircularProgressIndicator.adaptive(),
       );
     }
 
@@ -109,9 +112,9 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: AeronautColors.offline),
+            const PhosphorIcon(PhosphorIcons.warning, size: 48, color: AeronautColors.offline),
             const SizedBox(height: AeronautTheme.spacingMd),
-            Text(_error!, style: AeronautTheme.caption),
+            Text(_error!, style: AeronautTheme.caption1),
             const SizedBox(height: AeronautTheme.spacingLg),
             ElevatedButton(
               onPressed: _loadSessions,
@@ -131,17 +134,17 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.history,
+                  PhosphorIcon(
+                    PhosphorIcons.clock,
                     size: 48,
                     color: AeronautColors.textTertiary,
                   ),
                   SizedBox(height: AeronautTheme.spacingMd),
-                  Text('No sessions', style: AeronautTheme.heading),
+                  Text('No sessions', style: AeronautTheme.headline),
                   SizedBox(height: AeronautTheme.spacingSm),
                   Text(
                     'Start a conversation to create a session',
-                    style: AeronautTheme.caption,
+                    style: AeronautTheme.caption1,
                   ),
                 ],
               ),
@@ -163,20 +166,22 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: AeronautTheme.spacingLg),
             color: AeronautColors.offline,
-            child: const Icon(Icons.delete, color: Colors.white),
+            child: const PhosphorIcon(PhosphorIcons.trash, color: AeronautColors.textPrimary),
           ),
           confirmDismiss: (_) async {
-            return await showDialog<bool>(
+            return await showCupertinoDialog<bool>(
               context: context,
-              builder: (ctx) => AlertDialog(
+              builder: (ctx) => CupertinoAlertDialog(
                 title: const Text('Delete session?'),
                 content: Text('Session $sessionId will be permanently deleted.'),
                 actions: [
-                  TextButton(
+                  CupertinoDialogAction(
+                    isDefaultAction: true,
                     onPressed: () => Navigator.of(ctx).pop(false),
                     child: const Text('Cancel'),
                   ),
-                  TextButton(
+                  CupertinoDialogAction(
+                    isDestructiveAction: true,
                     onPressed: () => Navigator.of(ctx).pop(true),
                     child: const Text('Delete'),
                   ),
@@ -186,17 +191,17 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
           },
           onDismissed: (_) => _deleteSession(sessionId),
           child: ListTile(
-            leading: const Icon(
-              Icons.chat_bubble_outline,
+            leading: const PhosphorIcon(
+              PhosphorIcons.chat,
               color: AeronautColors.accent,
             ),
             title: Text(
               sessionId,
-              style: AeronautTheme.mono.copyWith(fontSize: 12),
+              style: AeronautTheme.mono,
               overflow: TextOverflow.ellipsis,
             ),
-            trailing: const Icon(
-              Icons.chevron_right,
+            trailing: const PhosphorIcon(
+              PhosphorIcons.chevronRight,
               color: AeronautColors.textTertiary,
             ),
             onTap: () => _loadSession(sessionId),

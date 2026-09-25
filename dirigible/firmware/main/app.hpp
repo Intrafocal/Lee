@@ -66,6 +66,7 @@ struct App {
     lv_obj_t* back_btn      = nullptr;   // header left: always-on back/close
     lv_obj_t* back_lbl      = nullptr;
     lv_obj_t* lbl_machine   = nullptr;   // header left: title
+    lv_obj_t* hester_icon   = nullptr;   // header left: dg_img_hester8, Hester view only
     lv_obj_t* lbl_centre    = nullptr;   // header centre: step / status
     lv_obj_t* conn_dot      = nullptr;   // header right: link state dot
     lv_obj_t* lbl_wifi      = nullptr;   // header right: wifi glyph
@@ -75,6 +76,7 @@ struct App {
     lv_obj_t* lbl_footer_l  = nullptr;   // key legend
     lv_obj_t* lbl_footer_r  = nullptr;   // right-hand hint
     lv_obj_t* footer_btns   = nullptr;   // right-hand action buttons
+    lv_obj_t* splash        = nullptr;   // boot splash overlay, nullptr once dismissed
     lv_group_t* group       = nullptr;
 
     // --- views ----------------------------------------------------------

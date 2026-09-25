@@ -4,6 +4,7 @@
 
 import React, { useState } from 'react';
 import { ResolvedTask, TaskStatus, WorkstreamPhase } from './types';
+import { Icon, type IconName } from '../Icon';
 
 const HESTER_DAEMON = 'http://127.0.0.1:9000';
 
@@ -14,11 +15,11 @@ interface RunbookPanelProps {
   onTasksChanged: () => void;
 }
 
-const STATUS_ICONS: Record<TaskStatus, string> = {
-  completed: '✓',
-  in_progress: '◉',
-  ready: '○',
-  blocked: '🔒',
+const STATUS_ICONS: Record<TaskStatus, IconName> = {
+  completed: 'check',
+  in_progress: 'play',
+  ready: 'circle',
+  blocked: 'lock',
 };
 
 export const RunbookPanel: React.FC<RunbookPanelProps> = ({
@@ -105,7 +106,7 @@ export const RunbookPanel: React.FC<RunbookPanelProps> = ({
             onClick={generateFromDesign}
             disabled={generating}
           >
-            {generating ? 'Generating...' : '⚡ Generate from Design'}
+            {generating ? 'Generating...' : <><Icon name="play" size={12} className="icon-inline" /> Generate from Design</>}
           </button>
         )}
       </div>
@@ -117,7 +118,7 @@ export const RunbookPanel: React.FC<RunbookPanelProps> = ({
         {tasks.map(task => (
           <div key={task.task_id} className={`ws-task ws-task-${task.status}`}>
             <span className={`ws-task-icon ws-task-icon-${task.status}`}>
-              {STATUS_ICONS[task.status]}
+              <Icon name={STATUS_ICONS[task.status]} size={12} />
             </span>
             <div className="ws-task-content">
               <span className="ws-task-title">{task.title}</span>
@@ -142,17 +143,17 @@ export const RunbookPanel: React.FC<RunbookPanelProps> = ({
                       }}
                       autoFocus
                     />
-                    <button className="ws-dispatch-go" onClick={() => dispatchTask(task.task_id)}>→</button>
+                    <button className="ws-dispatch-go" onClick={() => dispatchTask(task.task_id)}><Icon name="arrow-right" size={12} /></button>
                   </div>
                 ) : (
                   <button className="ws-task-btn" onClick={() => setDispatchingId(task.task_id)} title="Dispatch to agent">
-                    ▶
+                    <Icon name="play" size={12} />
                   </button>
                 )
               )}
               {task.status === 'in_progress' && (
                 <button className="ws-task-btn ws-task-btn-complete" onClick={() => completeTask(task.task_id)} title="Mark complete">
-                  ✓
+                  <Icon name="check" size={12} />
                 </button>
               )}
             </div>

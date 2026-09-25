@@ -14,6 +14,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { focusManager } from '../hooks/useFocusManager';
 import { ptyEventManager } from '../hooks/usePtyEvents';
+import { xtermTheme, fontMono } from '../theme/tokens.generated';
 import '@xterm/xterm/css/xterm.css';
 
 // Get the Lee API from preload
@@ -160,30 +161,8 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ ptyId, active, label
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
-      fontFamily: 'JetBrains Mono, Noto Color Emoji, Menlo, Monaco, Courier New, monospace',
-      theme: {
-        background: '#0d1a14',
-        foreground: '#eee',
-        cursor: '#4a9',
-        cursorAccent: '#0d1a14',
-        selectionBackground: '#1a3028',
-        black: '#0d1a14',
-        red: '#e55',
-        green: '#4a9',
-        yellow: '#da3',
-        blue: '#5ad',
-        magenta: '#a6d',
-        cyan: '#5bc',
-        white: '#ddd',
-        brightBlack: '#456',
-        brightRed: '#f66',
-        brightGreen: '#5ca',
-        brightYellow: '#eb4',
-        brightBlue: '#6be',
-        brightMagenta: '#b7e',
-        brightCyan: '#6cd',
-        brightWhite: '#fff',
-      },
+      fontFamily: fontMono,
+      theme: xtermTheme,
       allowTransparency: false,
       scrollback: 10000,
       // CRITICAL: Keep viewport at bottom when new data arrives

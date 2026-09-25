@@ -11,6 +11,8 @@ import '../providers/machines_provider.dart';
 import '../services/fs_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Cap on how much of an unclassified-but-text file is actually displayed.
 /// The server already caps the *transfer* at 2 MB (`/fs/read`); this trims
@@ -116,8 +118,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
   Widget _buildBody() {
     if (_loading) {
       return const Center(
-        child: CircularProgressIndicator(
-          color: AeronautColors.accent,
+        child: CircularProgressIndicator.adaptive(
           strokeWidth: 2,
         ),
       );
@@ -127,7 +128,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
       switch (_error!.kind) {
         case FsErrorKind.tooLarge:
           return _MessageView(
-            icon: Icons.unfold_more,
+            icon: PhosphorIcons.warning,
             title: 'File too large to view',
             message: _result != null
                 ? '${_formatBytes(_result!.size)} is over the 2 MB viewer cap.'
@@ -135,7 +136,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
           );
         case FsErrorKind.unviewable:
           return _MessageView(
-            icon: Icons.insert_drive_file_outlined,
+            icon: PhosphorIcons.fileCode,
             title: 'Binary file',
             message: _result != null
                 ? '${_formatBytes(_result!.size)} — no preview available for this file type.'
@@ -143,26 +144,26 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
           );
         case FsErrorKind.forbidden:
           return const _MessageView(
-            icon: Icons.lock_outline,
+            icon: PhosphorIcons.lock,
             title: 'Outside workspace',
             message: 'This path is outside every open Lee workspace.',
           );
         case FsErrorKind.notFound:
           return const _MessageView(
-            icon: Icons.search_off,
+            icon: PhosphorIcons.search,
             title: 'Not found',
             message: 'The file may have been moved or deleted.',
           );
         case FsErrorKind.unauthorized:
           return const _MessageView(
-            icon: Icons.lock_outline,
+            icon: PhosphorIcons.lock,
             title: 'Token rejected',
             message: 'Re-pair this machine.',
           );
         case FsErrorKind.network:
         case FsErrorKind.other:
           return _MessageView(
-            icon: Icons.error_outline,
+            icon: PhosphorIcons.warning,
             title: 'Couldn\'t load file',
             message: _error!.message,
           );
@@ -172,7 +173,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
     final result = _result;
     if (result == null || result.content == null) {
       return const _MessageView(
-        icon: Icons.description_outlined,
+        icon: PhosphorIcons.book,
         title: 'No content',
         message: 'Nothing to show.',
       );
@@ -184,7 +185,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
         return result.isUtf8
             ? _MarkdownView(content: result.content!)
             : _MessageView(
-                icon: Icons.description_outlined,
+                icon: PhosphorIcons.book,
                 title: 'Unexpected encoding',
                 message: 'Expected utf8 markdown, got ${result.encoding}.',
               );
@@ -192,7 +193,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
         return result.isUtf8
             ? _CodeView(content: result.content!)
             : _MessageView(
-                icon: Icons.code,
+                icon: PhosphorIcons.fileCode,
                 title: 'Unexpected encoding',
                 message: 'Expected utf8 source, got ${result.encoding}.',
               );
@@ -200,7 +201,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
         return result.isBase64
             ? _ImageView(mime: result.mime, base64Content: result.content!)
             : _MessageView(
-                icon: Icons.broken_image_outlined,
+                icon: PhosphorIcons.image,
                 title: 'Unexpected encoding',
                 message: 'Expected base64 image, got ${result.encoding}.',
               );
@@ -208,7 +209,8 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
         // No PDF renderer dependency — show metadata instead of trying to
         // open the file some other way that isn't available on this build.
         return _MessageView(
-          icon: Icons.picture_as_pdf_outlined,
+          // No PDF icon in the Phosphor set; generic file is the closest fit.
+          icon: PhosphorIcons.fileCode,
           title: 'PDF preview not available',
           message:
               '${_formatBytes(result.size)} — opening in Files/Safari is '
@@ -219,7 +221,7 @@ class _FileViewerScreenState extends ConsumerState<FileViewerScreen> {
       case FileViewKind.text:
         if (!result.isUtf8) {
           return _MessageView(
-            icon: Icons.insert_drive_file_outlined,
+            icon: PhosphorIcons.fileCode,
             title: 'Binary file',
             message: '${_formatBytes(result.size)} — no preview available.',
           );
@@ -268,7 +270,7 @@ class _Header extends StatelessWidget {
                       child: Text(
                         fileName,
                         overflow: TextOverflow.ellipsis,
-                        style: AeronautTheme.body.copyWith(
+                        style: AeronautTheme.subheadline.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -288,15 +290,14 @@ class _Header extends StatelessWidget {
                 Text(
                   path,
                   overflow: TextOverflow.ellipsis,
-                  style: AeronautTheme.caption.copyWith(fontSize: 11),
+                  style: AeronautTheme.caption2,
                 ),
                 if (result != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
                       '${_formatBytes(result!.size)} · ${_formatMtime(result!.mtime)}',
-                      style: AeronautTheme.caption.copyWith(
-                        fontSize: 11,
+                      style: AeronautTheme.caption2.copyWith(
                         color: AeronautColors.textTertiary,
                       ),
                     ),
@@ -305,7 +306,7 @@ class _Header extends StatelessWidget {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.refresh, size: 20),
+            icon: const PhosphorIcon(PhosphorIcons.refresh, size: 20),
             tooltip: 'Refresh',
             onPressed: onRefresh,
           ),
@@ -324,26 +325,7 @@ class _MarkdownView extends StatelessWidget {
     return Markdown(
       data: content,
       padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-      styleSheet: MarkdownStyleSheet(
-        p: AeronautTheme.body,
-        h1: AeronautTheme.heading.copyWith(fontSize: 24),
-        h2: AeronautTheme.heading.copyWith(fontSize: 20),
-        h3: AeronautTheme.heading.copyWith(fontSize: 17),
-        code: AeronautTheme.mono.copyWith(
-          fontSize: 12,
-          backgroundColor: AeronautColors.bgElevated,
-        ),
-        codeblockDecoration: BoxDecoration(
-          color: AeronautColors.bgElevated,
-          borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
-        ),
-        blockquoteDecoration: const BoxDecoration(
-          border: Border(
-            left: BorderSide(color: AeronautColors.border, width: 3),
-          ),
-        ),
-        a: AeronautTheme.body.copyWith(color: AeronautColors.info),
-      ),
+      styleSheet: AeronautTheme.markdown(context, compact: true),
     );
   }
 }
@@ -388,7 +370,6 @@ class _CodeView extends StatelessWidget {
                         '${i + 1}',
                         textAlign: TextAlign.right,
                         style: AeronautTheme.mono.copyWith(
-                          fontSize: 12,
                           color: AeronautColors.textTertiary,
                         ),
                       ),
@@ -396,7 +377,7 @@ class _CodeView extends StatelessWidget {
                     const SizedBox(width: AeronautTheme.spacingSm),
                     Text(
                       effectiveLines[i].isEmpty ? ' ' : effectiveLines[i],
-                      style: AeronautTheme.mono.copyWith(fontSize: 12),
+                      style: AeronautTheme.mono,
                     ),
                   ],
                 ),
@@ -420,7 +401,7 @@ class _ImageView extends StatelessWidget {
       bytes = base64Decode(base64Content);
     } catch (_) {
       return const _MessageView(
-        icon: Icons.broken_image_outlined,
+        icon: PhosphorIcons.image,
         title: 'Couldn\'t decode image',
         message: 'The base64 payload was malformed.',
       );
@@ -457,19 +438,19 @@ class _GenericTextView extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: AeronautTheme.spacingSm),
             child: Text(
               'Showing the first 64 KB.',
-              style: AeronautTheme.caption.copyWith(
+              style: AeronautTheme.caption1.copyWith(
                 color: AeronautColors.warning,
               ),
             ),
           ),
-        SelectableText(content, style: AeronautTheme.mono.copyWith(fontSize: 12)),
+        SelectableText(content, style: AeronautTheme.mono),
       ],
     );
   }
 }
 
 class _MessageView extends StatelessWidget {
-  final IconData icon;
+  final PhosphorIconData icon;
   final String title;
   final String message;
 
@@ -487,12 +468,11 @@ class _MessageView extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 40, color: AeronautColors.textTertiary),
+            PhosphorIcon(icon, size: 40, color: AeronautColors.textTertiary),
             const SizedBox(height: AeronautTheme.spacingMd),
             Text(
               title,
-              style: AeronautTheme.heading.copyWith(
-                fontSize: 16,
+              style: AeronautTheme.headline.copyWith(
                 color: AeronautColors.textSecondary,
               ),
             ),
@@ -500,7 +480,7 @@ class _MessageView extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: AeronautTheme.caption,
+              style: AeronautTheme.caption1,
             ),
           ],
         ),

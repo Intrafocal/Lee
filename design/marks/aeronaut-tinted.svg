@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Aeronaut app icon">
+<defs>
+<linearGradient id="aeroA-sky-tinted" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b2b2b"></stop><stop offset="1" stop-color="#111111"></stop></linearGradient>
+<clipPath id="aeroA-clip"><rect width="1024" height="1024"></rect></clipPath>
+</defs>
+<g clip-path="url(#aeroA-clip)">
+<rect width="1024" height="1024" fill="url(#aeroA-sky-tinted)"></rect>
+<circle cx="512" cy="1790" r="1060" fill="#1d1d1d"></circle>
+<g fill="none" stroke="#bdbdbd" stroke-width="5" opacity="0.3">
+<circle cx="512" cy="1790" r="1000"></circle>
+<circle cx="512" cy="1790" r="945"></circle>
+<circle cx="512" cy="1790" r="895"></circle>
+</g>
+<circle cx="512" cy="1790" r="1060" fill="none" stroke="#d6d6d6" stroke-width="8"></circle>
+<line x1="512" y1="600" x2="512" y2="712" stroke="#ececec" stroke-width="9" stroke-linecap="round" stroke-dasharray="1 24"></line>
+<ellipse cx="512" cy="790" rx="74" ry="16" fill="none" stroke="#d6d6d6" stroke-width="6"></ellipse>
+<circle cx="512" cy="790" r="7" fill="#9c9c9c"></circle>
+<g transform="translate(512 380) scale(0.52) translate(-512 -523)">
+<path d="M512 190C650 190 745 290 745 425C745 545 640 630 560 690L464 690C384 630 279 545 279 425C279 290 374 190 512 190Z" fill="#ececec"></path>
+<g fill="none" stroke="#1a1a1a" stroke-width="16" stroke-linecap="round">
+<path d="M512 196C380 215 330 470 474 690"></path>
+<path d="M512 196C644 215 694 470 550 690"></path>
+<path d="M512 196C455 250 440 520 494 690"></path>
+<path d="M512 196C569 250 584 520 530 690"></path>
+<path d="M512 196L512 690"></path>
+</g>
+<g stroke="#ececec" stroke-width="11" stroke-linecap="round">
+<line x1="474" y1="690" x2="486" y2="752"></line>
+<line x1="550" y1="690" x2="538" y2="752"></line>
+</g>
+<path d="M512 696C497 713 499 731 512 740C525 731 527 713 512 696Z" fill="#9c9c9c"></path>
+<rect x="468" y="752" width="88" height="104" rx="8" fill="#ffffff"></rect>
+</g>
+</g>
+</svg>

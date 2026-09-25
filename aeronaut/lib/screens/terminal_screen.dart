@@ -6,6 +6,9 @@ import '../models/lee_context.dart';
 import '../providers/pty_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
+import '../theme/phosphor_icons.generated.dart';
+import '../theme/phosphor_tokens.dart';
+import '../widgets/phosphor_icon.dart';
 
 /// Terminal screen with real terminal emulation via xterm.dart.
 ///
@@ -17,30 +20,33 @@ class TerminalScreen extends ConsumerStatefulWidget {
 
   const TerminalScreen({required this.tab, super.key});
 
+  /// Built from the Phosphor ANSI palette (`phosphor_tokens.dart`) rather
+  /// than a one-off set of hex literals, so the terminal always matches the
+  /// rest of the app's theme.
   static final terminalTheme = TerminalTheme(
-    cursor: AeronautColors.accent,
-    selection: AeronautColors.accent.withValues(alpha: 0.3),
-    foreground: AeronautColors.textPrimary,
-    background: AeronautColors.bgPrimary,
-    black: const Color(0xFF484F58),
-    red: const Color(0xFFFF7B72),
-    green: AeronautColors.accent,
-    yellow: const Color(0xFFD29922),
-    blue: const Color(0xFF58A6FF),
-    magenta: const Color(0xFFBC8CFF),
-    cyan: const Color(0xFF39C5CF),
-    white: AeronautColors.textPrimary,
-    brightBlack: const Color(0xFF6E7681),
-    brightRed: const Color(0xFFFFA198),
-    brightGreen: const Color(0xFF56D364),
-    brightYellow: const Color(0xFFE3B341),
-    brightBlue: const Color(0xFF79C0FF),
-    brightMagenta: const Color(0xFFD2A8FF),
-    brightCyan: const Color(0xFF56D4DD),
-    brightWhite: const Color(0xFFFFFFFF),
-    searchHitBackground: const Color(0xFF58A6FF),
-    searchHitBackgroundCurrent: AeronautColors.accent,
-    searchHitForeground: AeronautColors.bgPrimary,
+    cursor: Phosphor.lit,
+    selection: Phosphor.lit.withValues(alpha: 0.25),
+    foreground: Phosphor.text1,
+    background: Phosphor.ground0,
+    black: PhosphorAnsi.black,
+    red: PhosphorAnsi.red,
+    green: PhosphorAnsi.green,
+    yellow: PhosphorAnsi.yellow,
+    blue: PhosphorAnsi.blue,
+    magenta: PhosphorAnsi.magenta,
+    cyan: PhosphorAnsi.cyan,
+    white: PhosphorAnsi.white,
+    brightBlack: PhosphorAnsi.brightBlack,
+    brightRed: PhosphorAnsi.brightRed,
+    brightGreen: PhosphorAnsi.brightGreen,
+    brightYellow: PhosphorAnsi.brightYellow,
+    brightBlue: PhosphorAnsi.brightBlue,
+    brightMagenta: PhosphorAnsi.brightMagenta,
+    brightCyan: PhosphorAnsi.brightCyan,
+    brightWhite: PhosphorAnsi.brightWhite,
+    searchHitBackground: PhosphorAnsi.blue,
+    searchHitBackgroundCurrent: Phosphor.lit,
+    searchHitForeground: Phosphor.ground0,
   );
 
   @override
@@ -132,7 +138,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             theme: TerminalScreen.terminalTheme,
             textStyle: const TerminalStyle(
               fontSize: 13,
-              fontFamily: 'JetBrainsMono',
+              fontFamily: AeronautTheme.monoFontFamily,
             ),
             padding: const EdgeInsets.all(AeronautTheme.spacingSm),
             scrollController: _scrollController,
@@ -155,7 +161,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             color: AeronautColors.bgElevated,
             child: Text(
               'Process exited (code ${ptyState.exitCode ?? '?'})',
-              style: AeronautTheme.caption.copyWith(
+              style: AeronautTheme.caption1.copyWith(
                 color: ptyState.exitCode == 0
                     ? AeronautColors.accent
                     : AeronautColors.offline,
@@ -274,22 +280,22 @@ class _NoPtyView extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.terminal,
+          const PhosphorIcon(
+            PhosphorIcons.terminal,
             size: 48,
             color: AeronautColors.textTertiary,
           ),
           const SizedBox(height: AeronautTheme.spacingMd),
           Text(
             tab.label,
-            style: AeronautTheme.heading.copyWith(
+            style: AeronautTheme.headline.copyWith(
               color: AeronautColors.textSecondary,
             ),
           ),
           const SizedBox(height: AeronautTheme.spacingSm),
           const Text(
             'No PTY attached',
-            style: AeronautTheme.caption,
+            style: AeronautTheme.caption1,
           ),
         ],
       ),

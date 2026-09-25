@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { AgentSession } from './types';
+import { Icon } from '../Icon';
 
 interface AgentPanelProps {
   sessions: AgentSession[];
@@ -51,12 +52,12 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({ sessions }) => {
           </div>
           {session.current_tool && (
             <div className="ws-agent-tool">
-              🔧 {session.current_tool}
+              <Icon name="settings" size={12} className="icon-inline" /> {session.current_tool}
             </div>
           )}
           {session.active_file && (
             <div className="ws-agent-file">
-              📄 {session.active_file}
+              <Icon name="file-code" size={12} className="icon-inline" /> {session.active_file}
             </div>
           )}
           {session.recent_tools.length > 0 && (
