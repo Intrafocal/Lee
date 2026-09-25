@@ -41,6 +41,7 @@ interface FileEntry {
 }
 
 import { windowRegistry } from './window-registry';
+import { initCopilotQueue } from './copilot/queue';
 
 // Single-instance lock: a second `lee` launch used to get its own PTYManager
 // and try (and fail) to bind the same :9000/:9001 ports, with the failure
@@ -1932,6 +1933,7 @@ function setupIPC(): void {
 
     return { qrDataUrl, pairingInfo };
   });
+  initCopilotQueue({ ptyManager });
 }
 
 // App lifecycle

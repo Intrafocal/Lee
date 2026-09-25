@@ -16,6 +16,7 @@ import * as net from 'net';
 import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
+import { withClaudeHooks } from './copilot/hook-install';
 
 /**
  * Check if a port is available (not in use).
@@ -841,6 +842,7 @@ export class PTYManager extends EventEmitter {
         finalArgs = ['-l'];
       }
     }
+    finalArgs = withClaudeHooks(cmd, finalArgs);
 
     this.log('INFO', `Spawning PTY ${id}`, {
       command: cmd,
@@ -859,6 +861,9 @@ export class PTYManager extends EventEmitter {
     if (extraEnv) {
       Object.assign(env, extraEnv);
     }
+    env.LEE_PTY_ID = String(id);
+    if (windowId != null) env.LEE_WINDOW_ID = String(windowId);
+    if (!env.LEE_API_URL) env.LEE_API_URL = 'http://127.0.0.1:9001';
 
     const ptyProcess = pty.spawn(cmd, finalArgs, {
       name: 'xterm-256color',
