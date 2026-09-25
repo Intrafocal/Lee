@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dirigible/attention.hpp"
 #include "dirigible/fs.hpp"
 #include "dirigible/models.hpp"
 #include "dirigible/transport.hpp"
@@ -105,6 +106,35 @@ public:
     void fsRead(const std::string& path, bool stat_only,
                 std::function<void(const FsReadResult&)> cb);
 
+    // Copilot attention queue (contracts §5.6, §9.3).  The snapshot follows
+    // `attention_snapshot` messages on the context stream and is fetched over
+    // GET /attention?compact=1 on every WS connect.  Emits
+    // Event::AttentionChanged on each new snapshot and Event::AttentionAlert
+    // when an item's notify flips to true.  The snapshot survives a
+    // disconnect, so a reconnect compares against what was last seen.
+    const AttentionSnapshot& attention() const { return attention_; }
+    /// False until a snapshot has arrived; stays false against a Lee that
+    /// answers 404 (no queue yet).
+    bool attentionAvailable() const { return attention_ok_; }
+    bool attentionUnsupported() const { return attention_404_; }
+    void fetchAttention(std::function<void(bool ok)> cb = nullptr);
+
+    /// Every stream message whose type is not `context_update` (after the
+    /// connection has consumed `attention_snapshot` itself).  `msg` is the
+    /// whole message, non-owning, valid only for the call.
+    void onCopilotMessage(std::function<void(cJSON* msg)> cb);
+
+    /// POST /attention/:id/reply.  `action` is "approve", "deny" or "text";
+    /// `text` is sent only for "text".  `version` must echo the item's.
+    void attentionReply(const std::string& id, const char* action,
+                        const std::string& text, int version,
+                        std::function<void(const ReplyResult&)> cb);
+
+    /// POST /capture into Hester's Someday list, for the followed window's
+    /// workspace.
+    void capture(const std::string& text,
+                 std::function<void(const CaptureOutcome&)> cb);
+
     // Health check
     void healthCheck(std::function<void(bool online)> cb);
 
@@ -118,6 +148,7 @@ private:
 
     void fetchContext(int window_id);
     void setContext(LeeContext* ctx, int window_id);
+    void setAttention(AttentionSnapshot&& snap);
 
     std::string buildWsUrl() const;
     std::string buildHttpUrl(const char* path) const;
@@ -134,6 +165,12 @@ private:
     bool connected_         = false;
 
     ContextCallback on_context_update_;
+    std::function<void(cJSON*)> on_copilot_message_;
+
+    // Attention queue
+    AttentionSnapshot attention_;
+    bool attention_ok_  = false;
+    bool attention_404_ = false;
 
     // Windows
     std::vector<LeeWindow> windows_;

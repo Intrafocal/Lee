@@ -19,6 +19,8 @@ enum class Event {
     MachineSwitched,    // active machine changed
     MachineOnline,      // a machine came online
     MachineOffline,     // a machine went offline
+    AttentionChanged,   // attention snapshot replaced on active machine
+    AttentionAlert,     // some item's notify flipped false -> true
 };
 
 class EventBus {

@@ -28,6 +28,11 @@ namespace dirigible_esp {
 //                              "tok_" + the first 11 chars of the machine
 //                              name; names sharing an 11-char prefix collide.
 //
+//   Device id keys (same naming rule as tok_):
+//     did_<name>      (str)  — Lee's device_id for the token above
+//                              ("dev_" + 12 hex), absent for a shared or
+//                              typed token.
+//
 //   Free-form key/value:
 //     k_<key>         (str/i32/bool)  — generic config keys
 //
@@ -61,6 +66,10 @@ public:
     // Cached token accessor (NVS-backed)
     std::string getToken(const std::string& machine_name) const;
     bool setToken(const std::string& machine_name, const std::string& token);
+
+    // Per-device token id from the pairing grant; "" clears it.
+    std::string getDeviceId(const std::string& machine_name) const;
+    bool setDeviceId(const std::string& machine_name, const std::string& device_id);
 
     // IConfig interface
     int machineCount() const override { return static_cast<int>(machines_.size()); }

@@ -190,6 +190,29 @@ bool ConfigNvs::setToken(const std::string& machine_name, const std::string& tok
     return err == ESP_OK;
 }
 
+std::string ConfigNvs::getDeviceId(const std::string& machine_name) const {
+    nvs_handle_t h;
+    if (openHandle(NVS_READONLY, &h) != ESP_OK) return "";
+    std::string key = "did_" + machine_name;
+    if (key.size() > 15) key = key.substr(0, 15);
+    std::string id = readString(h, key.c_str());
+    nvs_close(h);
+    return id;
+}
+
+bool ConfigNvs::setDeviceId(const std::string& machine_name, const std::string& device_id) {
+    nvs_handle_t h;
+    if (openHandle(NVS_READWRITE, &h) != ESP_OK) return false;
+    std::string key = "did_" + machine_name;
+    if (key.size() > 15) key = key.substr(0, 15);
+    esp_err_t err = device_id.empty() ? nvs_erase_key(h, key.c_str())
+                                      : nvs_set_str(h, key.c_str(), device_id.c_str());
+    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    if (err == ESP_OK) nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK;
+}
+
 // ---------------------------------------------------------------------------
 // IConfig interface
 // ---------------------------------------------------------------------------

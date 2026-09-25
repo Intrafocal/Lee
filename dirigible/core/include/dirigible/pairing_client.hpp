@@ -17,7 +17,8 @@ namespace dirigible {
 //   POST /pair/request  {device, kind, code, nonce} -> {status:"pending",
 //                                                       expires_in}
 //   GET  /pair/poll?nonce=…  -> {status:"pending"|"denied"|"expired"}
-//                             | {status:"approved", token, hester_port, name}
+//                             | {status:"approved", token, hester_port, name,
+//                                  device_id?}
 //
 // Neither request carries a bearer — that is the whole point — so this client
 // never calls IHttpClient::setAuthToken().
@@ -44,6 +45,9 @@ public:
         std::string token;
         int         hester_port = 9000;
         std::string name;
+        /// "dev_" + 12 hex when Lee issued a per-device token (Copilot v0);
+        /// empty from an older Lee, whose grant is the shared token.
+        std::string device_id;
     };
 
     /// ok=false means the request never landed; `error` is a short line fit to
