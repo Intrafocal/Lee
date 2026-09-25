@@ -1,7 +1,8 @@
 # Dirigible
 
-A LilyGO T-Deck running firmware that talks to Lee: watch the live tab list,
-type into one terminal, ask Hester a question. Plain ESP-IDF + LVGL — no
+A LilyGO T-Deck running firmware that talks to Lee: see what is waiting on
+you and answer it, capture an idea, watch the live tab list, type into one
+terminal, ask Hester a question. Plain ESP-IDF + LVGL — no
 framework, no code generation.
 
 ```
@@ -55,14 +56,23 @@ Nobody types 36 characters on a thumb keyboard, and because the code lives on
 the device's screen, a machine that merely knows Lee's address cannot pair
 itself. Lee logs every approval and denial to `lee.log`.
 
+Since Copilot v0 the approved grant is a **per-device token** plus a
+`device_id` (`dev_` + 12 hex): Lee stores only its hash, lists the device under
+Devices, can revoke it, and attributes what the device does to it. The device
+keeps the id in NVS next to the token (`did_<name>`) and shows it in the setup
+card and on the empty Waiting screen. Replying to an agent needs a device
+token: a device still holding the shared token can read the queue but gets
+`re-pair to reply`.
+
 If pairing fails (denied, expired, or Lee unreachable) the card turns red and
 the footer offers **Retry** and **Token**.
 
 **Typed-token fallback.** The old step is still there behind that **Token**
 button — for a Lee older than E19, one with `hester: { pairing_enabled: false }`
 in `~/.lee/config.yaml`, or a network that will not pass the POST. Type the
-bearer from `cat ~/.lee/api-token`; the field counts up to `n/36` and turns
-green when what you typed is a UUID. **Code** goes back to the approve screen.
+bearer from `cat ~/.lee/api-token` — or, better, a device token from
+**Create device token** in Lee's Devices list, which can reply; the field
+counts up to `n/36` and turns green when what you typed is a UUID. **Code** goes back to the approve screen.
 
 Every screen carries a 20 px header (title | step/status | battery, WiFi, link
 dot) and a 16 px footer key legend. The pairing screen shows four step chips
@@ -97,6 +107,7 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
+| Waiting  | the default screen: Lee's attention queue (see below). A capture field on top, then each item with a severity bar (red blocking, amber needs you, dim ambient), its title, tab and age; the header centre reads `N waiting` (plus `focus` / `away`). Select one to read the agent's words and answer it |
 | Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a `Win` button / `w` picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
 | Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
 | Viewer   | read-only file view: code with a line gutter (pans, or wraps on click), markdown/text wrapped; follows an editor tab's file, cursor line and unsaved mark |
@@ -106,10 +117,13 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Input                   | Effect                                          |
 |-------------------------|-------------------------------------------------|
-| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Files and Viewer) |
-| trackball click         | activates what's under the pointer (the selected row in Files; wrap toggle in Viewer) |
-| trackball hold (0.8 s)  | back; on Tabs it opens the menu: Tabs / Files / Hester / Windows / Pairing / Reconnect |
-| ESC                     | leaves Terminal, steps back in Pairing          |
+| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Waiting, Files and Viewer) |
+| trackball click         | activates what's under the pointer (the selected row in Waiting and Files; wrap toggle in Viewer). Never approves |
+| trackball hold (0.8 s)  | back; on Waiting it opens the menu: Waiting / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
+| ESC                     | leaves Terminal, steps back in Pairing, closes an item or the capture field |
+| j / k, Enter (Waiting)  | move, open the selected item                    |
+| c / t / r (Waiting)     | capture an idea, show the tab list, refetch the queue |
+| y / n (approval)        | approve / deny                                  |
 | w (on Tabs)             | pick which Lee window to follow                 |
 | Tab                     | moves focus within a screen (reaches the password `show` toggle and the footer buttons) |
 | touch                   | works everywhere the pointer does               |
@@ -118,18 +132,47 @@ Sym+key chords are **not** available: the T-Deck's keypad MCU resolves the
 modifier itself and reports a single ASCII byte, so the firmware cannot tell
 Sym+X from the symbol X produces.
 
+## Waiting, Reply and Capture (Copilot v0)
+
+Lee keeps one machine-wide queue of agents that want you (approvals, questions,
+blockers, finished turns); `docs/13-Copilot.md` §5 and
+`docs/plans/2026-09-25-copilot-v0-v1-contracts.md` §9.3 are the spec.
+
+- **Live.** The queue rides the `/context/stream` socket the device already
+  holds, as `{"type":"attention_snapshot","data":…}`; `GET /attention?compact=1`
+  fills it on every connect and on `r`. At most 25 items, text cut to 280
+  characters; only what the screen draws is kept.
+- **Reply.** An approval shows **Approve** / **Deny** (`y` / `n`, or tap);
+  anything else that takes text shows a reply field, Enter sends. Every reply
+  echoes the item's `version`: if the item moved on, Lee answers 409, the queue
+  is refetched and nothing is resent — decide again on what is there now.
+  `agent gone` means its terminal exited.
+- **Capture.** Type in the top field (`c`, a tap, or Menu > Capture), Enter
+  sends it to Hester's Someday list for the followed window's workspace.
+  `saved, syncs later` means Hester was down and Lee spooled it.
+- **Alerts.** Pull-first: the only alert is the header blinking amber when an
+  item's `notify` flips on (Lee decides: blocking outside quiet hours, or a
+  wake-marked item while you are away). Nothing goes through a push service.
+
+A Lee without the queue (404 on `/attention`) shows "no queue" and the rest of
+the firmware works as before.
+
 ## Wire protocol
 
-Everything is authenticated with Lee's persistent API token (`~/.lee/api-token`).
+Everything is authenticated with a bearer: the per-device token from pairing,
+or Lee's shared API token (`~/.lee/api-token`) on older setups.
 
 | Direction | Endpoint |
 |-----------|----------|
-| device → Lee  | `ws://host:9001/context/stream?token=…` — live `LeeContext` |
+| device → Lee  | `ws://host:9001/context/stream?token=…` — live `LeeContext`; also `attention_snapshot`, `presence`, `copilot_return` messages |
 | device → Lee  | `ws://host:9001/pty/<id>/stream?token=…` — PTY bytes out, raw text in, `{"type":"resize","cols":C,"rows":R}` to resize |
 | device → Lee  | `POST http://host:9001/command` with `Authorization: Bearer …` |
+| device → Lee  | `GET http://host:9001/attention?compact=1` → `{success,data:AttentionSnapshot}` |
+| device → Lee  | `POST http://host:9001/attention/<id>/reply` — `{action:"approve"\|"deny"\|"text",text?,version}`; 409 stale, 410 agent gone, 403 shared token |
+| device → Lee  | `POST http://host:9001/capture` — `{text,workspace}` → `{success,someday_id,spooled}` |
 | device → Lee  | `GET http://host:9001/fs/list?path=…`, `GET /fs/read?path=…[&stat=1]` — bearer; read-only, workspace-scoped |
 | device → Lee  | `POST http://host:9001/pair/request` — **no auth**; `{device,kind,code,nonce}` → `{status:"pending",expires_in}` |
-| device → Lee  | `GET http://host:9001/pair/poll?nonce=…` — **no auth**; → `pending` / `denied` / `expired` / `approved` + `{token,hester_port,name}` |
+| device → Lee  | `GET http://host:9001/pair/poll?nonce=…` — **no auth**; → `pending` / `denied` / `expired` / `approved` + `{token,hester_port,name,device_id?}` |
 | device → Hester | `POST http://host:9000/context/stream` with the same bearer → SSE |
 
 See `docs/Dirigible.md` for the longer version.

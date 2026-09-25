@@ -265,12 +265,14 @@ static void menu_item_cb(lv_event_t* e)
     auto choice = (intptr_t)lv_event_get_user_data(e);
     menu_close();
     switch (choice) {
-    case 0: app_show(View::Tabs); break;
-    case 1: files_open(); break;
-    case 2: app_show(View::Hester); break;
-    case 3: windows_open(); break;
-    case 4: pairing_begin(); break;
-    case 5:
+    case 0: waiting_open(); break;
+    case 1: app_show(View::Tabs); break;
+    case 2: files_open(); break;
+    case 3: app_show(View::Hester); break;
+    case 4: waiting_open_capture(); break;
+    case 5: windows_open(); break;
+    case 6: pairing_begin(); break;
+    case 7:
         if (auto* c = activeConn()) { c->disconnect(); c->connect(); }
         app_set_status("reconnecting...");
         break;
@@ -300,7 +302,7 @@ static lv_obj_t* menu_add(lv_obj_t* list, const char* text, lv_event_cb_t cb, vo
     return btn;
 }
 
-/// Opened from the tab list's back affordance — the tab list is the root, so
+/// Opened from the Waiting view's back affordance — Waiting is the root, so
 /// "back" there means "what else can I do".  Every other view reaches its own
 /// parent instead, which is why this is no longer bound to the long-press.
 static void menu_open(void*)
@@ -311,8 +313,9 @@ static void menu_open(void*)
     a.menu = lv_list_create(a.screen);
     menu_style(a.menu, 180);
 
-    static const char* names[] = { "Tabs", "Files", "Hester", "Windows", "Pairing", "Reconnect" };
-    for (intptr_t i = 0; i < 6; i++) {
+    static const char* names[] = { "Waiting", "Tabs", "Files", "Hester", "Capture",
+                                   "Windows", "Pairing", "Reconnect" };
+    for (intptr_t i = 0; i < 8; i++) {
         menu_add(a.menu, names[i], menu_item_cb, (void*)i);
     }
 }
@@ -392,7 +395,10 @@ void app_back()
         pairing_back();
         return;
     case View::Tabs:
-        menu_open(nullptr);
+        waiting_open();
+        return;
+    case View::Waiting:
+        if (!waiting_back()) menu_open(nullptr);
         return;
     }
 }
@@ -416,6 +422,7 @@ static bool key_hook(uint8_t ascii, void*)
     }
 
     switch (a.view) {
+    case View::Waiting:  return waiting_key(ascii);
     case View::Terminal: return terminal_key(ascii);
     case View::Pairing:  return pairing_key(ascii);
     case View::Files:    return files_key(ascii);
@@ -434,6 +441,7 @@ static bool key_hook(uint8_t ascii, void*)
 static void ball_hook(int dx, int dy, bool click, void*)
 {
     switch (app().view) {
+    case View::Waiting:  waiting_ball(dx, dy, click);  break;
     case View::Terminal: terminal_ball(dx, dy, click); break;
     case View::Files:    files_ball(dx, dy, click);    break;
     case View::Viewer:   viewer_ball(dx, dy, click);   break;
@@ -450,6 +458,7 @@ void app_show(View v)
     auto& a = app();
     a.view = v;
 
+    lv_obj_add_flag(a.view_waiting,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_tabs,     LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_hester,   LV_OBJ_FLAG_HIDDEN);
@@ -458,10 +467,11 @@ void app_show(View v)
     lv_obj_add_flag(a.view_viewer,   LV_OBJ_FLAG_HIDDEN);
 
     // The ball is a pointer on the tab list, Hester and pairing.  In the
-    // terminal it is a d-pad feeding arrow keys to the PTY; in Files and the
-    // viewer it is a d-pad moving the selection / scrolling, which on a long
-    // list beats steering a pointer onto 17 px rows.
-    const bool dpad = v == View::Terminal || v == View::Files || v == View::Viewer;
+    // terminal it is a d-pad feeding arrow keys to the PTY; in Waiting, Files
+    // and the viewer it is a d-pad moving the selection / scrolling, which on
+    // a long list beats steering a pointer onto 17 px rows.
+    const bool dpad = v == View::Terminal || v == View::Files || v == View::Viewer ||
+                      v == View::Waiting;
     tdeck_bsp_set_ball_hook(dpad ? ball_hook : nullptr, nullptr);
 
     // Each view owns its legend; pairing replaces the buttons per step.
@@ -484,9 +494,14 @@ void app_show(View v)
     // The back button is the same object everywhere; only its glyph changes,
     // so its position never moves under the thumb.
     switch (v) {
+    case View::Waiting:
+        lv_obj_clear_flag(a.view_waiting, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph("=");          // root: back opens the menu
+        waiting_chrome();
+        break;
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
-        chrome_set_back_glyph("=");          // root: back opens the menu
+        chrome_set_back_glyph("<");
         tabs_chrome();
         break;
     case View::Terminal:
@@ -774,6 +789,7 @@ void app_start()
     lv_obj_set_pos(a.footer_btns, SCREEN_W - 2, 0);   // repositioned by footer_fit_legend()
 
     // ---- views ---------------------------------------------------------
+    waiting_build(a.content);
     tabs_build(a.content);
     terminal_build(a.content);
     hester_build(a.content);
@@ -805,6 +821,13 @@ void app_start()
     });
     dirigible::EventBus::instance().on(dirigible::Event::ConnectionChanged, []() {
         tabs_render(activeConn() ? activeConn()->currentContext() : nullptr);
+        waiting_render();
+    });
+    dirigible::EventBus::instance().on(dirigible::Event::AttentionChanged, []() {
+        waiting_render(true);
+    });
+    dirigible::EventBus::instance().on(dirigible::Event::AttentionAlert, []() {
+        waiting_alert();
     });
     dirigible::EventBus::instance().on(dirigible::Event::WindowsChanged, []() {
         if (app().view == View::Tabs) tabs_chrome();
@@ -824,7 +847,7 @@ void app_start()
         return;
     }
 
-    app_show(View::Tabs);
+    app_show(View::Waiting);
 
     // Dial the stored machine only once the link is actually up.  connect()
     // spawns a WebSocket task that calls getaddrinfo() immediately, and at
