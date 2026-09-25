@@ -11,7 +11,7 @@ the auth middleware puts the caller on ``request.state.principal``.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -225,8 +225,12 @@ def create_copilot_router() -> APIRouter:
     # ------------------------------------------------------------------ retro
 
     def _week_wins(ws: Path, week: str) -> List[Dict[str, Any]]:
-        start = retro_mod.week_start(week).astimezone().astimezone(timezone.utc)
-        return digest_mod.verified_wins(ws, since=start, until=datetime.now(timezone.utc))
+        local_start = retro_mod.week_start(week)
+        start = local_start.astimezone().astimezone(timezone.utc)
+        # Bound to the end of that ISO week so a past week's retro doesn't
+        # count wins made since.
+        end = (local_start + timedelta(days=7)).astimezone().astimezone(timezone.utc)
+        return digest_mod.verified_wins(ws, since=start, until=min(end, datetime.now(timezone.utc)))
 
     @router.get("/copilot/retro")
     async def copilot_retro_get(request: Request, workspace: Optional[str] = None):
@@ -257,6 +261,10 @@ def create_copilot_router() -> APIRouter:
             week = body.get("week") or retro_mod.status()["week"]
             if not isinstance(week, str) or not retro_mod.WEEK_RE.match(week):
                 raise BadRequest("week must look like 2026-W39")
+            try:
+                retro_mod.week_start(week)  # rejects W00, W60, W53 in 52-week years
+            except ValueError:
+                raise BadRequest(f"{week} is not an ISO week")
             try:
                 answers = retro_mod.clean_answers(body.get("answers"))
             except ValueError as e:
