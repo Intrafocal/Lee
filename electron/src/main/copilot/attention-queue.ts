@@ -11,6 +11,7 @@ import type {
   AttentionActionName,
   AttentionItem,
   AttentionKind,
+  AttentionQuestion,
   AttentionSeverity,
   AttentionSnapshot,
   AttentionSource,
@@ -20,7 +21,7 @@ import type {
   LeeStatusBlock,
 } from '../../shared/copilot';
 import type { CopilotConfig } from './config';
-import { AGENT_TEXT_MAX, clip } from './hook-payload';
+import { AGENT_TEXT_MAX, clip, compactQuestion, isQuestionTool } from './hook-payload';
 
 export const COMPACT_MAX_ITEMS = 25;
 export const COMPACT_TEXT_MAX = 280;
@@ -29,7 +30,7 @@ const MAX_ITEM_FILES = 50;
 
 export type Resolution = 'reply' | 'answered_in_tab' | 'superseded' | 'agent_exit' | 'dismissed' | 'expired';
 
-export const KIND_TITLES: Record<Exclude<AttentionKind, 'approval' | 'failure'>, string> = {
+export const KIND_TITLES: Record<Exclude<AttentionKind, 'approval' | 'question' | 'failure'>, string> = {
   waiting: 'Claude is waiting for you',
   blocker: 'Claude is blocked',
   decision: 'Claude needs a decision',
@@ -39,6 +40,7 @@ export const KIND_TITLES: Record<Exclude<AttentionKind, 'approval' | 'failure'>,
 
 const KIND_ACTIONS: Record<AttentionKind, AttentionActionName[]> = {
   approval: ['approve', 'deny', 'open', 'snooze', 'dismiss', 'wake'],
+  question: ['choose', 'open', 'snooze', 'dismiss', 'wake'],
   waiting: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
   blocker: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
   decision: ['reply', 'open', 'snooze', 'dismiss', 'wake'],
@@ -47,12 +49,20 @@ const KIND_ACTIONS: Record<AttentionKind, AttentionActionName[]> = {
   summary: ['open', 'dismiss'],
 };
 
-const PTY_ACTIONS = new Set<AttentionActionName>(['approve', 'deny', 'reply', 'open']);
+const PTY_ACTIONS = new Set<AttentionActionName>(['approve', 'deny', 'choose', 'reply', 'open']);
+
+/** Kinds that are a prompt the agent is showing right now (answered with keys). */
+export const PROMPT_KINDS: AttentionKind[] = ['approval', 'question'];
+
+export function isPromptKind(kind: AttentionKind): boolean {
+  return kind === 'approval' || kind === 'question';
+}
 
 const SEVERITY_RANK: Record<AttentionSeverity, number> = { blocking: 0, 'needs-you': 1, ambient: 2 };
 
-export function actionsFor(kind: AttentionKind, ptyId: number | null): AttentionActionName[] {
-  const all = KIND_ACTIONS[kind];
+/** `choosable`: a question one option pick can answer (see AttentionItem.actions). */
+export function actionsFor(kind: AttentionKind, ptyId: number | null, choosable = false): AttentionActionName[] {
+  const all = KIND_ACTIONS[kind].filter((a) => a !== 'choose' || choosable);
   if (kind === 'summary') return [...all];
   return ptyId == null ? all.filter((a) => !PTY_ACTIONS.has(a)) : [...all];
 }
@@ -74,6 +84,9 @@ export interface NewItem {
   text: string;
   source: AttentionSource;
   tool?: { name: string; preview: string; signature: string } | null;
+  /** Question items: what is asked, and whether one pick answers it. */
+  question?: AttentionQuestion | null;
+  choosable?: boolean;
   lee_status?: LeeStatusBlock | null;
   files?: string[];
   wake?: boolean;
@@ -110,6 +123,8 @@ interface Entry {
   snoozeOnChange: boolean;
   closedMs: number | null;
   escalatedFor: Set<string>;
+  /** Question items: 'choose' is offered. */
+  choosable: boolean;
 }
 
 function iso(ms: number): string {
@@ -162,20 +177,35 @@ export class AttentionQueue {
     const key = sourceKey(spec.source);
     const siblings = spec.kind === 'summary' ? [] : this.live().filter((e) => e.key === key);
     for (const e of siblings) {
-      const isApproval = e.item.kind === 'approval';
-      if (spec.kind === 'approval' && isApproval) {
+      const kind = e.item.kind;
+      if (isPromptKind(spec.kind) && kind === spec.kind) {
         const sameTool = !spec.tool || !e.item.tool || e.item.tool.signature === spec.tool.signature;
         if (sameTool) {
           this.update(
             e.item.id,
-            { text: spec.text || e.item.text, tool: spec.tool ?? e.item.tool ?? null, source: spec.source },
+            {
+              text: spec.text || e.item.text,
+              tool: spec.tool ?? e.item.tool ?? null,
+              source: spec.source,
+              ...(spec.kind === 'question' && spec.question
+                ? { title: spec.title, question: spec.question, choosable: !!spec.choosable }
+                : {}),
+            },
             now,
           );
           return copyItem(e.item);
         }
       }
-      if (isApproval && spec.kind !== 'approval') continue;
-      if (e.item.kind === 'failure') continue;
+      // An approval opened for AskUserQuestion becomes the question.
+      const askApproval = kind === 'approval' && isQuestionTool(e.item.tool?.name);
+      if (spec.kind === 'question' && askApproval) {
+        this.resolve(e.item.id, 'superseded', now);
+        continue;
+      }
+      // A prompt that is showing stays until it is answered; a different
+      // prompt of the same kind replaces it.
+      if (isPromptKind(kind) && kind !== spec.kind) continue;
+      if (kind === 'failure') continue;
       this.resolve(e.item.id, 'superseded', now);
     }
 
@@ -198,8 +228,9 @@ export class AttentionQueue {
       source: { ...spec.source },
       files: (spec.files ?? []).slice(-MAX_ITEM_FILES),
       tool: spec.tool ?? null,
+      ...(spec.kind === 'question' ? { question: spec.question ?? null } : {}),
       lee_status: spec.lee_status ?? null,
-      actions: actionsFor(spec.kind, spec.source.pty_id),
+      actions: actionsFor(spec.kind, spec.source.pty_id, !!spec.choosable),
       snoozed_until: null,
     };
     const entry: Entry = {
@@ -212,6 +243,7 @@ export class AttentionQueue {
       snoozeOnChange: false,
       closedMs: null,
       escalatedFor: new Set(),
+      choosable: spec.kind === 'question' && !!spec.choosable,
     };
     this.entries.set(id, entry);
     this.deps.log({
@@ -231,7 +263,9 @@ export class AttentionQueue {
 
   update(
     id: string,
-    changes: Partial<Pick<AttentionItem, 'text' | 'title' | 'tool' | 'lee_status' | 'files' | 'source'>>,
+    changes: Partial<Pick<AttentionItem, 'text' | 'title' | 'tool' | 'question' | 'lee_status' | 'files' | 'source'>> & {
+      choosable?: boolean;
+    },
     now: number,
   ): AttentionItem | undefined {
     const e = this.entries.get(id);
@@ -252,6 +286,17 @@ export class AttentionQueue {
       e.item.tool = changes.tool;
       changed.push('tool');
     }
+    if (e.item.kind === 'question') {
+      if (changes.question !== undefined && JSON.stringify(changes.question) !== JSON.stringify(e.item.question ?? null)) {
+        e.item.question = changes.question;
+        changed.push('question');
+      }
+      if (changes.choosable !== undefined && changes.choosable !== e.choosable) {
+        e.choosable = changes.choosable;
+        e.item.actions = actionsFor(e.item.kind, e.item.source.pty_id, e.choosable);
+        changed.push('actions');
+      }
+    }
     if (changes.lee_status !== undefined && JSON.stringify(changes.lee_status) !== JSON.stringify(e.item.lee_status ?? null)) {
       e.item.lee_status = changes.lee_status;
       changed.push('lee_status');
@@ -270,7 +315,7 @@ export class AttentionQueue {
       }
       if (JSON.stringify(merged) !== JSON.stringify(e.item.source)) {
         e.item.source = merged;
-        e.item.actions = actionsFor(e.item.kind, merged.pty_id);
+        e.item.actions = actionsFor(e.item.kind, merged.pty_id, e.choosable);
         changed.push('source');
       }
     }
@@ -525,6 +570,7 @@ export class AttentionQueue {
         item.text = clip(item.text, COMPACT_TEXT_MAX);
         delete item.files;
         delete item.lee_status;
+        if (item.question) item.question = compactQuestion(item.question);
       }
       return item;
     });

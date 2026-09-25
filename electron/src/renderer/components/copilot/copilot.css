@@ -347,6 +347,95 @@
   color: var(--error);
 }
 
+/* Question items (AskUserQuestion): the question and its options */
+
+.copilot-question {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copilot-question-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.copilot-question-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: 10px;
+  color: var(--text-muted);
+  vertical-align: 1px;
+}
+
+.copilot-question-note {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.copilot-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.copilot-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  text-align: left;
+  font-family: inherit;
+}
+
+.copilot-question-option.is-choosable {
+  cursor: pointer;
+}
+
+.copilot-question-option.is-choosable:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.copilot-question-option.is-picked {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-question-option-label {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.copilot-question-option-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.copilot-question-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+.copilot-question-confirm strong {
+  color: var(--phosphor);
+}
+
 /* ---------------------------------------------------------------------- */
 /* Blocking banner (portal, raised above the status bar)                  */
 /* ---------------------------------------------------------------------- */

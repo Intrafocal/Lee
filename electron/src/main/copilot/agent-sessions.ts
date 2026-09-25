@@ -7,6 +7,7 @@
  */
 
 import type { LeeStatusBlock } from '../../shared/copilot';
+import type { ParsedQuestion } from './hook-payload';
 
 export const MAX_SESSION_FILES = 50;
 
@@ -18,6 +19,8 @@ export interface PendingTool {
   /** Subagent id from the hook input; null for the main agent. */
   agent_id: string | null;
   files: string[];
+  /** AskUserQuestion calls: the parsed question (the agent's words; never logged). */
+  question?: ParsedQuestion | null;
 }
 
 /** Tool calls that have started (PreToolUse) and not finished yet, per session. */
@@ -49,12 +52,13 @@ export interface AgentSession {
   /** Started, unfinished tool calls (PreToolUse without PostToolUse[Failure]). */
   open_tools: PendingTool[];
   /**
-   * True while the agent is actually sitting on a permission prompt
-   * (PermissionRequest or an approval Notification), until the prompt is
-   * answered in the tab, the tool finishes, the turn ends or is interrupted.
-   * Device approve/deny is only written into the PTY while this is set.
+   * True while the agent is actually sitting on a prompt that takes keys: a
+   * permission prompt (PermissionRequest or an approval Notification) or an
+   * AskUserQuestion picker, until it is answered in the tab, the tool
+   * finishes, the turn ends or is interrupted. Device approve/deny/choose is
+   * only written into the PTY while this is set.
    */
-  awaiting_approval: boolean;
+  awaiting_input: boolean;
   files_written: string[];
   last_summary: string | null;
   last_lee_status: LeeStatusBlock | null;
@@ -101,7 +105,7 @@ export class AgentSessions {
         activity: 'unknown',
         pending_tool: null,
         open_tools: [],
-        awaiting_approval: false,
+        awaiting_input: false,
         files_written: [],
         last_summary: null,
         last_lee_status: null,
@@ -195,7 +199,7 @@ export class AgentSessions {
     s.turn_ended_at = now;
     s.pending_tool = null;
     s.open_tools = [];
-    s.awaiting_approval = false;
+    s.awaiting_input = false;
     s.activity = 'idle';
     return busy;
   }
@@ -255,7 +259,7 @@ export class AgentSessions {
     s.turn_started_at = null;
     s.pending_tool = null;
     s.open_tools = [];
-    s.awaiting_approval = false;
+    s.awaiting_input = false;
     s.activity = 'unknown';
   }
 

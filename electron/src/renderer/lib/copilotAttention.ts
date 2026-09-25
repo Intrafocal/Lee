@@ -50,7 +50,7 @@ export function resolveSummaryAtTime(timeValue: string, now: Date = new Date()):
 /** `needs`: an approval, question, blocker or decision is waiting on you. `review`: the agent finished a turn. */
 export type TabAttention = 'needs' | 'review';
 
-const NEEDS_KINDS = new Set<AttentionItem['kind']>(['approval', 'waiting', 'blocker', 'decision']);
+export const NEEDS_KINDS: ReadonlySet<AttentionItem['kind']> = new Set<AttentionItem['kind']>(['approval', 'question', 'waiting', 'blocker', 'decision']);
 
 function isLive(item: AttentionItem): boolean {
   return item.state === 'open';

@@ -1,10 +1,13 @@
 /**
  * AttentionItemRow - one row of the attention flyout or blocking banner.
  * Renders title, source, age, the agent's own words, and inline actions per
- * `item.actions` (contracts §5.1, §9.1).
+ * `item.actions` (contracts §5.1, §9.1). Question items show the question and
+ * its options instead; a single-select single question can be answered here
+ * (pick, see which option will be sent, then Send), anything else is read-only
+ * with "Open tab".
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Icon } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 
@@ -37,6 +40,8 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Question items: the option picked but not sent yet. */
+  const [picked, setPicked] = useState<number | null>(null);
 
   const run = async (fn: () => Promise<{ success: boolean; error?: string }>): Promise<boolean> => {
     setBusy(true);
@@ -75,6 +80,20 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
 
   const meta = [item.source.tab_label, workspaceBasename(item.source.workspace)].filter(Boolean).join(' · ');
   const hasWake = item.actions.includes('wake');
+  const question = item.kind === 'question' ? item.question ?? null : null;
+  const canChoose = !!question && item.actions.includes('choose');
+  // A different question (or options) under the same item: drop the pick so
+  // an index never sends an option the person didn't see.
+  const questionKey = question ? JSON.stringify(question) : '';
+  useEffect(() => setPicked(null), [questionKey]);
+  const pickedOption = canChoose && picked !== null ? question?.questions[0]?.options[picked] ?? null : null;
+
+  const sendChoice = () => {
+    if (picked === null) return;
+    void run(() => api.reply(item.id, { action: 'choose', choice: picked, version: item.version })).then((ok) => {
+      if (ok) setPicked(null);
+    });
+  };
 
   return (
     <div className={`copilot-item severity-${item.severity}`}>
@@ -83,7 +102,57 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
         <span className="copilot-item-age">{formatAge(item.created_at)}</span>
       </div>
       {meta && <div className="copilot-item-meta">{meta}</div>}
-      {!compact && item.text && (
+      {question && (
+        <div className="copilot-question">
+          {question.questions.map((q, qi) => (
+            <div className="copilot-question-block" key={qi}>
+              <div className="copilot-question-text">
+                {q.header && <span className="copilot-question-chip">{q.header}</span>}
+                {q.question}
+                {q.multi_select && <span className="copilot-question-note"> (pick any)</span>}
+              </div>
+              {!compact && q.options.length > 0 && (
+                <div className="copilot-question-options">
+                  {q.options.map((o, oi) =>
+                    canChoose ? (
+                      <button
+                        key={oi}
+                        className={`copilot-question-option is-choosable${picked === oi ? ' is-picked' : ''}`}
+                        disabled={busy}
+                        aria-pressed={picked === oi}
+                        onClick={() => setPicked((p) => (p === oi ? null : oi))}
+                      >
+                        <span className="copilot-question-option-label">{o.label}</span>
+                        {o.description && <span className="copilot-question-option-desc">{o.description}</span>}
+                      </button>
+                    ) : (
+                      <div key={oi} className="copilot-question-option">
+                        <span className="copilot-question-option-label">{o.label}</span>
+                        {o.description && <span className="copilot-question-option-desc">{o.description}</span>}
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+          {!canChoose && <div className="copilot-question-note">Answer this in the tab.</div>}
+          {pickedOption && (
+            <div className="copilot-question-confirm">
+              <span>
+                Send <strong>{pickedOption.label}</strong> to Claude?
+              </span>
+              <button className="copilot-item-btn copilot-item-btn-approve" disabled={busy} onClick={sendChoice}>
+                <Icon name="send" size={12} /> Send
+              </button>
+              <button className="copilot-item-btn" disabled={busy} onClick={() => setPicked(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {!question && !compact && item.text && (
         <div className="copilot-item-text">
           <span className="copilot-item-text-label">Claude:</span>
           {item.text}
@@ -119,7 +188,7 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
         )}
         {item.actions.includes('open') && (
           <button className="copilot-item-btn" disabled={busy} onClick={() => run(() => api.openItem(item.id))}>
-            <Icon name="external" size={12} /> Open
+            <Icon name="external" size={12} /> {item.kind === 'question' ? 'Open tab' : 'Open'}
           </button>
         )}
         {item.actions.includes('snooze') && (

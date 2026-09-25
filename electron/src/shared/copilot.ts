@@ -177,6 +177,7 @@ export type CeremonyAction =
 
 export type AttentionKind =
   | 'approval' // agent is showing a permission prompt
+  | 'question' // agent is showing a multiple-choice question (Claude Code's AskUserQuestion)
   | 'waiting' // agent is idle at its prompt waiting on you
   | 'blocker' // agent reported lee-status: blocked
   | 'decision' // agent reported lee-status: waiting (a question for you)
@@ -188,7 +189,7 @@ export type AttentionSeverity = 'ambient' | 'needs-you' | 'blocking';
 
 export type AttentionState = 'open' | 'snoozed' | 'resolved' | 'dismissed';
 
-export type AttentionActionName = 'approve' | 'deny' | 'reply' | 'open' | 'snooze' | 'dismiss' | 'wake';
+export type AttentionActionName = 'approve' | 'deny' | 'choose' | 'reply' | 'open' | 'snooze' | 'dismiss' | 'wake';
 
 export interface LeeStatusBlock {
   status: 'done' | 'in-progress' | 'blocked' | 'waiting' | null;
@@ -208,6 +209,22 @@ export interface AttentionSource {
   tab_label: string | null;
   workspace: string | null;
   cwd: string | null;
+}
+
+/**
+ * The question(s) an agent is showing, from AskUserQuestion's tool_input.
+ * The agent's own words: shown in the queue, never written to the event log.
+ * Caps: 4 questions, 8 options each, strings 300 chars (120 in compact form).
+ */
+export interface AttentionQuestion {
+  questions: Array<{
+    question: string;
+    /** Short chip label ("Auth method"); null when the agent gave none. */
+    header: string | null;
+    multi_select: boolean;
+    /** Empty for free-text / number questions. The picker also offers "Other" (free text), which is not listed. */
+    options: Array<{ label: string; description: string | null }>;
+  }>;
 }
 
 export interface AttentionItem {
@@ -237,7 +254,13 @@ export interface AttentionItem {
   files?: string[];
   /** Pending tool for approvals: name and a short preview (max 200 chars). Never written to the event log. */
   tool?: { name: string; preview: string; signature: string } | null;
+  /** Question items only. Kept (clipped) in compact form. */
+  question?: AttentionQuestion | null;
   lee_status?: LeeStatusBlock | null;
+  /**
+   * Includes 'choose' only when the item is a question a device can answer
+   * with one option pick: exactly one question, single-select, with options.
+   */
   actions: AttentionActionName[];
   snoozed_until?: string | null;
 }
@@ -307,9 +330,12 @@ export interface AttentionSnapshot {
 }
 
 export interface ReplyRequest {
-  action: 'approve' | 'deny' | 'text';
+  /** 'choose' answers a question item whose actions include 'choose'. */
+  action: 'approve' | 'deny' | 'choose' | 'text';
   /** Required when action is 'text'. */
   text?: string;
+  /** Required when action is 'choose': 0-based index into question.questions[0].options. */
+  choice?: number;
   /** Must equal the item's current version. */
   version: number;
 }

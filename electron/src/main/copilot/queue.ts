@@ -41,16 +41,19 @@ import {
   AGENT_TEXT_MAX,
   classifyNotification,
   clip,
+  isQuestionTool,
   isWriteTool,
   normalizeHook,
+  parseAskUserQuestion,
   parseLeeStatus,
   readTranscriptTail,
   toolFiles,
   toolPreview,
   toolSignature,
 } from './hook-payload';
+import type { ParsedQuestion } from './hook-payload';
 import { AgentSession, AgentSessions } from './agent-sessions';
-import { AttentionQueue, KIND_TITLES, sourceKey } from './attention-queue';
+import { AttentionQueue, KIND_TITLES, PROMPT_KINDS, isPromptKind, sourceKey } from './attention-queue';
 import { FocusTracker, parseFocusItem } from './focus';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
 import { checkReply, sanitizeReplyText, writeReply, writeText } from './reply';
@@ -75,11 +78,13 @@ const PERMISSION_MODES = new Set<HandoffLaunch['permission_mode']>(['acceptEdits
  * covers parallel calls of one message, which start together.
  */
 const NEWER_TOOL_GRACE_MS = 2_000;
-/** Keys that answer Claude Code's permission prompt when typed in the tab. */
+/** Question text in a question item's title. */
+const QUESTION_TITLE_MAX = 80;
+/** Keys that answer Claude Code's permission prompt or question picker when typed in the tab. */
 const PROMPT_ACCEPT_INPUT = /^(\r|[1-9])$/;
 const PROMPT_CANCEL_INPUT = '\x1b';
 
-/** What an approval item was opened for, to match the call that finishes it. */
+/** What a prompt item (approval or question) was opened for, to match the call that finishes it. */
 interface ApprovalMeta {
   tool_use_id: string | null;
   agent_id: string | null;
@@ -176,7 +181,7 @@ export class CopilotQueue {
   private wsTimer: ReturnType<typeof setTimeout> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
-  /** Approval item id -> the tool call it is about. Pruned as items close. */
+  /** Prompt item (approval or question) id -> the tool call it is about. Pruned as items close. */
   private approvalMeta = new Map<string, ApprovalMeta>();
   /** Per-agent state last seen by noteAgents(). */
   private agentsSig = '';
@@ -473,9 +478,9 @@ export class CopilotQueue {
       case 'UserPromptSubmit': {
         ev('agent.prompt', { prompt_chars: h.prompt_chars ?? 0 });
         this.sessions.startBusy(s, now, true);
-        s.awaiting_approval = false;
+        s.awaiting_input = false;
         this.queue.resolveWhere(
-          (i) => sourceKey(i.source) === key && ['approval', 'waiting', 'blocker', 'decision', 'review'].includes(i.kind),
+          (i) => sourceKey(i.source) === key && ['approval', 'question', 'waiting', 'blocker', 'decision', 'review'].includes(i.kind),
           'answered_in_tab',
           now,
         );
@@ -487,19 +492,22 @@ export class CopilotQueue {
         const writes = isWriteTool(tool);
         const signature = toolSignature(tool, h.tool_input);
         ev('agent.tool', { phase: 'pre', tool, files, writes, signature });
-        this.sessions.openTool(s, {
+        const asks = isQuestionTool(tool) ? parseAskUserQuestion(h.tool_input) : null;
+        const pending = {
           name: tool,
-          preview: toolPreview(tool, h.tool_input),
+          preview: asks ? clip(asks.question.questions[0].question, 200) : toolPreview(tool, h.tool_input),
           signature,
           tool_use_id: h.tool_use_id,
           agent_id: h.agent_id,
           files,
-        });
+          question: asks,
+        };
+        this.sessions.openTool(s, pending);
         if (writes) this.sessions.addWritten(s, files);
         // The same agent started a newer call, so it is past its prompt.
         const passed = this.queue.resolveWhere(
           (i) => {
-            if (sourceKey(i.source) !== key || i.kind !== 'approval') return false;
+            if (sourceKey(i.source) !== key || !isPromptKind(i.kind)) return false;
             const m = this.approvalMeta.get(i.id);
             return (
               !!m && !!m.tool_use_id && !!h.tool_use_id && m.tool_use_id !== h.tool_use_id &&
@@ -509,13 +517,36 @@ export class CopilotQueue {
           'answered_in_tab',
           now,
         );
-        if (passed > 0 && this.queue.findLive(key, ['approval']).length === 0) s.awaiting_approval = false;
+        if (passed > 0 && this.queue.findLive(key, PROMPT_KINDS).length === 0) s.awaiting_input = false;
         this.sessions.startBusy(s, now, false);
+        // AskUserQuestion shows its picker right after this hook: the agent
+        // is waiting on your answer now, not on a permission.
+        if (isQuestionTool(tool)) this.openQuestion(s, src, pending, 'pre', now);
         break;
       }
       case 'PermissionRequest': {
         const sig = h.tool_name ? toolSignature(h.tool_name, h.tool_input) : null;
         const started = this.sessions.findOpenTool(s, h.tool_use_id, sig) ?? (h.tool_name ? null : s.pending_tool);
+        if (isQuestionTool(h.tool_name ?? started?.name)) {
+          const byId = h.tool_use_id ? this.sessions.findOpenTool(s, h.tool_use_id, null) : null;
+          const base = started ?? byId;
+          const asks = parseAskUserQuestion(h.tool_input) ?? base?.question ?? null;
+          this.openQuestion(
+            s,
+            src,
+            {
+              name: h.tool_name ?? base?.name ?? 'AskUserQuestion',
+              preview: asks ? clip(asks.question.questions[0].question, 200) : base?.preview ?? '',
+              signature: base?.signature ?? sig ?? '',
+              tool_use_id: h.tool_use_id ?? base?.tool_use_id ?? null,
+              agent_id: h.agent_id ?? base?.agent_id ?? null,
+              question: asks,
+            },
+            'permission',
+            now,
+          );
+          break;
+        }
         const tool = h.tool_name
           ? { name: h.tool_name, preview: toolPreview(h.tool_name, h.tool_input), signature: sig as string }
           : started
@@ -534,7 +565,7 @@ export class CopilotQueue {
         );
         this.noteApproval(item.id, h.tool_use_id ?? started?.tool_use_id ?? null, h.agent_id ?? started?.agent_id ?? null, now);
         ev('agent.waiting', { item_id: item.id, kind: 'approval' });
-        s.awaiting_approval = true;
+        s.awaiting_input = true;
         this.sessions.pauseBusy(s, now);
         break;
       }
@@ -547,16 +578,16 @@ export class CopilotQueue {
         const sig = toolSignature(tool, h.tool_input);
         ev('agent.tool', { phase: 'post', tool, files, writes, signature: sig, ...(failed ? { failed: true } : {}) });
         if (writes && !failed) this.sessions.addWritten(s, files);
-        // Only the approval for this call: parallel or subagent calls to the
+        // Only the prompt for this call: parallel or subagent calls to the
         // same tool must not clear a prompt that is still showing.
         this.queue.resolveWhere(
-          (i) => sourceKey(i.source) === key && i.kind === 'approval' && this.approvalMatches(i, h.tool_use_id, sig, tool),
+          (i) => sourceKey(i.source) === key && isPromptKind(i.kind) && this.approvalMatches(i, h.tool_use_id, sig, tool),
           'answered_in_tab',
           now,
         );
         this.sessions.closeTool(s, h.tool_use_id, sig);
-        if (this.queue.findLive(key, ['approval']).length === 0) {
-          s.awaiting_approval = false;
+        if (this.queue.findLive(key, PROMPT_KINDS).length === 0) {
+          s.awaiting_input = false;
           this.sessions.resumeBusy(s, now);
         }
         break;
@@ -568,10 +599,19 @@ export class CopilotQueue {
         if (cls !== 'approval' && h.notification_type === 'idle_prompt') {
           // Claude is back at its input: any prompt is gone (Esc on a
           // permission prompt interrupts the turn and fires no Stop).
-          this.queue.resolveWhere((i) => sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
-          if (s.in_turn || s.awaiting_approval) this.sessions.interrupt(s, now);
+          this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
+          if (s.in_turn || s.awaiting_input) this.sessions.interrupt(s, now);
         }
-        if (cls === 'approval') {
+        const liveQuestion = this.queue.findLive(key, ['question'])[0];
+        const pendingAsk = s.pending_tool && isQuestionTool(s.pending_tool.name) ? s.pending_tool : null;
+        if (cls === 'approval' && (pendingAsk || (liveQuestion && this.queue.findLive(key, ['approval']).length === 0))) {
+          // "Claude needs your permission to use AskUserQuestion" is the
+          // question picker showing: keep (or open) the question.
+          const item = liveQuestion ?? (pendingAsk ? this.openQuestion(s, src, pendingAsk, 'notification', now) : undefined);
+          if (item && liveQuestion) ev('agent.waiting', { ...nt, item_id: item.id, kind: 'question' });
+          s.awaiting_input = true;
+          this.sessions.pauseBusy(s, now);
+        } else if (cls === 'approval') {
           const open = this.queue.findLive(key, ['approval'])[0];
           let item: AttentionItem | undefined;
           if (open) {
@@ -594,7 +634,7 @@ export class CopilotQueue {
             if (!open) this.noteApproval(item.id, s.pending_tool?.tool_use_id ?? null, s.pending_tool?.agent_id ?? null, now);
             ev('agent.waiting', { ...nt, item_id: item.id, kind: 'approval' });
           }
-          s.awaiting_approval = true;
+          s.awaiting_input = true;
           this.sessions.pauseBusy(s, now);
         } else {
           const existing = this.queue.findLive(key, ['waiting', 'blocker', 'decision'])[0];
@@ -633,7 +673,7 @@ export class CopilotQueue {
         s.last_lee_status = lee;
         ev('agent.turn_end', { busy_ms: busyMs, ...(summary ? { summary } : {}), ...(lee ? { lee_status: lee } : {}) });
         this.away.noteTurnEnd();
-        this.queue.resolveWhere((i) => sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+        this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
         this.openTurnItem(s, src, summary, lee, now);
         break;
       }
@@ -713,37 +753,96 @@ export class CopilotQueue {
     });
   }
 
+  /**
+   * Open (or refresh) the question item for an AskUserQuestion call and mark
+   * the agent as waiting on input. Logs kinds only, never the question.
+   */
+  private openQuestion(
+    s: AgentSession,
+    src: AttentionSource,
+    tool: {
+      name: string;
+      preview: string;
+      signature: string;
+      tool_use_id: string | null;
+      agent_id: string | null;
+      question?: ParsedQuestion | null;
+    },
+    via: 'pre' | 'permission' | 'notification',
+    now: number,
+  ): AttentionItem {
+    const parsed = tool.question ?? null;
+    const first = parsed?.question.questions[0]?.question ?? null;
+    const item = this.queue.open(
+      {
+        kind: 'question',
+        title: first ? `Claude asks: ${clip(first, QUESTION_TITLE_MAX)}` : 'Claude has a question',
+        text: parsed ? parsed.question.questions.map((q) => q.question).join('\n') : tool.preview,
+        source: src,
+        tool: { name: tool.name, preview: tool.preview, signature: tool.signature },
+        question: parsed?.question ?? null,
+        choosable: parsed?.choosable ?? false,
+        files: [...s.files_written],
+      },
+      now,
+    );
+    this.noteApproval(item.id, tool.tool_use_id, tool.agent_id, now);
+    this.log({
+      type: 'agent.waiting',
+      source: 'hook',
+      workspace: src.workspace,
+      window_id: src.window_id,
+      actor: { kind: 'agent', provider: 'claude', session_id: s.session_id, pty_id: src.pty_id },
+      data: {
+        session_id: s.session_id,
+        ...(src.pty_id != null ? { pty_id: src.pty_id } : {}),
+        item_id: item.id,
+        kind: 'question',
+        via,
+        questions: parsed?.question.questions.length ?? 0,
+        options: parsed?.question.questions[0]?.options.length ?? 0,
+      },
+    });
+    s.awaiting_input = true;
+    this.sessions.pauseBusy(s, now);
+    return item;
+  }
+
   /** Does a finished call (PostToolUse[Failure]) belong to this approval? */
   private approvalMatches(item: AttentionItem, toolUseId: string | null, signature: string, tool: string): boolean {
     const m = this.approvalMeta.get(item.id);
     if (m?.tool_use_id && toolUseId) return m.tool_use_id === toolUseId;
+    // AskUserQuestion's finished input carries the answers, so its signature
+    // differs from the asked one: match questions by tool name.
+    if (item.kind === 'question') return isQuestionTool(tool);
     if (item.tool?.signature) return item.tool.signature === signature;
     return !item.tool || item.tool.name === tool;
   }
 
   /**
    * A person typed into a PTY. Enter, a digit or Esc while the agent sits on
-   * a permission prompt answers it in the tab: close the approval so a
-   * device can't later send a stale approve/deny into the running agent.
+   * a permission prompt or question picker answers it in the tab: close the
+   * item so a device can't later send a stale approve/deny/choose into the
+   * running agent.
    */
   private onUserInput(ptyId: number, data: string): void {
     const s = this.sessions.byPty(ptyId);
-    if (!s || !s.awaiting_approval) return;
+    if (!s || !s.awaiting_input) return;
     const accept = PROMPT_ACCEPT_INPUT.test(data);
     const cancel = data === PROMPT_CANCEL_INPUT;
     if (!accept && !cancel) return;
     const now = Date.now();
     const key = `pty:${ptyId}`;
     const open = this.queue
-      .findLive(key, ['approval'])
+      .findLive(key, PROMPT_KINDS)
       .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))[0];
     if (open) this.queue.resolve(open.id, 'answered_in_tab', now);
     if (cancel) {
       // Esc declines and interrupts the turn; Claude fires no Stop for it.
-      this.queue.resolveWhere((i) => sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+      this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
       this.sessions.interrupt(s, now);
-    } else if (this.queue.findLive(key, ['approval']).length === 0) {
-      s.awaiting_approval = false;
+    } else if (this.queue.findLive(key, PROMPT_KINDS).length === 0) {
+      s.awaiting_input = false;
       this.sessions.resumeBusy(s, now);
     }
     this.changed();
@@ -809,9 +908,13 @@ export class CopilotQueue {
     const now = Date.now();
     const item = this.getItem(itemId);
     if (!item) return { status: 404, body: { success: false, error: 'not found' } };
-    const check = checkReply(item.kind, req);
+    const optionCount = item.question?.questions[0]?.options.length ?? 0;
+    const check = checkReply(item.kind, req, { choosable: item.actions.includes('choose'), optionCount });
     if (!check.ok) return { status: 400, body: { success: false, error: check.error } };
-    const category = check.action === 'text' ? (item.kind === 'decision' || item.kind === 'blocker' ? 'decide' : 'reply') : 'approve';
+    const category =
+      check.action === 'text'
+        ? item.kind === 'decision' || item.kind === 'blocker' ? 'decide' : 'reply'
+        : check.action === 'choose' ? 'decide' : 'approve';
     const ptyId = item.source.pty_id;
     const s = item.source.session_id
       ? this.sessions.get(item.source.session_id)
@@ -819,38 +922,39 @@ export class CopilotQueue {
     const stale =
       (item.state !== 'open' && item.state !== 'snoozed') ||
       typeof req?.version !== 'number' || req.version !== item.version;
-    // Approve/deny keys only mean something on the exact prompt, so they need
+    // Approve/deny/choose keys only mean something on the exact prompt, so they need
     // the current version. A text reply is just the next message: if the
     // agent is idle at its input it's safe to send even when the item moved on
     // (e.g. it was resolved when the tab was focused on the Mac).
-    const idleAtInput = !!s && !s.ended && !s.in_turn && !s.awaiting_approval;
+    const idleAtInput = !!s && !s.ended && !s.in_turn && !s.awaiting_input;
     if (stale && !(check.action === 'text' && idleAtInput)) {
       return { status: 409, body: { success: false, error: 'stale', item }, category };
     }
     if (ptyId == null || !this.ptyManager.get(ptyId)) {
       return { status: 410, body: { success: false, error: 'agent is gone' }, category };
     }
-    if (check.action === 'approve' || check.action === 'deny') {
-      // Enter or Esc only mean approve/deny while the agent is actually on
-      // the prompt. Otherwise Esc would interrupt a running tool and Enter
-      // would submit whatever is in the input box (C3).
-      if (!s || s.ended || !s.awaiting_approval) {
+    if (check.action === 'approve' || check.action === 'deny' || check.action === 'choose') {
+      // Enter, Esc or a digit only answer while the agent is actually on the
+      // prompt. Otherwise Esc would interrupt a running tool, Enter would
+      // submit whatever is in the input box and a digit would be typed into
+      // it (C3).
+      if (!s || s.ended || !s.awaiting_input) {
         this.queue.resolve(item.id, 'answered_in_tab', now);
         return { status: 409, body: { success: false, error: 'stale', item: this.queue.get(item.id) }, category };
       }
     }
-    writeReply((data) => this.ptyManager.write(ptyId, data), check.action, check.text);
+    writeReply((data) => this.ptyManager.write(ptyId, data), check.action, check.text, check.choice);
     if (s && check.action === 'deny') {
       // Esc declines and interrupts the turn (no Stop follows), so every
       // prompt of this agent is gone.
       const key = sourceKey(item.source);
-      this.queue.resolveWhere((i) => i.id !== item.id && sourceKey(i.source) === key && i.kind === 'approval', 'answered_in_tab', now);
+      this.queue.resolveWhere((i) => i.id !== item.id && sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
       this.sessions.interrupt(s, now);
-    } else if (s && check.action === 'approve') {
+    } else if (s && (check.action === 'approve' || check.action === 'choose')) {
       // Another queued prompt (a parallel call) shows next: stay paused on it.
-      const others = this.queue.findLive(sourceKey(item.source), ['approval']).filter((i) => i.id !== item.id);
+      const others = this.queue.findLive(sourceKey(item.source), PROMPT_KINDS).filter((i) => i.id !== item.id);
       if (others.length === 0) {
-        s.awaiting_approval = false;
+        s.awaiting_input = false;
         this.sessions.resumeBusy(s, now);
       }
     }
@@ -864,6 +968,8 @@ export class CopilotQueue {
         kind: item.kind,
         action: check.action,
         text_chars: check.text?.length ?? 0,
+        // A choice is logged as its index only, never the option's words.
+        ...(check.choice !== null ? { choice: check.choice, option_count: optionCount } : {}),
         ...(item.tool ? { tool_signature: item.tool.signature } : {}),
         latency_ms: Math.max(0, now - Date.parse(item.created_at)),
       },
@@ -993,7 +1099,7 @@ export class CopilotQueue {
   private agentState(s: AgentSession): HandoffAgent['state'] {
     // 'waiting' comes from open items only (§7.1): once the item is
     // dismissed or snoozed away, an agent outside a turn is idle.
-    if (s.pty_id != null && this.queue.findLive(`pty:${s.pty_id}`, ['approval', 'waiting']).length > 0) return 'waiting';
+    if (s.pty_id != null && this.queue.findLive(`pty:${s.pty_id}`, ['approval', 'question', 'waiting']).length > 0) return 'waiting';
     if (s.activity === 'waiting') return s.in_turn ? 'busy' : 'idle';
     if (s.activity === 'busy' || s.in_turn) return 'busy';
     if (s.activity === 'idle') return 'idle';

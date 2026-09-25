@@ -120,7 +120,7 @@ test('approval with no pause state is stale (409), even if still open', () => {
   hook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'a' });
   hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'a' });
   const [item] = live('approval');
-  q.sessions.get('s1').awaiting_approval = false;
+  q.sessions.get('s1').awaiting_input = false;
   const r = q.reply(item.id, { action: 'approve', version: item.version }, { kind: 'user', surface: 'device' });
   assert.strictEqual(r.status, 409);
   assert.strictEqual(pty.writes.length, 0);
@@ -332,6 +332,197 @@ test('agents: a state change schedules a device push; a tool event alone does no
     copilotBus.broadcast = orig;
     done();
   }
+});
+
+// AskUserQuestion's tool_input as Claude Code 2.1.283 sends it.
+const ASK = {
+  questions: [
+    {
+      question: 'Which auth method should the API use? SECRET-Q',
+      header: 'Auth',
+      multiSelect: false,
+      options: [
+        { label: 'JWT', description: 'Stateless tokens' },
+        { label: 'Sessions', description: 'Server-side sessions, SECRET-OPT' },
+        { label: 'OAuth' },
+      ],
+    },
+  ],
+};
+const DEVICE = { kind: 'user', surface: 'device', device_id: 'd1', device_kind: 'phone' };
+
+/** Capture every event-log line written during fn. */
+function captureEvents(fn) {
+  const lines = [];
+  copilotBus.setEventSink({ write: (e) => lines.push(e) });
+  lines.length = 0; // the bus flushes lines queued before a sink existed
+  try {
+    fn();
+  } finally {
+    copilotBus.setEventSink(null);
+  }
+  return lines;
+}
+
+function askFlow(hook, input = ASK, id = 'q1') {
+  hook('UserPromptSubmit', { prompt: 'x' });
+  hook('PreToolUse', { tool_name: 'AskUserQuestion', tool_input: input, tool_use_id: id });
+  hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_input: input, tool_use_id: id });
+  hook('Notification', { message: 'Claude needs your permission to use AskUserQuestion', notification_type: 'permission_prompt' });
+}
+
+test('AskUserQuestion opens a question with its options, not an approval', () => {
+  const { q, hook, live } = setup();
+  const events = captureEvents(() => askFlow(hook));
+  assert.strictEqual(live('approval').length, 0, 'no approval');
+  const qs = live('question');
+  assert.strictEqual(qs.length, 1, 'one question item');
+  const [item] = qs;
+  assert.strictEqual(item.severity, 'needs-you');
+  assert.match(item.title, /^Claude asks: Which auth method/);
+  assert.deepStrictEqual(item.question.questions[0].options.map((o) => o.label), ['JWT', 'Sessions', 'OAuth']);
+  assert.strictEqual(item.question.questions[0].options[2].description, null);
+  assert.strictEqual(item.question.questions[0].header, 'Auth');
+  assert.strictEqual(item.question.questions[0].multi_select, false);
+  assert.ok(item.actions.includes('choose'));
+  assert.ok(!item.actions.includes('approve') && !item.actions.includes('deny') && !item.actions.includes('reply'));
+  assert.ok(events.length > 0, 'events were logged');
+  const leak = events.filter((e) => JSON.stringify(e).includes('SECRET')).map((e) => e.type);
+  assert.deepStrictEqual(leak, [], 'question text and options never reach the event log');
+  assert.strictEqual(q.sessions.get('s1').awaiting_input, true);
+});
+
+test('choose sends the option digit and resolves the question; the choice logs as an index', () => {
+  const { pty, q, hook, live } = setup();
+  askFlow(hook);
+  const [item] = live('question');
+  let r;
+  const events = captureEvents(() => {
+    r = q.reply(item.id, { action: 'choose', choice: 1, version: item.version }, DEVICE);
+  });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.strictEqual(pty.writes.map((w) => w[1]).join(''), '2', 'digit 2 picks the second option');
+  assert.strictEqual(live('question').length, 0);
+  assert.strictEqual(q.sessions.get('s1').awaiting_input, false);
+  const reply = events.find((e) => e.type === 'attention.reply');
+  assert.strictEqual(reply.data.action, 'choose');
+  assert.strictEqual(reply.data.choice, 1);
+  assert.ok(!JSON.stringify(events).includes('SECRET'));
+});
+
+test('choose after the question was answered in the tab is stale (409) and writes nothing', () => {
+  const { pty, q, hook, live } = setup();
+  askFlow(hook);
+  const [item] = live('question');
+  q.onUserInput(1, '1'); // the person picked in the tab
+  assert.strictEqual(live('question').length, 0, 'answered in tab');
+  const r = q.reply(item.id, { action: 'choose', choice: 0, version: item.version }, DEVICE);
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(pty.writes.length, 0);
+});
+
+test('choose while the picker is not showing is stale (409), even if the item is still open', () => {
+  const { pty, q, hook, live } = setup();
+  askFlow(hook);
+  const [item] = live('question');
+  q.sessions.get('s1').awaiting_input = false;
+  const r = q.reply(item.id, { action: 'choose', choice: 0, version: item.version }, DEVICE);
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(pty.writes.length, 0);
+});
+
+test('choose with an old version is stale (409); bad choice or text is 400', () => {
+  const { pty, q, hook, live } = setup();
+  askFlow(hook);
+  const [item] = live('question');
+  assert.strictEqual(q.reply(item.id, { action: 'choose', choice: 0, version: item.version - 1 }, DEVICE).status, 409);
+  assert.strictEqual(q.reply(item.id, { action: 'choose', choice: 3, version: item.version }, DEVICE).status, 400);
+  assert.strictEqual(q.reply(item.id, { action: 'choose', choice: '1', version: item.version }, DEVICE).status, 400);
+  assert.strictEqual(q.reply(item.id, { action: 'approve', version: item.version }, DEVICE).status, 400);
+  assert.strictEqual(q.reply(item.id, { action: 'text', text: 'JWT', version: item.version }, DEVICE).status, 400);
+  assert.strictEqual(pty.writes.length, 0);
+});
+
+test('question resolves on PostToolUse (answers change the input signature)', () => {
+  const { q, hook, live } = setup();
+  askFlow(hook);
+  const answered = { ...ASK, answers: { [ASK.questions[0].question]: 'JWT' } };
+  hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: answered, tool_use_id: 'q1' });
+  assert.strictEqual(live('question').length, 0);
+  assert.strictEqual(q.sessions.get('s1').awaiting_input, false);
+});
+
+test('question resolves on idle_prompt, Stop and Esc in the tab', () => {
+  let { q, hook, live } = setup();
+  askFlow(hook);
+  hook('Notification', { message: 'Claude is waiting for your input', notification_type: 'idle_prompt' });
+  assert.strictEqual(live('question').length, 0, 'idle_prompt');
+
+  ({ q, hook, live } = setup());
+  askFlow(hook);
+  hook('Stop', { last_assistant_message: 'ok' });
+  assert.strictEqual(live('question').length, 0, 'Stop');
+
+  ({ q, hook, live } = setup());
+  askFlow(hook);
+  q.onUserInput(1, '\x1b');
+  assert.strictEqual(live('question').length, 0, 'Esc');
+  assert.strictEqual(q.sessions.get('s1').in_turn, false, 'Esc interrupts the turn');
+});
+
+test('multi-question or multi-select questions are read-only (no choose)', () => {
+  const { q, hook, live } = setup();
+  const multi = {
+    questions: [
+      { question: 'Pick features', header: 'Features', multi_select: true, options: [{ label: 'A' }, { label: 'B' }] },
+    ],
+  };
+  askFlow(hook, multi);
+  let [item] = live('question');
+  assert.strictEqual(item.question.questions[0].multi_select, true, 'snake_case multi_select read');
+  assert.ok(!item.actions.includes('choose'));
+  assert.strictEqual(q.reply(item.id, { action: 'choose', choice: 0, version: item.version }, DEVICE).status, 400);
+  hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: multi, tool_use_id: 'q1' });
+
+  const two = { questions: [ASK.questions[0], { question: 'And the DB?', options: [{ label: 'PG' }, { label: 'SQLite' }] }] };
+  askFlow(hook, two, 'q2');
+  [item] = live('question');
+  assert.strictEqual(item.question.questions.length, 2);
+  assert.ok(!item.actions.includes('choose'));
+});
+
+test('question strings are capped, and clipped in compact snapshots', () => {
+  const { q, hook } = setup();
+  const long = 'L'.repeat(1000);
+  const big = {
+    questions: Array.from({ length: 6 }, () => ({
+      question: long,
+      header: long,
+      options: Array.from({ length: 12 }, () => ({ label: long, description: long })),
+    })),
+  };
+  askFlow(hook, big);
+  const full = q.snapshot().items.find((i) => i.kind === 'question');
+  assert.strictEqual(full.question.questions.length, 4);
+  assert.strictEqual(full.question.questions[0].options.length, 8);
+  assert.ok(full.question.questions[0].question.length <= 300);
+  assert.ok(full.question.questions[0].options[0].description.length <= 300);
+  const compact = q.snapshot({ compact: true }).items.find((i) => i.kind === 'question');
+  for (const qq of compact.question.questions) {
+    assert.ok(qq.question.length <= 120 && qq.header.length <= 120);
+    for (const o of qq.options) assert.ok(o.label.length <= 120 && o.description.length <= 120);
+  }
+});
+
+test('an approval Notification before the question hooks still becomes a question', () => {
+  const { hook, live } = setup();
+  hook('UserPromptSubmit', { prompt: 'x' });
+  // Only PreToolUse, then Claude's permission_prompt notification.
+  hook('PreToolUse', { tool_name: 'AskUserQuestion', tool_input: ASK, tool_use_id: 'q1' });
+  hook('Notification', { message: 'Claude needs your permission to use AskUserQuestion', notification_type: 'permission_prompt' });
+  assert.strictEqual(live('approval').length, 0);
+  assert.strictEqual(live('question').length, 1);
+  assert.ok(live('question')[0].actions.includes('choose'));
 });
 
 test('withClaudeHooks prepends --settings before a -- prompt', () => {

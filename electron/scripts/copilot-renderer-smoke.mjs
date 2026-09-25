@@ -38,7 +38,7 @@ try {
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
-const { groupAttentionItems, resolveSummaryAtTime, attentionByPty, offscreenNeeds } = mod;
+const { groupAttentionItems, resolveSummaryAtTime, attentionByPty, offscreenNeeds, NEEDS_KINDS } = mod;
 
 let passed = 0;
 function test(name, fn) {
@@ -149,6 +149,12 @@ test('offscreenNeeds: only needs-you items not on a visible tab', () => {
   ];
   const off = offscreenNeeds(items, new Set([1]));
   assert.deepEqual(off.map((i) => i.id), ['b', 'd']);
+});
+
+test('NEEDS_KINDS includes question: an agent question rings the tab bell even while ambient', () => {
+  assert.ok(NEEDS_KINDS.has('question'));
+  const m = attentionByPty([tabItem('q', 'question', 5, { severity: 'ambient' })]);
+  assert.equal(m.get(5), 'needs');
 });
 
 console.log(`\n${passed} test(s) passed`);

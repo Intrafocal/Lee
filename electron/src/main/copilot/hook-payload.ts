@@ -8,7 +8,7 @@
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import type { LeeStatusBlock } from '../../shared/copilot';
+import type { AttentionQuestion, LeeStatusBlock } from '../../shared/copilot';
 
 export const HOOK_EVENTS = [
   'SessionStart',
@@ -101,6 +101,82 @@ export function classifyNotification(message: string | null, type: string | null
   if (type === 'permission_prompt' || type === 'worker_permission_prompt') return 'approval';
   if (message && /permission|approve|allow|wants to (use|run)/i.test(message)) return 'approval';
   return 'waiting';
+}
+
+/** Claude Code's multiple-choice question tool. Its prompt is a question, not a permission. */
+export const ASK_USER_QUESTION_TOOL = 'AskUserQuestion';
+export const QUESTION_MAX = 4;
+export const QUESTION_OPTIONS_MAX = 8;
+export const QUESTION_TEXT_MAX = 300;
+/** Question strings in compact snapshots (devices). */
+export const COMPACT_QUESTION_TEXT_MAX = 120;
+
+export function isQuestionTool(name: string | null | undefined): boolean {
+  return name === ASK_USER_QUESTION_TOOL;
+}
+
+export interface ParsedQuestion {
+  question: AttentionQuestion;
+  /**
+   * One pick answers it from a device: exactly one question, single-select,
+   * with options, and no option previews (with previews Claude Code switches
+   * to a side-by-side picker where a digit only moves the cursor).
+   */
+  choosable: boolean;
+}
+
+function oneLine(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return t ? clip(t, max) : null;
+}
+
+/**
+ * AskUserQuestion's tool_input, as Claude Code 2.1.283 sends it:
+ * `{ questions: [{ question, header, options: [{ label, description, preview? }],
+ * multiSelect, kind? }] }` (`kind` "text"/"number" questions have no options).
+ * Tolerant: snake_case `multi_select` too, missing fields, junk entries.
+ * Null when there is no usable question.
+ */
+export function parseAskUserQuestion(toolInput: unknown): ParsedQuestion | null {
+  if (!isRecord(toolInput) || !Array.isArray(toolInput.questions)) return null;
+  const questions: AttentionQuestion['questions'] = [];
+  let previews = false;
+  let total = 0;
+  for (const raw of toolInput.questions) {
+    if (!isRecord(raw)) continue;
+    const question = oneLine(raw.question, QUESTION_TEXT_MAX);
+    if (!question) continue;
+    total++;
+    if (questions.length >= QUESTION_MAX) continue;
+    const multi = raw.multiSelect === true || raw.multi_select === true;
+    const options: AttentionQuestion['questions'][number]['options'] = [];
+    for (const o of Array.isArray(raw.options) ? raw.options : []) {
+      if (!isRecord(o)) continue;
+      const label = oneLine(o.label, QUESTION_TEXT_MAX);
+      if (!label) continue;
+      if (o.preview !== undefined && o.preview !== null) previews = true;
+      if (options.length < QUESTION_OPTIONS_MAX) options.push({ label, description: oneLine(o.description, QUESTION_TEXT_MAX) });
+    }
+    questions.push({ question, header: oneLine(raw.header, QUESTION_TEXT_MAX), multi_select: multi, options });
+  }
+  if (questions.length === 0) return null;
+  const q0 = questions[0];
+  const choosable = total === 1 && !q0.multi_select && q0.options.length > 0 && !previews;
+  return { question: { questions }, choosable };
+}
+
+/** The same question with every string clipped for compact snapshots. */
+export function compactQuestion(q: AttentionQuestion): AttentionQuestion {
+  const c = (s: string) => clip(s, COMPACT_QUESTION_TEXT_MAX);
+  return {
+    questions: q.questions.map((x) => ({
+      question: c(x.question),
+      header: x.header === null ? null : c(x.header),
+      multi_select: x.multi_select,
+      options: x.options.map((o) => ({ label: c(o.label), description: o.description === null ? null : c(o.description) })),
+    })),
+  };
 }
 
 /** Paths a tool call touches: `file_path`, `path` or `notebook_path` of its input. */
