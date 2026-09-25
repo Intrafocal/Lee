@@ -14,6 +14,7 @@
 
 import type { LeeContext, TUIDefinition, AgentDefinition, MachineConfig } from './context';
 import type { CopilotAPI } from './copilot';
+import type { CockpitAPI } from './cockpit';
 
 export interface OpenDialogResult {
   canceled: boolean;
@@ -290,6 +291,8 @@ export interface LeeAPI {
   };
   /** Copilot v0/v1 (docs/plans/2026-09-25-copilot-v0-v1-contracts.md). */
   copilot: CopilotAPI;
+  /** Copilot v2 Cockpit (docs/plans/2026-09-25-copilot-v2-contracts.md). */
+  cockpit: CockpitAPI;
 }
 
 /** Re-exported so components can annotate TUI lists without a deep import. */

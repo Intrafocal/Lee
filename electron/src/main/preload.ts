@@ -22,6 +22,7 @@ import type {
   StatusMessagePayload,
 } from '../shared/lee-api';
 import { copilotApi } from './preload-copilot';
+import { cockpitApi } from './preload-cockpit';
 
 export type {
   LeeAPI,
@@ -519,6 +520,7 @@ const api: LeeAPI = {
     },
   },
   copilot: copilotApi,
+  cockpit: cockpitApi,
 };
 
 contextBridge.exposeInMainWorld('lee', api);
