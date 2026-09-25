@@ -106,6 +106,13 @@ interface TabInfo {
 
 const LEE_ACTOR: Actor = { kind: 'user', surface: 'lee' };
 
+/** Does the agent's last message end by asking the user something? (A trailing lee-status block doesn't count.) */
+function endsOnQuestion(summary: string | null): boolean {
+  if (!summary) return false;
+  const text = summary.replace(/```lee-status[\s\S]*?```\s*$/, '').trim();
+  return text.endsWith('?');
+}
+
 function parseId(v: string | null | undefined): number | null {
   if (!v) return null;
   const n = Number(v);
@@ -522,6 +529,10 @@ export class CopilotQueue {
           this.sessions.pauseBusy(s, now);
         } else {
           const existing = this.queue.findLive(key, ['waiting', 'blocker', 'decision'])[0];
+          // Claude sends idle_prompt about a minute after every finished turn.
+          // A finished turn is already a quiet review item; it only needs you
+          // when Claude ended the turn on a question.
+          if (!existing && h.notification_type === 'idle_prompt' && !endsOnQuestion(s.last_summary)) break;
           const item =
             existing ??
             this.queue.open(

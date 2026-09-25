@@ -169,6 +169,20 @@ test('idle agent takes a handoff follow-up once its idle item is dismissed', () 
   q.endHandoff('manual');
 });
 
+test('idle_prompt after a finished turn opens nothing unless Claude asked a question', () => {
+  const { hook, live } = setup();
+  hook('UserPromptSubmit', { prompt: 'x' });
+  hook('Stop', { last_assistant_message: 'All tests pass.' });
+  hook('Notification', { message: 'Claude is waiting for your input', notification_type: 'idle_prompt' });
+  assert.strictEqual(live('waiting').length, 0, 'finished turn stays a review item');
+  assert.strictEqual(live('review').length, 1);
+
+  hook('UserPromptSubmit', { prompt: 'y' });
+  hook('Stop', { last_assistant_message: 'Should I also update the docs?\n\n```lee-status\nstatus: in-progress\n```' });
+  hook('Notification', { message: 'Claude is waiting for your input', notification_type: 'idle_prompt' });
+  assert.strictEqual(live('waiting').length, 1, 'a question needs you');
+});
+
 test('X-Lee-Pty-Id for a non-Claude PTY is ignored', () => {
   const { pty, q, live } = setup();
   pty.add(7, { claude: false, name: 'Terminal' });
