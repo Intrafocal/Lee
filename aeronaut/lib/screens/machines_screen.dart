@@ -117,7 +117,7 @@ class MachinesScreen extends ConsumerWidget {
 
   void _connectToMachine(BuildContext context, WidgetRef ref, String id) {
     ref.read(machinesProvider.notifier).setActiveMachine(id);
-    ref.read(rootTabProvider.notifier).state = RootTab.tabs;
+    ref.read(rootTabProvider.notifier).state = RootTab.now;
   }
 
   void _showMachineActions(

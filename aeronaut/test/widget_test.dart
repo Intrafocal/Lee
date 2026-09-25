@@ -28,6 +28,25 @@ void main() {
       expect(restored.workspace, machine.workspace);
     });
 
+    test('serializes deviceId to and from JSON (copilot per-device tokens)', () {
+      const machine = Machine(
+        id: 'test-id',
+        name: 'MacBook Pro',
+        host: '192.168.1.100',
+        token: 'test-token',
+        deviceId: 'dev_3f9a1c2b7d10',
+      );
+
+      final restored = Machine.fromJson(machine.toJson());
+      expect(restored.deviceId, 'dev_3f9a1c2b7d10');
+    });
+
+    test('deviceId is null by default (older/v1 pairing)', () {
+      const machine = Machine(id: '1', name: 'Test', host: 'h');
+      expect(machine.deviceId, isNull);
+      expect(Machine.fromJson(machine.toJson()).deviceId, isNull);
+    });
+
     test('computes hostUrl correctly', () {
       const machine = Machine(
         id: '1',

@@ -11,15 +11,18 @@ import 'files_screen.dart';
 import 'hester_screen.dart';
 import 'home_screen.dart';
 import 'machines_screen.dart';
+import 'now_screen.dart';
 
-/// The four top-level destinations, in tab-bar order.
-enum RootTab { machines, tabs, hester, files }
+/// The five top-level destinations, in tab-bar order. [now] leads: it's
+/// where Copilot's Reply/Capture/Focus/Launch/Wins live (contracts §9.2),
+/// and it's the default once a machine is selected — see [_RootShellState].
+enum RootTab { now, machines, tabs, hester, files }
 
 /// Which root tab is showing. Screens switch tabs by writing to this, e.g.
-/// connecting to a machine jumps to [RootTab.tabs].
+/// connecting to a machine jumps to [RootTab.now].
 final rootTabProvider = StateProvider<RootTab>((ref) => RootTab.machines);
 
-/// App shell: a Cupertino tab bar over four independent navigation stacks,
+/// App shell: a Cupertino tab bar over five independent navigation stacks,
 /// so pushing a file in Files doesn't disturb the Tabs view and each tab
 /// keeps its own back history.
 class RootShell extends ConsumerStatefulWidget {
@@ -35,11 +38,26 @@ class _RootShellState extends ConsumerState<RootShell> {
   };
 
   static Widget _rootFor(RootTab tab) => switch (tab) {
+        RootTab.now => const RequireMachine(child: NowScreen()),
         RootTab.machines => const MachinesScreen(),
         RootTab.tabs => const RequireMachine(child: HomeScreen()),
         RootTab.hester => const RequireMachine(child: _HesterRoot()),
         RootTab.files => const RequireMachine(child: FilesScreen()),
       };
+
+  @override
+  void initState() {
+    super.initState();
+    // Now becomes the default tab once a machine is selected — whether that
+    // happens at startup (a machine was already active on disk) or when the
+    // user connects from the Machines tab. Only fires on the null→non-null
+    // edge, so it never yanks the user off a tab they picked by hand later.
+    ref.listenManual<MachinesState>(machinesProvider, (prev, next) {
+      if (prev?.activeMachineId == null && next.activeMachineId != null) {
+        ref.read(rootTabProvider.notifier).state = RootTab.now;
+      }
+    });
+  }
 
   void _select(RootTab tab) {
     final current = ref.read(rootTabProvider);
@@ -86,6 +104,7 @@ class _RootShellState extends ConsumerState<RootShell> {
             top: BorderSide(color: AeronautColors.border, width: 0.5),
           ),
           items: [
+            _item(PhosphorIcons.bell, 'Now', current == RootTab.now),
             _item(PhosphorIcons.machine, 'Machines', current == RootTab.machines),
             _item(PhosphorIcons.tabs, 'Tabs', current == RootTab.tabs),
             _item(PhosphorIcons.hester, 'Hester', current == RootTab.hester),
