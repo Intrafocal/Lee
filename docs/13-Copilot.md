@@ -471,6 +471,34 @@ Running an operation opens (or reuses) a terminal tab linked to it, so the Tabs 
 - Confirmed operations without `confirm: true` can run when Hester is asked ("rebuild and restart the server"). Operations with `confirm: true`, and any **ad-hoc command** that isn't a defined operation, run only after you approve a proposal showing the exact command and tab.
 - Output is read back from the tab's buffer, so Hester can report the result or turn a failure into a task.
 
+**Operation agents: small models for the parts that need judgment.** Running a *defined* operation needs no model at all: Lee types its command, which is free and instant. A model earns its place only where judgment is needed, and there a small Claude Code agent is the most cost-effective tool:
+
+| Situation | Who runs it | Model |
+|---|---|---|
+| Defined operation (`npm run build`, `idf.py build`) | Lee, deterministically | None |
+| A defined operation failed | Operation agent, started with the operation, its command and the log excerpt: read the error, try the obvious fix (missing dependency, wrong port, stale build dir), report | `operation_agent.model` (default Haiku) |
+| Undefined or multi-step operation ("build and flash the T-Deck") | Operation agent: find the port, pick the command, run it, and propose saving it as a defined operation | `operation_agent.model`, or `operation_agent.plan_model` (Sonnet) for multi-step |
+| The fix turns into real code changes | Escalate to a normal task (§7.2, `delegate` lead) | Sonnet or Opus |
+
+Operation agents are ordinary Claude Code tabs launched with `--model` and a narrow `--allowedTools` list, so the v0 machinery applies unchanged: hooks, waiting items, Reply, busy time and the event log. They never start by themselves; you launch one from a `failure` item ("Fix with agent"), from `Run ▾`, or through a handoff (C2). The allowed-tools list keeps a build agent from wandering off (C3), and its spend counts toward `background_leverage`'s guard (G4).
+
+```yaml
+operation_agent:
+  model: claude-haiku-4-5-20251001   # failure triage, single-step ad-hoc ops
+  plan_model: sonnet                 # multi-step ad-hoc ops
+  escalate_model: sonnet             # when the fix becomes a code task
+
+operations:
+  - name: flash-tdeck
+    kind: oneshot
+    command: idf.py -p {port} flash
+    cwd: dirigible/firmware
+    confirm: true
+    allowed_tools: ["Bash(idf.py *)", "Bash(ls /dev/cu.*)"]   # for its operation agent
+```
+
+Model aliases and flag names come from `claude --help` (2.1.282: `--model` takes an alias such as `sonnet` or a full model name; `--allowedTools`). Operation agents are v2, with the rest of Operations.
+
 ### 7.5 Explore (open ended)
 
 The Library, made durable:
