@@ -735,19 +735,32 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
-   * Compute a fingerprint of the bundled hester source.
-   * Hashes pyproject.toml content — bump the version field to trigger a reinstall.
+   * Compute a fingerprint of the bundled hester source: pyproject.toml plus
+   * every file under hester/ (paths and contents). Hashing only
+   * pyproject.toml missed every code change that didn't bump the version, so
+   * the venv kept running an old Hester.
    */
   private computeHesterSourceHash(): string | null {
     const hesterSrc = this.getBundledHesterSource();
     const pyprojectPath = path.join(hesterSrc, 'pyproject.toml');
     if (!fs.existsSync(pyprojectPath)) return null;
 
-    return crypto
-      .createHash('sha256')
-      .update(fs.readFileSync(pyprojectPath))
-      .digest('hex')
-      .slice(0, 16);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(pyprojectPath));
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === '__pycache__' || entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) files.push(full);
+      }
+    };
+    const pkgDir = path.join(hesterSrc, 'hester');
+    if (fs.existsSync(pkgDir)) walk(pkgDir);
+    for (const file of files.sort()) {
+      hash.update(path.relative(hesterSrc, file)).update('\0').update(fs.readFileSync(file)).update('\0');
+    }
+    return hash.digest('hex').slice(0, 16);
   }
 
   /**

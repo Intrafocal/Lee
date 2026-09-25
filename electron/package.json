@@ -109,6 +109,7 @@
           "hester/**/*.py",
           "hester/**/*.yaml",
           "hester/**/*.json",
+          "hester/**/*.md",
           "!hester/**/__pycache__/**"
         ]
       },
