@@ -12,6 +12,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { MachineStatus } from './MachineStatus';
 import { Icon, HesterGlyph, type IconName } from './Icon';
+import { CopilotStatus } from './copilot/CopilotStatus';
+import { HandoffDialog } from './copilot/HandoffDialog';
+import { useCopilot } from '../hooks/useCopilot';
+import './copilot/copilot.css';
 
 
 export interface StatusMessage {
@@ -58,9 +62,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [daemonMenuOpen, setDaemonMenuOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [focusMenuOpen, setFocusMenuOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const daemonMenuRef = useRef<HTMLDivElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const copilot = useCopilot();
+  const isFocused = !!copilot.focus?.active;
 
   // Get the most recent message
   const currentMessage = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -90,22 +98,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     };
   }, [flyoutOpen]);
 
-  // Close daemon menu when clicking outside
+  // Close daemon menu (and the focus menu, which shares the same container) when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (daemonMenuRef.current && !daemonMenuRef.current.contains(e.target as Node)) {
         setDaemonMenuOpen(false);
+        setFocusMenuOpen(false);
       }
     };
 
-    if (daemonMenuOpen) {
+    if (daemonMenuOpen || focusMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [daemonMenuOpen]);
+  }, [daemonMenuOpen, focusMenuOpen]);
 
   // Close workspace menu when clicking outside
   useEffect(() => {
@@ -197,6 +206,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   };
 
   const handleHesterClick = () => {
+    if (isFocused) {
+      setFocusMenuOpen((v) => !v);
+      return;
+    }
     if (currentMessage && onMessageClick) {
       onMessageClick(currentMessage);
     } else if (onHesterClick) {
@@ -218,6 +231,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   const handleDismiss = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    copilot.api?.logCeremony('status_dismiss');
     if (onClearMessage) {
       onClearMessage(id);
     }
@@ -278,7 +292,15 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 </span>
               );
             })()}
-            {currentMessage ? (
+            {isFocused ? (
+              <>
+                <span className="status-icon"><Icon name="eye" size={14} /></span>
+                <span className="status-text">
+                  Focus · {copilot.focus?.quiet_count ?? 0} queued
+                  {copilot.focus?.source === 'inferred' ? ' (inferred)' : ''}
+                </span>
+              </>
+            ) : currentMessage ? (
               <>
                 <span className="status-icon"><Icon name={getTypeIcon(currentMessage.type)} size={14} /></span>
                 <span className="status-message-text">{currentMessage.message}</span>
@@ -297,7 +319,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           </button>
 
           {/* Daemon context menu */}
-          {daemonMenuOpen && (
+          {daemonMenuOpen && !isFocused && (
             <div className="daemon-context-menu">
               {daemonStatus === 'unhealthy' ? (
                 <button onClick={() => handleDaemonMenuAction('start')}>
@@ -315,7 +337,31 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               )}
             </div>
           )}
+
+          {/* Focus menu (replaces the daemon menu while focus is active) */}
+          {focusMenuOpen && isFocused && (
+            <div className="daemon-context-menu">
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  void copilot.api?.focusStop();
+                }}
+              >
+                Stop focus
+              </button>
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  setHandoffOpen(true);
+                }}
+              >
+                Stop and hand off…
+              </button>
+            </div>
+          )}
         </div>
+
+        <CopilotStatus workspace={workspace} copilot={copilot} onOpenHandoff={() => setHandoffOpen(true)} />
 
         {messages.length > 0 && (
           <div className="status-badge-container" ref={flyoutRef}>
@@ -369,6 +415,15 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           <span className="status-text">{formatTime(time)}</span>
         </span>
       </div>
+
+      {handoffOpen && copilot.api && (
+        <HandoffDialog
+          api={copilot.api}
+          workspace={workspace}
+          onClose={() => setHandoffOpen(false)}
+          onLaunched={() => setHandoffOpen(false)}
+        />
+      )}
     </div>
   );
 };
