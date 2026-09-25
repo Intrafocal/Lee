@@ -474,11 +474,17 @@ export class APIServer {
             console.log('WebSocket client connected to /context/stream');
             this.wsClients.add(ws);
 
-            // Send current context from focused (or first) window immediately on connect
+            // Send current context from focused (or first) window immediately on connect.
+            // Tagged with window_id like every later broadcast, so a client showing a
+            // different window (Aeronaut, Dirigible) knows to discard it.
             const focusedWs = windowRegistry.getFocused() || windowRegistry.getAny();
             if (focusedWs) {
               const ctx = focusedWs.contextBridge.getContext();
-              ws.send(JSON.stringify({ type: 'context_update', data: ctx }));
+              ws.send(JSON.stringify({
+                type: 'context_update',
+                window_id: focusedWs.browserWindow.id,
+                data: ctx,
+              }));
             }
 
             ws.on('close', () => {
