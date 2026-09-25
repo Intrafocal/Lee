@@ -24,7 +24,7 @@ const sent = [];
 const electronStub = {
   app: { on() {}, getPath: () => tmpHome, isPackaged: false },
   ipcMain: { handle() {}, on() {} },
-  BrowserWindow: { fromWebContents: () => null, getAllWindows: () => [] },
+  BrowserWindow: { fromWebContents: () => null, getAllWindows: () => [], getFocusedWindow: () => null },
 };
 const origLoad = Module._load;
 Module._load = function (request, parent, isMain) {
@@ -36,6 +36,17 @@ const dist = path.join(__dirname, '..', 'dist', 'main');
 const { CopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
 const { withClaudeHooks, HOOK_SCRIPT } = require(path.join(dist, 'copilot', 'hook-install.js'));
 const { HOOK_EVENTS } = require(path.join(dist, 'copilot', 'hook-payload.js'));
+const { copilotBus } = require(path.join(dist, 'copilot', 'bus.js'));
+const { windowRegistry } = require(path.join(dist, 'window-registry.js'));
+
+/** A fake Lee window whose tabs show the given PTYs; returns an unregister fn. */
+function withWindow(tabs, id = 1) {
+  const bw = { id, isDestroyed: () => false, webContents: { send() {} } };
+  windowRegistry.register(bw, '/work/api', {
+    getContext: () => ({ workspace: '/work/api', tabs, panels: {}, focusedPanel: 'center' }),
+  });
+  return () => windowRegistry.unregister(id);
+}
 
 class FakePty {
   constructor() {
@@ -212,6 +223,115 @@ test('hidden prewarmed Claude opens no items', () => {
   q.handleHook({ event: 'SessionStart', ptyId: '9', windowId: null }, { session_id: 'warm' });
   q.handleHook({ event: 'Notification', ptyId: '9', windowId: null }, { session_id: 'warm', message: 'waiting' });
   assert.strictEqual(live().filter((i) => i.source.pty_id === 9).length, 0);
+});
+
+test('agents: busy with busy_since, idle with last_summary after Stop; no prompt or tool input', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude: api' }]);
+  try {
+    hook('SessionStart');
+    hook('UserPromptSubmit', { prompt: 'SECRET PROMPT' });
+    hook('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: '/work/api/SECRET.ts', old_string: 'a', new_string: 'b' }, tool_use_id: 'a' });
+    let snap = q.snapshot({ compact: true });
+    assert.strictEqual(snap.agents.length, 1);
+    let [a] = snap.agents;
+    assert.strictEqual(a.pty_id, 1);
+    assert.strictEqual(a.tab_id, 11);
+    assert.strictEqual(a.label, 'Claude: api');
+    assert.strictEqual(a.state, 'busy');
+    assert.ok(a.busy_since && Number.isFinite(Date.parse(a.busy_since)), 'busy_since is ISO');
+    assert.strictEqual(a.idle_since, null);
+    assert.strictEqual(a.last_tool, 'Edit');
+    assert.strictEqual(a.files_touched_count, 1);
+    assert.ok(!JSON.stringify(snap.agents).includes('SECRET'), 'no prompt text or tool input');
+
+    hook('Stop', { last_assistant_message: 'Refactored the router. ' + 'y'.repeat(600) });
+    snap = q.snapshot({ compact: true });
+    [a] = snap.agents;
+    assert.strictEqual(a.state, 'idle');
+    assert.strictEqual(a.busy_since, null);
+    assert.ok(a.idle_since, 'idle_since set');
+    assert.match(a.last_summary, /^Refactored the router/);
+    assert.ok(a.last_summary.length <= 280, 'clipped in compact');
+    assert.ok(q.snapshot().agents[0].last_summary.length > 280, 'full snapshot keeps more');
+
+    hook('SessionEnd', { reason: 'exit' });
+    assert.strictEqual(q.snapshot({ compact: true }).agents.length, 0, 'ended sessions drop out');
+  } finally {
+    done();
+  }
+});
+
+test('agents: warm and tab-less PTYs are not listed; exited PTY drops out', () => {
+  const { pty, q, hook } = setup();
+  pty.add(9, { name: 'Claude (warm)' });
+  pty.add(5);
+  const done = withWindow([
+    { id: 11, ptyId: 1, label: 'Claude' },
+    { id: 19, ptyId: 9, label: 'Claude (warm)' },
+  ]);
+  try {
+    hook('SessionStart');
+    q.handleHook({ event: 'SessionStart', ptyId: '9', windowId: null }, { session_id: 'warm' });
+    q.handleHook({ event: 'SessionStart', ptyId: '5', windowId: null }, { session_id: 'notab' });
+    assert.deepStrictEqual(q.snapshot({ compact: true }).agents.map((a) => a.pty_id), [1]);
+    q.onPtyExit(1, 0);
+    assert.strictEqual(q.snapshot({ compact: true }).agents.length, 0);
+  } finally {
+    done();
+  }
+});
+
+test('agents: a state change schedules a device push; a tool event alone does not', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  const pushed = [];
+  const orig = copilotBus.broadcast;
+  copilotBus.broadcast = (msg) => pushed.push(msg);
+  const clearTimers = () => {
+    for (const t of ['wsTimer', 'ipcTimer']) if (q[t]) { clearTimeout(q[t]); q[t] = null; }
+  };
+  try {
+    q.started = true; // pushes are only scheduled once started
+    hook('SessionStart');
+    clearTimers();
+    q.broadcastSnapshot();
+    pushed.length = 0;
+
+    hook('UserPromptSubmit', { prompt: 'x' });
+    assert.ok(q.wsTimer, 'turn start scheduled a push');
+    clearTimers();
+    assert.strictEqual(q.broadcastSnapshot(), true);
+    assert.strictEqual(pushed[0].type, 'attention_snapshot');
+    assert.strictEqual(pushed[0].data.agents[0].state, 'busy');
+
+    hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: 't1' });
+    hook('PostToolUse', { tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: 't1' });
+    clearTimers();
+    assert.strictEqual(q.broadcastSnapshot(), false, 'tool events alone are not pushed');
+
+    // A state change with no hook event (e.g. Enter answering a prompt in the tab) still schedules one.
+    q.sessions.get('s1').activity = 'idle';
+    q.sessions.get('s1').in_turn = false;
+    q.sessions.get('s1').turn_started_at = null;
+    q.noteAgents();
+    assert.ok(q.wsTimer, 'state change scheduled a push');
+    clearTimers();
+
+    hook('UserPromptSubmit', { prompt: 'y' });
+    hook('Stop', { last_assistant_message: 'done' });
+    clearTimers();
+    assert.strictEqual(q.broadcastSnapshot(), true);
+    const last = pushed[pushed.length - 1].data.agents[0];
+    assert.strictEqual(last.state, 'idle');
+    assert.strictEqual(last.last_summary, 'done');
+    assert.strictEqual(last.last_tool, 'Read', 'last_tool rides along');
+  } finally {
+    clearTimers();
+    q.started = false;
+    copilotBus.broadcast = orig;
+    done();
+  }
 });
 
 test('withClaudeHooks prepends --settings before a -- prompt', () => {

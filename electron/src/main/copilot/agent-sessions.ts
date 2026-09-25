@@ -38,6 +38,12 @@ export interface AgentSession {
   busy_accum_ms: number;
   /** True between a turn start and its Stop, even while paused on a prompt. */
   in_turn: boolean;
+  /** Start of the current turn (wall time, pauses included); null outside a turn. */
+  turn_started_at: number | null;
+  /** End of the last turn; null until one ends. */
+  turn_ended_at: number | null;
+  /** Name of the most recently started tool call (never its input). */
+  last_tool: string | null;
   activity: AgentActivity;
   pending_tool: PendingTool | null;
   /** Started, unfinished tool calls (PreToolUse without PostToolUse[Failure]). */
@@ -89,6 +95,9 @@ export class AgentSessions {
         busy_since: null,
         busy_accum_ms: 0,
         in_turn: false,
+        turn_started_at: null,
+        turn_ended_at: null,
+        last_tool: null,
         activity: 'unknown',
         pending_tool: null,
         open_tools: [],
@@ -149,6 +158,7 @@ export class AgentSessions {
       s.in_turn = true;
       s.busy_accum_ms = 0;
       s.busy_since = now;
+      s.turn_started_at = now;
     } else if (s.busy_since === null) {
       s.busy_since = now;
     }
@@ -181,6 +191,8 @@ export class AgentSessions {
     s.busy_since = null;
     s.busy_accum_ms = 0;
     s.in_turn = false;
+    s.turn_started_at = null;
+    s.turn_ended_at = now;
     s.pending_tool = null;
     s.open_tools = [];
     s.awaiting_approval = false;
@@ -202,6 +214,7 @@ export class AgentSessions {
     s.open_tools.push(tool);
     if (s.open_tools.length > MAX_OPEN_TOOLS) s.open_tools.shift();
     s.pending_tool = tool;
+    s.last_tool = tool.name;
   }
 
   /**
@@ -239,6 +252,7 @@ export class AgentSessions {
     s.ended = true;
     s.busy_since = null;
     s.in_turn = false;
+    s.turn_started_at = null;
     s.pending_tool = null;
     s.open_tools = [];
     s.awaiting_approval = false;

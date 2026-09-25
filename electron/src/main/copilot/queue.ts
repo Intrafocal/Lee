@@ -15,6 +15,7 @@ import { COPILOT_IPC } from '../../shared/copilot';
 import type {
   ActionResult,
   Actor,
+  AgentSummary,
   AttentionItem,
   AttentionSnapshot,
   AttentionSource,
@@ -62,6 +63,9 @@ export const LEE_STATUS_HINT =
 const TICK_MS = 15_000;
 const IPC_DEBOUNCE_MS = 100;
 const WS_DEBOUNCE_MS = 250;
+/** last_summary length in compact snapshots (devices). */
+const COMPACT_AGENT_SUMMARY_MAX = 280;
+const TOOL_NAME_MAX = 40;
 const SESSION_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_SNOOZE_MINUTES = 7 * 24 * 60;
 const PERMISSION_MODES = new Set<HandoffLaunch['permission_mode']>(['acceptEdits', 'default', 'plan']);
@@ -133,6 +137,31 @@ function slugify(title: string, suffix: string): string {
   return `${base || 'agent'}-${suffix}`;
 }
 
+/** `mcp__server__tool` -> `tool`; clipped. A name only, never the tool input. */
+function shortToolName(name: string | null): string | null {
+  if (!name) return null;
+  const parts = name.startsWith('mcp__') ? name.split('__') : [name];
+  return clip(parts[parts.length - 1] || name, TOOL_NAME_MAX);
+}
+
+function iso(ms: number | null): string | null {
+  return ms == null ? null : new Date(ms).toISOString();
+}
+
+/**
+ * What decides whether a device push is worth sending: the compact snapshot
+ * minus its timestamp and the per-tool agent fields (last_tool,
+ * files_touched_count), so tool events alone don't push. Those fields ride
+ * along with the next push.
+ */
+function pushSignature(snap: AttentionSnapshot): string {
+  return JSON.stringify({
+    ...snap,
+    generated_at: null,
+    agents: (snap.agents ?? []).map((a) => ({ ...a, last_tool: null, files_touched_count: null })),
+  });
+}
+
 function obj(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -149,6 +178,10 @@ export class CopilotQueue {
   private started = false;
   /** Approval item id -> the tool call it is about. Pruned as items close. */
   private approvalMeta = new Map<string, ApprovalMeta>();
+  /** Per-agent state last seen by noteAgents(). */
+  private agentsSig = '';
+  /** pushSignature() of the last device push. */
+  private lastPushSig: string | null = null;
 
   constructor(private ptyManager: PTYManager) {
     this.focus = new FocusTracker({
@@ -246,6 +279,8 @@ export class CopilotQueue {
       this.queue.recompute(now);
       this.queue.prune(now);
       this.sessions.prune(now, SESSION_KEEP_MS);
+      // A tab can adopt a prewarmed Claude without a hook event.
+      this.noteAgents();
       for (const id of Array.from(this.approvalMeta.keys())) {
         const item = this.queue.get(id);
         if (!item || (item.state !== 'open' && item.state !== 'snoozed')) this.approvalMeta.delete(id);
@@ -274,9 +309,33 @@ export class CopilotQueue {
     if (!this.wsTimer) {
       this.wsTimer = setTimeout(() => {
         this.wsTimer = null;
-        copilotBus.broadcast({ type: 'attention_snapshot', data: this.snapshot({ compact: true }) });
+        this.broadcastSnapshot();
       }, WS_DEBOUNCE_MS);
     }
+  }
+
+  /** Push the compact snapshot to devices unless nothing they show changed. Returns whether it was sent. */
+  broadcastSnapshot(): boolean {
+    const snap = this.snapshot({ compact: true });
+    const sig = pushSignature(snap);
+    if (sig === this.lastPushSig) return false;
+    this.lastPushSig = sig;
+    copilotBus.broadcast({ type: 'attention_snapshot', data: snap });
+    return true;
+  }
+
+  /**
+   * Schedule pushes when an agent's state changed (turn start/end, pause or
+   * resume on a prompt, session start/end, PTY exit, a tab appearing), even
+   * if no attention item did.
+   */
+  private noteAgents(): void {
+    const sig = this.agentSummaries()
+      .map((a) => `${a.pty_id}:${a.tab_id}:${a.state}:${a.busy_since}:${a.idle_since}`)
+      .join('|');
+    if (sig === this.agentsSig) return;
+    this.agentsSig = sig;
+    this.changed();
   }
 
   private flushPushes(): void {
@@ -316,7 +375,9 @@ export class CopilotQueue {
   snapshot(opts: { compact?: boolean; all?: boolean } = {}): AttentionSnapshot {
     const now = Date.now();
     this.queue.recompute(now);
-    return this.queue.snapshot(this.focusState(), this.awayState(), opts, now);
+    const snap = this.queue.snapshot(this.focusState(), this.awayState(), opts, now);
+    const agents = this.agentSummaries({ compact: opts.compact });
+    return { ...snap, agents };
   }
 
   getItem(id: string): AttentionItem | undefined {
@@ -365,6 +426,14 @@ export class CopilotQueue {
   // ---------------------------------------------------------------------------
 
   handleHook(headers: HookHeaders, body: unknown): Outcome<string | null> {
+    try {
+      return this.applyHook(headers, body);
+    } finally {
+      this.noteAgents();
+    }
+  }
+
+  private applyHook(headers: HookHeaders, body: unknown): Outcome<string | null> {
     const now = Date.now();
     const h = normalizeHook(headers.event, body);
     // X-Lee-Pty-Id is only believed for a PTY Lee spawned as Claude Code, so a
@@ -606,6 +675,14 @@ export class CopilotQueue {
 
   private onPtyExit(ptyId: number, code: number): void {
     if (!this.sessions.isTrackedPty(ptyId)) return;
+    try {
+      this.endPtySessions(ptyId, code);
+    } finally {
+      this.noteAgents();
+    }
+  }
+
+  private endPtySessions(ptyId: number, code: number): void {
     const now = Date.now();
     const last = this.sessions.latestForPty(ptyId) ?? null;
     const src = this.sourceFor(last, ptyId, null, null);
@@ -670,6 +747,7 @@ export class CopilotQueue {
       this.sessions.resumeBusy(s, now);
     }
     this.changed();
+    this.noteAgents();
   }
 
   // ---------------------------------------------------------------------------
@@ -791,6 +869,7 @@ export class CopilotQueue {
       },
     });
     this.queue.resolve(item.id, 'reply', now, actor);
+    this.noteAgents();
     return { status: 200, body: { success: true, item: this.queue.get(item.id) }, category };
   }
 
@@ -921,29 +1000,63 @@ export class CopilotQueue {
     return 'unknown';
   }
 
-  handoffProposals(): HandoffProposals {
-    this.queue.recompute(Date.now());
-    const agents: HandoffAgent[] = [];
+  /**
+   * One row per PTY with a live session that a tab shows, most recent first.
+   * Hidden prewarmed Claudes (and any PTY no tab shows) are not agents yet.
+   */
+  private liveAgents(): Array<{ s: AgentSession; ptyId: number; tab: TabInfo }> {
+    const out: Array<{ s: AgentSession; ptyId: number; tab: TabInfo }> = [];
     const seen = new Set<number>();
     const live = this.sessions.live().sort((a, b) => b.last_event_at - a.last_event_at);
     for (const s of live) {
-      if (s.pty_id == null || seen.has(s.pty_id) || !this.ptyManager.get(s.pty_id)) continue;
-      // Hidden prewarmed Claudes (and any PTY no tab shows) are not agents yet.
-      const tab = this.findTab(s.pty_id);
-      if (!tab || this.ptyManager.isWarmPty(s.pty_id)) continue;
-      seen.add(s.pty_id);
-      const src = this.sourceFor(s, s.pty_id, null, null);
-      agents.push({
-        pty_id: s.pty_id,
+      const ptyId = s.pty_id;
+      if (ptyId == null || seen.has(ptyId) || !this.ptyManager.get(ptyId)) continue;
+      const tab = this.findTab(ptyId);
+      if (!tab || this.ptyManager.isWarmPty(ptyId)) continue;
+      seen.add(ptyId);
+      out.push({ s, ptyId, tab });
+    }
+    return out;
+  }
+
+  /** Running agents for snapshots. Never prompt text or tool inputs. */
+  agentSummaries(opts: { compact?: boolean } = {}): AgentSummary[] {
+    return this.liveAgents().map(({ s, ptyId, tab }) => {
+      const src = this.sourceFor(s, ptyId, null, null);
+      const state = this.agentState(s);
+      const summary = s.last_summary && opts.compact ? clip(s.last_summary, COMPACT_AGENT_SUMMARY_MAX) : s.last_summary;
+      return {
+        pty_id: ptyId,
         window_id: src.window_id,
-        tab_id: tab?.tab_id ?? null,
-        label: tab?.label ?? 'Claude',
+        tab_id: tab.tab_id,
+        label: tab.label,
+        provider: s.provider,
+        workspace: src.workspace,
+        state,
+        busy_since: s.in_turn && (state === 'busy' || state === 'waiting') ? iso(s.turn_started_at) : null,
+        idle_since: state === 'idle' || (state === 'waiting' && !s.in_turn) ? iso(s.turn_ended_at) : null,
+        last_tool: shortToolName(s.last_tool),
+        last_summary: summary,
+        files_touched_count: s.files_written.length,
+      };
+    });
+  }
+
+  handoffProposals(): HandoffProposals {
+    this.queue.recompute(Date.now());
+    const agents: HandoffAgent[] = this.liveAgents().map(({ s, ptyId, tab }) => {
+      const src = this.sourceFor(s, ptyId, null, null);
+      return {
+        pty_id: ptyId,
+        window_id: src.window_id,
+        tab_id: tab.tab_id,
+        label: tab.label,
         provider: s.provider,
         workspace: src.workspace,
         state: this.agentState(s),
         last_summary: s.last_summary,
-      });
-    }
+      };
+    });
     const waiting = this.queue
       .snapshot(this.focusState(), this.awayState())
       .items.filter((i) => i.state === 'open' && i.severity !== 'ambient');

@@ -270,11 +270,39 @@ export interface AwayState {
   parked_count: number;
 }
 
+export type AgentState = 'busy' | 'idle' | 'waiting' | 'unknown';
+
+/**
+ * One running agent (a Claude tab Lee launched), for the device "In flight"
+ * view. Never carries prompt text or tool inputs; last_summary is the
+ * agent's own words.
+ */
+export interface AgentSummary {
+  pty_id: number;
+  window_id: number | null;
+  tab_id: number | null;
+  label: string;
+  provider: string;
+  workspace: string | null;
+  state: AgentState;
+  /** ISO start of the current turn while busy or waiting in a turn; else null. */
+  busy_since: string | null;
+  /** ISO end of the last turn while idle; else null. */
+  idle_since: string | null;
+  /** Short name of the most recent tool call (may lag until the next push). */
+  last_tool: string | null;
+  /** The agent's last message; clipped to ~280 chars in compact snapshots. */
+  last_summary: string | null;
+  files_touched_count: number;
+}
+
 export interface AttentionSnapshot {
   items: AttentionItem[];
   counts: { blocking: number; needs_you: number; ambient: number; parked: number };
   focus: FocusState;
   away: AwayState;
+  /** Running agents. Optional: older Lee builds omit it; older clients ignore it. */
+  agents?: AgentSummary[];
   generated_at: string;
 }
 
@@ -305,7 +333,7 @@ export interface HandoffAgent {
   label: string;
   provider: string;
   workspace: string | null;
-  state: 'busy' | 'idle' | 'waiting' | 'unknown';
+  state: AgentState;
   last_summary: string | null;
 }
 
