@@ -129,15 +129,10 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _refreshContext(WidgetRef ref, Machine machine) async {
-    final api = LeeApi(machine: machine);
-    try {
-      await api.getContext();
-      // The WebSocket connection will push the fresh context automatically,
-      // but triggering a GET /context ensures it's up to date.
-      ref.read(connectionProvider.notifier).reconnect();
-    } finally {
-      api.dispose();
-    }
+    // Pick up windows opened or closed since the last poll, then reconnect;
+    // the reconnect fetches the selected window's context itself.
+    await ref.read(windowsProvider.notifier).refresh();
+    ref.read(connectionProvider.notifier).reconnect();
   }
 
   void _focusTab(WidgetRef ref, Machine machine, TabContext tab) {

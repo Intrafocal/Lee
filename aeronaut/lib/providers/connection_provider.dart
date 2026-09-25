@@ -70,6 +70,11 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
         // Drop the replay buffer so a late subscriber doesn't see the
         // previous window's tabs.
         _lastContext = null;
+        // Lee only broadcasts a window's context when it changes, so pull
+        // the newly selected one now rather than showing the old window
+        // until the new one happens to update.
+        final windowId = next.activeWindowId;
+        if (windowId != null) _fetchWindowContext(windowId);
       }
     });
   }
@@ -86,6 +91,24 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     yield* _contextController.stream;
   }
 
+  /// Fetch `GET /context?window_id=` and publish it, unless the selection
+  /// or machine moved on while the request was in flight.
+  Future<void> _fetchWindowContext(int windowId) async {
+    final machine = _ref.read(machinesProvider).activeMachine;
+    if (machine == null) return;
+    final api = LeeApi(machine: machine);
+    try {
+      final ctx = await api.getContext(windowId: windowId);
+      if (ctx == null || !mounted) return;
+      if (_connectedMachineId != machine.id) return;
+      if (_ref.read(windowsProvider).activeWindowId != windowId) return;
+      _lastContext = ctx;
+      _contextController.add(ctx);
+    } finally {
+      api.dispose();
+    }
+  }
+
   void _connect(Machine machine) {
     _connectedMachineId = machine.id;
     state = const ConnectionState(status: ConnectionStatus.connecting);
@@ -98,8 +121,14 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
 
       _subscription = _channel!.stream.listen(
         (data) {
+          final wasConnected = state.status == ConnectionStatus.connected;
           state = state.copyWith(status: ConnectionStatus.connected);
           _handleMessage(data);
+          // The snapshot Lee sends on connect is the *focused* window's; when
+          // another window is selected it was filtered out above, so fetch
+          // ours instead.
+          final windowId = _ref.read(windowsProvider).activeWindowId;
+          if (!wasConnected && windowId != null) _fetchWindowContext(windowId);
         },
         onError: (error) {
           debugPrint('Aeronaut WS error: $error');
