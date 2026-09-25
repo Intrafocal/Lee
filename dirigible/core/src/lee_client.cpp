@@ -449,6 +449,38 @@ void LeeConnection::postAction(const std::string& path, cJSON* body,
     });
 }
 
+void LeeConnection::attentionChoose(const std::string& id, int choice, int version,
+                                    std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "action", "choose");
+    cJSON_AddNumberToObject(body, "choice", choice);
+    cJSON_AddNumberToObject(body, "version", version);
+    postAction("/attention/" + url_encode(id) + "/reply", body, std::move(cb));
+}
+
+void LeeConnection::attentionOpen(const std::string& id,
+                                  std::function<void(const ReplyResult&)> cb) {
+    postAction("/attention/" + url_encode(id) + "/open", cJSON_CreateObject(), std::move(cb));
+}
+
+void LeeConnection::fetchAttentionItem(const std::string& id,
+                                       std::function<void(int, const AttentionItem*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    std::weak_ptr<int> alive = alive_;
+    // The transport owns and frees `resp` after the callback; only the parsed
+    // copy leaves it.
+    http_->get(buildHttpUrl("/attention/") + url_encode(id),
+               [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        AttentionItem item;
+        const bool ok = status >= 200 && status < 300 && attention_item_parse(resp, item);
+        cb(status, ok ? &item : nullptr);
+    });
+}
+
 void LeeConnection::attentionDismiss(const std::string& id,
                                      std::function<void(const ReplyResult&)> cb) {
     postAction("/attention/" + url_encode(id) + "/dismiss", cJSON_CreateObject(), std::move(cb));

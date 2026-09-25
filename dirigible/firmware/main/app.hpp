@@ -146,11 +146,9 @@ void app_show(View v);
 /// Waiting, and Waiting (which has nowhere further back once its reply/capture
 /// box or an opened finished turn is closed) opens the menu.
 ///
-/// Three things call this and they must stay in agreement: the header's
-/// on-screen button, the ESC key, and a trackball long-press.  Before E15 the
-/// long-press opened the menu and did nothing at all in the terminal — the
-/// d-pad hook returned before the BSP's long-press detector ran — so a PTY tab
-/// was a dead end for anyone not reaching for ESC.
+/// Two things call this and they must stay in agreement: the header's
+/// on-screen button and a trackball long-press.  (The T-Deck keyboard has no
+/// Esc; a 0x1B byte, should another keyboard send one, is only a silent alias.)
 void app_back();
 
 // Chrome ---------------------------------------------------------------------
@@ -167,14 +165,47 @@ void chrome_show_footer(bool show);
 void chrome_set_back_glyph(const char* glyph);
 
 /// Footer action buttons (right-hand slot).  Views own their own set; adding
-/// one hides the right-hand hint label.  Buttons join the input group, so the
-/// trackball, touch and Tab all reach them — this is how pairing gets a
-/// visible "Back" affordance rather than only the ESC key.
+/// one hides the right-hand hint label.  They are touch targets first: the
+/// 15 px band is all the chrome allows, so each carries an extended hit area
+/// that reaches into the body above.  Buttons also join the input group, so
+/// Tab and Enter reach them.  A button that has a key names it after the word,
+/// capitalised: "Reload (R)".
 void      chrome_clear_footer_buttons();
 lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* user);
 
 /// Legacy shim: left -> header centre, right -> footer right hint.
 void app_set_status(const char* left, const char* right = nullptr);
+
+// Trackball ------------------------------------------------------------------
+// The ball is never a pointer (tdeck_bsp_set_ball_hook).  Everywhere except
+// the terminal it scrolls: lists move a highlighted row, text scrolls by
+// pixels.  These are the shared pieces every screen uses so the feel is the
+// same on each.
+
+/// Detents of roll per list row.  One per detent made a five-row menu
+/// twitchy; two keeps a slow roll precise and a flick still covers a list.
+inline constexpr int BALL_ROW_DETENTS = 2;
+
+/// A per-axis detent accumulator for whole-step moves (rows, expand/collapse,
+/// pan columns).  Resets when the direction flips or the ball rests.
+struct BallAcc {
+    int      acc  = 0;
+    uint32_t tick = 0;
+};
+int ball_steps(BallAcc& a, int detents, int per_step = BALL_ROW_DETENTS);
+
+/// Pixels to scroll for `detents` of vertical roll: ~10 px a detent when
+/// rolled slowly, up to 4x that on a fast flick.
+int ball_scroll_px(int detents);
+
+/// The ball over a list of touch rows (tabs, menu, window picker, pairing
+/// lists, Waiting's empty state): a vertical roll moves the highlight — LVGL
+/// group focus, drawn by dg::style_focus — among the visible, focusable
+/// descendants of `list` and keeps it in view; a click activates the
+/// highlighted row, or just highlights the first visible one if nothing is.
+/// Touch taps a row directly (LVGL focuses it on the way).  Returns false if
+/// `list` has no rows, so a caller can fall back to something else.
+bool ball_list(lv_obj_t* list, int dy, bool click);
 
 // Views ---------------------------------------------------------------------
 
@@ -212,11 +243,13 @@ void terminal_ball(int dx, int dy, bool click);
 void hester_build(lv_obj_t* parent);
 void hester_focus();
 void hester_submit();
+void hester_ball(int dx, int dy, bool click);   // scrolls the answer
 
 void pairing_build(lv_obj_t* parent);
 void pairing_begin();                      // restart the flow at step 0
-void pairing_back();                       // one step back (ESC / Back button)
+void pairing_back();                       // one step back (Back buttons, hold)
 bool pairing_key(uint8_t ascii);
+void pairing_ball(int dx, int dy, bool click);  // list steps: highlight + pick
 
 // Files: the workspace tree over GET /fs/list (Aeronaut's FilesBrowserBody).
 // Its own state lives in screen_files.cpp.
@@ -226,8 +259,9 @@ bool files_key(uint8_t ascii);
 void files_ball(int dx, int dy, bool click);
 
 // Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen): code in a
-// 40x20 monospace cell window, prose in 11 wrapped Montserrat rows.  State
-// lives in screen_viewer.cpp.
+// monospace cell window with a gutter, prose and rendered markdown in wrapped
+// Montserrat, all scrolled by the pixel.  State lives in screen_viewer.cpp;
+// markdown is parsed by dirigible/markdown.hpp (host-tested, tools/md-test).
 void viewer_build(lv_obj_t* parent);
 /// Open `path`; back returns to `from` (Files or Tabs).
 void viewer_open_path(const std::string& path, View from);
@@ -237,6 +271,9 @@ void viewer_open_tab(int tab_id);
 void viewer_on_context(const dirigible::LeeContext* ctx);
 void viewer_close();                       // drop the file and any tab binding
 View viewer_return_view();
+#if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
+void viewer_open_demo();                   // demo build: a markdown sample
+#endif
 bool viewer_key(uint8_t ascii);
 void viewer_ball(int dx, int dy, bool click);
 

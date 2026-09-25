@@ -23,7 +23,7 @@ namespace dirigible {
 // ---------------------------------------------------------------------------
 
 enum class AttentionKind : uint8_t {
-    Approval, Waiting, Blocker, Decision, Failure, Review, Summary, Other,
+    Approval, Waiting, Blocker, Decision, Failure, Review, Summary, Question, Other,
 };
 
 enum class AttentionSeverity : uint8_t { Ambient, NeedsYou, Blocking };
@@ -37,6 +37,23 @@ enum AttentionAction : uint8_t {
     ActSnooze  = 1 << 4,
     ActDismiss = 1 << 5,
     ActWake    = 1 << 6,
+    ActChoose  = 1 << 7,   // pick one option of a single-select question
+};
+
+/// One question of Claude Code's AskUserQuestion, as Lee reports it
+/// (electron/src/shared/copilot.ts AttentionQuestion).  Strings are capped;
+/// the compact snapshot clips them further (~120 chars) and GET
+/// /attention/:id carries them whole (<= 300).
+struct AttentionOption {
+    std::string label;
+    std::string description;   // empty when the agent gave none
+};
+
+struct AttentionQuestion {
+    std::string                  question;
+    std::string                  header;       // short chip label, may be empty
+    bool                         multi_select = false;
+    std::vector<AttentionOption> options;      // empty: a free-text question
 };
 
 struct AttentionItem {
@@ -53,8 +70,27 @@ struct AttentionItem {
     /// generated_at - created_at, both host clock, so the device clock does
     /// not matter.  -1 when either timestamp was missing.
     int64_t           age_ms   = -1;
+    /// Approvals: the pending tool's name ("Bash", "AskUserQuestion").
+    std::string       tool_name;
+    /// Question items only.
+    std::vector<AttentionQuestion> questions;
 
     bool can(AttentionAction a) const { return (actions & a) != 0; }
+
+    /// A question the device can answer with one pick: exactly one question,
+    /// single-select, with options (the only shape Lee accepts "choose" for).
+    bool choosable() const
+    {
+        return kind == AttentionKind::Question && questions.size() == 1 &&
+               !questions[0].multi_select && !questions[0].options.empty();
+    }
+
+    /// An older Lee files AskUserQuestion as an approval, where Approve
+    /// would silently pick whichever option is highlighted in the TUI.
+    bool question_as_approval() const
+    {
+        return kind == AttentionKind::Approval && tool_name == "AskUserQuestion";
+    }
 };
 
 struct AttentionSnapshot {
@@ -77,10 +113,24 @@ inline constexpr size_t ATTENTION_MAX_TEXT  = 280;
 inline constexpr size_t ATTENTION_MAX_TITLE = 96;
 inline constexpr size_t ATTENTION_MAX_LABEL = 48;
 inline constexpr size_t ATTENTION_MAX_ID    = 64;
+/// GET /attention/:id carries the agent's words whole (Lee's AGENT_TEXT_MAX).
+inline constexpr size_t ATTENTION_FULL_TEXT = 2000;
+inline constexpr size_t ATTENTION_MAX_QUESTIONS = 4;
+inline constexpr size_t ATTENTION_MAX_OPTIONS   = 8;
+/// Question strings kept per item.  Lee caps them at 300 (120 compact).
+inline constexpr size_t ATTENTION_MAX_QTEXT  = 300;
+/// Question items in one snapshot that keep their questions; the rest get
+/// them from GET /attention/:id when shown.  Bounds a hostile snapshot.
+inline constexpr size_t ATTENTION_MAX_QUESTION_ITEMS = 6;
 
 /// Parse an AttentionSnapshot object, or a `{success, data}` envelope around
 /// one.  Returns false (leaving `out` untouched) when it is not a snapshot.
 bool attention_snapshot_parse(cJSON* json, AttentionSnapshot& out);
+
+/// Parse one full item (GET /attention/:id, `{success, data: item}` or the
+/// bare item), keeping up to ATTENTION_FULL_TEXT of its text.  Returns false
+/// when it is not an item.
+bool attention_item_parse(cJSON* json, AttentionItem& out);
 
 /// True when some item in `next` has notify set and did not in `prev` (absent
 /// counts as not set): the one moment a device may alert (§5.4).

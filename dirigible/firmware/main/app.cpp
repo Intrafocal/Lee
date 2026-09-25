@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "brand_images.h"
 #include "dirigible/state.hpp"
@@ -169,6 +170,13 @@ void chrome_clear_footer_buttons()
     footer_fit_legend();
 }
 
+/// Header title slot, right of the 22 px back button; ends before x=112.
+static constexpr int TITLE_X = 28;
+static constexpr int TITLE_W = 80;
+
+/// Extra touch margin around each footer button (see chrome_add_footer_button).
+static constexpr int FOOTER_HIT = 7;
+
 lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* user)
 {
     auto& a = app();
@@ -186,8 +194,11 @@ lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* use
     lv_obj_set_style_border_color(btn, dg::ground4(), 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(btn, DG_RADIUS, 0);
-    lv_obj_set_style_pad_hor(btn, 5, 0);
+    lv_obj_set_style_pad_hor(btn, 6, 0);
     lv_obj_set_style_pad_ver(btn, 0, 0);
+    lv_obj_set_style_min_width(btn, 40, 0);   // "Win (W)" is still a target
+    lv_obj_set_style_bg_color(btn, dg::ground4(), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(btn, dg::ground5(), 0);
     dg::style_focus(btn);
 
     // The label is a full 15 px line in a 15 px box with a 1 px border; one
@@ -195,6 +206,13 @@ lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* use
     // line's empty top row is what gets clipped instead.
     lv_obj_t* l = make_label(btn, text, dg::text1(), dg::ui_font_small());
     lv_obj_align(l, LV_ALIGN_CENTER, 0, -1);
+
+    // A 15 px tall button is about 3 mm on this panel, well under a
+    // fingertip.  The band cannot grow without eating the body, so the hit
+    // area does instead: FOOTER_HIT px on every side, which reaches up into
+    // the body (the footer and its row are OVERFLOW_VISIBLE so LVGL looks
+    // there) and across the 3 px gaps.  Neighbours split the gap evenly.
+    lv_obj_set_ext_click_area(btn, FOOTER_HIT);
 
     if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user);
     if (a.group) lv_group_add_obj(a.group, btn);
@@ -245,7 +263,7 @@ void connect_active_machine()
 }
 
 // ---------------------------------------------------------------------------
-// Menu overlay (opened by a trackball long-press)
+// Menu overlay (Waiting's back affordance: the header button or a ball hold)
 // ---------------------------------------------------------------------------
 
 static void menu_close()
@@ -273,6 +291,9 @@ static void menu_item_cb(lv_event_t* e)
         if (auto* c = activeConn()) { c->disconnect(); c->connect(); }
         app_set_status("reconnecting...");
         break;
+#if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
+    case 8: viewer_open_demo(); break;
+#endif
     default: break;
     }
 }
@@ -311,8 +332,13 @@ static void menu_open(void*)
     menu_style(a.menu, 180);
 
     static const char* names[] = { "Waiting", "Tabs", "Files", "Hester", "Capture",
-                                   "Windows", "Pairing", "Reconnect" };
-    for (intptr_t i = 0; i < 8; i++) {
+                                   "Windows", "Pairing", "Reconnect", "MD sample" };
+#if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
+    const intptr_t n = 9;   // + the viewer's markdown sample
+#else
+    const intptr_t n = 8;
+#endif
+    for (intptr_t i = 0; i < n; i++) {
         menu_add(a.menu, names[i], menu_item_cb, (void*)i);
     }
 }
@@ -320,7 +346,7 @@ static void menu_open(void*)
 // ---------------------------------------------------------------------------
 // Window picker — every Lee window on the host shares one API port, so this
 // is Aeronaut's WorkspaceSwitcher: pick which window's tabs, files and
-// commands Dirigible follows.  Shares the menu overlay slot, so ESC, back and
+// commands Dirigible follows.  Shares the menu overlay slot, so back and
 // a long-press all close it the same way.
 // ---------------------------------------------------------------------------
 
@@ -442,14 +468,136 @@ static bool key_hook(uint8_t ascii, void*)
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Trackball — a scroll wheel with a click, never a pointer.
+// ---------------------------------------------------------------------------
+
+/// Sideways detents this soon after a vertical one are the optical sensor
+/// leaking, not intent (Waiting has always filtered these for its page flick).
+static constexpr uint32_t BALL_DX_QUIET_MS = 200;
+/// A roll that pauses this long starts a fresh accumulation / acceleration.
+static constexpr uint32_t BALL_REST_MS = 400;
+/// Pixels per detent at a slow roll; up to 4x on a flick.
+static constexpr int BALL_SCROLL_PX = 10;
+
+int ball_steps(BallAcc& a, int detents, int per_step)
+{
+    if (!detents) return 0;
+    if ((a.acc > 0 && detents < 0) || (a.acc < 0 && detents > 0) ||
+        lv_tick_elaps(a.tick) > BALL_REST_MS) {
+        a.acc = 0;
+    }
+    a.tick = lv_tick_get();
+    a.acc += detents;
+    const int steps = a.acc / per_step;
+    a.acc -= steps * per_step;
+    return steps;
+}
+
+int ball_scroll_px(int detents)
+{
+    static uint32_t last = 0;
+    const uint32_t dt = lv_tick_elaps(last);
+    last = lv_tick_get();
+    // The gap between detents is the roll speed: the poll runs every 10 ms,
+    // so a flick lands a detent every poll or two.
+    const int gain = dt >= 90 ? 1 : dt >= 50 ? 2 : dt >= 25 ? 3 : 4;
+    return detents * BALL_SCROLL_PX * gain;
+}
+
+/// Visible, clickable members of the input group under `o`, in tree order.
+/// A match's own children are not searched (a row's badge is not a row).
+static void collect_rows(lv_obj_t* o, std::vector<lv_obj_t*>& out)
+{
+    const uint32_t n = lv_obj_get_child_cnt(o);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t* c = lv_obj_get_child(o, i);
+        if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) continue;
+        if (lv_obj_has_flag(c, LV_OBJ_FLAG_CLICKABLE) && lv_obj_get_group(c)) {
+            out.push_back(c);
+            continue;
+        }
+        collect_rows(c, out);
+    }
+}
+
+bool ball_list(lv_obj_t* list, int dy, bool click)
+{
+    static BallAcc acc;
+    static std::vector<lv_obj_t*> rows;   // reused: no allocation per detent
+    auto& a = app();
+    if (!list || !a.group || lv_obj_has_flag(list, LV_OBJ_FLAG_HIDDEN)) return false;
+
+    rows.clear();
+    collect_rows(list, rows);
+    if (rows.empty()) return false;
+
+    lv_obj_t* focused = lv_group_get_focused(a.group);
+    int idx = -1;
+    for (size_t i = 0; i < rows.size(); i++) {
+        if (rows[i] == focused) { idx = (int)i; break; }
+    }
+
+    int target = idx;
+    if (click) {
+        if (idx >= 0) {
+            // The handler may delete the list (the menu closes itself), so
+            // nothing below touches `rows` again.
+            lv_event_send(rows[idx], LV_EVENT_CLICKED, nullptr);
+            return true;
+        }
+    } else {
+        const int steps = ball_steps(acc, dy);
+        if (!steps) return true;
+        if (idx >= 0) {
+            target = idx + steps;
+            if (target < 0) target = 0;
+            if (target >= (int)rows.size()) target = (int)rows.size() - 1;
+            if (target == idx) return true;
+        }
+    }
+    if (target < 0) {
+        // Nothing highlighted yet: start at the first row on screen rather
+        // than wherever the group's focus last was.
+        lv_area_t view;
+        lv_obj_get_coords(list, &view);
+        target = 0;
+        for (size_t i = 0; i < rows.size(); i++) {
+            lv_area_t r;
+            lv_obj_get_coords(rows[i], &r);
+            if (r.y1 >= view.y1) { target = (int)i; break; }
+        }
+    }
+    lv_group_focus_obj(rows[target]);
+    lv_obj_scroll_to_view_recursive(rows[target], LV_ANIM_ON);
+    return true;
+}
+
 static void ball_hook(int dx, int dy, bool click, void*)
 {
-    switch (app().view) {
+    auto& a = app();
+
+    // The terminal gets every detent raw: they are arrow keys there.
+    if (a.view == View::Terminal && !a.menu) {
+        terminal_ball(dx, dy, click);
+        return;
+    }
+
+    static uint32_t last_dy = 0;
+    if (dy) last_dy = lv_tick_get();
+    else if (dx && lv_tick_elaps(last_dy) < BALL_DX_QUIET_MS) dx = 0;
+    if (!dx && !dy && !click) return;
+
+    if (a.menu) { ball_list(a.menu, dy, click); return; }
+
+    switch (a.view) {
     case View::Waiting:  waiting_ball(dx, dy, click);  break;
-    case View::Terminal: terminal_ball(dx, dy, click); break;
+    case View::Tabs:     ball_list(a.tab_list, dy, click); break;
+    case View::Hester:   hester_ball(dx, dy, click);   break;
+    case View::Pairing:  pairing_ball(dx, dy, click);  break;
     case View::Files:    files_ball(dx, dy, click);    break;
     case View::Viewer:   viewer_ball(dx, dy, click);   break;
-    default: break;
+    case View::Terminal: break;
     }
 }
 
@@ -474,25 +622,17 @@ void app_show(View v)
     lv_obj_add_flag(a.view_files,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_viewer,   LV_OBJ_FLAG_HIDDEN);
 
-    // The ball is a pointer on the tab list, Hester and pairing.  In the
-    // terminal it is a d-pad feeding arrow keys to the PTY; in Waiting, Files
-    // and the viewer it is a d-pad moving the selection / scrolling, which on
-    // a long list beats steering a pointer onto 17 px rows.
-    const bool dpad = v == View::Terminal || v == View::Files || v == View::Viewer ||
-                      v == View::Waiting;
-    tdeck_bsp_set_ball_hook(dpad ? ball_hook : nullptr, nullptr);
-
     // Each view owns its legend; pairing replaces the buttons per step.
     if (v != View::Pairing) chrome_clear_footer_buttons();
     chrome_show_footer(v != View::Terminal);
 
     // The Hester hare only ever shows in the Hester view; every other view
-    // gets the title back at its usual x=24, 84 px wide.  Reset here so each
+    // gets the title back at its usual TITLE_X / TITLE_W.  Reset here so each
     // case below only has to opt in.
     if (a.hester_icon) lv_obj_add_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
     if (a.lbl_machine) {
-        lv_obj_set_width(a.lbl_machine, 84);
-        lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
+        lv_obj_set_width(a.lbl_machine, TITLE_W);
+        lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, TITLE_X, 0);
     }
     // Title defaults to the machine; Files and the viewer name themselves.
     if (auto* m = a.machines ? a.machines->activeMachine() : nullptr) {
@@ -515,18 +655,18 @@ void app_show(View v)
     case View::Terminal:
         lv_obj_clear_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph(LV_SYMBOL_CLOSE);  // back here closes the PTY
-        chrome_set_footer("Esc/hold exit  ball=arrows", "term");
+        chrome_set_footer("hold ball or " LV_SYMBOL_CLOSE " exit  ball = arrows", "term");
         break;
     case View::Hester:
         lv_obj_clear_flag(a.view_hester, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph(LV_SYMBOL_LEFT);
-        chrome_set_footer("Enter ask  Esc tabs", "hester");
+        chrome_set_footer("Enter ask  ball scrolls", "hester");
         // Make room for the 8x8 hare just left of the title: shift the title
-        // from x=24 to x=34 and shrink it by the same 10 px it gave up.
+        // 10 px right and shrink it by the same 10 px.
         if (a.hester_icon) lv_obj_clear_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
         if (a.lbl_machine) {
-            lv_obj_set_width(a.lbl_machine, 74);
-            lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 34, 0);
+            lv_obj_set_width(a.lbl_machine, TITLE_W - 10);
+            lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, TITLE_X + 10, 0);
         }
         hester_focus();
         break;
@@ -539,13 +679,13 @@ void app_show(View v)
         chrome_set_back_glyph(LV_SYMBOL_LEFT);
         chrome_set_title("Files");
         chrome_set_centre("");
-        chrome_set_footer("ball move/open  r", "files");
+        chrome_set_footer("ball/tap pick  " LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " fold", nullptr);
         break;
     case View::Viewer:
         lv_obj_clear_flag(a.view_viewer, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph(LV_SYMBOL_LEFT);
         chrome_set_centre("");
-        chrome_set_footer("ball scroll  spc pg", "view");
+        chrome_set_footer("ball scroll  spc page", nullptr);
         break;
     }
 }
@@ -683,21 +823,28 @@ void app_start()
     lv_obj_set_style_border_opa(a.header, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.header, LV_OBJ_FLAG_SCROLLABLE);
 
-    // far left: the always-on back/close button, x 2..19.  Deliberately NOT in
+    // far left: the always-on back/close button, x 2..23.  There is no Esc
+    // key on the T-Deck, so this (and a trackball hold) is how every view is
+    // left; it is bordered like every other touch target.  Deliberately NOT in
     // the input group's *focus order* by default — pairing and Hester focus
     // their text fields on entry and a button ahead of them in the group
     // steals that focus — but it IS added to the group (task: give it the
-    // focus style) so Tab can still reach it; touch, the trackball pointer,
-    // ESC and a long-press all reach it regardless.
+    // focus style) so Tab can still reach it; touch and a trackball hold reach
+    // it regardless.  Its hit area runs 4 px past the box into the gap before
+    // the title, since it is a thumb target.
     a.back_btn = lv_btn_create(a.header);
     lv_obj_remove_style_all(a.back_btn);
-    lv_obj_set_size(a.back_btn, 18, HEADER_H - 2);
+    lv_obj_set_size(a.back_btn, 22, HEADER_H - 2);
     lv_obj_set_pos(a.back_btn, 2, 1);
     lv_obj_set_style_bg_opa(a.back_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(a.back_btn, dg::ground3(), 0);
     lv_obj_set_style_bg_color(a.back_btn, dg::ground3(), LV_STATE_PRESSED);
     lv_obj_set_style_radius(a.back_btn, DG_RADIUS, 0);
     dg::style_focus(a.back_btn);
+    lv_obj_set_style_border_width(a.back_btn, 1, 0);
+    lv_obj_set_style_border_color(a.back_btn, dg::ground5(), 0);
+    lv_obj_set_style_border_opa(a.back_btn, LV_OPA_COVER, 0);
+    lv_obj_set_ext_click_area(a.back_btn, 4);
     lv_obj_add_event_cb(a.back_btn, back_btn_cb, LV_EVENT_CLICKED, nullptr);
     if (a.group) lv_group_add_obj(a.group, a.back_btn);
 
@@ -707,18 +854,18 @@ void app_start()
     lv_obj_set_style_text_color(a.back_lbl, dg::text1(), 0);
     lv_obj_center(a.back_lbl);
 
-    // left: title, x 24..107, Montserrat 14 with an ellipsis so it can never
+    // left: title, x 28..107, Montserrat 14 with an ellipsis so it can never
     // run into the centre slot, which starts at x=112.
     a.lbl_machine = make_label(a.header, "Dirigible", dg::text1());
     lv_label_set_long_mode(a.lbl_machine, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(a.lbl_machine, 84);
-    lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, 24, 0);
+    lv_obj_set_width(a.lbl_machine, TITLE_W);
+    lv_obj_align(a.lbl_machine, LV_ALIGN_LEFT_MID, TITLE_X, 0);
 
     // Hester's hare, 8x8, shown only while the Hester view is focused — see
-    // app_show().  Sits in the same 24..32 slot the title vacates for it.
+    // app_show().  Sits in the same slot the title vacates for it.
     a.hester_icon = lv_img_create(a.header);
     lv_img_set_src(a.hester_icon, &dg_img_hester8);
-    lv_obj_align(a.hester_icon, LV_ALIGN_LEFT_MID, 24, 0);
+    lv_obj_align(a.hester_icon, LV_ALIGN_LEFT_MID, TITLE_X, 0);
     lv_obj_add_flag(a.hester_icon, LV_OBJ_FLAG_HIDDEN);
 
     // centre: step / status.  x 112..239 (128 px), Montserrat 12 so a status
@@ -771,6 +918,8 @@ void app_start()
     lv_obj_set_style_border_color(a.footer, dg::ground4(), 0);
     lv_obj_set_style_border_opa(a.footer, LV_OPA_COVER, 0);
     lv_obj_clear_flag(a.footer, LV_OBJ_FLAG_SCROLLABLE);
+    // Lets touch find the footer buttons' extended hit areas above the band.
+    lv_obj_add_flag(a.footer, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     // Footer text is Montserrat 12: its 15 px line is exactly the band under
     // the hairline.  LVGL offsets children by the parent's border width, so
@@ -794,6 +943,7 @@ void app_start()
     lv_obj_set_flex_align(a.footer_btns, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(a.footer_btns, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(a.footer_btns, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
     // Style-based align (not lv_obj_align) so the row is re-anchored to the
     // right edge every time its content width changes as buttons are added.
     lv_obj_set_pos(a.footer_btns, SCREEN_W - 3, 0);   // repositioned by footer_fit_legend()
@@ -809,6 +959,7 @@ void app_start()
 
     // ---- input ---------------------------------------------------------
     tdeck_bsp_set_key_hook(key_hook, nullptr);
+    tdeck_bsp_set_ball_hook(ball_hook, nullptr);
     tdeck_bsp_set_long_press_cb(long_press_cb, nullptr);
 
     // ---- protocol stack -------------------------------------------------

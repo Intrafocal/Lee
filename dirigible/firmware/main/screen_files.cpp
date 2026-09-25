@@ -22,10 +22,10 @@
  *
  * The tree is flattened into `rows` and only the visible window is drawn, so
  * an expanded node_modules-sized directory costs a vector of strings, not a
- * few thousand LVGL objects.  The trackball is a d-pad here (as in the
- * terminal): roll up/down moves the selection, right expands, left collapses
- * or jumps to the parent, a click opens.  Touch taps a row; a vertical swipe
- * pages.
+ * few thousand LVGL objects.  The trackball scrolls the selection (two
+ * detents a row, so a slow roll is exact and a flick covers the list); a
+ * deliberate sideways roll expands or collapses (or jumps to the parent), and
+ * a click opens.  Touch taps a row; a vertical swipe pages.
  */
 
 #include <cstdio>
@@ -496,7 +496,7 @@ void files_open()
 
     app_show(View::Files);
     render();
-    chrome_add_footer_button("Refresh", refresh_btn_cb, nullptr);
+    chrome_add_footer_button("Refresh (R)", refresh_btn_cb, nullptr);
 }
 
 bool files_key(uint8_t ascii)
@@ -517,9 +517,13 @@ bool files_key(uint8_t ascii)
 
 void files_ball(int dx, int dy, bool click)
 {
-    if (dy) move(dy);
-    if (dx > 0) expand();
-    else if (dx < 0) collapse();
+    static BallAcc vert, side;
+    if (const int n = ball_steps(vert, dy)) move(n);
+    // Sideways takes a firmer roll than a row does: fold/unfold changes the
+    // whole list under the highlight, so it must never come from a wobble.
+    const int h = ball_steps(side, dx, 3);
+    if (h > 0) expand();
+    else if (h < 0) collapse();
     if (click) activate();
 }
 

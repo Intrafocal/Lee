@@ -41,6 +41,7 @@ AttentionKind parse_kind(const std::string& s) {
     if (s == "failure")  return AttentionKind::Failure;
     if (s == "review")   return AttentionKind::Review;
     if (s == "summary")  return AttentionKind::Summary;
+    if (s == "question") return AttentionKind::Question;
     return AttentionKind::Other;
 }
 
@@ -64,6 +65,7 @@ uint8_t parse_actions(cJSON* arr) {
         else if (!strcmp(v, "snooze"))  bits |= ActSnooze;
         else if (!strcmp(v, "dismiss")) bits |= ActDismiss;
         else if (!strcmp(v, "wake"))    bits |= ActWake;
+        else if (!strcmp(v, "choose"))  bits |= ActChoose;
     }
     return bits;
 }
@@ -124,6 +126,72 @@ const AttentionItem* AttentionSnapshot::find(const std::string& id) const {
     return nullptr;
 }
 
+namespace {
+
+void parse_questions(cJSON* q, std::vector<AttentionQuestion>& out) {
+    out.clear();
+    if (!cJSON_IsObject(q)) return;
+    cJSON* arr = get(q, "questions");
+    if (!cJSON_IsArray(arr)) return;
+    cJSON* one = nullptr;
+    cJSON_ArrayForEach(one, arr) {
+        if (out.size() >= ATTENTION_MAX_QUESTIONS) break;
+        if (!cJSON_IsObject(one)) continue;
+        AttentionQuestion aq;
+        aq.question     = get_str(one, "question", ATTENTION_MAX_QTEXT);
+        aq.header       = get_str(one, "header", 48);
+        aq.multi_select = get_bool(one, "multi_select");
+        cJSON* opts = get(one, "options");
+        cJSON* o = nullptr;
+        if (cJSON_IsArray(opts)) {
+            cJSON_ArrayForEach(o, opts) {
+                if (aq.options.size() >= ATTENTION_MAX_OPTIONS) break;
+                if (!cJSON_IsObject(o)) continue;
+                AttentionOption ao;
+                ao.label       = get_str(o, "label", 120);
+                ao.description = get_str(o, "description", ATTENTION_MAX_QTEXT);
+                aq.options.push_back(std::move(ao));
+            }
+        }
+        out.push_back(std::move(aq));
+    }
+}
+
+/// Fields shared by the snapshot's items and GET /attention/:id.
+bool parse_item(cJSON* it, AttentionItem& item, size_t text_limit, bool questions) {
+    if (!cJSON_IsObject(it)) return false;
+    item.id = get_str(it, "id", ATTENTION_MAX_ID);
+    if (item.id.empty()) return false;
+    item.version  = get_int(it, "version");
+    item.kind     = parse_kind(get_str(it, "kind", 16));
+    item.severity = parse_severity(get_str(it, "severity", 16));
+    item.title    = get_str(it, "title", ATTENTION_MAX_TITLE);
+    item.text     = get_str(it, "text", text_limit);
+    item.notify   = get_bool(it, "notify");
+    item.parked   = get_bool(it, "parked");
+    item.actions  = parse_actions(get(it, "actions"));
+    if (cJSON* src = get(it, "source"); cJSON_IsObject(src)) {
+        item.tab_label = get_str(src, "tab_label", ATTENTION_MAX_LABEL);
+    }
+    if (cJSON* tool = get(it, "tool"); cJSON_IsObject(tool)) {
+        item.tool_name = get_str(tool, "name", 48);
+    }
+    if (questions) parse_questions(get(it, "question"), item.questions);
+    return true;
+}
+
+}  // namespace
+
+bool attention_item_parse(cJSON* json, AttentionItem& out) {
+    if (!json || !cJSON_IsObject(json)) return false;
+    cJSON* data = get(json, "data");
+    cJSON* it = (data && cJSON_IsObject(data)) ? data : json;
+    AttentionItem item;
+    if (!parse_item(it, item, ATTENTION_FULL_TEXT, true)) return false;
+    out = std::move(item);
+    return true;
+}
+
 bool attention_snapshot_parse(cJSON* json, AttentionSnapshot& out) {
     if (!json || !cJSON_IsObject(json)) return false;
     cJSON* snap = json;
@@ -136,24 +204,14 @@ bool attention_snapshot_parse(cJSON* json, AttentionSnapshot& out) {
     AttentionSnapshot s;
     const int64_t generated = get_time(snap, "generated_at");
 
+    size_t question_items = 0;
     cJSON* it = nullptr;
     cJSON_ArrayForEach(it, items) {
         if (s.items.size() >= ATTENTION_MAX_ITEMS) break;
-        if (!cJSON_IsObject(it)) continue;
         AttentionItem item;
-        item.id = get_str(it, "id", ATTENTION_MAX_ID);
-        if (item.id.empty()) continue;
-        item.version  = get_int(it, "version");
-        item.kind     = parse_kind(get_str(it, "kind", 16));
-        item.severity = parse_severity(get_str(it, "severity", 16));
-        item.title    = get_str(it, "title", ATTENTION_MAX_TITLE);
-        item.text     = get_str(it, "text", ATTENTION_MAX_TEXT);
-        item.notify   = get_bool(it, "notify");
-        item.parked   = get_bool(it, "parked");
-        item.actions  = parse_actions(get(it, "actions"));
-        if (cJSON* src = get(it, "source"); cJSON_IsObject(src)) {
-            item.tab_label = get_str(src, "tab_label", ATTENTION_MAX_LABEL);
-        }
+        const bool q = question_items < ATTENTION_MAX_QUESTION_ITEMS;
+        if (!parse_item(it, item, ATTENTION_MAX_TEXT, q)) continue;
+        if (!item.questions.empty()) question_items++;
         const int64_t created = get_time(it, "created_at");
         if (generated >= 0 && created >= 0) {
             item.age_ms = generated > created ? generated - created : 0;
@@ -205,6 +263,7 @@ const char* attention_kind_name(AttentionKind k) {
     case AttentionKind::Failure:  return "failure";
     case AttentionKind::Review:   return "review";
     case AttentionKind::Summary:  return "summary";
+    case AttentionKind::Question: return "question";
     default:                      return "item";
     }
 }

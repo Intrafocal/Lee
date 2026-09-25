@@ -9,7 +9,8 @@
  *
  * Layout (E14), chat-shaped inside the 320x204 body:
  *
- *   y   0..169  the answer, scrolling, wrapped Montserrat 14
+ *   y   0..169  the answer, wrapped Montserrat 14, scrolled by the ball
+ *               (accelerated) or a finger
  *   y 172..203  the question, one line, Montserrat 16
  *
  * Hester's answer is agent prose, so it is folded (ui_fold) for Montserrat's
@@ -114,6 +115,15 @@ void hester_focus()
 {
     auto& a = app();
     if (a.group && a.hester_input) lv_group_focus_obj(a.hester_input);
+}
+
+void hester_ball(int, int dy, bool)
+{
+    // Vertical rolls scroll the answer; the question keeps the keyboard.
+    auto& a = app();
+    if (!dy || !a.hester_output) return;
+    lv_obj_scroll_by_bounded(lv_obj_get_parent(a.hester_output), 0, -ball_scroll_px(dy),
+                             LV_ANIM_OFF);
 }
 
 void hester_submit()

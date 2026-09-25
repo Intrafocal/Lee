@@ -79,7 +79,9 @@ dot) and a 16 px footer key legend. The pairing screen shows four step chips
 across the top, a summary card down the right that fills in as you go (SSID and
 signal, IP, Lee name/host:port/workspace, Hester port, and failures in red), and
 the step's own list or text entry on the left. **Back** is a footer button as
-well as the ESC key, so the trackball and touch can both step backwards.
+well as the header's back button and a trackball hold; the ball scrolls the
+WiFi and Lee lists (click picks the highlighted row) and leaves the text
+entry steps alone.
 
 To eyeball every pairing state without a network:
 
@@ -88,10 +90,27 @@ idf.py -DDIRIGIBLE_UI_DEMO=1 build flash monitor   # cycles the steps every 3 s
 ```
 
 The same build gives the Waiting screen a canned queue (a blocker, an
-approval with long text, a question, and two finished turns for the empty
-state). Answering, dismissing or snoozing removes an item locally; once the
-queue is empty, `x` refills it. Without a paired machine, Back from the first
-pairing step leaves for Waiting.
+approval with long text, a waiting item, a multiple-choice question, an old
+style AskUserQuestion approval, and two finished turns for the empty state).
+Answering, dismissing or snoozing removes an item locally; once the queue is
+empty, `x` refills it. Without a paired machine, Back from the first pairing
+step leaves for Waiting. The menu also gets **MD sample**: the viewer on a
+built-in markdown page with headings, inline styles, nested and task lists,
+quotes, a rule, fenced code and three tables (one that fits, one that wraps,
+one that pans).
+
+## Markdown in the viewer
+
+`core/src/markdown.cpp` is a pure parser (no LVGL) with host tests:
+`cd tools/md-test && make check`. The viewer lays its output out by measured
+Montserrat widths. Tables are drawn one of three ways: **fit** (every column
+at its natural width fits 320 px: measured columns, `:---:` alignment, the
+header in phosphor over a hairline), **wrap** (up to four columns, where each
+column that must shrink keeps at least 60 px and its longest word: cells wrap
+inside their columns), otherwise **mono** (a monospace grid you pan with the
+ball or `h` / `l`, like code). Inline styles are colours — the fonts have no
+bold: strong in bright phosphor, emphasis dimmer, code blue, links lit with a
+short URL dimmed after them.
 
 Do not ship a `DIRIGIBLE_UI_DEMO` build — it drives the UI with canned data.
 
@@ -113,31 +132,39 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
-| Waiting  | the default screen: Lee's attention queue as a pager, one item that needs you per page (see below): a kind chip (red blocking, amber needs you), `Claude · tab`, age and `1/3`; the title; the agent's words, scrolled by the ball; and two or three big buttons labelled with their letter. Nothing waiting: "Nothing needs you", the last few finished turns (tap one to read it) and `c capture · f focus · t tabs`. The header centre reads `N waiting` (`focus:` / `away:` in front when on) |
-| Tabs     | live list of Lee tabs with a type badge and a focus marker; select to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a `Win` button / `w` picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
+| Waiting  | the default screen: Lee's attention queue as a pager, one item that needs you per page (see below): a kind chip (red blocking, amber needs you), `Claude · tab`, age and `1/3`; the title; the agent's words (the full text is fetched when the snapshot's copy was clipped), scrolled by the ball; and two or three big bordered buttons naming their key: **Approve (Y)**, **Deny (N)**, **Reply (R)**, **Dismiss (D)**, **Snooze (S)**. Nothing waiting: "Nothing needs you", the last few finished turns (tap one to read it) and **Capture (C)** / **Focus (F)** / **Tabs (T)** buttons. The header centre reads `N waiting` (`focus:` / `away:` in front when on) |
+| Tabs     | live list of Lee tabs with a type badge and a focus marker; tap a row (or roll the ball to highlight one and click) to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a **Win (W)** button picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
 | Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
-| Viewer   | read-only file view: code with a line gutter (pans, or wraps on click), markdown/text wrapped; follows an editor tab's file, cursor line and unsaved mark |
-| Terminal | character grid over the PTY WebSocket; ESC returns to Tabs. Keeps the whole content band — the footer legend flashes for 2 s on entry, then collapses so no character row is lost |
-| Hester   | chat-shaped: question at the bottom, scrolling answer above, ReAct phases in the header's status slot |
+| Viewer   | read-only file view, scrolled by the pixel: code with a line gutter (pans, or wraps on click / `w`); markdown rendered (headings, **strong** / *em* / `code` / links in colour, bullet / numbered / task lists with hanging indents, quotes, rules, fenced code, pipe tables — see below); plain text wrapped. Follows an editor tab's file, cursor line and unsaved mark |
+| Terminal | character grid over the PTY WebSocket, 40x22, with a bordered key bar underneath: **Esc**, **Tab**, **S-Tab**, **Ctrl-C**, **Ctrl-D** (the keyboard has none of them). Leave with the header's close button or a trackball hold |
+| Hester   | chat-shaped: question at the bottom, scrolling answer above (the ball scrolls it), ReAct phases in the header's status slot |
 | Pairing  | WiFi → Lee host → approve a 6-digit code (or type the token)      |
+
+The trackball is **never a pointer**: there is no cursor. It scrolls, and
+its click activates; touch does every tap.
 
 | Input                   | Effect                                          |
 |-------------------------|-------------------------------------------------|
-| trackball roll          | moves the LVGL pointer (arrow keys in Terminal; selection / scroll in Files and Viewer). In Waiting, up/down scrolls the agent's words and a deliberate sideways flick turns the page |
-| trackball click         | activates what's under the pointer (the selected row in Files; wrap toggle in Viewer). In Waiting it opens the reply box on items that take text. Never approves |
-| trackball hold (0.8 s)  | back; on Waiting it opens the menu: Waiting / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
-| ESC                     | leaves Terminal, steps back in Pairing; in Waiting closes the reply/capture box (keeping the draft) or a finished turn you opened |
+| trackball roll          | lists (Tabs, menu, Windows, pairing lists, Waiting's empty screen): moves a highlighted row and keeps it in view, two detents a row. Text (Viewer, Hester, Waiting's words): scrolls smoothly, faster the faster you roll. Files: moves the selection; a firm sideways roll expands / collapses. Viewer: sideways pans code and wide tables. Waiting: a deliberate sideways flick turns the page. Terminal: arrow keys |
+| trackball click         | opens / activates the highlighted row (a first click with nothing highlighted just highlights). Viewer: wrap toggle on code. Waiting: opens the reply box on items that take text, or sends the highlighted option of a question. Never approves |
+| trackball hold (0.8 s)  | back, everywhere; on Waiting it opens the menu: Waiting / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
+| header back button      | the same back, as a touch target (a close button in the Terminal) |
 | swipe left / right, j / k (Waiting) | next / previous item                |
-| space / b (Waiting)     | scroll the agent's words a screen down / up     |
-| y / n (Waiting)         | approve / deny an approval                      |
-| r or Enter (Waiting)    | open the reply box; Enter sends, Esc keeps the draft |
-| d / s (Waiting)         | dismiss / snooze 15 minutes                     |
+| space / b (Waiting, Viewer) | scroll a screen down / up                   |
+| y / n (Waiting)         | approve / deny an approval (never on a question) |
+| r or Enter (Waiting)    | open the reply box; Enter sends; **Cancel** (or back, or Backspace in an empty box) closes it and keeps the draft |
+| d / s / o (Waiting)     | dismiss / snooze 15 minutes / open the item's tab on Lee |
 | c / f / t (Waiting)     | capture to Someday, start or end focus, show the tab list |
 | w (on Tabs)             | pick which Lee window to follow                 |
-| Tab                     | moves focus within a screen (reaches the password `show` toggle and the footer buttons) |
-| touch                   | works everywhere the pointer does               |
+| h / l, w, r, o (Viewer) | pan, wrap (code), reload, open in Lee           |
+| touch                   | every button and row; footer buttons have a hit area that reaches a few pixels above the 15 px footer |
 
-Sym+key chords are **not** available: the T-Deck's keypad MCU resolves the
+There is **no Esc key** on the T-Deck, so nothing needs one: back is the
+header button or a trackball hold, text boxes have a Cancel button, and the
+terminal has Esc on its key bar. Every control with a key names it:
+"Reload (R)" (the key is the lowercase letter).
+
+Sym+key chords are **not** availableSym+key chords are **not** available: the T-Deck's keypad MCU resolves the
 modifier itself and reports a single ASCII byte, so the firmware cannot tell
 Sym+X from the symbol X produces.
 
@@ -151,19 +178,35 @@ blockers, finished turns); `docs/13-Copilot.md` §5 and
   holds, as `{"type":"attention_snapshot","data":…}`; `GET /attention?compact=1`
   fills it on every connect and whenever the screen is opened. At most 25
   items, text cut to 280 characters; only what the screen draws is kept.
+- **Full text.** The snapshot cuts the agent's words at 280 characters; when a
+  page shows an item whose text is at that cap (or a question), the device
+  asks `GET /attention/:id` once for the whole item (up to 2000 characters),
+  keeps the clipped text on screen until it lands, and caches the last three
+  by id and version so paging back and forth never refetches. A slow answer
+  shows "loading full text" in the header; 404 / 410 (gone) are remembered.
 - **Pager.** Approvals, questions, blockers and decisions (plus anything Lee
   marks blocking) each get a page: blocking first, then needs you, oldest
   first; parked items last. The page stays on its item as snapshots arrive;
   when it is answered elsewhere the next one slides in. Only letters are
   shortcuts, since symbols and digits need chords on the T-Deck keyboard.
-- **Reply.** An approval shows **Approve y** / **Deny n** (/ **Snooze s**);
-  anything that takes text shows **Reply r** / **Dismiss d** (/ **Snooze s**).
-  Reply opens a full-screen text box: Enter sends (there is no newline), Esc
-  closes it and keeps the draft. Every write echoes the `version` the page
+- **Reply.** An approval shows **Approve (Y)** / **Deny (N)** (/ **Snooze (S)**);
+  anything that takes text shows **Reply (R)** / **Dismiss (D)** (/ **Snooze (S)**).
+  Reply opens a full-screen text box with **Cancel** and **Send (Enter)**
+  buttons: Enter sends (there is no newline), Cancel closes it and keeps the
+  draft. Every write echoes the `version` the page
   showed: if the item moved on, Lee answers 409, the queue is refetched and
   nothing is resent — decide again on what is there now. `agent gone` means
   its terminal exited. A swipe that starts on a button never presses it.
-- **Capture.** `c` (the empty screen's hint, or Menu > Capture) opens a
+- **Questions.** Claude Code's AskUserQuestion arrives as a `question` item
+  (chip QUESTION): the question, then its options as bordered buttons (label
+  over a dimmed description). Tap one to send it, or roll the ball to
+  highlight one and click (or press Enter); the header says
+  `sending: <option>` then `sent: <option>`. Only when Lee offers `choose`
+  (one question, single-select, with options) — otherwise the questions and
+  options are shown read-only with **Open tab (O)**. There is never an
+  Approve / Deny on a question, and an older Lee's `approval` for the
+  `AskUserQuestion` tool says "answer in the tab" instead of offering them.
+- **Capture.** `c` (the empty screen's **Capture (C)** button, or Menu > Capture) opens a
   full-screen box; Enter sends it to Hester's Someday list for the followed
   window's workspace. "Saved - reaches Someday when Hester is back" means Lee
   spooled it; the box closes itself after a successful send.

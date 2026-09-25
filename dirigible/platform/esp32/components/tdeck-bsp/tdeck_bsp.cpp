@@ -11,8 +11,7 @@
  *   2. lv_init() must run before any driver registers a display or indev;
  *   3. touch installs the I2C bus, and the keyboard must reuse it rather than
  *      reconfigure it (B4/B5) — here both go through tdeck_i2c_ensure();
- *   4. the trackball's cursor object needs a screen to live on, so it comes
- *      after the display.
+ *   4. the trackball poller is an LVGL timer, so it comes after lv_init().
  *
  * CONFIG_ESP_MAIN_TASK_STACK_SIZE is raised to 16384 in sdkconfig.defaults
  * (B7): the IDF default of 3840 overflows once the app builds non-trivial

@@ -285,7 +285,8 @@ void tabs_chrome()
     }
     if (buf[0]) chrome_set_centre(buf);
 
-    chrome_set_footer(multi ? "Click open  w window" : "Click open  Hold back",
+    // Tap a row, or roll the ball to highlight one and click it.
+    chrome_set_footer(multi ? "ball/tap open" : "ball/tap open  hold back",
                       "tabs");
 
     // One "Win" footer button while there is more than one window.  app_show
@@ -293,7 +294,7 @@ void tabs_chrome()
     static lv_obj_t* win_btn = nullptr;
     const bool have = win_btn && lv_obj_is_valid(win_btn);
     if (multi && !have) {
-        win_btn = chrome_add_footer_button("Win",
+        win_btn = chrome_add_footer_button("Win (W)",
             [](lv_event_t*) { windows_open(); }, nullptr);
     } else if (!multi && have) {
         chrome_clear_footer_buttons();

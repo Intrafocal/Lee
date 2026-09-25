@@ -12,7 +12,8 @@
  * Built around how the T-Deck is actually used: touch and swipes are good, the
  * trackball scrolls fast but points badly, letters are easy and symbols are
  * not.  So one item fills the body, the ball scrolls its text, swipes and j/k
- * page, and every action is a big button that also answers to one letter.
+ * page, and every action is a big bordered button that names its letter:
+ * "Approve (Y)".
  *
  * Page, inside the 320x204 body:
  *
@@ -22,7 +23,7 @@
  *   | Run idf.py build in dirigible/firmware to check the pager  |  14 px words,
  *   | compiles. This rebuilds the demo firmware, which ...       |  ball scrolls
  *   | +----------------+ +-------------+ +-------------+         |
- *   | |  Approve  y    | |   Deny  n   | |  Snooze  s  |         |  40 px bar
+ *   | | Approve (Y)    | |  Deny (N)   | | Snooze (S)  |         |  40 px bar
  *   | +----------------+ +-------------+ +-------------+         |
  *   +------------------------------------------------------------+
  *
@@ -34,8 +35,10 @@
  *
  * Every write echoes the version the page showed; a 409 means the item moved
  * on, so the queue is refetched, nothing is resent and the human looks again
- * (C3).  Reply and Capture open a full-body text box: Enter sends, Esc keeps
- * the draft and closes.
+ * (C3).  Reply and Capture open a full-body text box with bordered Cancel and
+ * Send (Enter) buttons: Cancel (or the header back, a trackball hold, or
+ * Backspace in an empty box) closes it and keeps the draft.  The T-Deck
+ * keyboard has no Esc, so nothing here needs one.
  */
 
 #include <algorithm>
@@ -87,6 +90,8 @@ constexpr int HINT_H     = 28;
 constexpr int HINT_Y     = BODY_H - HINT_H - 2;
 constexpr int REPLY_MAX   = 1000;   // Lee takes up to 4000; the keyboard won't
 constexpr int CAPTURE_MAX = 500;
+constexpr int COMPOSE_BTN_H = 30;
+constexpr int COMPOSE_BTN_Y = BODY_H - COMPOSE_BTN_H - 3;   // 171
 constexpr int SNOOZE_MIN  = 15;
 constexpr uint32_t FLASH_MS = 2500;
 
@@ -111,6 +116,26 @@ struct Row {
     lv_obj_t* title = nullptr;
     lv_obj_t* meta  = nullptr;
 };
+
+/// One option of a question item: a bordered touch button in the words.
+struct Opt {
+    lv_obj_t* obj  = nullptr;
+    lv_obj_t* lbl  = nullptr;
+    lv_obj_t* desc = nullptr;
+};
+constexpr int MAX_OPTS = (int)dirigible::ATTENTION_MAX_OPTIONS;
+
+/// The whole item from GET /attention/:id: the compact snapshot clips the
+/// agent's words to 280 characters and question strings to ~120.
+struct Full {
+    std::string id;
+    int         version = -1;
+    bool        gone = false;     // 404 / 410: never ask again
+    std::string text;
+    std::vector<dirigible::AttentionQuestion> questions;
+};
+constexpr int FULL_CACHE = 3;
+constexpr uint32_t FULL_HINT_MS = 700;   // say "loading" only past this
 
 struct State {
     // ---- page
@@ -141,7 +166,7 @@ struct State {
     Compose   mode = Compose::None;
     std::string reply_id;          // item the reply box answers
     int         reply_version = -1;   // the version the human was shown
-    std::string reply_draft;       // kept across Esc; capped by REPLY_MAX
+    std::string reply_draft;       // kept across Cancel; capped by REPLY_MAX
     std::string reply_draft_id;
     std::string capture_draft;     // capped by CAPTURE_MAX
     lv_timer_t* compose_close = nullptr;   // closes after "captured"
@@ -175,6 +200,17 @@ struct State {
 
     lv_timer_t* blink = nullptr;
     int         blink_left = 0;
+
+    // ---- full item text, cached by id + version
+    Full        full[FULL_CACHE];
+    int         full_next = 0;
+    std::string full_pending_id;
+    int         full_pending_version = -1;
+
+    // ---- question options
+    Opt opts[MAX_OPTS];
+    int opt_count = 0;
+    int opt_hl    = -1;    // highlighted by the ball; -1 none
 
     // ---- trackball paging
     int      ball_dx = 0;
@@ -235,6 +271,7 @@ bool pages(const AttentionItem& it)
     if (it.severity == AttentionSeverity::Blocking) return true;
     switch (it.kind) {
     case AttentionKind::Approval:
+    case AttentionKind::Question:
     case AttentionKind::Waiting:
     case AttentionKind::Blocker:
     case AttentionKind::Decision:
@@ -328,7 +365,8 @@ const char* kind_chip(AttentionKind k)
 {
     switch (k) {
     case AttentionKind::Approval: return "APPROVAL";
-    case AttentionKind::Waiting:  return "QUESTION";
+    case AttentionKind::Question: return "QUESTION";
+    case AttentionKind::Waiting:  return "WAITING";
     case AttentionKind::Blocker:  return "BLOCKER";
     case AttentionKind::Decision: return "DECISION";
     case AttentionKind::Failure:  return "EXITED";
@@ -407,12 +445,12 @@ void footer()
     auto& s = st();
     if (app().view != View::Waiting) return;
     switch (s.mode) {
-    case Compose::Reply:   chrome_set_footer("Enter send Esc cancel", "reply"); return;
-    case Compose::Capture: chrome_set_footer("Enter send Esc cancel", "idea");  return;
+    case Compose::Reply:   chrome_set_footer("Enter sends  hold: cancel", "reply"); return;
+    case Compose::Capture: chrome_set_footer("Enter sends  hold: cancel", "idea");  return;
     default: break;
     }
     if (current()) {
-        chrome_set_footer(s.pinned_id.empty() ? "j/k or swipe: items" : "Esc back",
+        chrome_set_footer(s.pinned_id.empty() ? "j/k or swipe: items" : LV_SYMBOL_LEFT " or hold: back",
                           "c f t");
         return;
     }
@@ -446,11 +484,11 @@ void demo_remove(const std::string& id)
 /// One place every item write goes through: approve / deny / text / dismiss /
 /// snooze.  `version` is the one the human was shown.
 void send(const std::string& id, const char* verb, const std::string& text,
-          int version, ResultCb cb)
+          int version, ResultCb cb, int choice = -1)
 {
 #if DIRIGIBLE_UI_DEMO
-    (void)text; (void)version;
-    demo_remove(id);
+    (void)text; (void)version; (void)choice;
+    if (strcmp(verb, "open") != 0) demo_remove(id);
     ReplyResult r;
     r.status = 200;
     r.ok = true;
@@ -468,12 +506,18 @@ void send(const std::string& id, const char* verb, const std::string& text,
     }
     if (strcmp(verb, "dismiss") == 0)     c->attentionDismiss(id, std::move(cb));
     else if (strcmp(verb, "snooze") == 0) c->attentionSnooze(id, SNOOZE_MIN, std::move(cb));
+    else if (strcmp(verb, "open") == 0)   c->attentionOpen(id, std::move(cb));
+    else if (strcmp(verb, "choose") == 0) c->attentionChoose(id, choice, version, std::move(cb));
     else                                  c->attentionReply(id, verb, text, version, std::move(cb));
 #endif
 }
 
 void close_compose(bool keep_draft);
 void set_status(const char* text, lv_color_t colour);
+const std::vector<dirigible::AttentionQuestion>& questions_of(const AttentionItem& it);
+bool pickable(const AttentionItem& it);
+void set_hl(int i);
+void scroll_words(int px);
 
 /// Shared failure handling for every write (C3: a 409 is never retried).
 void report_failure(const std::string& id, const ReplyResult& r)
@@ -506,8 +550,9 @@ void report_failure(const std::string& id, const ReplyResult& r)
     }
 }
 
-/// Act on the page's item.  `verb` is approve / deny / text / dismiss / snooze.
-void act(const char* verb, const std::string& text = std::string())
+/// Act on the page's item.  `verb` is approve / deny / text / dismiss /
+/// snooze / open / choose (with `choice`, 0-based).
+void act(const char* verb, const std::string& text = std::string(), int choice = -1)
 {
     auto& s = st();
     const auto* it = current();
@@ -515,12 +560,19 @@ void act(const char* verb, const std::string& text = std::string())
     if (!linked()) { flash("not connected"); return; }
 
     const bool is_text = strcmp(verb, "text") == 0;
+    const bool yes_no = strcmp(verb, "approve") == 0 || strcmp(verb, "deny") == 0;
     dirigible::AttentionAction need =
         strcmp(verb, "approve") == 0 ? dirigible::ActApprove :
         strcmp(verb, "deny") == 0    ? dirigible::ActDeny :
         strcmp(verb, "dismiss") == 0 ? dirigible::ActDismiss :
-        strcmp(verb, "snooze") == 0  ? dirigible::ActSnooze : dirigible::ActReply;
+        strcmp(verb, "snooze") == 0  ? dirigible::ActSnooze :
+        strcmp(verb, "open") == 0    ? dirigible::ActOpen :
+        strcmp(verb, "choose") == 0  ? dirigible::ActChoose : dirigible::ActReply;
     if (!it->can(need)) return;
+    // Approve on a question would press Enter on whatever option the TUI has
+    // highlighted; never.  And a pick only on the one shape Lee accepts.
+    if (yes_no && (it->question_as_approval() || it->kind == AttentionKind::Question)) return;
+    if (need == dirigible::ActChoose && !pickable(*it)) return;
 
     // A reply answers the version its box was opened on; everything else the
     // version on screen.  A snapshot that lands in between makes it a 409.
@@ -532,15 +584,25 @@ void act(const char* verb, const std::string& text = std::string())
     }
 
     s.busy = true;
-    flash("sending...");
-    ESP_LOGI(TAG, "%s %s v%d", verb, id.c_str(), version);
+    // Say exactly what is being sent for a pick.
+    std::string what = "sending...";
+    if (need == dirigible::ActChoose) {
+        const auto& qs = questions_of(*it);
+        if (!qs.empty() && choice >= 0 && choice < (int)qs[0].options.size()) {
+            what = "sending: " + ui_fold(qs[0].options[choice].label, false);
+        }
+    }
+    flash(what.c_str());
+    ESP_LOGI(TAG, "%s %s v%d%s", verb, id.c_str(), version, choice >= 0 ? " (choice)" : "");
     const std::string v = verb;
-    send(id, verb, text, version, [id, version, v](const ReplyResult& r) {
+    send(id, verb, text, version, [id, version, v, what](const ReplyResult& r) {
         auto& s = st();
         s.busy = false;
         if (!r.ok) { report_failure(id, r); return; }
+        if (v == "open") { flash("opened on Lee"); return; }   // the item stays
         s.acted_id = id;
         s.acted_version = version;
+        if (v == "choose") { flash(("sent" + what.substr(7)).c_str()); return; }
         if (v == "text") {
             s.reply_draft.clear();
             s.reply_draft_id.clear();
@@ -548,7 +610,7 @@ void act(const char* verb, const std::string& text = std::string())
         }
         flash(v == "approve" ? "approved" : v == "deny" ? "denied" :
               v == "dismiss" ? "dismissed" : v == "snooze" ? "snoozed 15m" : "sent");
-    });
+    }, choice);
 }
 
 void focus_toggle()
@@ -631,7 +693,8 @@ void open_compose(Compose mode)
     std::string head;
     if (mode == Compose::Reply) {
         const auto* it = current();
-        if (!it || !it->can(dirigible::ActReply)) return;
+        // Questions take a pick, never text.
+        if (!it || !it->can(dirigible::ActReply) || it->kind == AttentionKind::Question) return;
         s.reply_id = it->id;
         s.reply_version = s.shown_version;
         head = "Reply to " + source_of(*it);
@@ -720,6 +783,217 @@ void compose_submit()
 // Rendering
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The whole item: GET /attention/:id, once per id + version
+// ---------------------------------------------------------------------------
+
+/// A question this device can answer here: the one shape Lee takes a pick
+/// for, and Lee offering "choose" on it.
+bool pickable(const AttentionItem& it)
+{
+    return it.choosable() && it.can(dirigible::ActChoose);
+}
+
+const Full* full_for(const AttentionItem& it)
+{
+    for (const Full& f : st().full) {
+        if (!f.id.empty() && f.id == it.id && f.version == it.version) return &f;
+    }
+    return nullptr;
+}
+
+const std::string& words_of(const AttentionItem& it)
+{
+    const Full* f = full_for(it);
+    return f && !f->gone && !f->text.empty() ? f->text : it.text;
+}
+
+const std::vector<dirigible::AttentionQuestion>& questions_of(const AttentionItem& it)
+{
+    const Full* f = full_for(it);
+    return f && !f->gone && !f->questions.empty() ? f->questions : it.questions;
+}
+
+/// Words (and, for a question, its options) for the page's item.  Keeps the
+/// scroll position, so the full text can land under a reader.
+void fill_words(const AttentionItem& it)
+{
+    auto& s = st();
+    std::string w;
+    s.opt_count = 0;
+    if (it.question_as_approval()) {
+        w = "Claude is asking a question - answer in the tab.";
+        if (!words_of(it).empty()) w += "\n\n" + words_of(it);
+    } else if (it.kind == AttentionKind::Question) {
+        const auto& qs = questions_of(it);
+        if (pickable(it) && !qs.empty()) {
+            w = qs[0].header.empty() ? qs[0].question : "[" + qs[0].header + "] " + qs[0].question;
+            s.opt_count = std::min((int)qs[0].options.size(), MAX_OPTS);
+            for (int i = 0; i < s.opt_count; i++) {
+                const auto& o = qs[0].options[i];
+                ui_set_text(s.opts[i].lbl, o.label);
+                ui_set_text(s.opts[i].desc, o.description);
+                if (o.description.empty()) lv_obj_add_flag(s.opts[i].desc, LV_OBJ_FLAG_HIDDEN);
+                else                       lv_obj_clear_flag(s.opts[i].desc, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            // Several questions, multi-select or free text: read-only.
+            for (size_t q = 0; q < qs.size(); q++) {
+                if (q) w += "\n\n";
+                if (!qs[q].header.empty()) w += "[" + qs[q].header + "] ";
+                w += qs[q].question;
+                if (qs[q].multi_select) w += " (pick several)";
+                for (const auto& o : qs[q].options) {
+                    w += "\n  " LV_SYMBOL_BULLET " " + o.label;
+                    if (!o.description.empty()) w += " - " + o.description;
+                }
+            }
+            if (qs.empty()) w = words_of(it);
+            w += "\n\nAnswer in the tab.";
+        }
+    } else {
+        w = words_of(it);
+    }
+    for (int i = 0; i < MAX_OPTS; i++) {
+        if (i < s.opt_count) lv_obj_clear_flag(s.opts[i].obj, LV_OBJ_FLAG_HIDDEN);
+        else                 lv_obj_add_flag(s.opts[i].obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s.opt_hl >= s.opt_count) set_hl(-1);
+    lv_label_set_text(s.words, w.empty() ? "(no text)" : ui_fold(w, true).c_str());
+    lv_obj_set_style_text_color(s.words, w.empty() ? dg::text3() : dg::text1(), 0);
+}
+
+#if !DIRIGIBLE_UI_DEMO
+void full_hint_cb(lv_timer_t* t)
+{
+    auto& s = st();
+    lv_timer_del(t);
+    if (!s.full_pending_id.empty() && s.full_pending_id == s.shown_id &&
+        app().view == View::Waiting) {
+        flash(LV_SYMBOL_REFRESH " loading full text");
+    }
+}
+#endif
+
+/// Fetch the whole item when the snapshot's copy is (probably) clipped:
+/// words at the compact cap, or a question.  One request per id + version.
+void want_full(const AttentionItem& it)
+{
+#if DIRIGIBLE_UI_DEMO
+    (void)it;
+#else
+    auto& s = st();
+    const bool clipped = it.text.size() + 8 >= dirigible::ATTENTION_MAX_TEXT ||
+                         it.kind == AttentionKind::Question;
+    if (!clipped || full_for(it)) return;
+    if (s.full_pending_id == it.id && s.full_pending_version == it.version) return;
+    auto* c = conn();
+    if (!c || !c->isConnected()) return;
+
+    s.full_pending_id = it.id;
+    s.full_pending_version = it.version;
+    lv_timer_t* hint = lv_timer_create(full_hint_cb, FULL_HINT_MS, nullptr);
+    lv_timer_set_repeat_count(hint, 1);
+
+    const std::string id = it.id;
+    const int version = it.version;
+    c->fetchAttentionItem(id, [id, version](int status, const AttentionItem* item) {
+        auto& s = st();
+        if (s.full_pending_id == id && s.full_pending_version == version) {
+            s.full_pending_id.clear();
+            s.full_pending_version = -1;
+        }
+        const bool gone = status == 404 || status == 410;
+        if (!item && !gone) {
+            ESP_LOGW(TAG, "full item %s: HTTP %d", id.c_str(), status);
+            return;   // try again next time it is opened
+        }
+        // Oldest slot goes: a few bodies of <= 2000 characters at most.
+        Full& f = s.full[s.full_next];
+        s.full_next = (s.full_next + 1) % FULL_CACHE;
+        f.id = id;
+        f.version = version;
+        f.gone = gone;
+        f.text = item ? item->text : std::string();
+        f.questions = item ? item->questions : std::vector<dirigible::AttentionQuestion>();
+        if (gone) return;   // the next snapshot drops it
+        if (s.shown_id == id && s.shown_version == version) {
+            if (const auto* cur = current(); cur && cur->id == id) {
+                // The chosen option must not shift under the ball, so a
+                // question keeps its highlight index.
+                fill_words(*cur);
+                if ((int32_t)(s.flash_until - lv_tick_get()) > 0) {
+                    s.flash_until = 0;
+                    centre_status();
+                }
+            }
+        }
+    });
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Question options: touch picks one; the ball highlights and its click picks
+// ---------------------------------------------------------------------------
+
+void set_hl(int i)
+{
+    auto& s = st();
+    if (s.opt_hl >= 0 && s.opt_hl < MAX_OPTS) lv_obj_clear_state(s.opts[s.opt_hl].obj, LV_STATE_FOCUSED);
+    s.opt_hl = i;
+    if (i < 0) return;
+    lv_obj_add_state(s.opts[i].obj, LV_STATE_FOCUSED);
+    lv_obj_scroll_to_view(s.opts[i].obj, LV_ANIM_ON);
+}
+
+void choose(int i)
+{
+    auto& s = st();
+    if (i < 0 || i >= s.opt_count || s.mode != Compose::None) return;
+    set_hl(i);
+    act("choose", std::string(), i);
+}
+
+void opt_cb(lv_event_t* e)
+{
+    choose((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+/// True when the whole first option is inside the words box.
+bool first_opt_visible()
+{
+    auto& s = st();
+    if (s.opt_count == 0) return false;
+    lv_area_t box, o;
+    lv_obj_get_coords(s.scroll, &box);
+    lv_obj_get_coords(s.opts[0].obj, &o);
+    return o.y2 <= box.y2;
+}
+
+void question_ball(int dy, bool click)
+{
+    static BallAcc acc;
+    auto& s = st();
+    if (click) {
+        if (s.opt_hl >= 0) choose(s.opt_hl);
+        else               set_hl(0);   // a first click only shows what the next sends
+        return;
+    }
+    if (s.opt_hl < 0) {
+        // Read the question first; the highlight starts once the options
+        // are on screen.
+        if (dy > 0 && first_opt_visible()) set_hl(0);
+        else scroll_words(ball_scroll_px(dy));
+        return;
+    }
+    const int n = ball_steps(acc, dy);
+    if (!n) return;
+    int h = s.opt_hl + n;
+    if (h < 0) { set_hl(-1); scroll_words(ball_scroll_px(dy)); return; }
+    if (h >= s.opt_count) h = s.opt_count - 1;
+    set_hl(h);
+}
+
 void style_btn(Btn& b, bool primary)
 {
     lv_obj_set_style_bg_color(b.obj, primary ? dg::phosphor() : dg::ground3(), 0);
@@ -736,7 +1010,12 @@ void layout_buttons(const AttentionItem& it)
     struct Spec { const char* name; char key; };
     Spec spec[MAX_BTNS];
     int n = 0;
-    if (it.can(dirigible::ActApprove)) {
+    const bool question = it.kind == AttentionKind::Question || it.question_as_approval();
+    if (question) {
+        // The options are the answer (or the tab is): no Approve / Deny.
+        if (!pickable(it) && it.can(dirigible::ActOpen)) spec[n++] = { "Open tab", 'o' };
+        if (it.can(dirigible::ActDismiss)) spec[n++] = { "Dismiss", 'd' };
+    } else if (it.can(dirigible::ActApprove)) {
         spec[n++] = { "Approve", 'y' };
         if (it.can(dirigible::ActDeny)) spec[n++] = { "Deny", 'n' };
     } else {
@@ -759,11 +1038,14 @@ void layout_buttons(const AttentionItem& it)
         lv_obj_set_size(b.obj, w, BAR_H);
         x += w + gap;
         b.key = spec[i].key;
-        const bool primary = i == 0 && spec[i].key != 'd' && spec[i].key != 's';
+        const bool primary = i == 0 && spec[i].key != 'd' && spec[i].key != 's' &&
+                             !(question && pickable(it));
         style_btn(b, primary);
+        // "Approve (Y)": the key after the word, capitalised for display
+        // (the keyboard still takes the lowercase letter), a shade quieter.
         char text[48];
-        snprintf(text, sizeof(text), "%s  #%06x %c#", spec[i].name,
-                 (unsigned)(primary ? DG_GROUND_4 : DG_TEXT_3), spec[i].key);
+        snprintf(text, sizeof(text), "%s #%06x (%c)#", spec[i].name,
+                 (unsigned)(primary ? DG_GROUND_4 : DG_TEXT_3), spec[i].key - 'a' + 'A');
         lv_label_set_text(b.lbl, text);
         lv_obj_clear_flag(b.obj, LV_OBJ_FLAG_HIDDEN);
     }
@@ -808,17 +1090,18 @@ void render_page(const AttentionItem& it)
 
     lv_label_set_text(s.source, source_of(it).c_str());
     lv_label_set_text(s.title, ui_fold(it.title, false).c_str());
-    lv_label_set_text(s.words, it.text.empty() ? "(no text)" : ui_fold(it.text, true).c_str());
-    lv_obj_set_style_text_color(s.words, it.text.empty() ? dg::text3() : dg::text1(), 0);
+    if (!same_item) set_hl(-1);
+    fill_words(it);
     if (!same_item) lv_obj_scroll_to_y(s.scroll, 0, LV_ANIM_OFF);
     layout_buttons(it);
+    want_full(it);
 }
 
 void set_hint_focus()
 {
     auto& s = st();
     const auto* snap = snapshot();
-    lv_label_set_text(s.hint_focus, snap && snap->focus_active ? "f  end focus" : "f  focus");
+    lv_label_set_text(s.hint_focus, snap && snap->focus_active ? "End focus (F)" : "Focus (F)");
 }
 
 void render_empty(const char* title, const char* sub, bool with_recent)
@@ -930,6 +1213,7 @@ void key_action(char k)
     case 'd': act("dismiss"); break;
     case 's': act("snooze"); break;
     case 'r': open_compose(Compose::Reply); break;
+    case 'o': act("open"); break;
     default: break;
     }
 }
@@ -1089,6 +1373,37 @@ void build_page(lv_obj_t* parent)
     lv_obj_set_width(s.words, SCREEN_W - 2 * PAD - 4);
     lv_obj_set_style_text_line_space(s.words, 2, 0);
 
+    // A question's options follow its words in the same scroll: bordered
+    // touch buttons, label over a dimmed description.  Out of the input group
+    // (the ball drives its own highlight here).
+    lv_obj_set_flex_flow(s.scroll, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s.scroll, 4, 0);
+    for (int i = 0; i < MAX_OPTS; i++) {
+        Opt& o = s.opts[i];
+        o.obj = flat_btn(s.scroll);
+        if (lv_obj_get_group(o.obj)) lv_group_remove_obj(o.obj);
+        lv_obj_set_width(o.obj, SCREEN_W - 2 * PAD - 4);
+        lv_obj_set_height(o.obj, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(o.obj, 30, 0);
+        lv_obj_set_style_bg_color(o.obj, dg::ground1(), 0);
+        lv_obj_set_style_bg_color(o.obj, dg::ground3(), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(o.obj, 1, 0);
+        lv_obj_set_style_border_color(o.obj, dg::ground5(), 0);
+        dg::style_focus(o.obj);
+        lv_obj_set_style_border_width(o.obj, 2, LV_STATE_FOCUSED);
+        lv_obj_set_style_pad_all(o.obj, 5, 0);
+        lv_obj_set_style_pad_row(o.obj, 1, 0);
+        lv_obj_set_flex_flow(o.obj, LV_FLEX_FLOW_COLUMN);
+        o.lbl = label(o.obj, F_BODY, dg::text1());
+        lv_label_set_long_mode(o.lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(o.lbl, LV_PCT(100));
+        o.desc = label(o.obj, F_META, dg::text3());
+        lv_label_set_long_mode(o.desc, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(o.desc, LV_PCT(100));
+        lv_obj_add_event_cb(o.obj, opt_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        lv_obj_add_flag(o.obj, LV_OBJ_FLAG_HIDDEN);
+    }
+
     for (auto& b : s.btns) {
         b.obj = flat_btn(s.page);
         lv_obj_set_size(b.obj, 100, BAR_H);
@@ -1123,6 +1438,7 @@ void build_empty(lv_obj_t* parent)
         lv_obj_set_size(row.obj, SCREEN_W - 2 * PAD, ROW_H);
         lv_obj_set_style_bg_color(row.obj, dg::ground1(), 0);
         lv_obj_set_style_bg_color(row.obj, dg::ground3(), LV_STATE_PRESSED);
+        dg::style_focus(row.obj);   // the ball's highlight
         lv_obj_add_event_cb(row.obj, row_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
 
         row.title = label(row.obj, F_BODY, dg::text2());
@@ -1137,20 +1453,23 @@ void build_empty(lv_obj_t* parent)
         lv_obj_add_flag(row.obj, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // The hint line doubles as three flat touch targets.
+    // Three bordered buttons along the bottom, each naming its key.
     static const struct { char key; const char* text; } hints[] = {
-        { 'c', "c  capture" }, { 'f', "f  focus" }, { 't', "t  tabs" },
+        { 'c', "Capture (C)" }, { 'f', "Focus (F)" }, { 't', "Tabs (T)" },
     };
-    const int w = (SCREEN_W - 2 * PAD) / 3;
+    const int gap = 4;
+    const int w = (SCREEN_W - 2 * PAD - 2 * gap) / 3;
     for (int i = 0; i < 3; i++) {
         lv_obj_t* b = flat_btn(s.empty);
-        lv_obj_set_pos(b, PAD + i * w, HINT_Y);
+        lv_obj_set_pos(b, PAD + i * (w + gap), HINT_Y);
         lv_obj_set_size(b, w, HINT_H);
-        lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(b, dg::ground1(), 0);
         lv_obj_set_style_bg_color(b, dg::ground3(), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(b, 1, 0);
+        lv_obj_set_style_border_color(b, dg::ground5(), 0);
+        dg::style_focus(b, dg::ground1());
         lv_obj_add_event_cb(b, hint_cb, LV_EVENT_CLICKED, (void*)(intptr_t)hints[i].key);
-        lv_obj_t* l = label(b, F_META, dg::text3(), hints[i].text);
+        lv_obj_t* l = label(b, F_BODY, dg::text2(), hints[i].text);
         lv_obj_center(l);
         if (hints[i].key == 'f') s.hint_focus = l;
     }
@@ -1169,7 +1488,7 @@ void build_compose(lv_obj_t* parent)
     s.c_ta = lv_textarea_create(s.compose);
     lv_textarea_set_one_line(s.c_ta, false);   // wraps; Enter is caught and sends
     lv_obj_set_pos(s.c_ta, PAD - 2, 22);
-    lv_obj_set_size(s.c_ta, SCREEN_W - 2 * (PAD - 2), BODY_H - 22 - 24);
+    lv_obj_set_size(s.c_ta, SCREEN_W - 2 * (PAD - 2), COMPOSE_BTN_Y - 4 - 22);
     lv_obj_set_style_text_font(s.c_ta, F_BODY, 0);
     lv_obj_set_style_text_color(s.c_ta, dg::text1(), 0);
     lv_obj_set_style_text_color(s.c_ta, dg::text3(), LV_PART_TEXTAREA_PLACEHOLDER);
@@ -1182,14 +1501,40 @@ void build_compose(lv_obj_t* parent)
     lv_obj_set_style_text_line_space(s.c_ta, 2, 0);
     dg::style_input_focus(s.c_ta);
 
-    s.c_hint = label(s.compose, F_META, dg::text3(), "Enter sends  " LV_SYMBOL_BULLET "  Esc keeps the draft");
-    lv_obj_set_pos(s.c_hint, PAD, BODY_H - 19);
+    // Bordered touch buttons under the box: Cancel keeps the draft, Send is
+    // Enter.  The status line sits between them.
+    const int bw_cancel = 78, bw_send = 108;
+    lv_obj_t* cancel = flat_btn(s.compose);
+    lv_obj_set_pos(cancel, PAD - 2, COMPOSE_BTN_Y);
+    lv_obj_set_size(cancel, bw_cancel, COMPOSE_BTN_H);
+    lv_obj_set_style_bg_color(cancel, dg::ground1(), 0);
+    lv_obj_set_style_bg_color(cancel, dg::ground3(), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(cancel, 1, 0);
+    lv_obj_set_style_border_color(cancel, dg::ground5(), 0);
+    lv_obj_add_event_cb(cancel, [](lv_event_t*) { close_compose(true); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_center(label(cancel, F_BODY, dg::text2(), "Cancel"));
+
+    lv_obj_t* send = flat_btn(s.compose);
+    lv_obj_set_pos(send, SCREEN_W - (PAD - 2) - bw_send, COMPOSE_BTN_Y);
+    lv_obj_set_size(send, bw_send, COMPOSE_BTN_H);
+    lv_obj_set_style_bg_color(send, dg::phosphor(), 0);
+    lv_obj_set_style_bg_color(send, dg::phosphor_hi(), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(send, [](lv_event_t*) { compose_submit(); }, LV_EVENT_CLICKED, nullptr);
+    s.c_hint = label(send, F_BODY, dg::on_phosphor());
+    lv_label_set_recolor(s.c_hint, true);
+    char send_text[40];
+    snprintf(send_text, sizeof(send_text), "Send #%06x (Enter)#", (unsigned)DG_GROUND_4);
+    lv_label_set_text(s.c_hint, send_text);
+    lv_obj_center(s.c_hint);
+    // Touch-only: the text box keeps the keyboard (Enter already sends).
+    if (lv_obj_get_group(cancel)) lv_group_remove_obj(cancel);
+    if (lv_obj_get_group(send))   lv_group_remove_obj(send);
 
     s.c_status = label(s.compose, F_META, dg::text3());
-    lv_label_set_long_mode(s.c_status, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s.c_status, 150);
-    lv_obj_set_style_text_align(s.c_status, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s.c_status, LV_ALIGN_TOP_RIGHT, -PAD, BODY_H - 19);
+    lv_label_set_long_mode(s.c_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s.c_status, SCREEN_W - 2 * PAD - bw_cancel - bw_send - 8);
+    lv_obj_set_style_text_align(s.c_status, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s.c_status, PAD - 2 + bw_cancel + 6, COMPOSE_BTN_Y + 1);
 
     lv_obj_add_flag(s.compose, LV_OBJ_FLAG_HIDDEN);
 }
@@ -1237,8 +1582,32 @@ void demo_fill()
     s.items.push_back(demo_item("demo-question", AttentionKind::Waiting, AttentionSeverity::NeedsYou,
         "Claude is waiting for you", "lee copilot", 2,
         ActReply | ActOpen | ActSnooze | ActDismiss,
-        "Should the capture box keep its draft when you press Esc, or clear it? "
-        "I lean towards keeping it: a stray Esc should not cost a paragraph."));
+        "Should the capture box keep its draft when you press Cancel, or clear it? "
+        "I lean towards keeping it: a stray tap should not cost a paragraph."));
+    {
+        AttentionItem q = demo_item("demo-pick", AttentionKind::Question, AttentionSeverity::NeedsYou,
+            "Claude asks: how should wide tables render?", "lee copilot", 1,
+            ActChoose | ActOpen | ActSnooze | ActDismiss, "");
+        AttentionQuestion aq;
+        aq.header = "Table layout";
+        aq.question = "Wide markdown tables: how should the viewer draw them when the "
+                      "columns do not fit 320 px?";
+        aq.options = {
+            { "Monospace grid", "Pan it sideways with the ball or h/l, like code." },
+            { "Wrap the cells", "Keep Montserrat and wrap each cell inside its column." },
+            { "Both", "Wrap up to four columns, pan anything wider." },
+        };
+        q.questions.push_back(aq);
+        s.items.push_back(q);
+    }
+    {
+        AttentionItem q = demo_item("demo-ask-old", AttentionKind::Approval, AttentionSeverity::NeedsYou,
+            "Claude wants to use AskUserQuestion", "hester", 3,
+            ActApprove | ActDeny | ActOpen | ActSnooze | ActDismiss,
+            "Which port should the daemon use?");
+        q.tool_name = "AskUserQuestion";
+        s.items.push_back(q);
+    }
     s.items.push_back(demo_item("demo-blocker", AttentionKind::Blocker, AttentionSeverity::Blocking,
         "Claude is blocked", "design", 11,
         ActReply | ActOpen | ActSnooze | ActDismiss,
@@ -1327,6 +1696,11 @@ bool waiting_key(uint8_t k)
     if (s.mode != Compose::None) {
         if (k == 0x1B) { close_compose(true); return true; }
         if (k == '\r' || k == '\n') { compose_submit(); return true; }
+        // Backspace in an empty box is the keyboard's way out (no Esc key).
+        if (k == 0x08 || k == 0x7F) {
+            const char* t = lv_textarea_get_text(s.c_ta);
+            if (!t || !*t) { close_compose(true); return true; }
+        }
         return false;   // the text box types
     }
 
@@ -1341,9 +1715,22 @@ bool waiting_key(uint8_t k)
     case ' ': scroll_words(WORDS_H - 24);    return true;
     case 'b': scroll_words(-(WORDS_H - 24)); return true;
     case '\r': case '\n':
-        if (it && it->can(dirigible::ActReply)) open_compose(Compose::Reply);
+        if (it && pickable(*it)) {
+            if (s.opt_hl >= 0) choose(s.opt_hl);
+            else               flash("roll or tap an option");
+        } else if (it && it->kind != AttentionKind::Question && it->can(dirigible::ActReply)) {
+            open_compose(Compose::Reply);
+        }
         return true;
-    case 'y': case 'n': case 'd': case 's': case 'r':
+    case 'y': case 'n':
+        // Never on a question: Approve would pick the TUI's highlighted option.
+        if (it && (it->question_as_approval() || it->kind == AttentionKind::Question)) {
+            flash("answer the question in the tab");
+            return true;
+        }
+        key_action((char)k);
+        return true;
+    case 'o': case 'd': case 's': case 'r':
         key_action((char)k);
         return true;
     case '\t':
@@ -1360,11 +1747,28 @@ void waiting_ball(int dx, int dy, bool click)
 {
     auto& s = st();
     if (s.mode != Compose::None) return;
+
+    // Nothing paged: the ball walks the recent turns and the three buttons
+    // under them (highlight, click opens), so the screen works without touch.
+    if (lv_obj_has_flag(s.page, LV_OBJ_FLAG_HIDDEN)) {
+        ball_list(s.empty, dy, click);
+        return;
+    }
+
     const uint32_t now = lv_tick_get();
+    const auto* cur = current();
+    if (dy || click) {
+        if (cur && pickable(*cur) && s.opt_count > 0) {
+            s.ball_dx = 0;
+            s.ball_dy_tick = now;
+            question_ball(dy, click);
+            return;
+        }
+    }
     if (dy) {
         s.ball_dx = 0;
         s.ball_dy_tick = now;
-        scroll_words(dy * 12);
+        scroll_words(ball_scroll_px(dy));
     } else if (dx && lv_tick_elaps(s.ball_dy_tick) >= BALL_QUIET_MS) {
         if (lv_tick_elaps(s.ball_dx_tick) > BALL_WINDOW_MS) s.ball_dx = 0;
         s.ball_dx_tick = now;

@@ -17,12 +17,18 @@
  * Grid size is measured, not assumed: the lifted monospace font is
  * lv_font_unscii_8, whose advance width LVGL reports at run time, so the same
  * code gives the right COLSxROWS if the font is ever swapped.  On a T-Deck
- * that works out at 320/8 = 40 columns and 220/9 = 24 rows — the terminal view
- * claims the whole content band, footer included (E14: the shared key legend
- * is collapsed here and shown for two seconds on entry instead of standing on
- * a character row).  The size is sent
- * to Lee as {"type":"resize","cols":..,"rows":..} on the PTY WebSocket, which
+ * that works out at 320/8 = 40 columns and (220-22)/9 = 22 rows — the view
+ * claims the whole content band, footer included, and gives its bottom 22 px
+ * to a key bar.  The size is sent to Lee as
+ * {"type":"resize","cols":..,"rows":..} on the PTY WebSocket, which
  * api-server.ts forwards to PtyManager.resize().
+ *
+ * Key bar.  The T-Deck keyboard has no Esc and no Ctrl, yet a TUI like
+ * Claude Code wants them (Esc interrupts, Shift-Tab cycles modes, Ctrl-C
+ * quits, Ctrl-D ends input), and Tab for completion.  So the bottom strip
+ * carries bordered touch keys for them; arrows are the trackball.  Leaving
+ * the terminal is the header's close button or a trackball hold — never a
+ * key, since every key belongs to the remote program.
  */
 
 #include <cstdio>
@@ -50,6 +56,67 @@ void pty_send(const char* s, size_t n)
     if (a.pty && a.pty->isConnected()) a.pty->sendInput(s, n);
 }
 
+constexpr int KEYBAR_H = 22;
+
+struct BarKey {
+    const char* label;
+    const char* seq;    // bytes sent to the PTY
+};
+
+const BarKey BAR_KEYS[] = {
+    { "Esc",    "\x1b"    },
+    { "Tab",    "\t"      },
+    { "S-Tab",  "\x1b[Z"  },   // back-tab: Claude Code's mode switch
+    { "Ctrl-C", "\x03"    },
+    { "Ctrl-D", "\x04"    },
+};
+
+void bar_key_cb(lv_event_t* e)
+{
+    const auto* k = (const BarKey*)lv_event_get_user_data(e);
+    if (k) pty_send(k->seq, strlen(k->seq));
+}
+
+void build_keybar(lv_obj_t* parent)
+{
+    const int n = (int)(sizeof(BAR_KEYS) / sizeof(BAR_KEYS[0]));
+    const int gap = 3;
+    const int y = CONTENT_H - KEYBAR_H;
+    const int w = (SCREEN_W - 4 - (n - 1) * gap) / n;   // 60 px each
+
+    lv_obj_t* bar = lv_obj_create(parent);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_pos(bar, 0, y);
+    lv_obj_set_size(bar, SCREEN_W, KEYBAR_H);
+    lv_obj_set_style_bg_color(bar, dg::ground1(), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_width(bar, 1, 0);
+    lv_obj_set_style_border_color(bar, dg::ground4(), 0);
+    lv_obj_set_style_border_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int i = 0; i < n; i++) {
+        lv_obj_t* b = lv_btn_create(bar);
+        lv_obj_remove_style_all(b);
+        // Not keyboard-focusable: in the terminal every key goes to the PTY.
+        if (lv_obj_get_group(b)) lv_group_remove_obj(b);
+        lv_obj_set_pos(b, 2 + i * (w + gap), 1);
+        lv_obj_set_size(b, w, KEYBAR_H - 3);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b, dg::ground3(), 0);
+        lv_obj_set_style_bg_color(b, dg::phosphor_deep(), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(b, 1, 0);
+        lv_obj_set_style_border_color(b, dg::ground5(), 0);
+        lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(b, DG_RADIUS, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(b, bar_key_cb, LV_EVENT_CLICKED, (void*)&BAR_KEYS[i]);
+        lv_obj_t* l = make_label(b, BAR_KEYS[i].label, dg::text1(), dg::ui_font_small());
+        lv_obj_center(l);
+    }
+}
+
 }  // namespace
 
 void terminal_build(lv_obj_t* parent)
@@ -71,7 +138,7 @@ void terminal_build(lv_obj_t* parent)
     if (a.term_line_h <= 0) a.term_line_h = 8;
 
     int cols = SCREEN_W / a.term_char_w;
-    int rows = CONTENT_H / a.term_line_h;
+    int rows = (CONTENT_H - KEYBAR_H) / a.term_line_h;
     a.vt.resize(cols, rows);
     cols = a.vt.cols();
     rows = a.vt.rows();
@@ -101,6 +168,8 @@ void terminal_build(lv_obj_t* parent)
     lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(a.term_cursor, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_pos(a.term_cursor, 0, 0);
+
+    build_keybar(a.view_terminal);
 
     ESP_LOGI(TAG, "grid %dx%d (glyph %dx%d)", cols, rows,
              a.term_char_w, a.term_line_h);
@@ -160,14 +229,6 @@ void terminal_open(int pty_id, const char* label)
     ESP_LOGI(TAG, "opened pty %d (%s)", pty_id, label ? label : "");
 
     app_show(View::Terminal);
-    // Flash the key legend over the bottom rows for two seconds, then collapse
-    // it: the grid needs every row, but "Esc back" is worth saying once.
-    chrome_show_footer(true);
-    lv_timer_t* hide = lv_timer_create([](lv_timer_t* t) {
-        if (app().view == View::Terminal) chrome_show_footer(false);
-        lv_timer_del(t);
-    }, 2000, nullptr);
-    lv_timer_set_repeat_count(hide, 1);
     terminal_repaint();
 }
 
@@ -184,13 +245,9 @@ void terminal_close()
 
 bool terminal_key(uint8_t ascii)
 {
-    // ESC leaves the terminal; everything else goes upstream verbatim, which
-    // is the only way typing into a remote shell can work.
-    if (ascii == 0x1B) {
-        terminal_close();
-        app_show(View::Tabs);
-        return true;
-    }
+    // Every byte goes upstream verbatim, which is the only way typing into a
+    // remote shell can work (an Esc, should a keyboard ever send one, is the
+    // TUI's too).  Leaving is the header button or a trackball hold.
     char ch = (char)ascii;
     pty_send(&ch, 1);
     return true;

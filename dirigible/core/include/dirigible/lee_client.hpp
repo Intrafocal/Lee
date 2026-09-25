@@ -130,6 +130,22 @@ public:
                         const std::string& text, int version,
                         std::function<void(const ReplyResult&)> cb);
 
+    /// POST /attention/:id/reply {"action":"choose","choice":n,"version":v}:
+    /// pick option `choice` (0-based) of a single-select question item.
+    void attentionChoose(const std::string& id, int choice, int version,
+                         std::function<void(const ReplyResult&)> cb);
+
+    /// POST /attention/:id/open: Lee focuses the item's window and tab.
+    void attentionOpen(const std::string& id,
+                       std::function<void(const ReplyResult&)> cb);
+
+    /// GET /attention/:id: the whole item (text up to 2000 characters, full
+    /// question strings).  `item` is null unless status is 200 and it parsed;
+    /// 404 / 410 mean the item has gone.  One request per call — callers
+    /// cache.
+    void fetchAttentionItem(const std::string& id,
+                            std::function<void(int status, const AttentionItem* item)> cb);
+
     /// POST /attention/:id/dismiss.  Human-only like reply (§4.4).
     void attentionDismiss(const std::string& id,
                           std::function<void(const ReplyResult&)> cb);

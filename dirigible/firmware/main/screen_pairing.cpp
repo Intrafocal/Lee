@@ -1,7 +1,8 @@
 /*
  * screen_pairing.cpp — on-device pairing (E5, device half; E14 layout pass).
  *
- * Steps, driven entirely by the physical keyboard and the trackball:
+ * Steps, driven by touch, the physical keyboard and the trackball (which
+ * scrolls the pick lists and clicks the highlighted row; it never points):
  *
  *   0  WiFi      scan and pick an SSID (or rescan)
  *   1  Password  type it, Enter connects, credentials go to NVS "ss_wifi"
@@ -48,8 +49,8 @@
  * There is no on-screen keyboard — the T-Deck has a real one, and LVGL's
  * would eat two thirds of a 320x240 panel.
  *
- * Back is available three ways: the ESC key, the footer "Back" button (in the
- * input group, so trackball and touch both reach it), and — at step 0 with a
+ * Back is available three ways: the header's back button, the footer "Back"
+ * button (both touch targets), a trackball hold — and at step 0 with a
  * machine already stored — a straight exit to Tabs.
  *
  * Build with -DDIRIGIBLE_UI_DEMO=1 to cycle every step with canned data every
@@ -301,7 +302,8 @@ lv_obj_t* add_list(lv_obj_t* parent)
     return list;
 }
 
-/// A blank, full-width row button styled for the trackball focus state.
+/// A blank, full-width row button: tapped directly, or highlighted by the
+/// ball (group focus, dg::style_focus) and clicked.
 lv_obj_t* add_row(lv_obj_t* list, int height)
 {
     lv_obj_t* btn = lv_btn_create(list);
@@ -468,7 +470,7 @@ void step_wifi()
     chips_update();
     set_centre("1/4 WiFi");
     lv_obj_t* body = fresh_body();
-    chrome_set_footer("Click to pick", nullptr);
+    chrome_set_footer("ball/tap to pick", nullptr);
     chrome_add_footer_button("Rescan", [](lv_event_t*) { step_wifi(); }, nullptr);
     add_back_button();
 
@@ -563,12 +565,18 @@ void step_password()
     lv_obj_t* ta = add_input(body, "wifi password", true, INPUT_Y);
     lv_obj_add_event_cb(ta, password_ready, LV_EVENT_READY, nullptr);
 
+    // A finger-sized toggle (28 px) under the field, bordered so it reads as
+    // a button; the footer's Show does the same thing.
     lv_obj_t* show = lv_btn_create(body);
     lv_obj_set_pos(show, 2, 60);
-    lv_obj_set_size(show, 72, 20);
+    lv_obj_set_size(show, 84, 28);
     lv_obj_set_style_pad_all(show, 0, 0);
     lv_obj_set_style_bg_opa(show, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(show, dg::ground3(), 0);
+    lv_obj_set_style_bg_color(show, dg::ground4(), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(show, 1, 0);
+    lv_obj_set_style_border_color(show, dg::ground5(), 0);
+    lv_obj_set_style_border_opa(show, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(show, DG_RADIUS, 0);
     dg::style_focus(show);
     lv_obj_t* sl = make_label(show, LV_SYMBOL_EYE_OPEN "  Show", dg::text1());
@@ -576,9 +584,9 @@ void step_password()
     lv_obj_add_event_cb(show, password_show_cb, LV_EVENT_CLICKED, nullptr);
     if (a.group) lv_group_add_obj(a.group, show);
 
-    add_meter(body, 86);
+    add_meter(body, 94);
     lv_label_set_text(a.pair_meter,
-                      "Enter connects and saves.\nTab reaches show / Back.");
+                      "Enter connects and saves.\nTap Show to check what you typed.");
 }
 
 // ---------------------------------------------------------------------------
@@ -649,7 +657,7 @@ void step_discover()
     card_update();
     set_centre("3/4 find Lee");
     lv_obj_t* body = fresh_body();
-    chrome_set_footer("Click a Lee", nullptr);
+    chrome_set_footer("ball/tap a Lee", nullptr);
     chrome_add_footer_button("Manual", [](lv_event_t*) { step_host(); }, nullptr);
     chrome_add_footer_button("Rescan", [](lv_event_t*) { step_discover(); }, nullptr);
     add_back_button();
@@ -1336,6 +1344,15 @@ void pairing_back()
     case 6: step_approve();  return;   // typed-token fallback -> back to the code
     default: waiting_open(); return;
     }
+}
+
+void pairing_ball(int, int dy, bool click)
+{
+    // The pick lists (WiFi networks, discovered Lees) take the ball; a text
+    // entry step leaves it alone so a stray roll or click never moves focus
+    // off the field being typed into.
+    if (app().pair_input) return;
+    ball_list(app().pair_body, dy, click);
 }
 
 bool pairing_key(uint8_t ascii)

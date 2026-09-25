@@ -81,7 +81,6 @@
 #define TDECK_TB_PIN_LEFT         1
 #define TDECK_TB_PIN_RIGHT        2
 #define TDECK_TB_PIN_CLICK        0
-#define TDECK_TB_STEP_PX         10
 #define TDECK_TB_LONG_PRESS_MS  800
 
 // ---------------------------------------------------------------------------

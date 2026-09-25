@@ -68,7 +68,7 @@ esp_err_t tdeck_bsp_set_keyboard_backlight(uint8_t brightness);
 
 lv_indev_t *tdeck_bsp_touch_indev(void);      // pointer, may be NULL
 lv_indev_t *tdeck_bsp_keyboard_indev(void);   // keypad,  may be NULL
-lv_indev_t *tdeck_bsp_trackball_indev(void);  // pointer, may be NULL
+// The trackball is deliberately NOT an LVGL indev: see tdeck_bsp_set_ball_hook.
 
 /**
  * Raw keyboard interception.  Returning true consumes the byte so LVGL never
@@ -79,12 +79,12 @@ typedef bool (*tdeck_key_hook_t)(uint8_t ascii, void *user);
 void tdeck_bsp_set_key_hook(tdeck_key_hook_t hook, void *user);
 
 /**
- * Raw trackball interception.  While a delta hook is installed the trackball
- * stops driving the LVGL cursor and reports quantised steps instead
- * (dx/dy in units of one detent), which is what terminal mode maps to arrow
- * keys.  `click` is true once, on release of a plain press — never for a hold
- * that fired the long-press callback or rolled while held.  Pass NULL to
- * return to pointer mode.
+ * The trackball.  It is not an LVGL pointer or keypad: a timer polls it and
+ * reports quantised detents (dx/dy in units of one detent; +x right, +y down)
+ * to this hook, on the LVGL task, and the firmware decides what a roll means
+ * on each screen (scroll, move a list highlight, arrow keys).  `click` is
+ * true once, on release of a plain press — never for a hold that fired the
+ * long-press callback or rolled while held.  With no hook the ball is inert.
  */
 typedef void (*tdeck_ball_hook_t)(int dx, int dy, bool click, void *user);
 void tdeck_bsp_set_ball_hook(tdeck_ball_hook_t hook, void *user);
