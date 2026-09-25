@@ -34,6 +34,15 @@
   color: var(--on-phosphor);
 }
 
+/* Zero-state: nothing needs you, but Focus/Capture/Hand off must stay reachable.
+   No alert color here - it's a quiet, always-available entry point (C2). */
+.copilot-pill.is-idle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+}
+
 .copilot-retro-chip,
 .copilot-digest-ready-chip {
   display: flex;

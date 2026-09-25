@@ -16,10 +16,12 @@ interface DigestPanelProps {
   workspace: string;
   since?: string | null;
   focus?: FocusItem | null;
+  /** Called once the retro card is saved or skipped, so the caller can clear its "due" chip right away. */
+  onRetroDone?: () => void;
   onClose: () => void;
 }
 
-export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since, focus, onClose }) => {
+export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since, focus, onRetroDone, onClose }) => {
   const [digest, setDigest] = useState<DigestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,7 +100,7 @@ export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since,
               {digest.retro.due && (
                 <div className="copilot-digest-section">
                   <div className="copilot-digest-section-title">Weekly retro</div>
-                  <RetroCard />
+                  <RetroCard onDone={onRetroDone} />
                 </div>
               )}
             </>

@@ -7,7 +7,8 @@ import React, { useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { AttentionItemRow } from './AttentionItemRow';
 import { FocusControl } from './FocusControl';
-import type { AttentionItem, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
+import { groupAttentionItems } from '../../lib/copilotAttention';
+import type { AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 
 interface AttentionFlyoutProps {
   snapshot: AttentionSnapshot;
@@ -16,15 +17,6 @@ interface AttentionFlyoutProps {
   onClose: () => void;
   onOpenCapture: () => void;
   onOpenHandoff: () => void;
-}
-
-function groupItems(items: AttentionItem[]): { blocking: AttentionItem[]; needsYou: AttentionItem[]; recent: AttentionItem[] } {
-  const open = items.filter((i) => i.state === 'open' || i.state === 'snoozed');
-  return {
-    blocking: open.filter((i) => i.severity === 'blocking'),
-    needsYou: open.filter((i) => i.severity === 'needs-you'),
-    recent: open.filter((i) => i.severity === 'ambient'),
-  };
 }
 
 export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
@@ -45,7 +37,7 @@ export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
-  const { blocking, needsYou, recent } = groupItems(snapshot.items);
+  const { blocking, needsYou, recent } = groupAttentionItems(snapshot.items);
   const empty = blocking.length === 0 && needsYou.length === 0 && recent.length === 0;
 
   const style: React.CSSProperties = {
