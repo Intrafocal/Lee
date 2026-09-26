@@ -45,21 +45,21 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({ workspace, focusAc
       </div>
       {toast && <span className={`cockpit-toast is-${toast.level}`}>{toast.message}</span>}
       <span className="cockpit-header-spacer" />
-      <button className="cockpit-btn is-primary" onClick={onLaunch} title="New task (n)">
-        <Icon name="plus" size={12} /> Task <kbd>n</kbd>
+      <button className="cockpit-btn is-primary" onClick={onLaunch} title="New task (⌘N)">
+        <Icon name="plus" size={12} /> Task <kbd>⌘N</kbd>
       </button>
       <button className="cockpit-btn" onClick={onExplore} title="New exploration (Explore section)">
         <Icon name="plus" size={12} /> Explore
       </button>
-      <button className="cockpit-btn" onClick={onRun} title="Operations (o)">
-        <Icon name="play" size={12} /> Run <Icon name="chevron-down" size={10} /> <kbd>o</kbd>
+      <button className="cockpit-btn" onClick={onRun} title="Operations (⌘{)">
+        <Icon name="play" size={12} /> Run <Icon name="chevron-down" size={10} /> <kbd>{'⌘{'}</kbd>
       </button>
       {copilotApi && (
         <button className={`cockpit-btn${focusActive ? ' is-active' : ''}`} onClick={toggleFocus} disabled={busy}>
           <Icon name="eye" size={12} /> {focusActive ? 'Stop focus' : 'Focus'}
         </button>
       )}
-      <button className="cockpit-btn is-icon" onClick={onHelp} title="Keys (?)" aria-label="Keyboard help">
+      <button className="cockpit-btn is-icon" onClick={onHelp} title="Keys" aria-label="Keyboard help">
         <Icon name="keyboard" size={14} />
       </button>
     </div>

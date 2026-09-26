@@ -165,7 +165,7 @@ const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry; selected: bool
               {a.label}
             </button>
           ))}
-          <button className="cockpit-btn" disabled={busy} onClick={() => act('dismiss')} title="Dismiss (x)">
+          <button className="cockpit-btn" disabled={busy} onClick={() => act('dismiss')} title="Dismiss (⌘⌫)">
             Dismiss
           </button>
         </div>

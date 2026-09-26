@@ -155,6 +155,8 @@ interface KeyLike {
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
+  shiftKey: boolean;
+  code: string;
   preventDefault: () => void;
 }
 
@@ -591,6 +593,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     if (!shown) setPopover(null);
   }, [shown]);
 
+  // ⌘N: the File > New File accelerator, routed here by App while we're showing.
+  useEffect(() => cockpitModeStore.onLauncherRequest(() => openLauncher()), [openLauncher]);
+
   // A popover that closes (Send, Launch, a click) unmounts the focused element and
   // focus falls to <body>, where the overlay's keymap never sees keys. Take it back.
   useEffect(() => {
@@ -644,6 +649,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       meta: e.metaKey,
       ctrl: e.ctrlKey,
       alt: e.altKey,
+      shift: e.shiftKey,
+      code: e.code,
       drawer: drawerFocus,
     });
     if (!act) return;
@@ -652,10 +659,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     const tile = selectedTile;
     const row = selectedRow;
     switch (act.kind) {
-      case 'section':
-        setDrawerFocus(false);
-        setSection(act.section);
-        break;
       case 'row': {
         setDrawerFocus(false);
         const rows = rowsRef.current;
@@ -697,9 +700,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         if (tile) openRename({ ptyId: tile.ptyId, taskId: tile.task?.id ?? null, current: tile.title, provider: tile.provider });
         else row?.rename?.();
         break;
-      case 'launcher':
-        openLauncher();
-        break;
       case 'run':
         setPopover({ kind: 'run' });
         break;
@@ -717,9 +717,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         cockpitModeStore.select({ kind: 'drawer', id: String(ownTabs[next].id) });
         break;
       }
-      case 'help':
-        setPopover({ kind: 'help' });
-        break;
       case 'escape':
         setDrawerFocus(false);
         cockpitModeStore.select(null);

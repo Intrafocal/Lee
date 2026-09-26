@@ -57,8 +57,8 @@ export const TabDrawer: React.FC<TabDrawerProps> = ({ tabs, focused, selectedId,
         </button>
       ))}
     </div>
-    <button className="cockpit-drawer-key" onClick={() => onFocusChange(!focused)} title="Focus the drawer (`)">
-      <kbd>`</kbd> focus
+    <button className="cockpit-drawer-key" onClick={() => onFocusChange(!focused)} title="Focus the drawer (⌘T)">
+      <kbd>⌘T</kbd> focus
     </button>
   </div>
 );

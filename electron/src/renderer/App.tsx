@@ -2090,9 +2090,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isElectron) return;
 
-    // File > New - creates new untitled file tab
+    // File > New - creates new untitled file tab (the Launcher, in the Cockpit)
     lee.file.onNew(() => {
       console.log('New file requested');
+      if (cockpitModeStore.requestLauncher()) return;
       handleNewFile();
     });
 

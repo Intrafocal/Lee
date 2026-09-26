@@ -17,7 +17,7 @@ interface CockpitNavProps {
 
 export const CockpitNav: React.FC<CockpitNavProps> = ({ section, badges, onSelect }) => (
   <nav className="cockpit-nav" aria-label="Cockpit sections">
-    {SECTIONS.map((id, i) => {
+    {SECTIONS.map((id) => {
       const b = badges[id];
       return (
         <button
@@ -28,9 +28,7 @@ export const CockpitNav: React.FC<CockpitNavProps> = ({ section, badges, onSelec
         >
           <span className="cockpit-nav-label">{SECTION_LABELS[id]}</span>
           {b.count > 0 && <span className={`cockpit-badge${b.ember ? ' is-ember' : ''}`}>{b.count}</span>}
-          {b.count === 0 && b.dot && <span className="cockpit-badge-dot" aria-label="new" />}
-          <kbd className="cockpit-nav-key">{i + 1}</kbd>
-        </button>
+          {b.count === 0 && b.dot && <span className="cockpit-badge-dot" aria-label="new" />}        </button>
       );
     })}
   </nav>

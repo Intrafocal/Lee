@@ -167,7 +167,7 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
         <button
           className="cockpit-btn"
           disabled={busy}
-          title="Rename (e)"
+          title="Rename (⌘E)"
           onClick={() => ctx.openRename({ ptyId: tile.ptyId, taskId: task?.id ?? null, current: tile.title, provider: tile.provider })}
         >
           Rename

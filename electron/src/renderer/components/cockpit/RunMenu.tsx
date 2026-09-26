@@ -191,11 +191,11 @@ export const RunMenu: React.FC<{ ctx: CockpitCtx; onClose: () => void }> = ({ ct
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (step.kind !== 'menu') return;
-          if (e.key === 'ArrowDown' || e.key === 'j') {
+          if (e.key === 'ArrowDown') {
             e.preventDefault();
             e.stopPropagation();
             setIndex((i) => Math.min(entries - 1, i + 1));
-          } else if (e.key === 'ArrowUp' || e.key === 'k') {
+          } else if (e.key === 'ArrowUp') {
             e.preventDefault();
             e.stopPropagation();
             setIndex((i) => Math.max(0, i - 1));

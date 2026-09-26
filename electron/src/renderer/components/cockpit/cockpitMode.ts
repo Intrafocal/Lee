@@ -170,9 +170,27 @@ export function logGoInto(ptyId: number, agentState: AgentState | TabRunState, f
   }
 }
 
+const launcherListeners = new Set<() => void>();
+
 export const cockpitModeStore = {
   get(): CockpitModeState {
     return state;
+  },
+  /**
+   * ⌘N (File > New File) while the Cockpit is showing opens its Launcher
+   * instead. Returns false when no Cockpit is showing to take it, so the
+   * caller falls back to a new untitled file.
+   */
+  requestLauncher(): boolean {
+    if (!state.enabled || state.mode !== 'cockpit' || !launcherListeners.size) return false;
+    for (const fn of launcherListeners) fn();
+    return true;
+  },
+  onLauncherRequest(fn: () => void): () => void {
+    launcherListeners.add(fn);
+    return () => {
+      launcherListeners.delete(fn);
+    };
   },
   getWall(): CockpitWallState {
     return wall;

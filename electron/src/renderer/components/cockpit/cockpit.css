@@ -382,10 +382,6 @@
   flex: 1;
 }
 
-.cockpit-nav-key {
-  opacity: 0.6;
-}
-
 .cockpit-center {
   flex: 1;
   min-width: 0;
