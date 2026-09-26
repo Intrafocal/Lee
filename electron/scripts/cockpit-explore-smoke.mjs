@@ -7,8 +7,11 @@
  * Also Someday "Promote → Explore" (triage with to: 'explore'), the v3 tree
  * routes (nodes, prune, decisions, spikes, promote, archive, escalate) and
  * the spike launch flow (spike node, delegate launch in a worktree with
- * origin explore, PATCH running). Bundles the
- * real source with esbuild; fetch and window.lee are stubs. No Hester needed.
+ * origin explore, PATCH running). Deep D1 (§3.2, §8.1): the Deep client
+ * (src/renderer/lib/hesterDeep.ts): page GET/PUT and the 409 conflict,
+ * references, asks, answers, questions, sessions, explore, the opener, the
+ * Someday capture and a create with `page`. Bundles the real source with
+ * esbuild; fetch and window.lee are stubs. No Hester needed.
  *
  * Run: node scripts/cockpit-explore-smoke.mjs
  */
@@ -21,10 +24,14 @@ import * as esbuild from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcPath = join(__dirname, '../src/renderer/lib/hesterCockpit.ts');
+const deepPath = join(__dirname, '../src/renderer/lib/hesterDeep.ts');
 const result = await esbuild.build({ entryPoints: [srcPath], bundle: true, format: 'esm', platform: 'neutral', write: false });
+const deepResult = await esbuild.build({ entryPoints: [deepPath], bundle: true, format: 'esm', platform: 'neutral', write: false });
 const tmpDir = mkdtempSync(join(tmpdir(), 'lee-explore-smoke-'));
 const tmpFile = join(tmpDir, 'hesterCockpit.mjs');
+const deepFile = join(tmpDir, 'hesterDeep.mjs');
 writeFileSync(tmpFile, result.outputFiles[0].text);
+writeFileSync(deepFile, deepResult.outputFiles[0].text);
 
 const calls = [];
 let reply = { status: 200, body: { success: true, data: null } };
@@ -36,8 +43,10 @@ globalThis.fetch = async (url, init = {}) => {
 };
 
 let mod;
+let deep;
 try {
   mod = await import(pathToFileURL(tmpFile).href);
+  deep = await import(pathToFileURL(deepFile).href);
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
@@ -239,6 +248,135 @@ await test('spike launch flow: spike node, delegate worktree launch with origin 
   const off = await startSpike(WS, exp.id, { prompt: 'x', title: 'x' }, async () => ((launched = true), { success: true, task_id: 't' }));
   assert.equal(off.ok, false);
   assert.equal(launched, false, 'no launch without a spike node');
+});
+
+// ---------------------------------------------------------------------------
+// Deep D1: the Deep client (lib/hesterDeep.ts)
+// ---------------------------------------------------------------------------
+
+const EXP = '/cockpit/explorations/exp-1a2b3c4d';
+const anchor = { kind: 'page', quote: 'the vector clock', offset: 12, section: 'Mesh' };
+
+await test('deep page: GET /page, PUT with base_version, envelope unwrapped', async () => {
+  reply = { status: 200, body: { success: true, data: { text: '# Mesh\n', version: 'abc123abc123' } } };
+  assert.deepEqual(await deep.getPage(WS, exp.id), { ok: true, data: { text: '# Mesh\n', version: 'abc123abc123' } });
+  reply = { status: 200, body: { success: true, data: { version: 'def456def456' } } };
+  assert.deepEqual(await deep.putPage(WS, exp.id, '# Mesh\nmore', 'abc123abc123'), { ok: true, version: 'def456def456' });
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['GET', `${EXP}/page`],
+    ['PUT', `${EXP}/page`],
+  ]);
+  assert.deepEqual(calls[1].body, { text: '# Mesh\nmore', base_version: 'abc123abc123' });
+  assert.equal(calls[1].headers['Content-Type'], 'application/json');
+});
+
+await test('deep page: 409 hands back their text and version (enveloped or bare); other errors pass through', async () => {
+  reply = { status: 409, body: { success: false, error: 'version_conflict', data: { error: 'version_conflict', version: 'v2', text: 'theirs' } } };
+  assert.deepEqual(await deep.putPage(WS, exp.id, 'mine', 'v1'), { ok: false, conflict: { version: 'v2', text: 'theirs' } });
+  reply = { status: 409, body: { error: 'version_conflict', version: 'v3', text: 'bare' } };
+  assert.deepEqual(await deep.putPage(WS, exp.id, 'mine', 'v1'), { ok: false, conflict: { version: 'v3', text: 'bare' } });
+  reply = { status: 413, body: { success: false, error: 'page too large' } };
+  assert.deepEqual(await deep.putPage(WS, exp.id, 'x', 'v1'), { ok: false, error: 'page too large', status: 413 });
+  const saved = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error('ECONNREFUSED');
+  };
+  assert.deepEqual(await deep.putPage(WS, exp.id, 'x', null), { ok: false, error: 'Hester offline', status: undefined });
+  assert.deepEqual(await deep.getPage(WS, exp.id), { ok: false, error: 'Hester offline' });
+  globalThis.fetch = saved;
+});
+
+await test('deep references: list, add (quote and link), patch opened', async () => {
+  reply = { status: 201, body: { success: true, data: { id: 'ref-00000001', kind: 'quote', at: 't' } } };
+  await deep.listReferences(WS, exp.id);
+  await deep.addReference(WS, exp.id, { kind: 'quote', quote: 'the vector clock', section: 'Mesh', source: { kind: 'page' } });
+  await deep.addReference(WS, exp.id, { kind: 'link', url: 'https://x.dev', title: 'X' });
+  await deep.patchReference(WS, exp.id, 'ref-00000001', { opened: true });
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['GET', `${EXP}/references`],
+    ['POST', `${EXP}/references`],
+    ['POST', `${EXP}/references`],
+    ['PATCH', `${EXP}/references/ref-00000001`],
+  ]);
+  assert.deepEqual(calls[1].body, { kind: 'quote', quote: 'the vector clock', section: 'Mesh', source: { kind: 'page' } });
+  assert.deepEqual(calls[2].body, { kind: 'link', url: 'https://x.dev', title: 'X' });
+  assert.deepEqual(calls[3].body, { opened: true });
+});
+
+await test('deep asks and answers: POST /asks (202), list, patch, retry', async () => {
+  reply = { status: 202, body: { success: true, data: { id: 'ans-00000001', status: 'queued', question: 'Why?', anchor } } };
+  const r = await deep.askDeep(WS, exp.id, { question: 'Why?', anchor });
+  assert.equal(r.ok, true);
+  assert.equal(r.data.status, 'queued');
+  await deep.askDeep(WS, exp.id, { question: 'And then?', anchor, follow_up_of: 'ans-00000001' });
+  await deep.listAnswers(WS, exp.id);
+  await deep.patchAnswer(WS, exp.id, 'ans-00000001', { read: true });
+  await deep.patchAnswer(WS, exp.id, 'ans-00000001', { inserted: true });
+  await deep.retryAnswer(WS, exp.id, 'ans-00000001');
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['POST', `${EXP}/asks`],
+    ['POST', `${EXP}/asks`],
+    ['GET', `${EXP}/answers`],
+    ['PATCH', `${EXP}/answers/ans-00000001`],
+    ['PATCH', `${EXP}/answers/ans-00000001`],
+    ['POST', `${EXP}/answers/ans-00000001/retry`],
+  ]);
+  assert.deepEqual(calls[0].body, { question: 'Why?', anchor });
+  assert.deepEqual(calls[1].body, { question: 'And then?', anchor, follow_up_of: 'ans-00000001' });
+  assert.deepEqual(calls[3].body, { read: true });
+  assert.deepEqual(calls[4].body, { inserted: true });
+  assert.deepEqual(calls[5].body, {});
+});
+
+await test('deep questions and sessions', async () => {
+  reply = { status: 201, body: { success: true, data: { id: 'q-00000001', status: 'open' } } };
+  await deep.listQuestions(WS, exp.id);
+  await deep.addQuestion(WS, exp.id, { text: 'Does it survive a partition?', source: 'page', anchor });
+  await deep.patchQuestion(WS, exp.id, 'q-00000001', 'closed');
+  const record = {
+    focus_session_id: 'fs-1',
+    started_at: '2026-09-26T09:00:00Z',
+    ended_at: '2026-09-26T10:00:00Z',
+    reason: 'ritual',
+    stopped_at: '…the vector clock only helps if every write',
+    rating: 'deep',
+    questions_kept: ['q-00000002'],
+  };
+  await deep.postSession(WS, exp.id, record);
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['GET', `${EXP}/questions`],
+    ['POST', `${EXP}/questions`],
+    ['PATCH', `${EXP}/questions/q-00000001`],
+    ['POST', `${EXP}/sessions`],
+  ]);
+  assert.deepEqual(calls[1].body, { text: 'Does it survive a partition?', source: 'page', anchor });
+  assert.deepEqual(calls[2].body, { status: 'closed' });
+  assert.deepEqual(calls[3].body, record);
+});
+
+await test('deep explore, create with page, Someday capture, opener', async () => {
+  reply = { status: 201, body: { success: true, data: { ...exp, id: 'exp-99999999', title: 'Tangent' } } };
+  const child = await deep.exploreFrom(WS, exp.id, { seed: 'a tangent', anchor });
+  assert.equal(child.data.title, 'Tangent');
+  await deep.createDeepExploration(WS, { seed: 'Mesh sync', page: 'Mesh sync\n\n', origin: { kind: 'opener' } });
+  await deep.captureSomeday(WS, 'try CRDTs', { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' });
+  reply = { status: 200, body: { success: true, data: { generated_at: 't', workspace: WS, pick_up: null, surfaces: [{ kind: 'blank' }] } } };
+  const op = await deep.fetchOpener(WS);
+  assert.deepEqual(op.data.surfaces, [{ kind: 'blank' }]);
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['POST', `${EXP}/explore`],
+    ['POST', '/cockpit/explorations'],
+    ['POST', '/someday'],
+    ['GET', '/copilot/opener'],
+  ]);
+  assert.deepEqual(calls[0].body, { seed: 'a tangent', anchor });
+  assert.deepEqual(calls[1].body, { seed: 'Mesh sync', page: 'Mesh sync\n\n', origin: { kind: 'opener' }, workspace: WS });
+  assert.deepEqual(calls[2].body, {
+    workspace: WS,
+    text: 'try CRDTs',
+    as: 'someday',
+    source: { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' },
+  });
 });
 
 console.log(process.exitCode ? '\nsome FAILED' : `\n${passed} passed`);

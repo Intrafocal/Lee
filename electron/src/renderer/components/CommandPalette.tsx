@@ -3,10 +3,15 @@
  *
  * Triggered by Cmd+/ anywhere in Lee. Connects to the Hester daemon
  * via SSE streaming to show real-time ReAct processing.
+ *
+ * In Deep (Deep D1 §5), `exploration` is passed and the footer offers
+ * **Keep** (⌘K): the last response becomes a `quote` reference in that
+ * exploration, source `palette`.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Icon, HesterGlyph, type IconName } from './Icon';
+import { addReference } from '../lib/hesterDeep';
 
 const HESTER_DAEMON_PORT = 9000;
 
@@ -59,6 +64,8 @@ interface CommandPaletteProps {
   initialPrompt?: string | null;
   autoSubmit?: boolean; // If true (default), auto-submit initialPrompt; if false, just pre-populate
   onPromptConsumed?: () => void;
+  /** The exploration open in Deep, if any: enables Keep. */
+  exploration?: { workspace: string; id: string };
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -72,6 +79,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   initialPrompt = null,
   autoSubmit = true,
   onPromptConsumed,
+  exploration,
 }) => {
   const [query, setQuery] = useState('');
   const hasAutoSubmittedRef = useRef(false);
@@ -81,6 +89,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [response, setResponse] = useState<ResponseEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDaemonHealthy, setIsDaemonHealthy] = useState<boolean | null>(null);
+  const [kept, setKept] = useState<'idle' | 'saving' | 'kept' | 'error'>('idle');
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -130,6 +139,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         setResponse(null);
         setError(null);
         setIsProcessing(false);
+        setKept('idle');
         sessionIdRef.current = `palette-${Date.now()}`;
       }, 200);
     }
@@ -155,6 +165,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     if (!queryText.trim() || isProcessing) return;
 
     // Reset state for new query
+    setKept('idle');
     setPhases([]);
     setViewingIndex(-1);
     setResponse(null);
@@ -297,7 +308,23 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     }
   }, [response, onOpenAsTab, onClose]);
 
-  // Handle keyboard shortcuts (Escape to close, Cmd+Enter to open as tab)
+  // Keep (Deep D1 §5.5): the last response as a quote reference in the open exploration.
+  const handleKeep = useCallback(async () => {
+    const text = response?.text?.trim();
+    if (!exploration || !text || kept === 'saving' || kept === 'kept') return;
+    setKept('saving');
+    const r = await addReference(exploration.workspace, exploration.id, { kind: 'quote', quote: text, source: { kind: 'palette' } });
+    setKept(r.ok ? 'kept' : 'error');
+    if (r.ok) {
+      try {
+        window.lee?.cockpit?.logEvent({ type: 'deep.action', data: { action: 'keep', exploration_id: exploration.id, chars: text.length } });
+      } catch {
+        /* cockpit IPC not available */
+      }
+    }
+  }, [exploration, response, kept]);
+
+  // Handle keyboard shortcuts (Escape to close, Cmd+Enter to open as tab, Cmd+K to Keep in Deep)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isOpen) return;
@@ -307,6 +334,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         e.preventDefault();
         e.stopPropagation();
         onClose();
+        return;
+      }
+
+      // Cmd+K keeps the response in the open exploration (Deep only)
+      if (exploration && e.metaKey && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K') && response?.text && !error) {
+        e.preventDefault();
+        e.stopPropagation();
+        void handleKeep();
         return;
       }
 
@@ -322,7 +357,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       window.addEventListener('keydown', handleKeyDown, true);
       return () => window.removeEventListener('keydown', handleKeyDown, true);
     }
-  }, [isOpen, onClose, response, error, handleOpenAsTab]);
+  }, [isOpen, onClose, response, error, handleOpenAsTab, exploration, handleKeep]);
 
   if (!isOpen) return null;
 
@@ -452,6 +487,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               Dismiss
               <kbd>Esc</kbd>
             </button>
+            {exploration && response?.text && !error && (
+              <button
+                className="command-palette-btn secondary"
+                onClick={() => void handleKeep()}
+                disabled={kept === 'saving' || kept === 'kept'}
+                title="Keep this answer as a reference in the open exploration"
+              >
+                {kept === 'kept' ? 'Kept' : kept === 'error' ? 'Keep failed · retry' : 'Keep'}
+                <kbd>⌘K</kbd>
+              </button>
+            )}
             {response && !error && (
               <button className="command-palette-btn primary" onClick={handleOpenAsTab}>
                 Open as Hester Tab
