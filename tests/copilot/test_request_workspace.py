@@ -100,3 +100,41 @@ def test_requests_without_header_follow_the_active_workspace(switchable):
     c.post("/cockpit/tasks", headers=SHARED, json={"title": "in B"})
     assert [t["title"] for t in c.get("/cockpit/tasks", headers=hdr(env.a)).json()["data"]] == ["in A"]
     assert [t["title"] for t in c.get("/cockpit/tasks", headers=SHARED).json()["data"]] == ["in B"]
+
+
+def test_non_ascii_workspace_header_is_percent_encoded(cockpit_env, tmp_path):
+    import httpx
+
+    env = cockpit_env
+    c = env.client
+    for name in ("Développement", "项目", "100% done"):
+        d = (tmp_path / name)
+        d.mkdir()
+        d = d.resolve()
+        value = ws_mod.encode_workspace_header(d)
+        value.encode("ascii")  # a header value httpx and fetch accept
+        httpx.Request("GET", "http://x/", headers={"X-Lee-Workspace": value})
+        r = c.get("/cockpit/tasks", headers={**SHARED, "X-Lee-Workspace": value})
+        assert r.status_code == 200 and r.json()["workspace"] == str(d), name
+    # ASCII paths (spaces included) go out unchanged, and an older sender's raw value still works
+    spaced = (tmp_path / "my project")
+    spaced.mkdir()
+    assert ws_mod.encode_workspace_header(spaced) == str(spaced)
+    raw = (tmp_path / "a%20b")
+    raw.mkdir()
+    r = c.get("/cockpit/tasks", headers={**SHARED, "X-Lee-Workspace": str(raw.resolve())})
+    assert r.status_code == 200 and r.json()["workspace"] == str(raw.resolve())
+
+
+def test_chat_tui_daemon_headers_are_ascii(tmp_path):
+    from types import SimpleNamespace
+
+    from hester.daemon.tui.handlers.message_processor import MessageProcessor
+
+    d = tmp_path / "Développement"
+    d.mkdir()
+    mp = MessageProcessor.__new__(MessageProcessor)
+    mp.runner = SimpleNamespace(working_directory=str(d))
+    headers = mp._daemon_headers()
+    headers["X-Lee-Workspace"].encode("ascii")
+    assert ws_mod.workspace_header_candidates(headers["X-Lee-Workspace"])[0] == str(d)

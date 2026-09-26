@@ -142,15 +142,29 @@ class BusyIndex:
         return set(self.intervals)
 
 
+FOCUS_MODE_RACE = timedelta(seconds=2)
+
+
 def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[str, Any]]:
     """tab.focus intervals per window: until the next tab.focus or window.focus false.
 
     ``cockpit.mode`` to ``cockpit`` also ends the interval (the overlay covers
     the tabs); the next one starts at the first tab.focus after ``workbench``.
+    Lee logs tab.focus and cockpit.mode in either order when one action both
+    activates a tab and leaves the Cockpit (⌘1-9, Hester opening a file), so a
+    tab.focus seen inside the Cockpit at most ``FOCUS_MODE_RACE`` before
+    ``workbench`` opens its interval there.
     """
     out: List[Dict[str, Any]] = []
     open_by_window: Dict[Any, Dict[str, Any]] = {}
     in_cockpit: Set[Any] = set()
+    skipped: Dict[Any, Dict[str, Any]] = {}
+
+    def interval(window: Any, d: Dict[str, Any], ts: datetime) -> Dict[str, Any]:
+        return {
+            "window_id": window, "tab_id": d.get("tab_id"), "pty_id": d.get("pty_id"),
+            "tab_type": d.get("tab_type"), "file_path": d.get("file_path"), "start": ts,
+        }
 
     def close(window: Any, ts: datetime) -> None:
         cur = open_by_window.pop(window, None)
@@ -166,20 +180,23 @@ def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[st
             if to == "cockpit":
                 close(window, ev["_ts"])
                 in_cockpit.add(window)
+                skipped.pop(window, None)
             elif to == "workbench":
                 in_cockpit.discard(window)
+                last = skipped.pop(window, None)
+                if last is not None and window not in open_by_window and ev["_ts"] - last["_ts"] <= FOCUS_MODE_RACE:
+                    open_by_window[window] = interval(window, last, ev["_ts"])
             continue
         if t == "tab.focus":
             close(window, ev["_ts"])
             if window in in_cockpit:
+                skipped[window] = {**_data(ev), "_ts": ev["_ts"]}
                 continue
-            d = _data(ev)
-            open_by_window[window] = {
-                "window_id": window, "tab_id": d.get("tab_id"), "pty_id": d.get("pty_id"),
-                "tab_type": d.get("tab_type"), "file_path": d.get("file_path"), "start": ev["_ts"],
-            }
+            skipped.pop(window, None)
+            open_by_window[window] = interval(window, _data(ev), ev["_ts"])
         elif t == "window.focus" and _data(ev).get("focused") is False:
             close(window, ev["_ts"])
+            skipped.pop(window, None)
         elif t == "app.quit":
             for w in list(open_by_window):
                 close(w, ev["_ts"])

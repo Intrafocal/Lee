@@ -43,6 +43,7 @@ from ..shared.workspace import (
     get_current_workspace,
     request_workspace,
     set_current_workspace,
+    workspace_header_candidates,
     workspace_id,
 )
 from .cockpit.follower import EventFollower
@@ -744,12 +745,19 @@ def _auth_is_disabled() -> bool:
 async def _call_as_user(request: Request, call_next, principal: Dict[str, Any]):
     """Run the request with its principal, its workspace and a `user` model-call trigger (C2 telemetry)."""
     request.state.principal = principal
-    raw_ws = request.query_params.get("workspace") or request.headers.get("x-lee-workspace")
+    query_ws = request.query_params.get("workspace")
+    header_ws = request.headers.get("x-lee-workspace")
+    # The header is percent-encoded for non-ASCII paths; the query is already decoded.
+    candidates = [query_ws] if query_ws else (workspace_header_candidates(header_ws) if header_ws else [])
     scoped = None
-    if raw_ws:
-        try:
-            scoped = validate_workspace(raw_ws)
-        except WorkspaceError:
+    if candidates:
+        for raw_ws in candidates:
+            try:
+                scoped = validate_workspace(raw_ws)
+                break
+            except WorkspaceError:
+                continue
+        if scoped is None:
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "error": "workspace must be an absolute directory"},

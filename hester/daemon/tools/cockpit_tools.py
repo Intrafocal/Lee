@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from ...shared.auth import auth_headers
-from ...shared.workspace import get_current_workspace
+from ...shared.workspace import encode_workspace_header, get_current_workspace
 
 logger = logging.getLogger("hester.tools.cockpit")
 
@@ -50,7 +50,7 @@ async def lee_command(
             resp = await client.post(
                 f"{_lee_url()}/command",
                 json={"domain": domain, "action": action, "params": params},
-                headers=auth_headers({"X-Lee-Workspace": workspace}),
+                headers=auth_headers({"X-Lee-Workspace": encode_workspace_header(workspace)}),
             )
     except httpx.ConnectError:
         return {"error": "Cannot connect to Lee. Is it running?"}

@@ -173,3 +173,28 @@ def test_cli_prints_v3_metrics(tmp_path, events_dir):
     assert result.exit_code == 0, result.output
     assert "attributed_agent_time" in result.output and "nudge_acceptance" in result.output
     assert "formula v3" in result.output
+
+
+def test_peek_counted_when_tab_focus_is_logged_before_leaving_the_cockpit(tmp_path, events_dir):
+    E = make_event
+    agent = {"tab_id": 3, "tab_type": "terminal", "pty_id": 7, "label": "Claude"}
+    editor = {"tab_id": 1, "tab_type": "editor", "file_path": "/ws/a.py", "label": "a.py"}
+    write_events(events_dir, [
+        E("agent.prompt", at(1), {"session_id": "s1", "pty_id": 7}),
+        E("cockpit.mode", at(2), {"from": "workbench", "to": "cockpit", "reason": "hotkey"}, window_id=1),
+        # ⌘3 from the Cockpit: main logs tab.focus a moment before the renderer logs workbench
+        E("tab.focus", at(3), agent, window_id=1),
+        E("cockpit.mode", at(3) + timedelta(milliseconds=150), {"from": "cockpit", "to": "workbench", "reason": "open_tab"}, window_id=1),
+        E("tab.focus", at(3.5), editor, window_id=1),
+        E("agent.turn_end", at(20), {"session_id": "s1", "pty_id": 7, "busy_ms": 1140000}),
+    ])
+    rec = metrics.run(T0, at(hours=1), events_dir=events_dir, now=at(hours=2))
+    assert rec["metrics"]["peeks"] == 1
+    iv = metrics.focus_intervals([
+        {**e, "_ts": datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))} for e in [
+            E("cockpit.mode", at(2), {"to": "cockpit"}, window_id=1),
+            E("tab.focus", at(3), agent, window_id=1),
+            E("cockpit.mode", at(4), {"to": "workbench"}, window_id=1),
+        ]
+    ], at(5))
+    assert iv == [], "a tab.focus long before leaving the Cockpit is not an interval"

@@ -290,3 +290,102 @@ def test_task_linked_over_http_is_not_duplicated(env):
     tasks = env.tasks()
     assert list(tasks) == ["task-55555555"]
     assert tasks["task-55555555"]["busy_ms"] == 50 and tasks["task-55555555"]["title"] == "Assigned by hand"
+
+
+def test_failed_apply_replays_the_batch(env, monkeypatch):
+    E = env.ev
+    env.write(
+        E("agent.session_start", 0, {"session_id": "sb", "pty_id": 3, "cwd": str(env.b)}, workspace="B"),
+        E("agent.prompt", 0.1, {"session_id": "sb", "pty_id": 3}, workspace="B"),
+        E("agent.session_start", 0.2, {"session_id": "sa", "pty_id": 4, "cwd": str(env.a)}),
+        E("agent.prompt", 0.3, {"session_id": "sa", "pty_id": 4}),
+    )
+    f = env.follower()
+    real_save = CockpitTaskStore.save
+    broken = {"on": True}
+
+    def save(self, task, *a, **kw):
+        if broken["on"] and self.workspace == env.b:
+            raise PermissionError("read-only checkout")
+        return real_save(self, task, *a, **kw)
+
+    monkeypatch.setattr(CockpitTaskStore, "save", save)
+    tick(f)
+    assert len(env.tasks()) == 1, "workspace A is applied even though B failed"
+    assert env.tasks(env.b) == {}
+    broken["on"] = False
+    tick(f)
+    assert len(env.tasks(env.b)) == 1, "B's events were replayed, not skipped"
+    assert len(env.tasks()) == 1, "A's replay is de-duplicated"
+
+
+def test_failing_workspace_gives_up_after_retries(env, monkeypatch):
+    from hester.daemon.cockpit import follower as fmod
+
+    E = env.ev
+    env.write(E("agent.session_start", 0, {"session_id": "sb", "pty_id": 3, "cwd": str(env.b)}, workspace="B"),
+              E("agent.prompt", 0.1, {"session_id": "sb", "pty_id": 3}, workspace="B"))
+    f = env.follower()
+
+    def save(self, task, *a, **kw):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(CockpitTaskStore, "save", save)
+    for _ in range(fmod.MAX_APPLY_RETRIES - 1):
+        tick(f)
+        assert f._cursor is None or not env.state.exists()
+    tick(f)
+    assert env.state.exists() and json.loads(env.state.read_text())["cursor"] is not None
+
+
+def test_slow_relay_launch_folds_the_automatic_task(env):
+    E = env.ev
+    env.write(
+        E("agent.session_start", 0, {"session_id": "s1", "pty_id": 5, "cwd": str(env.a)}),
+        E("agent.prompt", 0.1, {"session_id": "s1", "pty_id": 5}),
+        E("task.launch", 0.2, {"task_id": "task-abc12345", "pty_id": 5, "session_id": "s1", "provider": "claude",
+                               "lead": "delegate", "kind": "bug", "confirmed": True, "origin_kind": "launcher"}),
+        E("agent.turn_end", 1, {"session_id": "s1", "pty_id": 5, "busy_ms": 5000,
+                                "lee_status": {"status": "done", "summary": "Fixed"}}),
+    )
+    f = env.follower()
+    tick(f)
+    tasks = env.tasks()
+    assert list(tasks) == ["task-abc12345"], "no duplicate automatic task"
+    t = tasks["task-abc12345"]
+    assert t["busy_ms"] == 5000 and t["turns"] == 1 and t["status"] == "review" and t["confirmed"] is True
+    assert t["sessions"] == ["s1"]
+    # the spooled relay lands afterwards and merges into it without undoing the follower's status
+    t, created = CockpitTaskStore(env.a).upsert({"id": "task-abc12345", "title": "Fix bug", "status": "running",
+                                                 "agent": {"provider": "claude", "pty_id": 5, "session_id": "s1"}})
+    assert not created and t["title"] == "Fix bug" and t["status"] == "review" and t["busy_ms"] == 5000
+
+
+def test_stale_pty_from_before_a_lee_restart_is_not_matched(env):
+    E = env.ev
+    env.write(
+        E("checkin.result", 0, {"ok": True, "pty_id": 5, "checkin_id": "c1", "summary": "Old work",
+                                "lee_status": {"status": "in-progress", "summary": "Old work"}}),
+    )
+    f = env.follower()
+    tick(f)
+    (old_id,) = env.tasks()
+    env.write(
+        E("app.start", 10, {"version": "x", "pid": 1}, workspace=None),
+        E("checkin.result", 11, {"ok": True, "pty_id": 5, "checkin_id": "c2", "summary": "New work",
+                                 "lee_status": {"status": "in-progress", "summary": "New work"}}),
+    )
+    tick(f)
+    tasks = env.tasks()
+    assert len(tasks) == 2 and tasks[old_id]["summary"] == "Old work"
+    (new_id,) = set(tasks) - {old_id}
+    assert tasks[new_id]["summary"] == "New work"
+    # within the same Lee run the new task keeps matching by pty
+    env.write(E("checkin.result", 12, {"ok": True, "pty_id": 5, "checkin_id": "c3", "summary": "More",
+                                       "lee_status": {"status": "in-progress", "summary": "More"}}))
+    tick(f)
+    assert len(env.tasks()) == 2 and env.tasks()[new_id]["summary"] == "More"
+    # the boot survives a restart of the follower (state file)
+    f2 = env.follower()
+    f2._load_state()
+    assert f2._boots
