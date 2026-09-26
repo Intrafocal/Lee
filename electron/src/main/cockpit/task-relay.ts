@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { TaskAgentRef, TaskKind, TaskLead, TaskOrigin, TaskStatus } from '../../shared/cockpit';
+import { encodeWorkspaceHeader, type TaskAgentRef, type TaskKind, type TaskLead, type TaskOrigin, type TaskStatus } from '../../shared/cockpit';
 
 const RETRY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 5000;
@@ -147,7 +147,7 @@ export class TaskRelay {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
-          'X-Lee-Workspace': rec.workspace,
+          'X-Lee-Workspace': encodeWorkspaceHeader(rec.workspace),
         },
         body: JSON.stringify(rec),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),

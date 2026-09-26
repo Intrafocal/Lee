@@ -7,7 +7,7 @@
  */
 
 import { getApiToken } from './hesterAuth';
-import type { CockpitTask, TaskKind, TaskLead, TaskOrigin, TaskStatus } from '../../shared/cockpit';
+import { encodeWorkspaceHeader, type CockpitTask, type TaskKind, type TaskLead, type TaskOrigin, type TaskStatus } from '../../shared/cockpit';
 import type { HesterTaskEvent } from './cockpitModel';
 import type { DigestWin } from './hesterCopilot';
 
@@ -89,7 +89,7 @@ export interface TaskCreate {
 async function call<T>(workspace: string, method: string, path: string, body?: unknown): Promise<HesterResult<T>> {
   const sep = path.includes('?') ? '&' : '?';
   const url = `${HESTER_DAEMON}${path}${sep}workspace=${encodeURIComponent(workspace)}`;
-  const headers: Record<string, string> = { 'X-Lee-Workspace': workspace };
+  const headers: Record<string, string> = { 'X-Lee-Workspace': encodeWorkspaceHeader(workspace) };
   try {
     const token = await getApiToken();
     if (token) headers.Authorization = `Bearer ${token}`;

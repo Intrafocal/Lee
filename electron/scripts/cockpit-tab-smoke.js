@@ -228,6 +228,13 @@ async function main() {
     assert.deepStrictEqual(rt.list('/elsewhere'), []);
   });
 
+  await check('X-Lee-Workspace: only % and non-ASCII are percent-encoded (matches Hester)', () => {
+    const { encodeWorkspaceHeader } = require(path.join(dist, '..', 'shared', 'cockpit.js'));
+    assert.strictEqual(encodeWorkspaceHeader('/Users/me/My Project'), '/Users/me/My Project');
+    assert.strictEqual(encodeWorkspaceHeader('/tmp/caf\u00e9 100%'), '/tmp/caf%C3%A9 100%25');
+    assert.strictEqual(encodeWorkspaceHeader('/w/\u30d7\ud83d\ude00'), '/w/%E3%83%97%F0%9F%98%80');
+  });
+
   await check('runtime: Hester chat and DevOps tabs are own tabs, not agents', () => {
     const h2 = new FakePty();
     const rt2 = new TabRuntimeImpl(h2, { now: () => clock });

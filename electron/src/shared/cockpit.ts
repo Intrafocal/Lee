@@ -704,3 +704,20 @@ export interface CockpitAPI {
     learnTool: (info: { signature: string; tool: string; preview: string }) => void;
   };
 }
+
+/**
+ * The `X-Lee-Workspace` header value for a workspace path. Header values must
+ * be ByteStrings, so '%' and everything outside printable ASCII is
+ * percent-encoded (UTF-8); printable ASCII paths, spaces included, pass
+ * unchanged. Mirrors hester/shared/workspace.py encode_workspace_header();
+ * the daemon tries the decoded value first, then the raw one.
+ */
+export function encodeWorkspaceHeader(workspace: string): string {
+  return workspace.replace(/%|[^\x20-\x7E]/gu, (ch) => {
+    try {
+      return encodeURIComponent(ch);
+    } catch {
+      return '%EF%BF%BD'; // lone surrogate: U+FFFD, as Python's quote would fail on it anyway
+    }
+  });
+}
