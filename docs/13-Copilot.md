@@ -360,25 +360,31 @@ The two devices share one data model (the attention queue, Someday, the digest) 
 
 Per workspace. The Cockpit answers three questions: **Where are we heading?** (goals), **What's in flight?** (tasks, workstreams, explorations, operations, tabs), **What needs me?** (approvals, decisions, failures, drift).
 
+*Revised 2026-09-26.* The right rail is gone: Hester lives in a **Copilot** section, first in the nav, so the center keeps the full width.
+
 ```
-┌ tabs ────────────────────────────────────────────────────────────────┐
-├ NAV ─────┬ SECTION ─────────────────────── [+Task][+Explore][Run ▾] ┬ HESTER ─────┤
-│ Feed   3 │                                                          │ since you   │
-│ Tasks  2 │   selected section                                       │ left…       │
-│ Goals  1 │                                                          │ about: X    │
-│ Ops      │                                                          │ proposals   │
-│ Explore  │                                                          │             │
-│ Tabs   6 │                                                          │ [ask…]      │
-│ History  │                                                          │             │
-│ PINNED   │                                                          │             │
-├──────────┴──────────────────────────────────────────────────────────┴─────────────┤
-│ status bar: ambient Hester line · lint count · needs-you pill (§9)                 │
-└────────────────────────────────────────────────────────────────────────────────────┘
+┌ tabs ──────────────────────────────────────────────────────────────────────────┐
+├ NAV ───────┬ SECTION ─────────────────────────── [+Task][+Explore][Run ▾] ────┤
+│ Copilot  • │                                                                  │
+│ Feed     3 │   agent tiles (wrap; collapsible)                                │
+│ Tasks    2 │   ──────────────────────────────                                 │
+│ Ops        │   selected section                                               │
+│ Files      │   (Copilot: Ask Hester · since you left… · away summary ·        │
+│ Someday  4 │    work lint · weekly retro · copilot mode)                      │
+│ Explore    │                                                                  │
+│ Tabs     6 │                                                                  │
+│ History    │                                                                  │
+├────────────┴──────────────────────────────────────────────────────────────────┤
+│ your tabs (drawer)                                                             │
+├────────────────────────────────────────────────────────────────────────────────┤
+│ status bar: ambient Hester line · lint count · needs-you pill (§9)             │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Left nav:** Feed, the four categories, Tabs and History, each with a badge (ember when something in it needs you). Below them, **Pinned** items (a workstream, an exploration) for direct jumps.
+- **Left nav**, in this order, number keys `1`–`9`: **Copilot**, Feed, Tasks, Ops, **Files**, Someday, **Explore**, Tabs, History. Each has a badge: ember when something in it needs you, a neutral count otherwise. Copilot shows only a neutral dot when a fresh brief is waiting after an absence (never ember, C2); Someday is always a neutral count (old untriaged ideas don't need you). There is no Goals section yet (§7.3). Below them, **Pinned** items (a workstream, an exploration) for direct jumps (later).
+- **Copilot** is always present and is where you invoke Hester in steward mode and, later, see copilot mode (§8, §11): Ask Hester (about the last item you selected), the "since you left…" digest, the away summary, a work-lint summary, the weekly retro when due, and copilot mode's status (an empty state until Part IV is built). The default landing section stays Feed.
+- **Files** is a keyboard-navigable workspace file browser (the Workbench file tree's data sources); opening a file switches to the Workbench and opens it the way the Workbench does.
 - **Center:** the selected section, with a title, a one-line summary, and the **launch buttons** top right.
-- **Right rail:** embedded Hester (§8).
 - **Launch buttons:** `+ Task`, `+ Explore`, and `Run ▾` (operations menu). Goals are defined less often and are reached from the Goals section. A single `⌘N` opens the Launcher (mockup row 3). You type what you want and press **Enter**: it launches immediately. Placement is **deterministic** (kind from the button or a prefix, lead defaults to `delegate`, goal links only if you add them), and nothing waits on a model. Afterwards, a **suggestion** chip offers Hester's view (goals it might serve, a better lead, starting branches) on demand. Only new work with no goal and no urgency gets the one-line Q4 note (§2.2). You can also mark anything as **play** or **I'll do this myself** (§2.3), and neither is pushed back on. Launching works offline (C1).
 
 ## 7. Sections
@@ -389,7 +395,7 @@ A merged stream across all categories. Newest first, with needs-you items pinned
 
 Item kinds: `approval` (an agent waiting on a permission prompt), `blocker` (an agent reported a blocker, §4.1), `decision` (an exploration or workstream blocked on a choice), `failure` (an operation or test run failed), `metric` (a goal metric moved), `lint` (a work-lint diagnostic, §10), `proposal` (Hester suggests an action), `event` (commit, task closed, operation finished), `prepared` (something copilot mode made while you were away, §11).
 
-Every item has at most three inline actions and can be the "about" context for the Hester rail (§8.3).
+Every item has at most three inline actions and can be the "about" context for Ask Hester in the Copilot section (§8.3).
 
 ### 7.2 Tasks
 
@@ -534,8 +540,15 @@ Model aliases and flag names come from `claude --help` (2.1.282: `--model` takes
 
 ### 7.5 Explore (open ended)
 
-The Library, made durable:
-- Sessions are **persisted to disk** (the same file-first approach as workstreams) instead of Redis with a 2 h TTL.
+Someday is quick idea capture; Explore is for deeper dives.
+
+**Now (v-now, decided 2026-09-26: section + persistence only):**
+- Explorations are **persisted to disk**, one markdown file each in the workspace's gitignored `.hester/explore/<id>.md` (frontmatter, a Seed and a Log), file-first like the Cockpit task store, instead of Redis with a 2 h TTL.
+- The **Explore** section (right after Someday) lists them (title, last touched, exchanges, archived), `+ Explore` (header or section) creates one, and **Dive in / Continue** opens a Hester chat tab on the session `explore-<id>`, seeded from the file. Every finished turn there is appended to the file's Log, so the file outlives the chat session and a later dive re-seeds from it. Explorations can be archived.
+- **Promote → Explore** on a Someday item creates an exploration seeded from the idea.
+- The Library pane's tree sessions are unchanged for now (still Redis).
+
+**Later:**
 - The node tree gains **decision** and **spike** nodes. Pruning a branch records a decision; a reason is optional and can be added later. A spike runs an agent in a git worktree as a task with `delegate` lead and a timebox, and its summary and diff come back as an evidence node.
 - Promote actions: to Goal (seeds a GOALS.md draft), to Workstream, to Task. Promotion carries the tree's decisions and evidence, not a transcript dump.
 - An exploration can be **archived as knowledge**: a summary note kept with the workspace, which Hester can draw on later.
@@ -556,9 +569,11 @@ Commits and closed items, each showing its goal impact where known ("G1 +180 ms"
 
 ## 8. Hester in the Cockpit
 
+*Revised 2026-09-26:* "the rail" below now means the **Copilot** nav section (§6.0); the surface names (`rail-ask`, `rail-steer`) are kept.
+
 ### 8.1 Digest and "What next?"
 
-The top of the rail has two parts, one per tier (§1.3):
+The top of the Copilot section has two parts, one per tier (§1.3):
 
 - **Digest** (preparation, automatic): a factual "since you left" list that leads with **progress** (what shipped, what got decided, which goals moved), then what changed, what's waiting, and Q2 candidates. It's assembled deterministically from the Cockpit model; after a copilot-mode period it also includes the local-model recaps prepared while you were idle (§11.3). It recommends nothing. It regenerates when you return after being idle and on a slow timer, and its top line goes to the status bar as an ambient message. Every line links to its item.
 - **What next?** (thinking, on demand): a button that asks the steward to read the digest and the Cockpit model and recommend where to spend the next stretch of time, with evidence.
@@ -577,7 +592,7 @@ Accepting a proposal is logged, and prunes and choices become decision records.
 
 ### 8.3 Context selection
 
-Selecting any item (a feed card, a task, a goal, a tile, a lint diagnostic) sets the rail's **about:** context. Questions typed in the rail are answered about that item, with Hester given its full record, linked tabs and telemetry.
+Selecting any item (a feed card, a task, a goal, a tile, a lint diagnostic) sets the **about:** context for Ask Hester in the Copilot section; it survives switching to Copilot, and can be cleared there. Questions asked there are answered about that item, with Hester given its full record, linked tabs and telemetry.
 
 ## 9. Status bar
 

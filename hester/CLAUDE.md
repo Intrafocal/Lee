@@ -529,7 +529,7 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/sessions` | List active sessions |
 | POST | `/someday` | Capture an idea into `<workspace>/.hester/someday/` |
 | GET | `/someday` | List Someday items (`?workspace=&status=open\|all`) |
-| POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`) |
+| POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`; `to: task` / `to: explore` also creates one) |
 | GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
 | GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
 | GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
@@ -537,6 +537,7 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
 | GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote` |
 | GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks + readings, operation readings |
+| GET/POST/PATCH | `/cockpit/explorations[/{id}]` | Explorations in `<ws>/.hester/explore/`; `/{id}/open` seeds the Hester chat session `explore-<id>`, whose turns are written back to the file |
 
 Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
 

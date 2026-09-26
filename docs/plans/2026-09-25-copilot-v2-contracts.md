@@ -2850,3 +2850,34 @@ agents:
 ```
 
 Files v2 creates: `~/.lee/shell/**`, `~/.lee/spool/tasks.jsonl`, `~/.lee/ops/<wsid>/{state.json,<op>.last.log}`, `~/.lee/cockpit/nudges.json`, `~/.lee/lint/*` (machine-wide diagnostics), `<ws>/.lee/operations.yaml`, `<ws>/.hester/cockpit/tasks/*.md`, `<ws>/.hester/lint/{outcomes.jsonl,suppressions.json,rules.json}`, `<ws>/.hester/goals/metrics.jsonl` (reading lines), `~/.hester/cockpit/follower.json`, and on a fix click `<ws>/.claude/settings.local.json`.
+
+---
+
+## Addendum (2026-09-26): Copilot section, Files, Explore
+
+Supersedes the rail parts of §3.4 and §4.7 and the section list in package C. Spec: `docs/13-Copilot.md` §6.0, §7.5, §8.
+
+**Renderer (package C).** `CockpitRail.tsx` is removed. Nav order (`SECTIONS` in `cockpitModel.ts`, number keys `1`–`9`): `copilot`, `feed`, `tasks`, `ops`, `files`, `someday`, `explore`, `tabs`, `history`; `DEFAULT_SECTION` stays `feed`.
+- `sections/CopilotSection.tsx`: Ask Hester (palette pre-filled, not submitted; "about:" is the last selected tile or row, kept across the section switch), the digest (`GET /copilot/digest`, unchanged), the open `summary` attention item, a read-only lint summary (`window.lee.cockpit.lint.list/onChange`; it never reports `shown`), `RetroCard` when `retro.due`, and a copilot-mode empty state. Badge: `copilotBadge({returnNonce, seenNonce})` returns `{count: 0, ember: false, dot}`, where `dot` means a return happened since you last opened Copilot. `SectionBadge` gains optional `dot`.
+- `sections/FilesSection.tsx`: `window.lee.fs.readdir` plus `watchDir`/`unwatchDir`/`onDirChanged`, flattened by the pure `flattenFileTree()`; Enter opens a file through the new `CockpitHost` prop `onOpenFile` (App's `handleFileOpen`), then applies `open_tab`.
+- `sections/ExploreSection.tsx` and the header's `+ Explore` (focuses the section's new-exploration field). "Dive in" calls `POST …/open`, then the new `CockpitHost` prop `onOpenHesterSession(session_id, label)` (App's `handleOpenHesterTab`, which now takes an optional label, records `hesterSessionId` on the tab and refocuses an open center tab for the same session), then applies `open_tab`.
+- Someday: "Explore" becomes "Promote → Explore" (`triage {action: 'explore', to: 'explore'}`); the badge is `somedayBadge()`, a neutral open count, never ember.
+
+**Storage (package E).** `<workspace>/.hester/explore/<id>.md` (file 0600, dir 0700; `.hester/` is gitignored), id `exp-<8 hex>`. YAML frontmatter: `id, workspace, title, status (active|archived), seed, origin {kind: cockpit|someday|hester, ref}, session_id (explore-<id>), turns, created_at, updated_at, last_touched_at, archived_at, version`. Body: `# <title>`, `## Seed`, `## Log` with `### You · <ts>` / `### Hester · <ts>` entries appended per turn (each clipped to 8000 chars). `hester/daemon/cockpit/explorations.py` (`ExplorationStore`, `ctx.explorations()` on `WorkspaceContext`). The Library's Redis tree sessions are untouched.
+
+**Routes (Hester :9000).** Same conventions as §6.3/§9.8: bearer token, workspace from `?workspace=` or percent-encoded `X-Lee-Workspace` (a body `workspace` must agree), copilot envelope `{success, data, workspace, workspace_id}`, 400 on bad input or id, 404 on unknown id.
+
+| Method | Path | Body / query | Data |
+|---|---|---|---|
+| GET | `/cockpit/explorations` | `?status=active\|archived\|all` (default `active`), `?limit=` | `Exploration[]`, newest `last_touched_at` first |
+| POST | `/cockpit/explorations` | `{title?, seed?, origin?}` (one of title/seed required; title defaults to the seed's plain first sentence) | `Exploration` (201) |
+| GET | `/cockpit/explorations/{id}` | | `Exploration` plus `body` (the markdown) |
+| PATCH | `/cockpit/explorations/{id}` | `{title?, status?: active\|archived}` | `Exploration` |
+| POST | `/cockpit/explorations/{id}/open` | `{}` | `{exploration, session_id, seeded}`; touches the file and, if the chat session `explore-<id>` doesn't exist, creates it with a system message holding the file (log tail ≤ 12 000 chars) and a visible opening assistant message |
+| POST | `/someday/{id}/triage` | now also `{action: 'explore', to: 'explore'}` | `{item, exploration}`; the item's triage note is `explore:<exp id>` |
+
+**Write-back.** `HesterDaemonAgent.process_context` calls `record_session_turn(session_id, working_dir, message, response)` after saving a turn. For `explore-<id>` sessions it appends the exchange to the file (workspace from the `/open` call, else the chat's working directory if it holds that file) and never raises. `/context/continue` turns are not written back.
+
+**Fixed on the way.** `POST /library/sessions/{id}/promote-to-workstream` called the nonexistent `manager.get_session`; it now awaits `manager.get`.
+
+**Later (not in this addendum):** spikes, decision nodes, archive as knowledge, promote an exploration to goal/workstream/task, Pinned explorations, an Explore badge count.
