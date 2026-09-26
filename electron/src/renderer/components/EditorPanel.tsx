@@ -12,8 +12,8 @@
 
 import React, { useEffect, useCallback, useRef, useMemo } from 'react';
 import { Icon, HesterGlyph } from './Icon';
-import { EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine, Decoration, DecorationSet } from '@codemirror/view';
+import { Annotation, EditorState, Extension, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, ViewUpdate, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, rectangularSelection, crosshairCursor, highlightActiveLine, Decoration, DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
@@ -37,6 +37,9 @@ import { cpp } from '@codemirror/lang-cpp';
 import { MarkdownPreview } from './MarkdownPreview';
 
 const lee = window.lee;
+
+/** Marks transactions that mirror an external fileContent prop into the view. */
+const externalSync = Annotation.define<boolean>();
 
 // --- Agent highlight decoration ---
 const addHighlight = StateEffect.define<{ from: number; to: number }[]>();
@@ -155,8 +158,11 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   const editorRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const contextUpdateTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastExternalContentRef = useRef<string | undefined>(fileContent);
-  const isInternalChangeRef = useRef<boolean>(false);
+  // The content the view and App last agreed on; anything else arriving via
+  // props is an external change.
+  const lastSyncedContentRef = useRef<string>(fileContent || '');
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   // Check if current file is markdown
   const isMarkdown = useMemo(() => {
@@ -231,14 +237,23 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }, 100);
   }, [pushEditorContext]);
 
+  // Callbacks are read through refs so the editor's extensions never go stale
+  // and never need rebuilding. App passes inline arrows (new identity every
+  // render); depending on them used to recreate the whole EditorView on
+  // unrelated re-renders, snapping the cursor back to the top of the file.
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
+  const debouncedContextPushRef = useRef(debouncedContextPush);
+  debouncedContextPushRef.current = debouncedContextPush;
+
   // Handle document change
-  const handleDocChange = useCallback(() => {
-    if (!editorViewRef.current || !onContentChange) return;
-    const newContent = editorViewRef.current.state.doc.toString();
-    // Mark this as an internal change so we don't recreate the editor
-    isInternalChangeRef.current = true;
-    onContentChange(newContent);
-  }, [onContentChange]);
+  const handleDocChange = useCallback((update: ViewUpdate) => {
+    // Skip changes we applied ourselves to mirror an external fileContent.
+    if (update.transactions.some(tr => tr.annotation(externalSync))) return;
+    const newContent = update.state.doc.toString();
+    lastSyncedContentRef.current = newContent;
+    onContentChangeRef.current?.(newContent);
+  }, []);
 
   // Create CodeMirror extensions
   const createExtensions = useCallback((path: string): Extension[] => {
@@ -272,10 +287,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
       oneDark,
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
-          handleDocChange();
+          handleDocChange(update);
         }
         if (update.selectionSet || update.docChanged) {
-          debouncedContextPush();
+          debouncedContextPushRef.current();
         }
       }),
       EditorView.theme({
@@ -296,74 +311,58 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         },
       }),
     ];
-  }, [getLanguageExtension, handleDocChange, debouncedContextPush]);
+  }, [getLanguageExtension, handleDocChange]);
 
-  // Create/recreate editor when file changes or preview mode toggles
+  // Create the editor only when the file or preview mode changes. Content
+  // updates are mirrored into the live view by the sync effect below.
   useEffect(() => {
-    if (!editorRef.current || !filePath || previewMode) {
-      // Destroy editor if exists
-      if (editorViewRef.current) {
-        editorViewRef.current.destroy();
-        editorViewRef.current = null;
-      }
-      return;
-    }
+    if (!editorRef.current || !filePath || previewMode) return;
 
-    // If this is an internal change (user typing), don't recreate the editor
-    if (isInternalChangeRef.current) {
-      isInternalChangeRef.current = false;
-      return;
-    }
-
-    // Check if content changed from external source (e.g., initial load, file reload, or switching files)
-    const externalContentChanged = lastExternalContentRef.current !== fileContent;
-    lastExternalContentRef.current = fileContent;
-
-    // If editor exists and external content hasn't changed, don't recreate
-    if (editorViewRef.current && !externalContentChanged) {
-      return;
-    }
-
-    // Destroy existing editor
-    if (editorViewRef.current) {
-      editorViewRef.current.destroy();
-    }
-
-    // Create new editor
-    const state = EditorState.create({
-      doc: fileContent || '',
-      extensions: createExtensions(filePath),
-    });
-
+    const content = fileContent || '';
     const view = new EditorView({
-      state,
+      state: EditorState.create({ doc: content, extensions: createExtensions(filePath) }),
       parent: editorRef.current,
     });
-
     editorViewRef.current = view;
+    lastSyncedContentRef.current = content;
 
-    // Focus editor if tab is active
-    if (active) {
-      view.focus();
-    }
-
-    // Push initial context
-    debouncedContextPush();
+    if (activeRef.current) view.focus();
+    debouncedContextPushRef.current();
 
     return () => {
-      // Don't destroy on cleanup - let the explicit destroy handle it
+      view.destroy();
+      if (editorViewRef.current === view) editorViewRef.current = null;
     };
-  }, [filePath, fileContent, previewMode, active, createExtensions, debouncedContextPush]);
+    // fileContent is deliberately omitted: it seeds the doc, it doesn't own it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, previewMode, createExtensions]);
 
-  // Cleanup on unmount
+  // Mirror genuinely external content changes (reload from disk, Hester
+  // edits routed through App) into the existing view without recreating it,
+  // keeping the cursor where it was (clamped to the new length).
   useEffect(() => {
-    return () => {
-      if (editorViewRef.current) {
-        editorViewRef.current.destroy();
-        editorViewRef.current = null;
-      }
-    };
-  }, []);
+    const view = editorViewRef.current;
+    const content = fileContent || '';
+    if (!view || content === lastSyncedContentRef.current) return;
+    lastSyncedContentRef.current = content;
+    const current = view.state.doc.toString();
+    if (content === current) return;
+
+    const sel = view.state.selection.main;
+    view.dispatch({
+      changes: { from: 0, to: current.length, insert: content },
+      selection: {
+        anchor: Math.min(sel.anchor, content.length),
+        head: Math.min(sel.head, content.length),
+      },
+      annotations: externalSync.of(true),
+    });
+  }, [fileContent]);
+
+  // Focus the editor when its tab becomes active.
+  useEffect(() => {
+    if (active) editorViewRef.current?.focus();
+  }, [active]);
 
   // Wire IPC editor commands from Hester / agents.
   //
