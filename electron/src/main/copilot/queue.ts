@@ -451,12 +451,14 @@ export class CopilotQueue {
     const cfg = getCopilotConfig();
     const ptyId = this.sessions.resolvePty(sessionId, headerPty);
     const s = this.sessions.ensure(sessionId, ptyId, h.cwd, now);
+    // Pi tabs post through Lee's Pi extension (v2 §5.6b); only a PTY spawned as Pi can claim it.
+    if (headerPty != null && this.ptyManager.get(headerPty)?.pi) s.provider = 'pi';
     // A hidden prewarmed Claude has no tab: keep its session (a tab adopts it
     // later) and answer SessionStart, but open no items for it.
     if (ptyId != null && h.event !== 'SessionStart' && this.ptyManager.isWarmPty(ptyId)) return { status: 204, body: null };
     const src = this.sourceFor(s, ptyId, h.cwd, parseId(headers.windowId));
     const key = sourceKey(src);
-    const agent: Actor = { kind: 'agent', provider: 'claude', session_id: s.session_id, pty_id: ptyId };
+    const agent: Actor = { kind: 'agent', provider: s.provider, session_id: s.session_id, pty_id: ptyId };
     const ev = (type: LeeEventInput['type'], data: Record<string, unknown>) =>
       this.log({
         type,
@@ -471,7 +473,7 @@ export class CopilotQueue {
 
     switch (h.event) {
       case 'SessionStart': {
-        ev('agent.session_start', { provider: 'claude', ...(h.cwd ? { cwd: h.cwd } : {}), ...(h.source ? { source: h.source } : {}) });
+        ev('agent.session_start', { provider: s.provider, ...(h.cwd ? { cwd: h.cwd } : {}), ...(h.source ? { source: h.source } : {}) });
         if (cfg.hooks.lee_status_hint) return { status: 200, body: LEE_STATUS_HINT };
         return { status: 204, body: null };
       }
@@ -732,7 +734,7 @@ export class CopilotQueue {
       source: 'lee-main',
       workspace: src.workspace,
       window_id: src.window_id,
-      actor: { kind: 'agent', provider: 'claude', session_id: last?.session_id ?? null, pty_id: ptyId },
+      actor: { kind: 'agent', provider: last?.provider ?? 'claude', session_id: last?.session_id ?? null, pty_id: ptyId },
       data: { pty_id: ptyId, code, ...(last ? { session_id: last.session_id } : {}) },
     });
     this.queue.resolveWhere((i) => i.source.pty_id === ptyId && i.kind !== 'summary', 'agent_exit', now);
@@ -792,7 +794,7 @@ export class CopilotQueue {
       source: 'hook',
       workspace: src.workspace,
       window_id: src.window_id,
-      actor: { kind: 'agent', provider: 'claude', session_id: s.session_id, pty_id: src.pty_id },
+      actor: { kind: 'agent', provider: s.provider, session_id: s.session_id, pty_id: src.pty_id },
       data: {
         session_id: s.session_id,
         ...(src.pty_id != null ? { pty_id: src.pty_id } : {}),
