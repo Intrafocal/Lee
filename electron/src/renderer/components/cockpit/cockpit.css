@@ -814,6 +814,39 @@
   margin-left: auto;
 }
 
+/* Icon-only tile actions: the label slides out on hover / keyboard focus. */
+.cockpit-btn.is-reveal {
+  gap: 0;
+  padding: 4px 6px;
+  transition: gap 120ms ease;
+}
+
+.cockpit-btn.is-reveal .cockpit-btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-width 160ms ease, opacity 120ms ease;
+}
+
+.cockpit-btn.is-reveal:is(:hover, :focus-visible, .is-open):not(:disabled) {
+  gap: 4px;
+}
+
+.cockpit-btn.is-reveal:is(:hover, :focus-visible, .is-open):not(:disabled) .cockpit-btn-label {
+  max-width: 240px;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cockpit-btn.is-reveal,
+  .cockpit-btn.is-reveal .cockpit-btn-label {
+    transition: none;
+  }
+}
+
 /* ---------------------------------------------------------------------- */
 /* Sections and rows                                                       */
 /* ---------------------------------------------------------------------- */

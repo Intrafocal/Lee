@@ -10,7 +10,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon } from '../Icon';
+import { Icon, type IconName } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 import { CHECKIN_PROMPT, type CheckinError, type CockpitAPI } from '../../../shared/cockpit';
 import type { TileModel } from '../../lib/cockpitModel';
@@ -42,6 +42,36 @@ const NOTICE_LABEL: Record<string, string> = {
   review: 'review',
   summary: 'summary',
 };
+
+/**
+ * An icon button whose label slides out on hover or keyboard focus (or while
+ * `open`, e.g. Close's second-click confirmation). The label stays the
+ * accessible name either way.
+ */
+const TileAction: React.FC<{
+  icon: IconName;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  className?: string;
+  kbd?: string;
+  open?: boolean;
+}> = ({ icon, label, onClick, disabled, title, className, kbd, open }) => (
+  <button
+    className={`cockpit-btn is-reveal${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`}
+    disabled={disabled}
+    title={title ?? label}
+    aria-label={label}
+    onClick={onClick}
+  >
+    <Icon name={icon} size={12} />
+    <span className="cockpit-btn-label" aria-hidden="true">
+      {label}
+      {kbd && <kbd>{kbd}</kbd>}
+    </span>
+  </button>
+);
 
 export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSelect }) => {
   const [busy, setBusy] = useState(false);
@@ -190,22 +220,17 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
       <div className="cockpit-tile-actions" onClick={(e) => e.stopPropagation()}>
         {tile.approval && (
           <>
-            <button className="cockpit-btn is-primary" disabled={busy} onClick={() => reply('approve')}>
-              <Icon name="check" size={11} /> Approve
-            </button>
-            <button className="cockpit-btn is-danger" disabled={busy} onClick={() => reply('deny')}>
-              <Icon name="close" size={11} /> Deny
-            </button>
+            <TileAction icon="check" label="Approve" className="is-primary" disabled={busy} onClick={() => reply('approve')} />
+            <TileAction icon="close" label="Deny" className="is-danger" disabled={busy} onClick={() => reply('deny')} />
           </>
         )}
         {tile.replyItem && (
-          <button className="cockpit-btn" disabled={busy} onClick={() => ctx.openReply(tile.replyItem as AttentionItem, tile.title)}>
-            <Icon name="send" size={11} /> Reply
-          </button>
+          <TileAction icon="send" label="Reply" disabled={busy} onClick={() => ctx.openReply(tile.replyItem as AttentionItem, tile.title)} />
         )}
         {tile.checkin ? (
-          <button
-            className="cockpit-btn"
+          <TileAction
+            icon="stop"
+            label="Cancel check-in"
             disabled={busy}
             title={tile.checkin.state === 'queued' ? 'Cancel the queued check-in (nothing has been typed)' : 'Stop waiting for the reply'}
             onClick={() => {
@@ -216,58 +241,74 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
                 return r.success ? null : r.error || 'failed';
               });
             }}
-          >
-            <Icon name="close" size={11} /> Cancel check-in
-          </button>
+          />
         ) : (
           tile.canCheckin &&
           !tile.approval && (
-            <button className="cockpit-btn" disabled={busy} title={`Types exactly: ${CHECKIN_PROMPT}`} onClick={() => ctx.openCheckin(tile.ptyId, tile.title)}>
-              <Icon name="chat" size={11} /> Check in
-            </button>
+            <TileAction
+              icon="chat"
+              label="Check in"
+              disabled={busy}
+              title={`Types exactly: ${CHECKIN_PROMPT}`}
+              onClick={() => ctx.openCheckin(tile.ptyId, tile.title)}
+            />
           )
         )}
         {task && !task.confirmed && (
-          <button
-            className="cockpit-btn"
+          <TileAction
+            icon="check"
+            label="Confirm"
             disabled={busy}
+            title="Confirm this task"
             onClick={() => {
               ctx.copilotApi?.logCeremony('confirm', 'task-confirm');
               void taskAct(() => confirmTask(ctx.workspace, task.id));
             }}
-          >
-            Confirm
-          </button>
+          />
         )}
         {task && task.status === 'review' && (
           <>
-            <button className="cockpit-btn" disabled={busy} onClick={() => void taskAct(() => closeTask(ctx.workspace, task.id, { status: 'done', accepted: true }))}>
-              Accept
-            </button>
-            <button className="cockpit-btn" disabled={busy} onClick={() => void taskAct(() => closeTask(ctx.workspace, task.id, { status: 'discarded' }))}>
-              Discard
-            </button>
+            <TileAction
+              icon="check"
+              label="Accept"
+              disabled={busy}
+              title="Accept this task's work"
+              onClick={() => void taskAct(() => closeTask(ctx.workspace, task.id, { status: 'done', accepted: true }))}
+            />
+            <TileAction
+              icon="trash"
+              label="Discard"
+              disabled={busy}
+              title="Discard this task's work"
+              onClick={() => void taskAct(() => closeTask(ctx.workspace, task.id, { status: 'discarded' }))}
+            />
           </>
         )}
-        <button
-          className="cockpit-btn"
+        <TileAction
+          icon="edit"
+          label="Rename"
           disabled={busy}
           title="Rename (⌘E)"
           onClick={() => ctx.openRename({ ptyId: tile.ptyId, taskId: task?.id ?? null, current: tile.title, provider: tile.provider })}
-        >
-          Rename
-        </button>
-        <button
-          className={`cockpit-btn${confirmClose ? ' is-danger' : ''}`}
+        />
+        <TileAction
+          icon="power"
+          label={confirmClose ? 'Agent is working — close anyway?' : 'Close'}
+          className={confirmClose ? 'is-danger' : undefined}
+          open={confirmClose}
           disabled={busy}
           title={tile.working ? 'Close this agent (it is working: asks once more)' : 'Close this agent and its tab'}
           onClick={close}
-        >
-          <Icon name="close" size={11} /> {confirmClose ? 'Agent is working — close anyway?' : 'Close'}
-        </button>
-        <button className="cockpit-btn is-go" disabled={busy} onClick={() => ctx.goInto(tile.ptyId, 'tile')} title="Peek at this agent's terminal (Enter)">
-          <Icon name="arrow-right" size={11} /> Peek <kbd>⏎</kbd>
-        </button>
+        />
+        <TileAction
+          icon="eye"
+          label="Peek"
+          kbd="⏎"
+          className="is-go"
+          disabled={busy}
+          title="Peek at this agent's terminal (Enter)"
+          onClick={() => ctx.goInto(tile.ptyId, 'tile')}
+        />
       </div>
     </div>
   );
