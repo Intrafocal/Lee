@@ -56,24 +56,85 @@ export function agentPtysFromSnapshot(snapshot: AttentionSnapshot | null | undef
   return new Set((snapshot?.agents ?? []).map((a) => a.pty_id));
 }
 
+/** Providers that are the user's own tools, not agents: Hester chat stays outside the wall (user decision 2026-09-25). */
+const OWN_PROVIDERS = new Set(['hester']);
+/** Tab types that are never walled, whatever A or the snapshot report: Hester chat, Hester QA, DevOps. */
+const OWN_TAB_TYPES = new Set(['hester', 'hester-qa', 'devops']);
+
+/** Hester chat and DevOps tabs stay visible like the user's own tabs, even when typed 'agent'. */
+export function isWallExempt(tab: Pick<ModelTab, 'type' | 'provider'>): boolean {
+  return OWN_TAB_TYPES.has(tab.type) || (!!tab.provider && OWN_PROVIDERS.has(tab.provider));
+}
+
+export function isOwnProvider(provider: string | null | undefined): boolean {
+  return !!provider && OWN_PROVIDERS.has(provider);
+}
+
 export function runtimeAgentPtys(tabs: readonly TabRuntimeInfo[] | null | undefined): Set<number> {
-  return new Set((tabs ?? []).filter((t) => t.kind === 'agent').map((t) => t.pty_id));
+  return new Set((tabs ?? []).filter((t) => t.kind === 'agent' && !isOwnProvider(t.provider)).map((t) => t.pty_id));
 }
 
 export function isAgentTab(tab: ModelTab, sets: AgentSets): boolean {
+  if (isWallExempt(tab)) return false;
   if (tab.type === 'agent' || tab.type === 'claude') return true;
   if (tab.ptyId == null) return false;
   return sets.snapshotAgents.has(tab.ptyId) || sets.runtimeAgents.has(tab.ptyId);
 }
 
-/** Workbench strip: own tabs plus the agent terminals you went into. Identity when the Cockpit is disabled. */
+/**
+ * Workbench strip for one dock (center, or a side panel): own tabs plus the
+ * agent terminals you went into. Identity when the Cockpit is disabled.
+ */
 export function stripTabs<T extends ModelTab>(
-  centerTabs: T[],
+  tabs: T[],
   opts: { enabled: boolean; enteredPtys: ReadonlySet<number>; sets: AgentSets },
 ): T[] {
-  if (!opts.enabled) return centerTabs;
-  const out = centerTabs.filter((t) => !isAgentTab(t, opts.sets) || (t.ptyId != null && opts.enteredPtys.has(t.ptyId)));
-  return out.length === centerTabs.length ? centerTabs : out;
+  if (!opts.enabled) return tabs;
+  const out = tabs.filter((t) => !isAgentTab(t, opts.sets) || (t.ptyId != null && opts.enteredPtys.has(t.ptyId)));
+  return out.length === tabs.length ? tabs : out;
+}
+
+/**
+ * Where the active tab of a dock goes when that tab closes or moves away:
+ * the last visible (strip) tab other than it, never a hidden agent.
+ */
+export function fallbackTab<T extends ModelTab>(visible: readonly T[], leavingId: number, pick: 'first' | 'last' = 'last'): T | null {
+  const rest = visible.filter((t) => t.id !== leavingId);
+  if (!rest.length) return null;
+  return pick === 'first' ? rest[0] : rest[rest.length - 1];
+}
+
+/** Tab navigation (⌘1-9, next/prev) walks the strip you can see, not hidden agents. */
+export function stripNeighbor<T extends ModelTab>(strip: readonly T[], activeId: number | null, delta: 1 | -1): T | null {
+  if (strip.length < 2 || activeId == null) return null;
+  const i = strip.findIndex((t) => t.id === activeId);
+  if (i < 0) return delta > 0 ? strip[0] : strip[strip.length - 1];
+  return strip[(i + delta + strip.length) % strip.length];
+}
+
+export interface WallRepairInput {
+  enabled: boolean;
+  mode: LeeMode;
+  isAgent: boolean;
+  entered: boolean;
+  ptyId: number | null;
+  /** The tab was an own tab when last seen active and is an agent now (you ran `claude` in it). */
+  becameAgent: boolean;
+  /** A hold (session restore, create-tab bridge) just ended with this tab active. */
+  holdEnded: boolean;
+}
+
+/**
+ * What to do with an active tab that is an agent you never went into, outside
+ * a user activation: 'enter' it (you started it where you work, contracts §3.6),
+ * 'redirect' to an own tab (it only got active through restore or a background
+ * launch), or nothing.
+ */
+export function wallRepair(input: WallRepairInput): 'enter' | 'redirect' | null {
+  if (!input.enabled || !input.isAgent || input.ptyId == null || input.entered) return null;
+  if (input.becameAgent) return 'enter';
+  if (input.holdEnded && input.mode === 'workbench') return 'redirect';
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -239,10 +300,17 @@ export function tileModel(input: TileInput): TileModel[] {
       ptys.push(id);
     }
   };
+  // Hester chat / DevOps tabs are never tiles, whatever A or the snapshot report about their pty.
+  const exempt = (id: number) => {
+    const t = localTabs.get(id);
+    return !!t && isWallExempt(t);
+  };
   for (const t of input.tabs) if (t.ptyId != null && isAgentTab(t, input.sets)) add(t.ptyId);
-  for (const id of agents.keys()) add(id);
+  for (const [id, a] of agents) if (!exempt(id) && !isOwnProvider(a.provider)) add(id);
   for (const r of input.runtime ?? []) {
-    if (r.kind === 'agent' && r.state.state !== 'exited' && sameWorkspace(r.workspace, workspace)) add(r.pty_id);
+    if (r.kind === 'agent' && r.state.state !== 'exited' && sameWorkspace(r.workspace, workspace) && !exempt(r.pty_id) && !isOwnProvider(r.provider)) {
+      add(r.pty_id);
+    }
   }
 
   const taskByPty = new Map<number, CockpitTask>();
@@ -447,6 +515,8 @@ export type CockpitKeyAction =
 export interface KeyContext {
   /** Focus is in an input, textarea, select or contenteditable. */
   inInput: boolean;
+  /** Focus is on a button or link: Enter and Space activate it, not the Cockpit. */
+  onControl?: boolean;
   meta?: boolean;
   ctrl?: boolean;
   alt?: boolean;
@@ -456,6 +526,7 @@ export interface KeyContext {
 
 export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null {
   if (ctx.inInput || ctx.meta || ctx.ctrl || ctx.alt) return null;
+  if (ctx.onControl && (key === 'Enter' || key === ' ')) return null;
   if (key >= '1' && key <= '6' && key.length === 1) return { kind: 'section', section: SECTIONS[Number(key) - 1] };
   if (ctx.drawer) {
     if (key === 'ArrowLeft' || key === 'h') return { kind: 'drawer-move', delta: -1 };

@@ -13,6 +13,7 @@ import {
   nextMode,
   SECTIONS,
   stripTabs as stripTabsPure,
+  wallRepair,
   type AgentSets,
   type ModelTab,
   type ModeDecision,
@@ -41,6 +42,8 @@ export interface CockpitModeState {
   runtimeAgents: ReadonlySet<number>;
   /** Needs-you Feed count, for the workbench chip. */
   needsCount: number;
+  /** Bumped when a hold() ends, so the wall re-checks the active tabs. */
+  holdEpoch: number;
 }
 
 type Listener = () => void;
@@ -56,14 +59,21 @@ let state: CockpitModeState = {
   selected: null,
   runtimeAgents: new Set(),
   needsCount: 0,
+  holdEpoch: 0,
 };
 
 const listeners = new Set<Listener>();
 let holdUntil = 0;
+let holdTimer: ReturnType<typeof setTimeout> | null = null;
+/** Tab ids whose next activation Lee made, not you (close/dock fallbacks, wall redirects). */
+const quietTabs = new Map<number, number>();
 let sectionWorkspace = '';
 
 /** The part of the state App.tsx depends on; a new object only when one of these changes. */
-export type CockpitWallState = Pick<CockpitModeState, 'enabled' | 'configured' | 'mode' | 'reason' | 'since' | 'enteredPtys' | 'runtimeAgents'>;
+export type CockpitWallState = Pick<
+  CockpitModeState,
+  'enabled' | 'configured' | 'mode' | 'reason' | 'since' | 'enteredPtys' | 'runtimeAgents' | 'holdEpoch'
+>;
 
 function wallOf(s: CockpitModeState): CockpitWallState {
   return {
@@ -74,6 +84,7 @@ function wallOf(s: CockpitModeState): CockpitWallState {
     since: s.since,
     enteredPtys: s.enteredPtys,
     runtimeAgents: s.runtimeAgents,
+    holdEpoch: s.holdEpoch,
   };
 }
 
@@ -87,7 +98,8 @@ function emit(next: Partial<CockpitModeState>): void {
     w.configured !== state.configured ||
     w.mode !== state.mode ||
     w.enteredPtys !== state.enteredPtys ||
-    w.runtimeAgents !== state.runtimeAgents
+    w.runtimeAgents !== state.runtimeAgents ||
+    w.holdEpoch !== state.holdEpoch
   ) {
     wall = wallOf(state);
   }
@@ -222,9 +234,30 @@ export const cockpitModeStore = {
   /** Ignore tab activations for a while (session restore, tabs the create-tab bridge opens). */
   hold(ms: number): void {
     holdUntil = Math.max(holdUntil, Date.now() + ms);
+    if (holdTimer != null) clearTimeout(holdTimer);
+    const fire = () => {
+      holdTimer = null;
+      const left = holdUntil - Date.now();
+      if (left > 0) {
+        holdTimer = setTimeout(fire, left + 10);
+        return;
+      }
+      emit({ holdEpoch: state.holdEpoch + 1 });
+    };
+    holdTimer = setTimeout(fire, holdUntil - Date.now() + 10);
   },
   holding(): boolean {
     return Date.now() < holdUntil;
+  },
+  /** The next activation of this tab is Lee's doing (a fallback after a close), not a go-into or an open. */
+  quiet(tabId: number): void {
+    quietTabs.set(tabId, Date.now() + 1000);
+  },
+  /** Consume a quiet() mark. */
+  takeQuiet(tabId: number): boolean {
+    const until = quietTabs.get(tabId);
+    quietTabs.delete(tabId);
+    return until != null && Date.now() < until;
   },
   /** Apply a nextMode() decision: mode, entered set, tile selection, go_into log. */
   apply(d: ModeDecision | null, goIntoInfo?: { agentState: AgentState | TabRunState; from: GoIntoFrom }): void {
@@ -245,24 +278,41 @@ export function useCockpitModeState(): CockpitModeState {
   return useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.get, cockpitModeStore.get);
 }
 
+export type Dock = 'center' | 'left' | 'right' | 'bottom';
+
 export interface UseCockpitModeOptions {
   workspace: string;
   snapshot: AttentionSnapshot | null;
   activeTabId: number | null;
+  /** Active tabs of the side panels: agents docked there are behind the wall too (user decision 2026-09-25). */
+  sideActiveTabIds?: { left: number | null; right: number | null; bottom: number | null };
   tabs: readonly ModelTab[];
+  /** Make this tab active in its dock (used to move off a hidden agent after a restore). */
+  activate?: (tabId: number) => void;
 }
 
 export interface CockpitModeHandle {
   state: CockpitWallState;
   sets: AgentSets;
-  stripTabs: <T extends ModelTab>(centerTabs: T[]) => T[];
+  /** The tabs of one dock you can see in the workbench (center strip or a side panel). */
+  stripTabs: <T extends ModelTab>(dockTabs: T[]) => T[];
   isAgentTab: (tab: ModelTab) => boolean;
+}
+
+function dockOf(tab: ModelTab): Dock {
+  const d = tab.dockPosition;
+  return d === 'left' || d === 'right' || d === 'bottom' ? d : 'center';
 }
 
 /** Subscribes to the store, wires the automatic transitions (§3.2) and returns the wall helpers. */
 export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
   const s = useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.getWall, cockpitModeStore.getWall);
   const { workspace, snapshot, activeTabId, tabs } = opts;
+  const activeLeft = opts.sideActiveTabIds?.left ?? null;
+  const activeRight = opts.sideActiveTabIds?.right ?? null;
+  const activeBottom = opts.sideActiveTabIds?.bottom ?? null;
+  const activateRef = useRef(opts.activate);
+  activateRef.current = opts.activate;
 
   useEffect(() => {
     if (workspace) cockpitModeStore.useWorkspace(workspace);
@@ -316,13 +366,23 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
 
-  useEffect(() => {
-    if (activeTabId == null) return;
-    const st = cockpitModeStore.get();
-    if (!st.enabled || cockpitModeStore.holding()) return;
-    const tab = tabsRef.current.find((t) => t.id === activeTabId);
-    if (!tab || (tab.dockPosition && tab.dockPosition !== 'center')) return;
+  // Whether each tab was an agent when last seen active (to spot a terminal that becomes one).
+  const agentWhenSeen = useRef(new Map<number, boolean>());
+  // The last own tab you had active per dock, where a wall redirect goes.
+  const lastOwn = useRef(new Map<Dock, number>());
+
+  const onActivated = (tabId: number | null, dock: Dock) => {
+    if (tabId == null) return;
+    const tab = tabsRef.current.find((t) => t.id === tabId);
+    if (!tab || dockOf(tab) !== dock) return;
     const isAgent = isAgentTabPure(tab, setsRef.current);
+    agentWhenSeen.current.set(tab.id, isAgent);
+    if (!isAgent) lastOwn.current.set(dock, tab.id);
+    const quiet = cockpitModeStore.takeQuiet(tab.id);
+    const st = cockpitModeStore.get();
+    if (!st.enabled || quiet || cockpitModeStore.holding()) return;
+    // Side panels never switched modes for own tabs; only their agents go through the wall.
+    if (dock !== 'center' && !isAgent) return;
     const seen = firstSeen.current.get(tab.id) ?? Date.now();
     const isNew = Date.now() - seen < 2000;
     const d = nextMode(st, {
@@ -332,16 +392,73 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
       ptyId: tab.ptyId,
       entered: tab.ptyId != null && st.enteredPtys.has(tab.ptyId),
     });
-    const agent = snapshotRef.current?.agents?.find((a) => a.pty_id === tab.ptyId);
+    const agent = snapshotRef.current?.agents?.find((x) => x.pty_id === tab.ptyId);
     cockpitModeStore.apply(d, { agentState: agent?.state ?? 'unknown', from: 'hotkey' });
-  }, [activeTabId]);
+  };
+  const onActivatedRef = useRef(onActivated);
+  onActivatedRef.current = onActivated;
+
+  useEffect(() => onActivatedRef.current(activeTabId, 'center'), [activeTabId]);
+  useEffect(() => onActivatedRef.current(activeLeft, 'left'), [activeLeft]);
+  useEffect(() => onActivatedRef.current(activeRight, 'right'), [activeRight]);
+  useEffect(() => onActivatedRef.current(activeBottom, 'bottom'), [activeBottom]);
+
+  const activeIdsRef = useRef<Array<[number | null, Dock]>>([]);
+  activeIdsRef.current = [
+    [activeTabId, 'center'],
+    [activeLeft, 'left'],
+    [activeRight, 'right'],
+    [activeBottom, 'bottom'],
+  ];
+
+  // Re-check the active tabs when the agent sets change (a terminal you are
+  // in became an agent) or when a hold ends (session restore, background launch).
+  const lastHoldEpoch = useRef(s.holdEpoch);
+  useEffect(() => {
+    const holdEnded = s.holdEpoch !== lastHoldEpoch.current;
+    lastHoldEpoch.current = s.holdEpoch;
+    const st = cockpitModeStore.get();
+    for (const [id, dock] of activeIdsRef.current) {
+      if (id == null) continue;
+      const tab = tabsRef.current.find((t) => t.id === id);
+      if (!tab || dockOf(tab) !== dock) continue;
+      const isAgent = isAgentTabPure(tab, sets);
+      const was = agentWhenSeen.current.get(tab.id);
+      if (cockpitModeStore.holding()) continue;
+      agentWhenSeen.current.set(tab.id, isAgent);
+      const action = wallRepair({
+        enabled: st.enabled,
+        mode: st.mode,
+        isAgent,
+        entered: tab.ptyId != null && st.enteredPtys.has(tab.ptyId),
+        ptyId: tab.ptyId,
+        becameAgent: was === false && isAgent,
+        holdEnded,
+      });
+      if (action === 'enter' && tab.ptyId != null) {
+        cockpitModeStore.enter(tab.ptyId);
+      } else if (action === 'redirect') {
+        const visible = stripTabsPure(
+          tabsRef.current.filter((t) => dockOf(t) === dock),
+          { enabled: st.enabled, enteredPtys: st.enteredPtys, sets },
+        );
+        const remembered = lastOwn.current.get(dock);
+        const target = visible.find((t) => t.id === remembered) ?? visible[visible.length - 1];
+        if (target && activateRef.current) {
+          cockpitModeStore.quiet(target.id);
+          activateRef.current(target.id);
+        }
+        // No visible tab in that dock: the agent stays hidden.
+      }
+    }
+  }, [sets, s.holdEpoch]);
 
   return useMemo<CockpitModeHandle>(
     () => ({
       state: s,
       sets,
-      stripTabs: <T extends ModelTab>(centerTabs: T[]) =>
-        stripTabsPure(centerTabs, { enabled: s.enabled, enteredPtys: s.enteredPtys, sets }),
+      stripTabs: <T extends ModelTab>(dockTabs: T[]) =>
+        stripTabsPure(dockTabs, { enabled: s.enabled, enteredPtys: s.enteredPtys, sets }),
       isAgentTab: (tab: ModelTab) => isAgentTabPure(tab, sets),
     }),
     [s, sets],

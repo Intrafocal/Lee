@@ -14,6 +14,7 @@ import { CHECKIN_PROMPT, type CheckinError, type CockpitAPI } from '../../../sha
 import type { TileModel } from '../../lib/cockpitModel';
 import { closeTask, confirmTask } from '../../lib/hesterCockpit';
 import type { CockpitCtx } from './CockpitHost';
+import { isControlTarget } from './dom';
 
 interface AgentTileProps {
   ctx: CockpitCtx;
@@ -270,7 +271,8 @@ export const CheckinPopover: React.FC<CheckinPopoverProps> = ({ api, ptyId, labe
         className="cockpit-popover"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') {
+          // Enter on a focused button is that button's click (Cancel must cancel, C3).
+          if (e.key === 'Enter' && !isControlTarget(e.target)) {
             e.preventDefault();
             e.stopPropagation();
             send(unknown);

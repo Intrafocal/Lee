@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../Icon';
 import type { OperationInfo } from '../../../shared/cockpit';
 import type { CockpitCtx } from './CockpitHost';
+import { isControlTarget } from './dom';
 
 export function fillCommand(command: string, params: Record<string, string>): string {
   return command.replace(/\{(\w+)\}/g, (m, name: string) => (params[name] != null && params[name] !== '' ? params[name] : m));
@@ -72,7 +73,8 @@ export const RunOpDialog: React.FC<RunOpDialogProps> = ({ ctx, op, onClose }) =>
         className="cockpit-popover"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
+          // Enter on a focused button is that button's click: Cancel must never run (C3).
+          if (e.key === 'Enter' && !e.shiftKey && !isControlTarget(e.target)) {
             e.preventDefault();
             e.stopPropagation();
             run();
@@ -197,7 +199,7 @@ export const RunMenu: React.FC<{ ctx: CockpitCtx; onClose: () => void }> = ({ ct
             e.preventDefault();
             e.stopPropagation();
             setIndex((i) => Math.max(0, i - 1));
-          } else if (e.key === 'Enter') {
+          } else if (e.key === 'Enter' && !isControlTarget(e.target)) {
             e.preventDefault();
             e.stopPropagation();
             pick(index);
