@@ -304,8 +304,9 @@ export function createFakeCockpitApi(): CockpitAPI {
     },
     checkin: (ptyId): Promise<CheckinResult> => {
       addEvent(`Checked in on ${ptyId} (fake)`, `Would type: ${CHECKIN_PROMPT}`);
-      return Promise.resolve({ success: true, checkin_id: 'chk_fake', lee_status: null, summary: 'Fake check-in: nothing typed.', source: 'screen' });
+      return Promise.resolve({ success: true, checkin_id: 'chk_fake', state: 'sent', source: 'screen' });
     },
+    checkinCancel: () => Promise.resolve({ success: true }),
     launch: (req): Promise<LaunchResult> => {
       addEvent(`Launched (fake): ${req.title || (req.prompt ?? '').slice(0, 60) || 'Task'}`, `lead ${req.lead ?? 'delegate'} · nothing was started`);
       return Promise.resolve({ success: true, task_id: `task-${Math.random().toString(16).slice(2, 10)}`, pty_id: null, relayed: false });

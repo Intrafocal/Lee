@@ -175,6 +175,7 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
   ipcMain.handle(COCKPIT_IPC.checkin, (_e: IpcMainInvokeEvent, ptyId: number, opts?: { force?: boolean }) =>
     checkins.checkin(ptyArg(ptyId), { by: LOCAL_USER, force: !!opts?.force }),
   );
+  ipcMain.handle(COCKPIT_IPC.checkinCancel, (_e: IpcMainInvokeEvent, ptyId: number) => checkins.cancel(ptyArg(ptyId), LOCAL_USER));
   ipcMain.handle(COCKPIT_IPC.launch, (e: IpcMainInvokeEvent, req: LaunchRequest) => launcher.launch(req, LOCAL_USER, senderWindow(e)));
   ipcMain.handle(COCKPIT_IPC.feedGet, (_e: IpcMainInvokeEvent, workspace?: string | null) =>
     cockpitBus.feed.snapshot(typeof workspace === 'string' && workspace ? workspace : undefined),

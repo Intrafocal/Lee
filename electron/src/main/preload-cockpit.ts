@@ -37,6 +37,7 @@ export const cockpitApi: CockpitAPI = {
     focus: (ptyId) => ipcRenderer.invoke(COCKPIT_IPC.tabFocus, ptyId),
   },
   checkin: (ptyId, opts) => ipcRenderer.invoke(COCKPIT_IPC.checkin, ptyId, opts ?? {}),
+  checkinCancel: (ptyId) => ipcRenderer.invoke(COCKPIT_IPC.checkinCancel, ptyId),
   launch: (req) => ipcRenderer.invoke(COCKPIT_IPC.launch, req),
   feed: {
     get: (workspace) => ipcRenderer.invoke(COCKPIT_IPC.feedGet, workspace ?? null),

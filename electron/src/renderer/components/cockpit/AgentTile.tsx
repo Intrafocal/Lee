@@ -72,6 +72,14 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
     >
       <div className="cockpit-tile-head">
         <span className={`cockpit-chip tone-${tile.chip.tone}`}>{tile.chip.label}</span>
+        {tile.checkin && (
+          <span
+            className="cockpit-chip tone-muted"
+            title={tile.checkin.state === 'queued' ? 'Lee types the check-in when this turn ends' : 'Typed; waiting for the reply'}
+          >
+            {tile.checkin.label}
+          </span>
+        )}
         <span className="cockpit-tile-title" title={tile.title}>
           {tile.title}
         </span>
@@ -110,10 +118,29 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
             <Icon name="send" size={11} /> Reply
           </button>
         )}
-        {tile.canCheckin && !tile.approval && (
-          <button className="cockpit-btn" disabled={busy} title={`Types exactly: ${CHECKIN_PROMPT}`} onClick={() => ctx.openCheckin(tile.ptyId, tile.title)}>
-            <Icon name="chat" size={11} /> Check in
+        {tile.checkin ? (
+          <button
+            className="cockpit-btn"
+            disabled={busy}
+            title={tile.checkin.state === 'queued' ? 'Cancel the queued check-in (nothing has been typed)' : 'Stop waiting for the reply'}
+            onClick={() => {
+              const api = ctx.api;
+              if (!api) return;
+              void guard(async () => {
+                const r = await api.checkinCancel(tile.ptyId);
+                return r.success ? null : r.error || 'failed';
+              });
+            }}
+          >
+            <Icon name="close" size={11} /> Cancel check-in
           </button>
+        ) : (
+          tile.canCheckin &&
+          !tile.approval && (
+            <button className="cockpit-btn" disabled={busy} title={`Types exactly: ${CHECKIN_PROMPT}`} onClick={() => ctx.openCheckin(tile.ptyId, tile.title)}>
+              <Icon name="chat" size={11} /> Check in
+            </button>
+          )
         )}
         {task && !task.confirmed && (
           <button
@@ -221,12 +248,13 @@ export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, item, label, on
 const CHECKIN_ERRORS: Record<CheckinError, string> = {
   not_found: 'That tab is gone',
   not_agent: 'Not an agent tab',
-  busy: 'It stayed busy; try again when it is idle',
+  busy: 'It is busy',
   awaiting_input: 'It is waiting on a prompt; answer that first',
   state_unknown: "Lee can't tell whether it is at its prompt",
   timeout: 'No reply in time',
   forbidden: 'Not allowed',
-  in_progress: 'A check-in is already running',
+  in_progress: 'A check-in is already pending',
+  cancelled: 'Cancelled',
 };
 
 interface CheckinPopoverProps {
@@ -246,15 +274,16 @@ export const CheckinPopover: React.FC<CheckinPopoverProps> = ({ api, ptyId, labe
     rootRef.current?.focus();
   }, []);
 
+  // The request returns at once: queued behind the agent's turn, or typed now.
+  // The result arrives later (tile chip, Feed entry and a toast).
   const send = (force: boolean) => {
     if (busy) return;
     setBusy(true);
-    notify(`Checking in on ${label}…`);
     api
       .checkin(ptyId, force ? { force: true } : undefined)
       .then((r) => {
         if (r.success) {
-          notify(`Checked in on ${label}: ${r.lee_status?.status ?? 'reply received'}`);
+          notify(r.state === 'queued' ? `Check-in on ${label} queued: Lee types it when this turn ends` : `Checking in on ${label}…`);
           onClose();
         } else if (r.error === 'state_unknown' && !force) {
           setUnknown(true);
@@ -289,7 +318,9 @@ export const CheckinPopover: React.FC<CheckinPopoverProps> = ({ api, ptyId, labe
         aria-label={`Check in on ${label}`}
       >
         <div className="cockpit-popover-title">Check in on {label}?</div>
-        <div className="cockpit-muted">Lee will type exactly this into that agent, then Enter:</div>
+        <div className="cockpit-muted">
+          Lee will type exactly this into that agent, then Enter (if it is busy or waiting on a prompt, when its turn ends):
+        </div>
         <pre className="cockpit-confirm-text">{CHECKIN_PROMPT}</pre>
         {unknown && <div className="cockpit-warn">{CHECKIN_ERRORS.state_unknown}. Send it anyway?</div>}
         <div className="cockpit-popover-actions">

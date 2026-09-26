@@ -64,6 +64,8 @@ const {
   DEFAULT_SECTION,
   flattenFileTree,
   tabDisplayFromRuntime,
+  checkinToasts,
+  checkinChipLabel,
 } = mod;
 
 let passed = 0;
@@ -367,6 +369,22 @@ test('tabDisplayFromRuntime: a terminal running a hand-started claude is an agen
   assert.deepEqual(m.get(13), { provider: 'claude', name: 'Fix login' });
   // The same runtime set walls the terminal (A reports kind 'agent').
   assert.equal(isAgentTab(shellTab, { snapshotAgents: new Set(), runtimeAgents: runtimeAgentPtys(rts) }), true);
+});
+
+test('async check-ins: tile chip from the runtime; results toasted once, only for check-ins seen pending', () => {
+  const rt = runtime({ pty_id: 30, checkin: { id: 'chk_1', state: 'queued', queued_at: ago(1), sent_at: null } });
+  const [tile] = tileModel({ workspace: WS, tabs: [], sets: noSets, snapshot: null, runtime: [rt], tasks: [], now: NOW });
+  assert.deepEqual(tile.checkin, { id: 'chk_1', state: 'queued', label: 'check-in pending' });
+  assert.equal(checkinChipLabel('sent'), 'checking in…');
+  const entries = [
+    entry({ id: 'a', producer: 'checkin', title: 'Checked in on Pi: done', ref: { pty_id: 30, checkin_id: 'chk_1' } }),
+    entry({ id: 'b', producer: 'checkin', title: 'Check-in on Pi failed: no reply in time', ref: { pty_id: 30, checkin_id: 'chk_2' } }),
+    entry({ id: 'c', producer: 'checkin', title: 'Lee typed into Pi (asked by you)', ref: { pty_id: 30 } }),
+    entry({ id: 'd', producer: 'checkin', title: 'Checked in on X: done', ref: { pty_id: 31, checkin_id: 'chk_other' } }),
+  ];
+  const out = checkinToasts(entries, new Set(['chk_1', 'chk_2']), new Set());
+  assert.deepEqual(out.map((t) => [t.checkin_id, t.level]), [['chk_1', 'info'], ['chk_2', 'error']]);
+  assert.deepEqual(checkinToasts(entries, new Set(['chk_1']), new Set(['chk_1'])), []);
 });
 
 test('stripTabs: hides agents you did not go into; identity when disabled or nothing hidden', () => {

@@ -141,8 +141,18 @@ export function createTabDomain(rt: TabRuntimeImpl, checkins: CheckinManager): C
           if (!entry) return fail('not_agent');
           return ok({ success: false, proposed: true, entry_id: entry.id }, 202);
         }
+        // Returns at once: {checkin_id, state: 'queued' | 'sent'}; the result
+        // follows in the Feed and GET /cockpit/tabs (`checkin`).
         const res = await checkins.checkin(r.pty_id, { by });
         if (!res.success) return fail(res.error ?? 'invalid');
+        return ok(res);
+      }
+      case 'checkin_cancel': {
+        if (by.kind === 'shared') return fail('forbidden');
+        const r = resolvePty(rt, p);
+        if ('error' in r) return fail(r.error);
+        const res = checkins.cancel(r.pty_id, by);
+        if (!res.success) return fail(res.error ?? 'not_found');
         return ok(res);
       }
       default:

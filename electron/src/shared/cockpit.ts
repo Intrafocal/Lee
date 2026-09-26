@@ -106,6 +106,8 @@ export interface TabRuntimeInfo {
    */
   name?: string | null;
   name_source?: AgentNameSource | null;
+  /** A check-in queued behind the agent's turn or typed and awaiting its reply; null otherwise. */
+  checkin?: TabCheckinInfo | null;
   /** Last <= 5 ANSI-stripped lines. Only for fidelity 'screen'; [] otherwise. */
   tail: string[];
 }
@@ -165,11 +167,44 @@ export interface TabSendResult {
 export const CHECKIN_PROMPT =
   "Reply with only a lee-status block (status, summary, blockers, files, next) describing your current work. Don't change anything.";
 
-export type CheckinError = 'not_found' | 'not_agent' | 'busy' | 'awaiting_input' | 'state_unknown' | 'timeout' | 'forbidden' | 'in_progress';
+/**
+ * Check-in errors. Returned synchronously by the request: not_found,
+ * not_agent, forbidden, in_progress, state_unknown (without force).
+ * Delivered later (checkin.result, Feed): timeout, state_unknown (a queued
+ * hook-less agent went quiet in a state Lee can't read), not_found (the tab
+ * closed), cancelled. `busy` and `awaiting_input` are no longer returned: a
+ * busy or prompting agent's check-in is queued (addendum 2026-09-26b).
+ */
+export type CheckinError =
+  | 'not_found'
+  | 'not_agent'
+  | 'busy'
+  | 'awaiting_input'
+  | 'state_unknown'
+  | 'timeout'
+  | 'forbidden'
+  | 'in_progress'
+  | 'cancelled';
 
+/** A pending check-in on a PTY (TabRuntimeInfo.checkin). */
+export interface TabCheckinInfo {
+  id: string;
+  /** 'queued': waiting for the agent's turn to end; 'sent': typed, awaiting the reply. */
+  state: 'queued' | 'sent';
+  queued_at: string;
+  sent_at: string | null;
+}
+
+/**
+ * The check-in request's answer is immediate: `{success: true, checkin_id,
+ * state}`. The final result (lee_status, summary, or a later error) has the
+ * same shape and arrives asynchronously (Feed entry, event log, runtime push).
+ */
 export interface CheckinResult {
   success: boolean;
   checkin_id?: string;
+  /** For the immediate answer: queued behind the current turn, or typed now. */
+  state?: 'queued' | 'sent';
   error?: CheckinError;
   /** Parsed block, or null when the reply had none (summary is still returned). */
   lee_status?: LeeStatusBlock | null;
@@ -635,6 +670,7 @@ export const COCKPIT_IPC = {
   tabSend: 'cockpit:tabs:send',
   tabFocus: 'cockpit:tabs:focus',
   checkin: 'cockpit:checkin',
+  checkinCancel: 'cockpit:checkin:cancel',
   launch: 'cockpit:launch',
   feedGet: 'cockpit:feed:get',
   /** main to renderer: FeedSnapshot for all workspaces (renderer filters). */
@@ -686,7 +722,10 @@ export interface CockpitAPI {
     /** Focus the window showing ptyId and open that tab there. */
     focus: (ptyId: number) => Promise<{ success: boolean; error?: string }>;
   };
+  /** Returns at once ({state: 'queued' | 'sent'}); the result arrives via the Feed and tabs.onChange. */
   checkin: (ptyId: number, opts?: { force?: boolean }) => Promise<CheckinResult>;
+  /** Cancel the PTY's pending check-in (nothing is typed after this). */
+  checkinCancel: (ptyId: number) => Promise<{ success: boolean; error?: string }>;
   launch: (req: LaunchRequest) => Promise<LaunchResult>;
   feed: {
     get: (workspace?: string | null) => Promise<FeedSnapshot>;

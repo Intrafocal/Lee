@@ -31,7 +31,9 @@ export interface CockpitConfig {
       quiet_ms: number;
     };
     checkin: {
+      /** Reply timeout, counted from when the check-in prompt is typed. */
       timeout_s: number;
+      /** Unused since check-ins queue behind a busy turn (addendum 2026-09-26b); kept so old configs parse. */
       wait_idle_s: number;
       propose_after_min: number;
     };

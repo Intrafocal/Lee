@@ -12,7 +12,9 @@ import * as path from 'path';
 import { EventEmitter } from 'events';
 import type { Actor, LeeEvent, Principal } from '../../shared/copilot';
 import type {
+  AgentNameSource,
   CreateTabRequest,
+  TabCheckinInfo,
   CreateTabResult,
   TabInputPurpose,
   TabKind,
@@ -95,6 +97,11 @@ interface PtyEntry {
   sessionId: string | null;
   provider: string | null;
   taskId: string | null;
+  /** Session name and where it came from (see setName). */
+  name: string | null;
+  nameSource: AgentNameSource | null;
+  /** The last custom-title seen in the transcript (a /rename replaces a user name only when it differs). */
+  seenCustomTitle: string | null;
   state: TabRunState;
   source: TabStateSource;
   since: number;
@@ -215,6 +222,9 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         sessionId: null,
         provider: null,
         taskId: null,
+        name: null,
+        nameSource: null,
+        seenCustomTitle: null,
         state: 'unknown',
         source: 'quiet',
         since: now,
@@ -519,6 +529,19 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     return this.host.isClaudePty(ptyId) || !!this.entries.get(ptyId)?.hookSeen;
   }
 
+  private checkinOf: (ptyId: number) => TabCheckinInfo | null = () => null;
+
+  /** The check-in manager's view of pending check-ins (shown on tiles); emits a change. */
+  setCheckins(fn: (ptyId: number) => TabCheckinInfo | null): void {
+    this.checkinOf = fn;
+    this.emit('change');
+  }
+
+  /** The agent's name if it has one, else the tab label (Feed titles, proposals). */
+  displayNameOf(ptyId: number): string {
+    return this.entries.get(ptyId)?.name || this.labelOf(ptyId);
+  }
+
   setTask(ptyId: number, taskId: string, sessionId: string | null): void {
     const e = this.entry(ptyId);
     e.taskId = taskId;
@@ -710,6 +733,9 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       operation: null,
       task_id: e.taskId,
       session_id: e.sessionId,
+      name: e.name,
+      name_source: e.nameSource,
+      checkin: this.checkinOf(ptyId),
       tail: fidelity === 'screen' ? e.ring.tailLines(5) : [],
     };
   }

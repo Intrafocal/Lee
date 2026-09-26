@@ -27,6 +27,7 @@ import {
   mergeFeed,
   runtimeAgentPtys,
   tabDisplayFromRuntime,
+  checkinToasts,
   opsBadge,
   tasksBadge,
   tileModel,
@@ -121,6 +122,8 @@ interface CockpitHostProps {
   /** Open (or refocus) a Hester chat tab resumed on this session (App.handleOpenHesterTab). */
   onOpenHesterSession?: (sessionId: string, label: string) => Promise<number | null> | void;
   onAskHester: (prompt: string) => void;
+  /** App-level toast, for results that arrive while the Cockpit is hidden (async check-ins). */
+  onNotify?: (message: string, level: 'info' | 'error') => void;
 }
 
 type Popover =
@@ -164,6 +167,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onOpenFile,
   onOpenHesterSession,
   onAskHester,
+  onNotify,
 }) => {
   const state = useCockpitModeState();
   const snapshot = copilot.snapshot;
@@ -172,6 +176,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const cockpit = useCockpit({ workspace, visible: shown, agentsKey });
   const { api, available, runtime, ops, hester } = cockpit;
   const now = useNow(30000, shown);
+  const notifyRef = useRef<(message: string, level?: 'info' | 'error') => void>(() => {});
 
   // Configure once the cockpit API was probed and the workspace is known; config may lag.
   const enabledCfg = config?.enabled !== false;
@@ -199,6 +204,25 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   useEffect(() => {
     if (returnNonce) cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'return' }));
   }, [returnNonce]);
+
+  // Async check-ins: toast the result of a check-in this window saw pending.
+  const checkinIds = useRef(new Set<string>());
+  const toastedCheckins = useRef(new Set<string>());
+  useEffect(() => {
+    for (const r of runtime) if (r.checkin) checkinIds.current.add(r.checkin.id);
+  }, [runtime]);
+  useEffect(() => {
+    for (const t of checkinToasts(cockpit.feed, checkinIds.current, toastedCheckins.current)) {
+      toastedCheckins.current.add(t.checkin_id);
+      checkinIds.current.delete(t.checkin_id);
+      if (shownRef.current || !onNotifyRef.current) notifyRef.current(t.message, t.level);
+      else onNotifyRef.current(t.message, t.level);
+    }
+  }, [cockpit.feed]);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const onNotifyRef = useRef(onNotify);
+  onNotifyRef.current = onNotify;
 
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
@@ -276,6 +300,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const notify = useCallback((message: string, level: 'info' | 'error' = 'info') => {
     setToast({ message, level });
   }, []);
+  notifyRef.current = notify;
   useEffect(() => {
     if (!toast) return;
     const id = window.setTimeout(() => setToast(null), toast.level === 'error' ? 8000 : 4000);

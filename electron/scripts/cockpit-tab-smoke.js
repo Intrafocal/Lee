@@ -387,16 +387,31 @@ async function main() {
 
   // -------------------------------------------------------------------------
   const checkins = new CheckinManager(rt, { pollMs: 20, screenPollMs: 20 });
+  const settle = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+  // The check-in poll timer is unref'd (it never keeps Lee alive): hold the loop while awaiting a result.
+  const until = async (p) => {
+    const keep = setInterval(() => {}, 50);
+    try {
+      return await p;
+    } finally {
+      clearInterval(keep);
+    }
+  };
   await check('check-in: hook path resolved by agent.turn_end', async () => {
     hook('agent.session_start', 1, { provider: 'claude' });
     host.writes.length = 0;
     const lee = { status: 'in-progress', summary: 'Halfway through', blockers: null, files: [], next: 'tests' };
     setTimeout(() => hook('agent.turn_end', 1, { busy_ms: 10, summary: 'Working on it', lee_status: lee }), 60);
-    const res = await checkins.checkin(1, { by: LOCAL });
+    const ack = await checkins.checkin(1, { by: LOCAL });
+    // The request answers at once: it was at its prompt, so the prompt was typed.
+    assert.deepStrictEqual([ack.success, ack.state, ack.source], [true, 'sent', 'hook']);
+    assert.strictEqual(rt.get(1).checkin.state, 'sent');
+    const res = await until(checkins.waitFor(ack.checkin_id));
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.source, 'hook');
     assert.deepStrictEqual(res.lee_status, lee);
     assert.strictEqual(res.summary, 'Halfway through');
+    assert.strictEqual(rt.get(1).checkin, null);
     assert.strictEqual(host.writes[0][1], `\x1b[200~${CHECKIN_PROMPT}\x1b[201~`);
     const start = events.filter((e) => e.type === 'checkin.start').pop();
     const result = events.filter((e) => e.type === 'checkin.result').pop();
@@ -407,14 +422,78 @@ async function main() {
     assert.ok(feed && feed.text_is_agent);
   });
 
-  await check('check-in: awaiting input refuses and types nothing', async () => {
-    hook('agent.waiting', 1, { kind: 'approval' });
+
+  await check('check-in: awaiting input queues it; nothing typed until the prompt is resolved and the turn ends', async () => {
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-q' });
     host.writes.length = 0;
-    const res = await checkins.checkin(1, { by: LOCAL });
-    assert.strictEqual(res.error, 'awaiting_input');
-    assert.strictEqual(host.writes.length, 0);
+    const ack = await checkins.checkin(1, { by: LOCAL });
+    assert.deepStrictEqual([ack.success, ack.state], [true, 'queued']);
+    assert.strictEqual(rt.get(1).checkin.state, 'queued');
+    assert.strictEqual((await checkins.checkin(1, { by: LOCAL })).error, 'in_progress');
+    await settle();
+    assert.strictEqual(host.writes.length, 0, 'never types over a permission prompt');
+    // Approved: working again (busy), still queued.
+    logEvent({ type: 'attention.reply', source: 'lee-main', workspace: WS, data: { item_id: 'item-q', kind: 'approval', action: 'approve' } });
+    host.emit('data', 1, 'x');
+    await settle();
+    assert.strictEqual(host.writes.length, 0, 'never interrupts a running turn');
+    // The turn ends (Stop hook): the prompt is typed now and the reply awaited.
+    const done = checkins.waitFor(ack.checkin_id);
+    hook('agent.turn_end', 1, { busy_ms: 5, summary: 'Finished the tool' });
+    await settle();
+    assert.strictEqual(host.writes[0][1], `\x1b[200~${CHECKIN_PROMPT}\x1b[201~`);
+    assert.strictEqual(rt.get(1).checkin.state, 'sent');
+    const lee = { status: 'done', summary: 'All done', blockers: null, files: [], next: null };
+    hook('agent.turn_end', 1, { busy_ms: 5, summary: 'All done', lee_status: lee });
+    const res = await until(done);
+    assert.strictEqual(res.success, true);
+    assert.deepStrictEqual(res.lee_status, lee);
+    const result = events.filter((e) => e.type === 'checkin.result').pop();
+    assert.strictEqual(result.data.checkin_id, ack.checkin_id);
+    assert.ok(result.data.queued_ms >= 0);
     assert.strictEqual((await checkins.checkin(2, { by: LOCAL })).error, 'not_agent');
     assert.strictEqual((await checkins.checkin(1, { by: HESTER })).error, 'forbidden');
+  });
+
+  await check('check-in: a queued check-in can be cancelled (nothing typed, no Feed failure)', async () => {
+    hook('agent.prompt', 1);
+    host.writes.length = 0;
+    const ack = await checkins.checkin(1, { by: LOCAL });
+    assert.strictEqual(ack.state, 'queued');
+    const done = checkins.waitFor(ack.checkin_id);
+    assert.strictEqual(checkins.cancel(1, HESTER).error, 'forbidden');
+    assert.strictEqual(checkins.cancel(1, LOCAL).success, true);
+    const res = await until(done);
+    assert.strictEqual(res.error, 'cancelled');
+    hook('agent.turn_end', 1, { busy_ms: 5 });
+    await settle();
+    assert.strictEqual(host.writes.length, 0);
+    assert.strictEqual(rt.get(1).checkin, null);
+    assert.ok(!cockpitBus.feed.list(WS).some((e) => e.ref.checkin_id === ack.checkin_id));
+    assert.strictEqual(checkins.cancel(1, LOCAL).error, 'not_found');
+  });
+
+  await check('check-in: a busy screen agent is queued and typed once it is back at its prompt (no busy failure)', async () => {
+    host.emit('data', 3, '\r\nworking hard');
+    host.writes.length = 0;
+    assert.strictEqual(rt.state(3).state, 'busy');
+    const ack = await checkins.checkin(3, { by: LOCAL });
+    assert.deepStrictEqual([ack.success, ack.state, ack.source], [true, 'queued', 'screen']);
+    await settle();
+    assert.strictEqual(host.writes.length, 0);
+    host.emit('data', 3, '\r\nstep 1\r\nstep 2\r\nstep 3\r\nstep 4\r\n> ');
+    clock += 2000;
+    await settle();
+    assert.strictEqual(rt.state(3).state, 'idle-at-prompt');
+    assert.strictEqual(host.writes.length, 2, 'bracketed paste, then Enter');
+    const done = checkins.waitFor(ack.checkin_id);
+    host.emit('data', 3, '\r\n```lee-status\nstatus: in-progress\nsummary: Screen report\n```\r\n> ');
+    clock += 5000;
+    const res = await until(done);
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    assert.strictEqual(res.summary, 'Screen report');
+    const feed = cockpitBus.feed.list(WS).find((e) => e.ref.checkin_id === ack.checkin_id);
+    assert.ok(feed && feed.title.startsWith('Checked in on Screenbot'));
   });
 
   // -------------------------------------------------------------------------
@@ -447,6 +526,7 @@ async function main() {
     assert.strictEqual(prop.kind, 'proposal');
     assert.strictEqual(prop.actions[0].confirm_text, CHECKIN_PROMPT);
     assert.strictEqual((await cockpitBus.actOnFeed(prop.id, 'checkin', {}, HESTER)).error, 'forbidden');
+
     assert.strictEqual((await domain('state', { tab_id: 12 }, HESTER)).body.data.pty_id, 2);
     assert.strictEqual((await domain('state', { pty_id: 99 }, HESTER)).status, 404);
     assert.strictEqual((await domain('send_input', { pty_id: 2, text: 'ls' }, DEVICE)).status, 200);
@@ -569,7 +649,9 @@ async function main() {
       setTimeout(() => host.emit('data', 24, 'reading files\r\n$ export TOKEN=hunter2-SCREEN\r\nno status block here\r\n'), 30),
       setTimeout(() => (clock += 10_000), 120),
     ];
-    const res = await checkins.checkin(24, { by: LOCAL, force: true });
+    const ack = await checkins.checkin(24, { by: LOCAL, force: true });
+    assert.strictEqual(ack.state, 'sent');
+    const res = await until(checkins.waitFor(ack.checkin_id));
     timers.forEach(clearTimeout);
     assert.strictEqual(res.success, true, JSON.stringify(res));
     assert.strictEqual(res.source, 'screen');

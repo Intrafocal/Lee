@@ -2762,6 +2762,7 @@ const App: React.FC = () => {
         onOpenFile={(path: string) => handleFileOpenRef.current(path)}
         onOpenHesterSession={(sessionId: string, label: string) => handleOpenHesterTab(sessionId, label)}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
+        onNotify={(message: string, level: 'info' | 'error') => notify(level === 'error' ? 'warn' : 'info', message, { id: 'cockpit-checkin' })}
       />
       <StatusBar
         workspace={workspace}

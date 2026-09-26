@@ -277,6 +277,8 @@ export interface TileModel {
   task: CockpitTask | null;
   /** A has this PTY as an agent (check-ins possible). */
   canCheckin: boolean;
+  /** A check-in queued behind the agent's turn, or typed and awaiting its reply. */
+  checkin: { id: string; state: 'queued' | 'sent'; label: string } | null;
   needsYou: boolean;
 }
 
@@ -303,6 +305,29 @@ function providerName(provider: string | null | undefined): string {
 
 function sameWorkspace(a: string | null | undefined, ws: string): boolean {
   return !!a && a.replace(/\/+$/, '') === ws.replace(/\/+$/, '');
+}
+
+/** The tile chip for a pending check-in. */
+export function checkinChipLabel(state: 'queued' | 'sent'): string {
+  return state === 'queued' ? 'check-in pending' : 'checking in…';
+}
+
+/**
+ * Check-in results to toast (pure): Feed entries from the check-in producer
+ * about a check-in this window started (`mine`) that it has not toasted yet.
+ */
+export function checkinToasts(
+  entries: readonly FeedEntry[],
+  mine: ReadonlySet<string>,
+  toasted: ReadonlySet<string>,
+): Array<{ checkin_id: string; message: string; level: 'info' | 'error' }> {
+  const out: Array<{ checkin_id: string; message: string; level: 'info' | 'error' }> = [];
+  for (const e of entries) {
+    const id = e.ref?.checkin_id;
+    if (e.producer !== 'checkin' || e.kind !== 'event' || !id || !mine.has(id) || toasted.has(id)) continue;
+    out.push({ checkin_id: id, message: e.title, level: /\bfailed\b/.test(e.title) ? 'error' : 'info' });
+  }
+  return out;
 }
 
 export function tileModel(input: TileInput): TileModel[] {
@@ -439,6 +464,7 @@ export function tileModel(input: TileInput): TileModel[] {
       replyItem,
       task,
       canCheckin: rt?.kind === 'agent' && rt.state.state !== 'exited',
+      checkin: rt?.checkin ? { id: rt.checkin.id, state: rt.checkin.state, label: checkinChipLabel(rt.checkin.state) } : null,
       needsYou: chip.tone === 'needs',
     };
   });
