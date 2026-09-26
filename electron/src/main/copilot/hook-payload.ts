@@ -46,6 +46,8 @@ export interface NormalizedHook {
   notification_type: string | null;
   last_assistant_message: string | null;
   reason: string | null;
+  /** Sent by Lee's Pi extension ('pi'); Claude Code's payloads have none. */
+  provider: string | null;
 }
 
 function str(v: unknown): string | null {
@@ -81,6 +83,7 @@ export function normalizeHook(headerEvent: string | null | undefined, body: unkn
     notification_type: str(b.notification_type),
     last_assistant_message: str(b.last_assistant_message),
     reason: str(b.reason),
+    provider: str(b.provider),
   };
 }
 

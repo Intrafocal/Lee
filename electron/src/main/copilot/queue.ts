@@ -53,7 +53,7 @@ import {
 } from './hook-payload';
 import type { ParsedQuestion } from './hook-payload';
 import { AgentSession, AgentSessions } from './agent-sessions';
-import { AttentionQueue, KIND_TITLES, PROMPT_KINDS, isPromptKind, sourceKey } from './attention-queue';
+import { AttentionQueue, PROMPT_KINDS, isPromptKind, kindTitle, providerLabel, sourceKey } from './attention-queue';
 import { FocusTracker, parseFocusItem } from './focus';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
 import { checkReply, sanitizeReplyText, writeReply, writeText } from './reply';
@@ -408,6 +408,11 @@ export class CopilotQueue {
     return null;
   }
 
+  /** Provider for a PTY with no session yet: from the spawn flags, else Claude (the hooked default). */
+  private ptyProvider(ptyId: number | null): string {
+    return ptyId != null && this.ptyManager.get(ptyId)?.pi ? 'pi' : 'claude';
+  }
+
   private sourceFor(s: AgentSession | null, ptyId: number | null, cwd: string | null, headerWindow: number | null): AttentionSource {
     const tab = ptyId != null ? this.findTab(ptyId) : null;
     const procWindow = ptyId != null ? this.ptyManager.get(ptyId)?.windowId ?? null : null;
@@ -415,7 +420,7 @@ export class CopilotQueue {
     const winWorkspace = windowId != null ? windowRegistry.get(windowId)?.workspace ?? null : null;
     return {
       kind: 'agent',
-      provider: s?.provider ?? 'claude',
+      provider: s?.provider ?? this.ptyProvider(ptyId),
       session_id: s?.session_id ?? null,
       pty_id: ptyId,
       window_id: windowId,
@@ -451,8 +456,12 @@ export class CopilotQueue {
     const cfg = getCopilotConfig();
     const ptyId = this.sessions.resolvePty(sessionId, headerPty);
     const s = this.sessions.ensure(sessionId, ptyId, h.cwd, now);
-    // Pi tabs post through Lee's Pi extension (v2 §5.6b); only a PTY spawned as Pi can claim it.
-    if (headerPty != null && this.ptyManager.get(headerPty)?.pi) s.provider = 'pi';
+    // Pi tabs post through Lee's Pi extension (v2 §5.6b). The provider is a
+    // label only (Reply targeting is decided by headerPty above), so trust the
+    // PTY flag (header or the session's known PTY) and else the body's own
+    // provider field, which Lee's Pi extension always sends and Claude never does.
+    const piPty = (headerPty != null && !!this.ptyManager.get(headerPty)?.pi) || (ptyId != null && !!this.ptyManager.get(ptyId)?.pi);
+    if (piPty || h.provider === 'pi') s.provider = 'pi';
     // A hidden prewarmed Claude has no tab: keep its session (a tab adopts it
     // later) and answer SessionStart, but open no items for it.
     if (ptyId != null && h.event !== 'SessionStart' && this.ptyManager.isWarmPty(ptyId)) return { status: 204, body: null };
@@ -557,7 +566,7 @@ export class CopilotQueue {
         const item = this.queue.open(
           {
             kind: 'approval',
-            title: `Claude wants to use ${tool?.name ?? 'a tool'}`,
+            title: `${providerLabel(src.provider)} wants to use ${tool?.name ?? 'a tool'}`,
             text: tool?.preview ?? '',
             source: src,
             tool,
@@ -623,7 +632,7 @@ export class CopilotQueue {
             item = this.queue.open(
               {
                 kind: 'approval',
-                title: `Claude wants to use ${p?.name ?? 'a tool'}`,
+                title: `${providerLabel(src.provider)} wants to use ${p?.name ?? 'a tool'}`,
                 text: h.message ?? p?.preview ?? '',
                 source: src,
                 tool: p ? { name: p.name, preview: p.preview, signature: p.signature } : null,
@@ -649,7 +658,7 @@ export class CopilotQueue {
             this.queue.open(
               {
                 kind: 'waiting',
-                title: KIND_TITLES.waiting,
+                title: kindTitle('waiting', src.provider),
                 text: [h.message, s.last_summary].filter((x): x is string => !!x).join('\n\n'),
                 source: src,
                 lee_status: s.last_lee_status,
@@ -704,14 +713,14 @@ export class CopilotQueue {
     const text = summary ?? '';
     const files = [...s.files_written];
     if (lee?.status === 'blocked') {
-      this.queue.open({ kind: 'blocker', title: KIND_TITLES.blocker, text: lee.blockers ?? lee.summary ?? text, source: src, lee_status: lee, files }, now);
+      this.queue.open({ kind: 'blocker', title: kindTitle('blocker', src.provider), text: lee.blockers ?? lee.summary ?? text, source: src, lee_status: lee, files }, now);
     } else if (lee?.status === 'waiting') {
       this.queue.open(
-        { kind: 'decision', title: KIND_TITLES.decision, text: lee.blockers ?? lee.next ?? lee.summary ?? text, source: src, lee_status: lee, files },
+        { kind: 'decision', title: kindTitle('decision', src.provider), text: lee.blockers ?? lee.next ?? lee.summary ?? text, source: src, lee_status: lee, files },
         now,
       );
     } else {
-      this.queue.open({ kind: 'review', title: KIND_TITLES.review, text, source: src, lee_status: lee, files }, now);
+      this.queue.open({ kind: 'review', title: kindTitle('review', src.provider), text, source: src, lee_status: lee, files }, now);
     }
   }
 
@@ -734,13 +743,13 @@ export class CopilotQueue {
       source: 'lee-main',
       workspace: src.workspace,
       window_id: src.window_id,
-      actor: { kind: 'agent', provider: last?.provider ?? 'claude', session_id: last?.session_id ?? null, pty_id: ptyId },
+      actor: { kind: 'agent', provider: src.provider ?? this.ptyProvider(ptyId), session_id: last?.session_id ?? null, pty_id: ptyId },
       data: { pty_id: ptyId, code, ...(last ? { session_id: last.session_id } : {}) },
     });
     this.queue.resolveWhere((i) => i.source.pty_id === ptyId && i.kind !== 'summary', 'agent_exit', now);
     if (code !== 0) {
       this.queue.open(
-        { kind: 'failure', title: `Claude exited (code ${code})`, text: last?.last_summary ?? '', source: src, files: last ? [...last.files_written] : [] },
+        { kind: 'failure', title: `${providerLabel(src.provider)} exited (code ${code})`, text: last?.last_summary ?? '', source: src, files: last ? [...last.files_written] : [] },
         now,
       );
     }
@@ -778,7 +787,7 @@ export class CopilotQueue {
     const item = this.queue.open(
       {
         kind: 'question',
-        title: first ? `Claude asks: ${clip(first, QUESTION_TITLE_MAX)}` : 'Claude has a question',
+        title: first ? `${providerLabel(src.provider)} asks: ${clip(first, QUESTION_TITLE_MAX)}` : `${providerLabel(src.provider)} has a question`,
         text: parsed ? parsed.question.questions.map((q) => q.question).join('\n') : tool.preview,
         source: src,
         tool: { name: tool.name, preview: tool.preview, signature: tool.signature },
@@ -1289,13 +1298,13 @@ export class CopilotQueue {
       .filter((s) => s.last_summary)
       .sort((a, b) => b.last_event_at - a.last_event_at)
       .map((s) => ({
-        label: (s.pty_id != null ? this.findTab(s.pty_id)?.label : null) ?? 'Claude',
+        label: (s.pty_id != null ? this.findTab(s.pty_id)?.label : null) ?? providerLabel(s.provider),
         summary: s.last_summary as string,
       }));
     this.queue.open(
       {
         kind: 'summary',
-        title: KIND_TITLES.summary,
+        title: kindTitle('summary', null),
         text: this.away.summaryText({ waiting, parked, agentLines }),
         source: {
           kind: 'lee',

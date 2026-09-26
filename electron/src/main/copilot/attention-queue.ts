@@ -30,13 +30,30 @@ const MAX_ITEM_FILES = 50;
 
 export type Resolution = 'reply' | 'answered_in_tab' | 'superseded' | 'agent_exit' | 'dismissed' | 'expired';
 
-export const KIND_TITLES: Record<Exclude<AttentionKind, 'approval' | 'question' | 'failure'>, string> = {
-  waiting: 'Claude is waiting for you',
-  blocker: 'Claude is blocked',
-  decision: 'Claude needs a decision',
-  review: 'Claude finished a turn',
+/** Display name for an agent provider key; "Agent" when unknown. */
+export function providerLabel(provider: string | null | undefined): string {
+  const p = (provider ?? '').trim();
+  if (!p) return 'Agent';
+  if (p === 'claude') return 'Claude';
+  if (p === 'pi') return 'Pi';
+  if (p === 'hester') return 'Hester';
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+type TitledKind = Exclude<AttentionKind, 'approval' | 'question' | 'failure'>;
+
+const KIND_TITLE_TEMPLATES: Record<TitledKind, string> = {
+  waiting: '{agent} is waiting for you',
+  blocker: '{agent} is blocked',
+  decision: '{agent} needs a decision',
+  review: '{agent} finished a turn',
   summary: 'While you were away',
 };
+
+/** An item title naming the agent's provider ("Pi finished a turn"). */
+export function kindTitle(kind: TitledKind, provider: string | null | undefined): string {
+  return KIND_TITLE_TEMPLATES[kind].replace('{agent}', providerLabel(provider));
+}
 
 const KIND_ACTIONS: Record<AttentionKind, AttentionActionName[]> = {
   approval: ['approve', 'deny', 'open', 'snooze', 'dismiss', 'wake'],

@@ -36,6 +36,7 @@ const dist = path.join(__dirname, '..', 'dist', 'main');
 const { CopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
 const { withClaudeHooks, HOOK_SCRIPT } = require(path.join(dist, 'copilot', 'hook-install.js'));
 const { HOOK_EVENTS } = require(path.join(dist, 'copilot', 'hook-payload.js'));
+const { kindTitle, providerLabel } = require(path.join(dist, 'copilot', 'attention-queue.js'));
 const { copilotBus } = require(path.join(dist, 'copilot', 'bus.js'));
 const { windowRegistry } = require(path.join(dist, 'window-registry.js'));
 
@@ -54,8 +55,8 @@ class FakePty {
     this.writes = [];
     this.listeners = {};
   }
-  add(id, { claude = true, name = 'Claude' } = {}) {
-    this.procs.set(id, { id, name, windowId: null, claude });
+  add(id, { claude = true, pi = false, name = 'Claude' } = {}) {
+    this.procs.set(id, { id, name, windowId: null, claude: claude && !pi, pi });
   }
   get(id) {
     return this.procs.get(id);
@@ -64,7 +65,8 @@ class FakePty {
     this.writes.push([id, data]);
   }
   isClaudePty(id) {
-    return this.procs.get(id)?.claude === true;
+    const p = this.procs.get(id);
+    return p?.claude === true || p?.pi === true;
   }
   isWarmPty(id) {
     return !!this.procs.get(id)?.name.endsWith(' (warm)');
@@ -558,6 +560,45 @@ test('hook script: loopback-only URL, and no error body on SessionStart', () => 
   assert.ok(fs.readFileSync(log, 'utf8').includes('http://127.0.0.1:9001/agent/hook'));
   run('http://127.0.0.1:9123');
   assert.ok(fs.readFileSync(log, 'utf8').includes('http://127.0.0.1:9123/agent/hook'));
+});
+
+test('item titles name the provider: Pi, not Claude', () => {
+  const pty = new FakePty();
+  pty.add(7, { pi: true, name: 'Pi' });
+  const q = new CopilotQueue(pty);
+  const hook = (event, body = {}, ptyId = '7') =>
+    q.handleHook({ event, ptyId, windowId: null }, { session_id: 'pi1', hook_event_name: event, provider: 'pi', ...body });
+  hook('SessionStart');
+  hook('UserPromptSubmit', { prompt: 'x' });
+  hook('Stop', { last_assistant_message: 'Done.' });
+  const review = q.snapshot({ all: true }).items.find((i) => i.kind === 'review');
+  assert.ok(review, 'review item');
+  assert.strictEqual(review.title, 'Pi finished a turn');
+  assert.strictEqual(review.source.provider, 'pi');
+  hook('UserPromptSubmit', { prompt: 'y' });
+  hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'b' });
+  const appr = q.snapshot({ all: true }).items.find((i) => i.kind === 'approval' && i.state === 'open');
+  assert.strictEqual(appr.title, 'Pi wants to use Bash');
+});
+
+test('a Pi post without a trusted PTY header is still labelled Pi', () => {
+  const pty = new FakePty();
+  const q = new CopilotQueue(pty);
+  q.handleHook({ event: 'SessionStart', ptyId: null, windowId: null }, { session_id: 'pi2', hook_event_name: 'SessionStart', provider: 'pi' });
+  q.handleHook({ event: 'Stop', ptyId: '', windowId: null }, { session_id: 'pi2', hook_event_name: 'Stop', provider: 'pi', last_assistant_message: 'ok' });
+  const review = q.snapshot({ all: true }).items.find((i) => i.kind === 'review');
+  assert.strictEqual(review.title, 'Pi finished a turn');
+  assert.strictEqual(q.sessions.get('pi2').provider, 'pi');
+});
+
+test('Claude sessions keep Claude titles; unknown providers say Agent', () => {
+  const { q, hook } = setup();
+  hook('UserPromptSubmit', { prompt: 'x' });
+  hook('Stop', { last_assistant_message: 'Done.' });
+  assert.strictEqual(q.snapshot({ all: true }).items.find((i) => i.kind === 'review').title, 'Claude finished a turn');
+  assert.strictEqual(kindTitle('waiting', null), 'Agent is waiting for you');
+  assert.strictEqual(kindTitle('blocker', 'codex'), 'Codex is blocked');
+  assert.strictEqual(providerLabel(''), 'Agent');
 });
 
 let failed = 0;

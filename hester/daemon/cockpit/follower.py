@@ -31,13 +31,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..copilot.digest import _norm
 from ..copilot.event_reader import events_dir as default_events_dir
 from ..copilot.event_reader import list_files, parse_ts
+from .plain import plain_title
 from .tasks import (
     CLOSED_STATUSES,
     MAX_FILES,
     atomic_write,
     clip,
     default_task,
-    first_line,
     is_open,
     iso_s,
     new_task_id,
@@ -549,7 +549,7 @@ class EventFollower:
             set_status(task, status_from_lee_status(lee_status), ev)
             source = task.get("title_source")
             if source == "auto" or (not respect_agent_title and source != "user"):
-                title = first_line((lee_status or {}).get("summary") or data.get("summary"), 80)
+                title = plain_title((lee_status or {}).get("summary") or data.get("summary"), 80)
                 if title:
                     task["title"] = title
                     task["title_source"] = "agent"

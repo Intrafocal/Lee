@@ -142,7 +142,10 @@ console.log('ok - hook posts are Claude-shaped, loopback-only, with no prompt or
   assert.strictEqual(end.data.pty_id, 42);
   assert.ok(end.data.summary.startsWith('Done. '));
   const snap = q.snapshot({ all: true });
-  assert.ok(snap.items.some((i) => i.kind === 'review' && i.source.pty_id === 42), 'a review item after the turn');
+  const review = snap.items.find((i) => i.kind === 'review' && i.source.pty_id === 42);
+  assert.ok(review, 'a review item after the turn');
+  assert.strictEqual(review.source.provider, 'pi');
+  assert.strictEqual(review.title, 'Pi finished a turn', 'titled for Pi, not Claude');
   console.log('ok - the v0 queue turns Pi posts into agent.prompt / agent.tool / agent.turn_end and a review item');
 }
 

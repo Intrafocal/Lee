@@ -101,6 +101,22 @@ def test_launch_stub_session_and_turns(env):
     assert t["status"] == "review" and t["agent"]["pty_id"] is None
 
 
+def test_agent_title_is_plain_text(env):
+    E = env.ev
+    summary = "**Done.** Fixed the `fs/list` 404 against packaged Lee.\n\n```ts\nconst x = 1;\n```"
+    env.write(
+        E("task.launch", 0, {"task_id": "task-33333333", "pty_id": 7, "session_id": "s7", "provider": "pi",
+                              "lead": "delegate", "kind": "bug", "confirmed": True, "play": False,
+                              "origin_kind": "launcher"}),
+        E("agent.prompt", 0.2, {"session_id": "s7", "pty_id": 7, "prompt_chars": 4}),
+        E("agent.turn_end", 1, {"session_id": "s7", "pty_id": 7, "busy_ms": 1000, "summary": summary}),
+    )
+    tick(env.follower())
+    t = env.tasks()["task-33333333"]
+    assert t["title"] == "Done. Fixed the fs/list 404 against packaged Lee."
+    assert "`" not in t["title"] and "*" not in t["title"] and t["title_source"] == "agent"
+
+
 def test_auto_task_only_after_prompt(env):
     E = env.ev
     env.write(
