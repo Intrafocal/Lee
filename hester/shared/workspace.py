@@ -14,6 +14,7 @@ window's (POST /workspace); a request can name its own workspace with
 import hashlib
 import logging
 import os
+import urllib.parse
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -24,6 +25,28 @@ logger = logging.getLogger("hester.shared.workspace")
 _current_workspace: Optional[Path] = None
 
 request_workspace: ContextVar[Optional[Path]] = ContextVar("hester_request_workspace", default=None)
+
+
+# Printable ASCII except '%': left as is in the X-Lee-Workspace header, so an
+# ASCII path (spaces included) is sent unchanged and only '%' and non-ASCII
+# characters are percent-encoded (HTTP header values must be ASCII; httpx and
+# fetch refuse anything else).
+_HEADER_SAFE = "".join(chr(c) for c in range(0x20, 0x7F) if chr(c) != "%")
+
+
+def encode_workspace_header(path) -> str:
+    """The X-Lee-Workspace value for a workspace path (percent-encoded, ASCII only)."""
+    return urllib.parse.quote(str(path), safe=_HEADER_SAFE)
+
+
+def workspace_header_candidates(value: str) -> list:
+    """Paths an X-Lee-Workspace value may name: decoded first, then the raw value (older senders)."""
+    out = []
+    if "%" in value:
+        out.append(urllib.parse.unquote(value))
+    if value not in out:
+        out.append(value)
+    return out
 
 
 def get_active_workspace() -> Path:

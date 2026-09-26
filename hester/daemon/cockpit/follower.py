@@ -9,6 +9,15 @@ the last 48 h. Each task remembers ``applied_through`` (``"<ts>|<id>"`` of the
 last event applied), so replaying the log after a crash or a reset cursor
 never counts anything twice. Operation readings are de-duplicated by
 ``(run_id, metric)``.
+
+If applying a batch fails for some workspace (a read-only checkout, a full
+disk), the cursor goes back to where the batch started so the next tick
+replays it (``applied_through`` makes that safe); after ``MAX_APPLY_RETRIES``
+failed ticks the batch is given up so one broken workspace can't stall the
+rest.
+
+PTY ids restart at 1 with every Lee launch (``app.start``). A task whose pty
+was last seen before the most recent launch is not matched by pty alone.
 """
 
 import asyncio
@@ -42,6 +51,8 @@ TICK_S = 2.0
 START_LOOKBACK = timedelta(hours=48)
 CLOSED_IGNORE = timedelta(hours=24)
 MAX_PENDING = 500
+MAX_APPLY_RETRIES = 5
+MAX_BOOTS = 20
 
 FOLLOW_TYPES = {
     "task.launch",
@@ -54,6 +65,7 @@ FOLLOW_TYPES = {
     "agent.exit",
     "checkin.result",
     "operation.result",
+    "app.start",
 }
 
 LEE_STATUS_MAP = {"done": "review", "blocked": "waiting", "waiting": "waiting", "in-progress": "running"}
@@ -120,6 +132,8 @@ class EventFollower:
         self._by_session: Dict[str, Tuple[str, str]] = {}
         self._by_pty: Dict[int, Tuple[str, str]] = {}
         self._task_task: Optional[asyncio.Task] = None
+        self._boots: List[datetime] = []
+        self._apply_failures = 0
 
     # ------------------------------------------------------------------ plumbing
 
@@ -150,6 +164,9 @@ class EventFollower:
         pending = state.get("pending") if isinstance(state, dict) else None
         if isinstance(pending, dict):
             self._pending = {k: v for k, v in pending.items() if isinstance(v, dict)}
+            boots = state.get("boots") if isinstance(state, dict) else None
+            if isinstance(boots, list):
+                self._boots = sorted(b for b in (parse_ts(x) for x in boots) if b is not None)[-MAX_BOOTS:]
             for sid, p in self._pending.items():
                 if p.get("workspace"):
                     self._session_ws[sid] = p["workspace"]
@@ -164,7 +181,10 @@ class EventFollower:
             pending = dict(keep)
         self._pending = pending
         try:
-            atomic_write(self._state_path(), json.dumps({"cursor": self._cursor, "pending": pending}))
+            atomic_write(self._state_path(), json.dumps({
+                "cursor": self._cursor, "pending": pending,
+                "boots": [iso_s(b) for b in self._boots[-MAX_BOOTS:]],
+            }))
         except OSError as e:
             logger.warning(f"Cannot save follower state: {e}")
 
@@ -287,10 +307,15 @@ class EventFollower:
 
     async def tick(self) -> int:
         """Read and apply new events. Returns how many were applied to some workspace."""
+        self._load_state()
+        prev_cursor = dict(self._cursor) if self._cursor else None
         events = await asyncio.to_thread(self.read_new)
         groups: Dict[str, List[Dict[str, Any]]] = {}
         order: List[str] = []
         for ev in events:
+            if ev.get("type") == "app.start":
+                self._note_boot(ev["_ts"])
+                continue
             ws = self._resolve_ws(ev)
             if ws is None:
                 continue
@@ -299,15 +324,59 @@ class EventFollower:
                 order.append(ws)
             groups[ws].append(ev)
         applied = 0
+        failed = False
         for ws in order:
             try:
                 ctx = self.registry.get(ws, source="request")
             except ValueError:
                 continue
-            async with ctx.lock:
-                applied += self._apply_workspace(ctx, groups[ws])
+            try:
+                async with ctx.lock:
+                    # Off the event loop: a reindex parses the workspace's task files.
+                    applied += await asyncio.to_thread(self._apply_workspace, ctx, groups[ws])
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failed = True
+                logger.warning(f"Cockpit follower could not apply events for {ws}: {e}")
+        if failed and events:
+            self._apply_failures += 1
+            if self._apply_failures < MAX_APPLY_RETRIES:
+                self._cursor = prev_cursor
+                return applied
+            logger.warning(f"Cockpit follower giving up on a batch after {self._apply_failures} failed ticks")
+        self._apply_failures = 0
         self._save_state()
         return applied
+
+    def _note_boot(self, ts: datetime) -> None:
+        """A Lee launch: PTY ids restart, so pty-only matches from before it are stale."""
+        if ts not in self._boots:
+            self._boots.append(ts)
+            self._boots.sort()
+            self._boots = self._boots[-MAX_BOOTS:]
+        if ts == self._boots[-1]:
+            self._pty_ws.clear()
+            self._by_pty.clear()
+
+    def _boot_before(self, ts: datetime) -> Optional[datetime]:
+        best = None
+        for b in self._boots:
+            if b <= ts:
+                best = b
+        return best
+
+    def _pty_current(self, task: Dict[str, Any], ev: Dict[str, Any]) -> bool:
+        """Was the task's pty seen in the same Lee run as this event?"""
+        boot = self._boot_before(ev["_ts"])
+        if boot is None:
+            return True
+        seen = [parse_time(task.get("created_at"))]
+        done = _key_tuple(task.get("applied_through"))
+        if done is not None:
+            seen.append(done[0])
+        seen = [s for s in seen if s is not None]
+        return bool(seen) and max(seen) >= boot
 
     async def run(self, interval: float = TICK_S) -> None:
         while True:
@@ -341,6 +410,7 @@ class EventFollower:
         cache: Dict[str, Dict[str, Any]] = {}
         dirty: set = set()
         notes: List[Tuple[str, str, str, str]] = []
+        removed: set = set()
 
         def load(task_id: str) -> Optional[Dict[str, Any]]:
             if task_id not in cache:
@@ -398,7 +468,7 @@ class EventFollower:
                 hit_ws, hit_id = self._by_pty[pty]
                 if hit_ws == ws:
                     task = load(hit_id)
-                    if task is not None and is_open(task):
+                    if task is not None and is_open(task) and self._pty_current(task, ev):
                         task_sid = (task.get("agent") or {}).get("session_id")
                         if not sid or not task_sid or task_sid == sid:
                             return task
@@ -426,6 +496,49 @@ class EventFollower:
                     sessions.append(sid)
                 task["sessions"] = sessions
             self._index_task(ws, task)
+
+        def is_auto(task: Dict[str, Any]) -> bool:
+            return (task.get("origin") or {}).get("kind") == "agent" and not task.get("confirmed")
+
+        def fold(src: Dict[str, Any], dst: Dict[str, Any]) -> None:
+            """Move an automatic task's progress into ``dst`` and drop ``src``."""
+            dst["busy_ms"] = int(dst.get("busy_ms") or 0) + int(src.get("busy_ms") or 0)
+            dst["turns"] = int(dst.get("turns") or 0) + int(src.get("turns") or 0)
+            files = list(dst.get("files") or [])
+            for f in src.get("files") or []:
+                if f not in files and len(files) < MAX_FILES:
+                    files.append(f)
+            dst["files"] = files
+            dst["files_count"] = len(files)
+            sessions = list(dst.get("sessions") or [])
+            for sid_ in src.get("sessions") or []:
+                if sid_ not in sessions:
+                    sessions.append(sid_)
+            dst["sessions"] = sessions
+            for key in ("summary", "lee_status", "last_checkin_at"):
+                if not dst.get(key) and src.get(key):
+                    dst[key] = src[key]
+            if dst.get("title_source") == "auto" and src.get("title_source") == "agent" and src.get("title"):
+                dst["title"], dst["title_source"] = src["title"], "agent"
+            if is_open(dst) and src.get("status") in ("waiting", "idle", "review"):
+                dst["status"] = src["status"]
+            if src.get("agent"):
+                agent = dict(dst.get("agent") or {})
+                for k, v in src["agent"].items():
+                    if agent.get(k) is None and v is not None:
+                        agent[k] = v
+                dst["agent"] = agent
+            done = _key_tuple(src.get("applied_through"))
+            if done is not None and (_key_tuple(dst.get("applied_through")) or done) <= done:
+                dst["applied_through"] = src["applied_through"]
+            cache.pop(src["id"], None)
+            dirty.discard(src["id"])
+            removed.add(src["id"])
+            for m in (self._by_session, self._by_pty):
+                for k, v in list(m.items()):
+                    if v == (ws, src["id"]):
+                        m[k] = (ws, dst["id"])
+            cache[dst["id"]] = dst
 
         def apply_report(task: Dict[str, Any], data: Dict[str, Any], ev: Dict[str, Any], respect_agent_title: bool) -> None:
             lee_status = data.get("lee_status") if isinstance(data.get("lee_status"), dict) else None
@@ -466,6 +579,11 @@ class EventFollower:
                 tid = data.get("task_id")
                 if not isinstance(tid, str) or not tid:
                     continue
+                adopted = None
+                if task is not None and task["id"] != tid and is_auto(task):
+                    # The hooks beat a slow relay to the log: fold the automatic
+                    # task into the launched one instead of keeping both.
+                    adopted, task = task, load(tid)
                 if task is None:
                     try:
                         task = new_task(tid, ev)
@@ -491,6 +609,8 @@ class EventFollower:
                             "tab_label": None, "model": data.get("model"),
                         }
                     notes.append(("created", task["id"], "Task launched", iso_s(ev["_ts"])))
+                if adopted is not None:
+                    fold(adopted, task)
                 if pty is not None or sid:
                     attach_session(task, sid, pty, data.get("provider"))
                 if sid:
@@ -587,11 +707,15 @@ class EventFollower:
             applied += 1
 
         for task_id in dirty:
+            if task_id in removed:
+                continue
             task = cache[task_id]
             if task.get("status") in CLOSED_STATUSES:
                 task["agent"] = dict(task["agent"], pty_id=None) if task.get("agent") else None
             store.save(task)
+        for task_id in removed:
+            store.delete(task_id)
         for kind, task_id, text, at in notes:
-            if task_id in cache:
+            if task_id in cache and task_id not in removed:
                 store.record_event(kind, cache[task_id], text, at=at)
         return applied

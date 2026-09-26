@@ -10,6 +10,7 @@ from rich.console import Console
 
 from ...thinking_depth import ThinkingDepth
 from ....shared.auth import auth_headers
+from ....shared.workspace import encode_workspace_header
 from ....shared.gemini_tools import PhaseUpdate, ReActPhase
 from ..selectors import DepthSelector
 
@@ -33,7 +34,7 @@ class MessageProcessor:
         extra = {}
         workspace = os.path.abspath(os.path.expanduser(self.runner.working_directory or ""))
         if self.runner.working_directory and os.path.isdir(workspace):
-            extra["X-Lee-Workspace"] = workspace
+            extra["X-Lee-Workspace"] = encode_workspace_header(workspace)
         return auth_headers(extra)
 
     async def init_direct_agent(self):

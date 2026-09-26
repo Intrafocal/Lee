@@ -170,7 +170,8 @@ def create_cockpit_router() -> APIRouter:
         try:
             ctx = context_for()
             n = _int(limit, 100, 0, 1000, "limit")
-            return _ok(ctx, ctx.tasks().list(status, n))
+            data = await asyncio.to_thread(ctx.tasks().list, status, n)
+            return _ok(ctx, data)
         except BadRequest as e:
             return _err(str(e), e.status)
         except TaskError as e:

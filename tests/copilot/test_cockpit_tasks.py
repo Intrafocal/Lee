@@ -231,3 +231,39 @@ def test_cockpit_tools_are_read_or_propose_only(cockpit_env, monkeypatch):
     CockpitTaskStore(cockpit_env.b).upsert({"title": "Visible to tools"})
     out = asyncio.run(cockpit_tools.cockpit_tasks(working_dir=ws))
     assert [t["title"] for t in out["data"]["tasks"]] == ["Visible to tools"]
+
+
+def test_late_relay_keeps_follower_status_and_pty(cockpit_env):
+    store = CockpitTaskStore(cockpit_env.a)
+    task, _ = store.upsert({"id": "task-0000aaaa", "title": "Fix bug", "status": "running",
+                            "agent": {"provider": "claude", "pty_id": 5, "session_id": "s1"}})
+    # the follower saw the agent finish
+    task["status"] = "review"
+    task["agent"] = dict(task["agent"], pty_id=None)
+    task["applied_through"] = "2026-09-25T10:00:00.000Z|ev1"
+    store.save(task)
+    # the spooled relay lands late with the launch-time status and pty
+    t, created = store.upsert({"id": "task-0000aaaa", "title": "Fix bug", "status": "running",
+                               "agent": {"provider": "claude", "pty_id": 5, "session_id": "s1", "model": "opus"}})
+    assert not created
+    assert t["status"] == "review" and t["agent"]["pty_id"] is None
+    assert t["agent"]["model"] == "opus", "missing agent fields are still filled in"
+    # before the follower touched a task, the relay's fields win as before
+    store.upsert({"id": "task-0000bbbb", "title": "Other", "status": "queued"})
+    t, _ = store.upsert({"id": "task-0000bbbb", "status": "running", "agent": {"pty_id": 9}})
+    assert t["status"] == "running" and t["agent"]["pty_id"] == 9
+
+
+def test_load_all_reuses_parsed_files_until_they_change(cockpit_env, monkeypatch):
+    store = CockpitTaskStore(cockpit_env.a)
+    store.upsert({"id": "task-0000cccc", "title": "One"})
+    store.load_all()
+    calls = []
+    orig = CockpitTaskStore._parse
+    monkeypatch.setattr(CockpitTaskStore, "_parse", staticmethod(lambda c: calls.append(1) or orig(c)))
+    first = store.load_all()
+    assert calls == [], "unchanged files are not re-parsed"
+    first[0]["title"] = "mutated"
+    assert store.load_all()[0]["title"] == "One", "callers get their own copy"
+    store.patch("task-0000cccc", {"title": "Two"})
+    assert store.load_all()[0]["title"] == "Two"

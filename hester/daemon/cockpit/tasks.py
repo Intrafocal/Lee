@@ -9,6 +9,7 @@ and the event follower keeps every task current. Writes are atomic (temp +
 rename); callers serialise them with the workspace context's lock.
 """
 
+import copy
 import json
 import os
 import re
@@ -45,6 +46,14 @@ FIELDS = (
     "updated_at", "closed_at", "version",
 )
 FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions")
+MAX_PARSE_CACHE = 5000
+
+# libyaml when present: task files are re-read on every snapshot and reindex.
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+# Parsed frontmatter keyed by path, reused while (mtime_ns, size) is unchanged,
+# so a load_all() over months of task files costs a stat per file, not a parse.
+_parse_cache: Dict[str, Tuple[int, int, Dict[str, Any], str]] = {}
 
 
 class TaskError(ValueError):
@@ -308,15 +317,25 @@ class CockpitTaskStore:
         end = content.find("\n---\n", 3)
         if end < 0:
             raise TaskError("unterminated frontmatter")
-        meta = yaml.safe_load(content[4:end + 1]) or {}
+        meta = yaml.load(content[4:end + 1], Loader=_YAML_LOADER) or {}
         if not isinstance(meta, dict):
             raise TaskError("frontmatter is not a mapping")
         return _stringify_times(meta), content[end + 5:]
 
     def _load(self, path: Path) -> Optional[Tuple[Dict[str, Any], str]]:
+        key = str(path)
         try:
-            meta, body = self._parse(path.read_text(encoding="utf-8"))
+            st = path.stat()
+            hit = _parse_cache.get(key)
+            if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                meta, body = copy.deepcopy(hit[2]), hit[3]
+            else:
+                meta, body = self._parse(path.read_text(encoding="utf-8"))
+                if len(_parse_cache) >= MAX_PARSE_CACHE:
+                    _parse_cache.clear()
+                _parse_cache[key] = (st.st_mtime_ns, st.st_size, copy.deepcopy(meta), body)
         except FileNotFoundError:
+            _parse_cache.pop(key, None)
             return None
         except (OSError, TaskError, yaml.YAMLError):
             return None
@@ -337,6 +356,16 @@ class CockpitTaskStore:
     def _body(self, task_id: str) -> str:
         loaded = self._load(self._path(task_id))
         return loaded[1] if loaded else ""
+
+    def delete(self, task_id: str) -> None:
+        """Remove a task file (the follower folds a duplicate automatic task into a launched one)."""
+        path = self._path(task_id)
+        _parse_cache.pop(str(path), None)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        self.counter.bump()
 
     def load_all(self) -> List[Dict[str, Any]]:
         out = []
@@ -380,6 +409,7 @@ class CockpitTaskStore:
         except OSError:
             pass
         atomic_write(path, f"---\n{head}---\n{body}")
+        _parse_cache.pop(str(path), None)
         self.counter.bump()
         return task
 
@@ -411,6 +441,9 @@ class CockpitTaskStore:
         created = existing is None
         task = existing or default_task(task_id, str(self.workspace), now)
         body = None
+        # Once the follower has applied events to a task, its status and live
+        # pty are newer than anything a (late, spooled or retried) relay says.
+        followed = not created and bool(task.get("applied_through"))
 
         if created:
             task["title_source"] = "user"
@@ -430,10 +463,21 @@ class CockpitTaskStore:
             task["play"] = _bool("play", payload["play"])
         if "status" in payload and payload["status"] is not None:
             status = _choice("status", payload["status"], OPEN_STATUSES)
-            if is_open(task):
+            if is_open(task) and not followed:
                 task["status"] = status
         if "agent" in payload:
-            task["agent"] = _agent(payload["agent"], task.get("agent"))
+            agent = _agent(payload["agent"], task.get("agent"))
+            if followed and agent is None:
+                agent = task.get("agent")
+            elif followed:
+                current = task.get("agent") or {}
+                if current:
+                    agent = dict(current, **{
+                        k: v for k, v in agent.items() if k != "pty_id" and current.get(k) is None and v is not None
+                    })
+                else:
+                    agent["pty_id"] = None
+            task["agent"] = agent
         if "serves" in payload and payload["serves"] is not None:
             task["serves"] = _str_list("serves", payload["serves"])
         if "workstream" in payload:
