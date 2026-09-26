@@ -331,7 +331,10 @@ export interface LaunchRequest {
   /** Default: cockpit.launch.worktree_for_delegate for lead 'delegate', else false. */
   worktree?: boolean;
   model?: string;
-  /** Default from lead: delegate -> acceptEdits, plan -> plan. */
+  /**
+   * Default: plan lead -> plan (also over an explicit 'auto'); else
+   * cockpit.launch.permission_default: 'auto', or 'default' -> acceptEdits.
+   */
   permission_mode?: ClaudePermissionMode;
   /** Claude --tools (available built-in tools). */
   tools?: string[];
@@ -710,6 +713,8 @@ export const COCKPIT_IPC = {
   checkin: 'cockpit:checkin',
   checkinCancel: 'cockpit:checkin:cancel',
   launch: 'cockpit:launch',
+  /** invoke(workspace): LaunchDefaults (the Launcher's initial toggles). */
+  launchDefaults: 'cockpit:launch:defaults',
   feedGet: 'cockpit:feed:get',
   /** main to renderer: FeedSnapshot for all workspaces (renderer filters). */
   feedPush: 'cockpit:feed',
@@ -749,6 +754,11 @@ export const COCKPIT_IPC = {
 export type CockpitUnsubscribe = () => void;
 
 /** window.lee.cockpit */
+export interface LaunchDefaults {
+  /** cockpit.launch.permission_default: 'auto' launches Claude with --permission-mode auto. */
+  permission_default: 'auto' | 'default';
+}
+
 export interface CockpitAPI {
   // Package A (lee-tab)
   tabs: {
@@ -769,6 +779,8 @@ export interface CockpitAPI {
   /** Cancel the PTY's pending check-in (nothing is typed after this). */
   checkinCancel: (ptyId: number) => Promise<{ success: boolean; error?: string }>;
   launch: (req: LaunchRequest) => Promise<LaunchResult>;
+  /** The workspace's launch defaults (cockpit.launch); optional so older hosts/mocks still type. */
+  launchDefaults?: (workspace: string) => Promise<LaunchDefaults>;
   feed: {
     get: (workspace?: string | null) => Promise<FeedSnapshot>;
     onChange: (cb: (snapshot: FeedSnapshot) => void) => CockpitUnsubscribe;

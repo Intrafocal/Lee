@@ -277,6 +277,14 @@ export interface TileModel {
   approval: AttentionItem | null;
   /** First open item that accepts a text reply. */
   replyItem: AttentionItem | null;
+  /**
+   * The notification the tile's Dismiss closes: the open item that needs you
+   * (else any other open item: summary, review, failure), if it accepts
+   * 'dismiss'. Dismissing uses the queue's dismiss, as the flyout does.
+   */
+  notice: AttentionItem | null;
+  /** The agent is mid-turn (closing it needs a second click). */
+  working: boolean;
   task: CockpitTask | null;
   /** A has this PTY as an agent (check-ins possible). */
   canCheckin: boolean;
@@ -383,6 +391,8 @@ export function tileModel(input: TileInput): TileModel[] {
     const approval = items.find((i) => i.kind === 'approval' && i.actions.includes('approve')) ?? null;
     const replyItem = items.find((i) => i.actions.includes('reply')) ?? null;
     const needsItem = items.find((i) => NEEDS_ITEM_KINDS.has(i.kind)) ?? null;
+    const dismissable = items.filter((i) => i.actions.includes('dismiss'));
+    const notice = dismissable.find((i) => NEEDS_ITEM_KINDS.has(i.kind)) ?? dismissable[0] ?? null;
     const provider = agent?.provider ?? rt?.provider ?? tab?.provider ?? task?.agent?.provider ?? null;
 
     // One state source for tiles and the Tabs list: the tab runtime (hooks for
@@ -467,6 +477,8 @@ export function tileModel(input: TileInput): TileModel[] {
       fidelity,
       approval,
       replyItem,
+      notice,
+      working: busyNow,
       task,
       canCheckin: rt?.kind === 'agent' && rt.state.state !== 'exited',
       checkin: rt?.checkin ? { id: rt.checkin.id, state: rt.checkin.state, label: checkinChipLabel(rt.checkin.state) } : null,

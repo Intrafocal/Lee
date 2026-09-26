@@ -19,6 +19,7 @@ import { TUIDefinition, AgentDefinition } from '../shared/context';
 import { isClaude, withClaudeHooks } from './copilot/hook-install';
 import { withShellIntegration } from './cockpit/shell-integration';
 import { isPi, withPiExtension } from './cockpit/pi-extension';
+import { withClaudePermissionDefault } from './cockpit/cockpit-config';
 
 /**
  * Check if a port is available (not in use).
@@ -864,6 +865,7 @@ export class PTYManager extends EventEmitter {
       }
     }
     finalArgs = withClaudeHooks(cmd, finalArgs);
+    finalArgs = withClaudePermissionDefault(cmd, finalArgs, this.workspaceFor(windowId) || cwd || null);
     finalArgs = withPiExtension(cmd, finalArgs);
     const claude = isClaude(cmd);
     const pi = isPi(cmd) && finalArgs.includes('--extension');

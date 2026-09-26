@@ -1,6 +1,8 @@
 /**
  * Launcher (+ Task / n): one text field and Enter launches with defaults
- * (contracts §4.2). Optional chips: kind, lead, play, worktree, provider.
+ * (contracts §4.2). Optional chips: kind, lead, play, worktree, auto
+ * (Claude --permission-mode auto; default from cockpit.launch.permission_default;
+ * a Plan lead always runs in plan mode), provider.
  * Zero required fields beyond the text; works with Hester down (A spools the
  * task record). No Q4 note, no suggestion chip (v4).
  *
@@ -57,6 +59,9 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
   const [play, setPlay] = useState(false);
   const [worktree, setWorktree] = useState<boolean | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
+  // Claude auto mode: null follows cockpit.launch.permission_default (default 'auto').
+  const [auto, setAuto] = useState<boolean | null>(null);
+  const [autoDefault, setAutoDefault] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +80,20 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
   const effectiveWorktree = worktree ?? lead === 'delegate';
   const effectiveProvider = provider ?? 'claude';
   const contextSupported = lead !== 'human' && CONTEXT_PROVIDERS.has(effectiveProvider);
+  // A plan lead always runs in plan mode; the auto toggle only applies to Claude.
+  const autoApplies = lead === 'delegate' && effectiveProvider === 'claude';
+  const effectiveAuto = auto ?? autoDefault;
+
+  useEffect(() => {
+    let alive = true;
+    ctx.api
+      ?.launchDefaults?.(ctx.workspace)
+      .then((d) => alive && setAutoDefault(d.permission_default !== 'default'))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [ctx.api, ctx.workspace]);
 
   // Load the pick lists the first time the picker opens (no model, no network beyond local Hester).
   useEffect(() => {
@@ -158,6 +177,8 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
       ...(context ? { context } : {}),
       ...(worktree != null ? { worktree } : {}),
       ...(provider ? { provider } : {}),
+      // Only when you flipped the toggle; otherwise main applies the configured default.
+      ...(autoApplies && auto != null ? { permission_mode: auto ? ('auto' as const) : ('acceptEdits' as const) } : {}),
     };
     setBusy(true);
     setError(null);
@@ -342,6 +363,23 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
               <button className={`cockpit-chip-btn${effectiveWorktree ? ' is-on' : ''}`} onClick={() => setWorktree(!effectiveWorktree)}>
                 worktree
               </button>
+              {effectiveProvider === 'claude' && (
+                <button
+                  className={`cockpit-chip-btn${autoApplies && effectiveAuto ? ' is-on' : ''}`}
+                  disabled={!autoApplies}
+                  aria-pressed={autoApplies && effectiveAuto}
+                  title={
+                    autoApplies
+                      ? effectiveAuto
+                        ? 'Claude runs in auto mode (--permission-mode auto). Click for accept-edits.'
+                        : 'Claude runs in accept-edits mode. Click for auto mode.'
+                      : 'Plan runs in plan mode'
+                  }
+                  onClick={() => setAuto(!effectiveAuto)}
+                >
+                  auto
+                </button>
+              )}
               <span className="cockpit-chip-sep" />
               {PROVIDERS.map((p) => (
                 <button key={p} className={`cockpit-chip-btn${effectiveProvider === p ? ' is-on' : ''}`} onClick={() => setProvider(p)}>

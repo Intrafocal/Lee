@@ -214,6 +214,7 @@ await test('spike launch flow: spike node, delegate worktree launch with origin 
     workspace: WS,
     lead: 'delegate',
     kind: 'prototype',
+    provider: 'claude',
     worktree: true,
     prompt: 'Try a file-first store',
     title: 'File store',

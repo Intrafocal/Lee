@@ -5,6 +5,7 @@
  * or lee.log.
  */
 
+import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import type { Principal } from '../../shared/copilot';
@@ -12,7 +13,7 @@ import type { ClaudePermissionMode, LaunchRequest, LaunchResult, TaskKind, TaskL
 import { COCKPIT_IPC } from '../../shared/cockpit';
 import { windowRegistry } from '../window-registry';
 import { logCockpitEvent, type TaskCreateInput, type TaskLauncher } from './cockpit-bus';
-import { getCockpitConfig } from './cockpit-config';
+import { getCockpitConfig, permissionDefault, type PermissionDefault } from './cockpit-config';
 import type { TaskRelay, TaskRecord } from './task-relay';
 import { actorFor, type TabRuntimeImpl } from './tab-runtime';
 import { cleanName } from './session-name';
@@ -48,15 +49,23 @@ export interface LaunchPlan {
   titled: boolean;
 }
 
-/** Defaults from contract §5.6 step 4 (pure). */
-export function launchPlan(req: LaunchRequest, opts: { worktree_for_delegate: boolean }): LaunchPlan {
+/**
+ * Defaults from contract §5.6 step 4 (pure). The permission mode is decided
+ * here: plan lead -> 'plan' (it wins over 'auto', given or defaulted); else an
+ * explicit mode; else cockpit.launch.permission_default ('auto' by default,
+ * 'default' falls back to acceptEdits).
+ */
+export function launchPlan(
+  req: LaunchRequest,
+  opts: { worktree_for_delegate: boolean; permission_default?: PermissionDefault },
+): LaunchPlan {
   const lead: TaskLead = LEADS.includes(req.lead as TaskLead) ? (req.lead as TaskLead) : 'delegate';
   const kind: TaskKind = KINDS.includes(req.kind as TaskKind) ? (req.kind as TaskKind) : 'unknown';
-  const permission_mode: ClaudePermissionMode = MODES.includes(req.permission_mode as ClaudePermissionMode)
-    ? (req.permission_mode as ClaudePermissionMode)
-    : lead === 'plan'
+  const given = MODES.includes(req.permission_mode as ClaudePermissionMode) ? (req.permission_mode as ClaudePermissionMode) : null;
+  const permission_mode: ClaudePermissionMode =
+    lead === 'plan' && (given == null || given === 'auto')
       ? 'plan'
-      : 'acceptEdits';
+      : given ?? ((opts.permission_default ?? 'auto') === 'auto' ? 'auto' : 'acceptEdits');
   const worktree = typeof req.worktree === 'boolean' ? req.worktree : lead === 'delegate' && opts.worktree_for_delegate;
   const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
   const titled = typeof req.title === 'string' && !!req.title.trim();
@@ -78,12 +87,38 @@ export function worktreeSlug(plan: LaunchPlan): string {
   return slugify(plan.titled ? plan.title : 'task', crypto.randomBytes(2).toString('hex'));
 }
 
+const toplevels = new Map<string, string>();
+
+/**
+ * The git top level for a workspace (`git rev-parse --show-toplevel`), cached
+ * per workspace; the workspace itself when it isn't in a repo or git fails.
+ */
+export function gitToplevel(workspace: string): string {
+  const hit = toplevels.get(workspace);
+  if (hit) return hit;
+  let top = workspace;
+  try {
+    const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: workspace,
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out) top = out;
+  } catch {
+    // not a repo, no git, or timed out: the workspace
+  }
+  toplevels.set(workspace, top);
+  return top;
+}
+
 /**
  * Where `claude --worktree <slug>` puts the worktree (contract v3 §4):
- * `<ws>/.claude/worktrees/<slug>` on branch `worktree-<slug>`.
+ * `<git top level>/.claude/worktrees/<slug>` on branch `worktree-<slug>`
+ * (the workspace itself when it isn't in a git repo).
  */
 export function worktreeFor(workspace: string, slug: string): TaskWorktree {
-  return { slug, path: path.join(workspace, '.claude', 'worktrees', slug), branch: `worktree-${slug}` };
+  return { slug, path: path.join(gitToplevel(workspace), '.claude', 'worktrees', slug), branch: `worktree-${slug}` };
 }
 
 /**
@@ -92,9 +127,15 @@ export function worktreeFor(workspace: string, slug: string): TaskWorktree {
  */
 export function buildClaudeArgs(
   req: LaunchRequest,
-  ids: { session_id: string; slug?: string | null; worktree_for_delegate?: boolean; refs?: readonly string[] },
+  ids: {
+    session_id: string;
+    slug?: string | null;
+    worktree_for_delegate?: boolean;
+    permission_default?: PermissionDefault;
+    refs?: readonly string[];
+  },
 ): string[] {
-  const plan = launchPlan(req, { worktree_for_delegate: ids.worktree_for_delegate ?? true });
+  const plan = launchPlan(req, { worktree_for_delegate: ids.worktree_for_delegate ?? true, permission_default: ids.permission_default });
   // The worktree dir and branch are on disk: named after a given title, never the prompt.
   const slug = plan.worktree ? ids.slug ?? worktreeSlug(plan) : null;
   const prompt = withContext(typeof req.prompt === 'string' ? req.prompt.trim() : '', ids.refs ?? []);
@@ -175,7 +216,8 @@ export class TaskLauncherImpl implements TaskLauncher {
     }
 
     const cfg = getCockpitConfig(workspace).cockpit;
-    const plan = launchPlan(req, { worktree_for_delegate: cfg.launch.worktree_for_delegate });
+    const permission_default = permissionDefault(cfg.launch.permission_default);
+    const plan = launchPlan(req, { worktree_for_delegate: cfg.launch.worktree_for_delegate, permission_default });
     const taskId = req.task_id ?? newTaskId();
     const origin = validOrigin(req.origin) ?? { kind: 'launcher', ref: null };
     const serves = Array.isArray(req.serves) ? req.serves.filter((s): s is string => typeof s === 'string') : [];
@@ -226,6 +268,7 @@ export class TaskLauncherImpl implements TaskLauncher {
         session_id: sessionId,
         slug: worktree?.slug ?? null,
         worktree_for_delegate: cfg.launch.worktree_for_delegate,
+        permission_default,
         refs: ctx.refs,
       });
       // An agent tab (type 'agent', provider 'claude'), so it is typed, walled,

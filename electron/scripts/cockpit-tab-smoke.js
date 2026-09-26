@@ -375,7 +375,7 @@ async function main() {
       { session_id: 'uuid-1', slug: 'fix-abcd' },
     );
     assert.deepStrictEqual(a, [
-      '--permission-mode', 'acceptEdits', '--worktree', 'fix-abcd', '--session-id', 'uuid-1', '--name', 'Fix',
+      '--permission-mode', 'auto', '--worktree', 'fix-abcd', '--session-id', 'uuid-1', '--name', 'Fix',
       '--model', 'haiku', '--tools', 'Bash,Read', '--allowedTools', 'Read,Bash(ls:*)', '--', '- fix it',
     ]);
     const plan = buildClaudeArgs({ workspace: WS, lead: 'plan', prompt: 'think about x' }, { session_id: 's' });
@@ -387,11 +387,55 @@ async function main() {
       { workspace: WS, name: '  Login  fix ', title: 'T', prompt: 'go', worktree: false },
       { session_id: 's', refs: ['@src/a.ts', '@/abs/.hester/context/bundles/auth.md'] },
     );
-    assert.deepStrictEqual(named, ['--permission-mode', 'acceptEdits', '--session-id', 's', '--name', 'Login fix', '--', 'go\n\nContext: @src/a.ts @/abs/.hester/context/bundles/auth.md']);
+    assert.deepStrictEqual(named, ['--permission-mode', 'auto', '--session-id', 's', '--name', 'Login fix', '--', 'go\n\nContext: @src/a.ts @/abs/.hester/context/bundles/auth.md']);
     const { buildPiArgs } = cockpit('launcher.js');
     assert.deepStrictEqual(buildPiArgs({ workspace: WS, name: 'Pi job', prompt: 'do it' }, ['@a.md']), ['--name', 'Pi job', '--', '@a.md', 'do it']);
     assert.deepStrictEqual(buildPiArgs({ workspace: WS }), []);
     assert.strictEqual(launchPlan({ workspace: WS }, { worktree_for_delegate: false }).worktree, false);
+  });
+
+  await check('launch permission mode: auto by default, plan lead wins, toggle off / config default -> acceptEdits', () => {
+    const mode = (req, permission_default) => launchPlan({ workspace: WS, ...req }, { worktree_for_delegate: true, permission_default }).permission_mode;
+    assert.strictEqual(mode({}), 'auto', 'default is auto');
+    assert.strictEqual(mode({}, 'auto'), 'auto');
+    assert.strictEqual(mode({}, 'default'), 'acceptEdits', "permission_default 'default' keeps the old delegate mode");
+    assert.strictEqual(mode({ lead: 'plan' }), 'plan', 'plan lead wins over the auto default');
+    assert.strictEqual(mode({ lead: 'plan', permission_mode: 'auto' }), 'plan', 'plan lead wins over an explicit auto');
+    assert.strictEqual(mode({ permission_mode: 'acceptEdits' }), 'acceptEdits', 'the Launcher toggle off');
+    assert.strictEqual(mode({ permission_mode: 'auto' }, 'default'), 'auto', 'the Launcher toggle on over a default config');
+    assert.strictEqual(mode({ permission_mode: 'manual' }), 'manual', 'ops agents keep their explicit mode');
+    const { withClaudePermissionDefault, permissionDefault, COCKPIT_DEFAULTS } = cockpit('cockpit-config.js');
+    assert.strictEqual(COCKPIT_DEFAULTS.cockpit.launch.permission_default, 'auto');
+    assert.strictEqual(permissionDefault('default'), 'default');
+    assert.strictEqual(permissionDefault('bogus'), 'auto');
+    // Plain agent starts (⇧⌘C, agent tabs, prewarm): auto unless the argv picks a mode.
+    assert.deepStrictEqual(withClaudePermissionDefault('/usr/local/bin/claude', [], WS), ['--permission-mode', 'auto']);
+    assert.deepStrictEqual(withClaudePermissionDefault('claude', ['--resume', 'x'], WS), ['--permission-mode', 'auto', '--resume', 'x']);
+    assert.deepStrictEqual(withClaudePermissionDefault('claude', ['--permission-mode', 'plan'], WS), ['--permission-mode', 'plan']);
+    assert.deepStrictEqual(withClaudePermissionDefault('claude', ['--dangerously-skip-permissions'], WS), ['--dangerously-skip-permissions']);
+    assert.deepStrictEqual(withClaudePermissionDefault('claude', ['--', '--permission-mode'], WS), ['--permission-mode', 'auto', '--', '--permission-mode'], 'prompt text is not a flag');
+    assert.deepStrictEqual(withClaudePermissionDefault('pi', [], WS), []);
+    // A workspace that opts out.
+    const optOut = path.join(tmpHome, 'optout');
+    fs.mkdirSync(path.join(optOut, '.lee'), { recursive: true });
+    fs.writeFileSync(path.join(optOut, '.lee', 'config.yaml'), 'cockpit:\n  launch:\n    permission_default: default\n');
+    assert.deepStrictEqual(withClaudePermissionDefault('claude', [], optOut), []);
+  });
+
+  await check('worktreeFor: under the git top level, not a subdirectory workspace', () => {
+    const { worktreeFor } = cockpit('launcher.js');
+    const { execFileSync } = require('child_process');
+    const repo = path.join(tmpHome, 'repo');
+    const sub = path.join(repo, 'packages', 'app');
+    fs.mkdirSync(sub, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    const top = fs.realpathSync(repo);
+    assert.strictEqual(worktreeFor(sub, 'x-1234').path, path.join(top, '.claude', 'worktrees', 'x-1234'));
+    assert.strictEqual(worktreeFor(sub, 'x-1234').branch, 'worktree-x-1234');
+    // Not a repo: the workspace itself.
+    const plain = path.join(tmpHome, 'plain');
+    fs.mkdirSync(plain, { recursive: true });
+    assert.strictEqual(worktreeFor(plain, 'y').path, path.join(plain, '.claude', 'worktrees', 'y'));
   });
 
   // -------------------------------------------------------------------------

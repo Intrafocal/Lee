@@ -274,7 +274,8 @@ export interface ExploreSpike {
   prompt: string;
   task_id: string | null;
   status: SpikeStatus;
-  timebox_min: number;
+  /** null: no timebox. */
+  timebox_min: number | null;
   worktree: TaskWorktree | null;
   started_at: string | null;
   ended_at: string | null;
@@ -495,6 +496,8 @@ export async function startSpike(
       workspace,
       lead: 'delegate',
       kind: 'prototype',
+      // A spike is a claude worktree run, whatever the workspace's default provider.
+      provider: 'claude',
       worktree: true,
       prompt: opts.prompt,
       title,
@@ -508,6 +511,8 @@ export async function startSpike(
     await patchSpike(workspace, expId, node.id, { status: 'failed' });
     return { ok: false, error: res.error || 'Launch failed' };
   }
+  // Forward only: this PATCH never carries a status other than 'running' (Hester
+  // may already have synced the spike further; it refuses to regress one).
   const marked = await patchSpike(workspace, expId, node.id, { task_id: res.task_id, status: 'running' });
   return { ok: true, data: { node: marked.ok ? marked.data : node, launch: res } };
 }

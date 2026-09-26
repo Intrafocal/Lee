@@ -1242,7 +1242,10 @@ export class CopilotQueue {
       // A session name only when you gave a title: Claude writes it to the
       // transcript as a custom-title, which Lee reads back as the task's name.
       const named = typeof l.title === 'string' && l.title.trim() ? ['--name', l.title.trim()] : [];
-      const args = ['--permission-mode', mode, ...(slug ? ['--worktree', slug] : []), ...named, ...(prompt ? ['--', prompt] : [])];
+      // Claude has no "default" mode; the handoff's 'default' means asking for
+      // permissions, which Claude calls 'manual'.
+      const cliMode = mode === 'default' ? 'manual' : mode;
+      const args = ['--permission-mode', cliMode, ...(slug ? ['--worktree', slug] : []), ...named, ...(prompt ? ['--', prompt] : [])];
       target.browserWindow.webContents.send('system:create-tab', { type: 'terminal', label: title, command: 'claude', args });
       this.log({
         type: 'handoff.launch',

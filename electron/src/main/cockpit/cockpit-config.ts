@@ -6,8 +6,10 @@
  *
  * Operations (`operations:`, `services:`) are NOT read here; package B owns them.
  *
- * Source of truth: docs/plans/2026-09-25-copilot-v2-contracts.md (Appendix C).
- * Copied VERBATIM. Do not edit inside a work package.
+ * Source of truth: docs/plans/2026-09-25-copilot-v2-contracts.md (Appendix C),
+ * plus later additions: cockpit.launch.permission_default ('auto' | 'default',
+ * default 'auto'): the Claude permission mode for launches and plain agent
+ * starts that don't pick one (a plan lead is always plan).
  */
 
 import * as fs from 'fs';
@@ -41,6 +43,13 @@ export interface CockpitConfig {
     launch: {
       provider: string;
       worktree_for_delegate: boolean;
+      /**
+       * Claude's permission mode for launches and plain agent starts that do
+       * not choose one: 'auto' (`--permission-mode auto`) or 'default' (no
+       * flag for plain starts, acceptEdits for delegate launches). A plan
+       * lead is always 'plan'.
+       */
+      permission_default: PermissionDefault;
     };
     nudges: {
       max_per_hour: number;
@@ -63,6 +72,36 @@ export interface CockpitConfig {
   };
 }
 
+export type PermissionDefault = 'auto' | 'default';
+
+/** A configured permission_default, validated: only 'default' opts out of auto. */
+export function permissionDefault(v: unknown): PermissionDefault {
+  return v === 'default' ? 'default' : 'auto';
+}
+
+/**
+ * Prepend `--permission-mode auto` to a Claude spawn that doesn't choose a
+ * mode itself (⇧⌘C, agent tabs, the prewarmed process, configured TUIs), when
+ * cockpit.launch.permission_default is 'auto' (the default). Launches, ops
+ * agents and handoffs pass their own --permission-mode and are left alone.
+ * Never throws.
+ */
+export function withClaudePermissionDefault(cmd: string, args: string[], workspace: string | null): string[] {
+  try {
+    if (!cmd || path.basename(cmd) !== 'claude') return args;
+    const end = args.indexOf('--');
+    const opts = end >= 0 ? args.slice(0, end) : args;
+    const chosen = opts.some(
+      (a) => a === '--permission-mode' || a.startsWith('--permission-mode=') || a === '--dangerously-skip-permissions',
+    );
+    if (chosen) return args;
+    if (permissionDefault(getCockpitConfig(workspace).cockpit.launch.permission_default) !== 'auto') return args;
+    return ['--permission-mode', 'auto', ...args];
+  } catch {
+    return args;
+  }
+}
+
 export const COCKPIT_DEFAULTS: CockpitConfig = {
   cockpit: {
     enabled: true,
@@ -70,7 +109,7 @@ export const COCKPIT_DEFAULTS: CockpitConfig = {
     tab: { output_buffer_kb: 256, quiet_ms: 1500 },
     checkin: { timeout_s: 180, wait_idle_s: 120, propose_after_min: 20 },
     shell_integration: true,
-    launch: { provider: 'claude', worktree_for_delegate: true },
+    launch: { provider: 'claude', worktree_for_delegate: true, permission_default: 'auto' },
     nudges: { max_per_hour: 6 },
     detect: { enabled: true, tool_paths: [] },
   },

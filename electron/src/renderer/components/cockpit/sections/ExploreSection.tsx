@@ -296,6 +296,12 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
     const sp = node.spike;
     const ev = node.evidence;
     const elapsedMs = sp?.started_at ? (sp.ended_at ? Date.parse(sp.ended_at) : ctx.now) - Date.parse(sp.started_at) : null;
+    const files = ev?.files ?? [];
+    const commits = ev?.commits ?? [];
+    const chosen = d?.chosen ?? [];
+    const prunedIds = d?.pruned ?? [];
+    // Decision targets by label when the node is in this exploration (ids otherwise).
+    const labelOf = (id: string) => (exp.nodes ?? []).find((n) => n.id === id)?.label || id;
     return (
       <div key={node.id} className={`cockpit-explore-node${pruned ? ' is-pruned' : ''}`} style={{ paddingLeft: depth * 16 }}>
         <div className="cockpit-explore-node-line">
@@ -308,7 +314,8 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
           {sp && <span className={`cockpit-status st-${sp.status}`}>{sp.status}</span>}
           {sp && (
             <span className="cockpit-muted">
-              {elapsedMs != null && elapsedMs >= 0 ? formatDuration(elapsedMs) : '0m'} / {sp.timebox_min}m
+              {elapsedMs != null && elapsedMs >= 0 ? formatDuration(elapsedMs) : '0m'}
+              {sp.timebox_min != null ? ` / ${sp.timebox_min}m` : ''}
             </span>
           )}
           {sp?.task_id && (
@@ -330,6 +337,13 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
             </span>
           )}
         </div>
+        {d && (chosen.length > 0 || prunedIds.length > 0) && (
+          <div className="cockpit-explore-node-detail cockpit-muted">
+            {chosen.length > 0 && <span>Chosen: {chosen.map(labelOf).join(', ')}</span>}
+            {chosen.length > 0 && prunedIds.length > 0 && ' · '}
+            {prunedIds.length > 0 && <span>Pruned: {prunedIds.map(labelOf).join(', ')}</span>}
+          </div>
+        )}
         {d && (
           <div className="cockpit-explore-node-detail">
             {reasonEdit?.nodeId === node.id ? (
@@ -381,8 +395,8 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
             )}
             {ev.diffstat && <pre className="cockpit-explore-diffstat">{ev.diffstat}</pre>}
             <span className="cockpit-muted">
-              {ev.files.length} file{ev.files.length === 1 ? '' : 's'}
-              {ev.commits.length ? ` · ${ev.commits.length} commit${ev.commits.length === 1 ? '' : 's'}` : ''}
+              {files.length} file{files.length === 1 ? '' : 's'}
+              {commits.length ? ` · ${commits.length} commit${commits.length === 1 ? '' : 's'}` : ''}
               {ev.captured_at ? ` · captured ${formatAge(ev.captured_at, ctx.now)}` : ''}
             </span>
             {ev.diff_path && (
@@ -549,8 +563,8 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
                 {exp.origin?.kind === 'someday' && <span className="cockpit-tag">from Someday</span>}
                 {exp.origin?.kind === 'task' && <span className="cockpit-tag">from a task</span>}
                 {exp.origin?.kind === 'library' && <span className="cockpit-tag">from the Library</span>}
-                {(exp.promoted ?? []).map((p) => (
-                  <span key={`${p.to}:${p.ref}`} className="cockpit-tag is-ok" title={p.ref}>
+                {(exp.promoted ?? []).map((p, i) => (
+                  <span key={`${p.to}:${p.ref}:${p.at ?? ''}:${i}`} className="cockpit-tag is-ok" title={p.ref}>
                     → {p.to}
                   </span>
                 ))}

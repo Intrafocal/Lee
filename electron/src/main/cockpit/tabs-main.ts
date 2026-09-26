@@ -23,6 +23,7 @@ import type { PTYManager } from '../pty-manager';
 import { windowRegistry } from '../window-registry';
 import { cockpitBus, logCockpitEvent, type FeedActionHandler } from './cockpit-bus';
 import { CheckinManager } from './checkin';
+import { getCockpitConfig, permissionDefault } from './cockpit-config';
 import { TaskLauncherImpl } from './launcher';
 import { installPiExtension } from './pi-extension';
 import { installShellIntegration, setShellIntegrationWorkspaceResolver } from './shell-integration';
@@ -227,6 +228,10 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
   );
   ipcMain.handle(COCKPIT_IPC.checkinCancel, (_e: IpcMainInvokeEvent, ptyId: number) => checkins.cancel(ptyArg(ptyId), LOCAL_USER));
   ipcMain.handle(COCKPIT_IPC.launch, (e: IpcMainInvokeEvent, req: LaunchRequest) => launcher.launch(req, LOCAL_USER, senderWindow(e)));
+  ipcMain.handle(COCKPIT_IPC.launchDefaults, (_e: IpcMainInvokeEvent, workspace: unknown) => {
+    const ws = typeof workspace === 'string' ? openWorkspacePath(workspace) : null;
+    return { permission_default: permissionDefault(getCockpitConfig(ws).cockpit.launch.permission_default) };
+  });
   ipcMain.handle(COCKPIT_IPC.feedGet, (_e: IpcMainInvokeEvent, workspace?: string | null) =>
     cockpitBus.feed.snapshot(typeof workspace === 'string' && workspace ? workspace : undefined),
   );

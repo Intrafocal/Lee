@@ -276,7 +276,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
 
   // Decision, spike and evidence nodes: read-only, no chat (contract v3 §9)
   if (isReadOnlyNode(node)) {
-    return <ReadOnlyNodeView node={node} onOpenDiff={onOpenDiff} />;
+    return <ReadOnlyNodeView node={node} nodes={session?.nodes} onOpenDiff={onOpenDiff} />;
   }
 
   // Session overview — when the root node is selected
@@ -707,11 +707,21 @@ export default NodeChat;
 const READ_ONLY_TITLE: Record<string, string> = { decision: 'Decision', spike: 'Spike', evidence: 'Evidence' };
 
 /** A decision, spike or evidence node: its frontmatter text, read-only. */
-const ReadOnlyNodeView: React.FC<{ node: ExplorationNode; onOpenDiff?: (path: string) => void }> = ({ node, onOpenDiff }) => {
+const ReadOnlyNodeView: React.FC<{
+  node: ExplorationNode;
+  nodes?: Record<string, ExplorationNode>;
+  onOpenDiff?: (path: string) => void;
+}> = ({ node, nodes, onOpenDiff }) => {
   const kind = nodeKind(node) ?? 'decision';
   const d = node.decision;
   const sp = node.spike;
   const ev = node.evidence;
+  // Decision targets by label when the node is in this session (ids otherwise).
+  const labelOf = (id: string) => nodes?.[id]?.label || id;
+  const chosen = d?.chosen ?? [];
+  const pruned = d?.pruned ?? [];
+  const files = ev?.files ?? [];
+  const commits = ev?.commits ?? [];
   return (
     <div className="library-chat">
       <div className="library-chat-header">
@@ -724,15 +734,17 @@ const ReadOnlyNodeView: React.FC<{ node: ExplorationNode; onOpenDiff?: (path: st
         {d && (
           <>
             <div className="library-readonly-text">{d.text || node.label}</div>
-            {d.chosen.length > 0 && <div className="library-readonly-meta">Chosen: {d.chosen.join(', ')}</div>}
-            {d.pruned.length > 0 && <div className="library-readonly-meta">Pruned: {d.pruned.join(', ')}</div>}
+            {chosen.length > 0 && <div className="library-readonly-meta">Chosen: {chosen.map(labelOf).join(', ')}</div>}
+            {pruned.length > 0 && <div className="library-readonly-meta">Pruned: {pruned.map(labelOf).join(', ')}</div>}
             <div className="library-readonly-meta">{d.reason ? `Reason: ${d.reason}` : 'No reason given (add one from the Cockpit’s Explore section).'}</div>
           </>
         )}
         {sp && (
           <>
             <div className="library-readonly-meta">
-              Status: <strong>{sp.status}</strong> · timebox {sp.timebox_min}m{sp.task_id ? ` · task ${sp.task_id}` : ''}
+              Status: <strong>{sp.status}</strong>
+              {sp.timebox_min != null ? ` · timebox ${sp.timebox_min}m` : ''}
+              {sp.task_id ? ` · task ${sp.task_id}` : ''}
             </div>
             {sp.worktree && <div className="library-readonly-meta">Worktree: {sp.worktree.branch} ({sp.worktree.path})</div>}
             <div className="library-readonly-label">Prompt</div>
@@ -744,8 +756,8 @@ const ReadOnlyNodeView: React.FC<{ node: ExplorationNode; onOpenDiff?: (path: st
             <div className="library-readonly-label">Agent’s claim</div>
             <div className="library-readonly-text">{ev.summary || '(no summary)'}</div>
             {ev.diffstat && <pre className="library-readonly-pre">{ev.diffstat}</pre>}
-            {ev.files.length > 0 && <div className="library-readonly-meta">Files: {ev.files.slice(0, 20).join(', ')}</div>}
-            {ev.commits.length > 0 && <div className="library-readonly-meta">Commits: {ev.commits.map((c) => c.slice(0, 8)).join(', ')}</div>}
+            {files.length > 0 && <div className="library-readonly-meta">Files: {files.slice(0, 20).join(', ')}</div>}
+            {commits.length > 0 && <div className="library-readonly-meta">Commits: {commits.map((c) => c.slice(0, 8)).join(', ')}</div>}
             {ev.diff_path && onOpenDiff && (
               <button className="library-search-promote-btn" onClick={() => onOpenDiff(ev.diff_path as string)}>
                 Open diff

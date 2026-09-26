@@ -291,6 +291,27 @@ test('tileModel: the tab runtime state wins over an unknown agent summary (same 
   assert.equal(u.chip.label, 'quiet 4m');
 });
 
+test('tileModel: notice is the dismissable item that needs you (else any other); working only while busy', () => {
+  const mk = (items, state = 'idle-at-prompt') =>
+    tileModel({
+      workspace: WS,
+      tabs: [agentTab],
+      sets: noSets,
+      snapshot: snapshot({ items }),
+      runtime: [runtime({ pty_id: 12, kind: 'agent', provider: 'claude', fidelity: 'structured', label: 'Claude', state: { ...runtime({}).state, pty_id: 12, state } })],
+      tasks: [],
+      now: NOW,
+    })[0];
+  const sum = item({ id: 'sum', kind: 'summary', actions: ['open', 'dismiss'] });
+  const ap = item({ id: 'ap', kind: 'approval', actions: ['approve', 'deny', 'open', 'snooze', 'dismiss'] });
+  assert.equal(mk([sum, ap]).notice.id, 'ap', 'the item that needs you first');
+  assert.equal(mk([sum]).notice.id, 'sum');
+  assert.equal(mk([item({ id: 'nd', kind: 'summary', actions: ['open'] })]).notice, null, 'not dismissable: no notice');
+  assert.equal(mk([]).notice, null);
+  assert.equal(mk([], 'busy').working, true);
+  assert.equal(mk([]).working, false);
+});
+
 test('tileModel: agent/auto task titles are made plain; user titles kept', () => {
   const mk = (title, title_source) =>
     tileModel({ workspace: WS, tabs: [agentTab], sets: noSets, snapshot: snapshot({}), runtime: [], now: NOW,

@@ -112,6 +112,8 @@ export interface CockpitCtx {
   openCheckin: (ptyId: number, label: string) => void;
   /** Rename an agent (by pty) and/or its task: your name wins over Claude's titles. */
   openRename: (target: RenameTarget) => void;
+  /** Close an agent: its tab here (the Workbench close path, which kills the PTY), else just its PTY. */
+  closeAgent: (ptyId: number, tabId: number | null) => void;
   registerRows: (rows: RowHandle[]) => void;
   selectRow: (id: string) => void;
   setSection: (section: SectionId) => void;
@@ -126,6 +128,8 @@ interface CockpitHostProps {
   copilot: UseCopilotResult;
   onCreateTab: CreateTabFn;
   onOpenTab: (tabId: number) => void;
+  /** Close a tab in this window (App.closeTab: kills its PTY). */
+  onCloseTab?: (tabId: number) => void | Promise<void>;
   /** The Workbench's open-file path (App.handleFileOpen). */
   onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
   /** Open (or refocus) a Hester chat tab resumed on this session (App.handleOpenHesterTab). */
@@ -180,6 +184,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   copilot,
   onCreateTab,
   onOpenTab,
+  onCloseTab,
   onOpenFile,
   onOpenHesterSession,
   onOpenLibrary,
@@ -257,6 +262,17 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   createRef.current = onCreateTab;
   const openRef = useRef(onOpenTab);
   openRef.current = onOpenTab;
+  const closeRef = useRef(onCloseTab);
+  closeRef.current = onCloseTab;
+  const closeAgent = useCallback((ptyId: number, tabId: number | null) => {
+    const close = closeRef.current;
+    if (tabId != null && close) {
+      void Promise.resolve(close(tabId)).catch(() => {});
+      return;
+    }
+    // Another window's agent: end its PTY (that window's tab shows it exited).
+    void window.lee?.pty?.kill(ptyId)?.catch?.(() => {});
+  }, []);
   const openFileRef = useRef(onOpenFile);
   openFileRef.current = onOpenFile;
   const openHesterRef = useRef(onOpenHesterSession);
@@ -766,6 +782,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     openReply,
     openCheckin,
     openRename,
+    closeAgent,
     registerRows,
     selectRow,
     setSection,
@@ -814,7 +831,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       <div className="cockpit-body">
         <CockpitNav section={section} badges={badges} onSelect={setSection} />
         <div className="cockpit-center">
-          <AgentTiles ctx={ctx} />
           <div className="cockpit-section">
             {section === 'copilot' && (
               <CopilotSection
@@ -834,6 +850,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
             {section === 'tabs' && <TabsSection ctx={ctx} />}
             {section === 'history' && <HistorySection ctx={ctx} />}
           </div>
+          {/* The selected section reads first; the agent tiles sit below it. */}
+          <AgentTiles ctx={ctx} />
         </div>
       </div>
       <TabDrawer

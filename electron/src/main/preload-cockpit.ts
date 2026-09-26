@@ -41,6 +41,7 @@ export const cockpitApi: CockpitAPI = {
   checkin: (ptyId, opts) => ipcRenderer.invoke(COCKPIT_IPC.checkin, ptyId, opts ?? {}),
   checkinCancel: (ptyId) => ipcRenderer.invoke(COCKPIT_IPC.checkinCancel, ptyId),
   launch: (req) => ipcRenderer.invoke(COCKPIT_IPC.launch, req),
+  launchDefaults: (workspace) => ipcRenderer.invoke(COCKPIT_IPC.launchDefaults, workspace),
   feed: {
     get: (workspace) => ipcRenderer.invoke(COCKPIT_IPC.feedGet, workspace ?? null),
     onChange: (cb) => subscribe<FeedSnapshot>(COCKPIT_IPC.feedPush, cb),

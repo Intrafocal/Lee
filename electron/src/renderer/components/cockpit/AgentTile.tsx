@@ -2,7 +2,9 @@
  * AgentTile - one agent: state chip, title, the agent's latest words (or its
  * screen tail), meta and actions (contracts §3.5). Approve/Deny and Reply use
  * the v0 queue; Check in shows the exact fixed prompt before anything is
- * typed (C3); Peek opens the terminal.
+ * typed (C3); Peek opens the terminal. × dismisses the tile's notification
+ * (queue dismiss, as the flyout); Close ends the agent (a working agent asks
+ * once more, inline).
  *
  * Also exports the Reply and Check-in popovers the keyboard map opens.
  */
@@ -24,13 +26,43 @@ interface AgentTileProps {
   onSelect: () => void;
 }
 
+/**
+ * Summaries you dismissed, by pty: the text hidden (a new summary shows again).
+ * Module-level so it survives collapsing the tiles; renderer memory only.
+ */
+const hiddenSummaries = new Map<number, string>();
+
+const NOTICE_LABEL: Record<string, string> = {
+  approval: 'approval',
+  question: 'question',
+  waiting: 'waiting',
+  blocker: 'blocker',
+  decision: 'decision',
+  failure: 'failure',
+  review: 'review',
+  summary: 'summary',
+};
+
 export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSelect }) => {
   const [busy, setBusy] = useState(false);
+  const [hiddenSummary, setHiddenSummary] = useState<string | null>(() => hiddenSummaries.get(tile.ptyId) ?? null);
+  // Closing a working agent takes a second click (no modal).
+  const [confirmClose, setConfirmClose] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (selected) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [selected]);
+
+  useEffect(() => {
+    if (!confirmClose) return;
+    const t = window.setTimeout(() => setConfirmClose(false), 5000);
+    return () => window.clearTimeout(t);
+  }, [confirmClose]);
+  // The confirmation is about a working agent: drop it once it stops.
+  useEffect(() => {
+    if (!tile.working) setConfirmClose(false);
+  }, [tile.working]);
 
   const guard = async (fn: () => Promise<string | null>) => {
     setBusy(true);
@@ -52,6 +84,39 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
       const r = await api.reply(item.id, { action, version: item.version });
       return r.success ? null : r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'failed';
     });
+  };
+
+  const summaryShown = !!tile.summary && tile.summary.text !== hiddenSummary;
+  const notice = tile.notice;
+  const canDismiss = !!notice || summaryShown;
+
+  // Dismiss the tile's notification: the attention item through the queue's
+  // dismiss (as the flyout does; an approval's prompt stays open in the
+  // terminal), and the agent's summary text locally when the item is a
+  // summary/review or there is no item.
+  const dismiss = () => {
+    const hideSummary = () => {
+      if (!tile.summary) return;
+      hiddenSummaries.set(tile.ptyId, tile.summary.text);
+      setHiddenSummary(tile.summary.text);
+    };
+    if (!notice || notice.kind === 'summary' || notice.kind === 'review') hideSummary();
+    if (!notice || !ctx.copilotApi) return;
+    const api = ctx.copilotApi;
+    void guard(async () => {
+      const r = await api.dismiss(notice.id);
+      return r.success ? null : r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'failed';
+    });
+  };
+
+  const close = () => {
+    if (tile.working && !confirmClose) {
+      setConfirmClose(true);
+      return;
+    }
+    setConfirmClose(false);
+    ctx.closeAgent(tile.ptyId, tile.tabId);
+    ctx.notify(`Closed ${tile.title}`);
   };
 
   const task = tile.task;
@@ -83,6 +148,25 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
         <span className="cockpit-tile-title" title={tile.title}>
           {tile.title}
         </span>
+        {canDismiss && (
+          <button
+            className="cockpit-tile-dismiss"
+            disabled={busy}
+            aria-label="Dismiss notification"
+            title={
+              notice
+                ? `Dismiss this ${NOTICE_LABEL[notice.kind] ?? 'notification'}${notice.kind === 'approval' ? ' (the prompt stays open in the terminal)' : ''}`
+                : 'Hide this summary'
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              dismiss();
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <Icon name="close" size={11} />
+          </button>
+        )}
       </div>
       {tile.approval?.tool && (
         <div className="cockpit-tile-tool">
@@ -90,6 +174,7 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
         </div>
       )}
       {tile.summary &&
+        summaryShown &&
         (selected ? (
           <div className="cockpit-tile-summary is-expanded" onDoubleClick={(e) => e.stopPropagation()}>
             <span className="cockpit-agent-label">{tile.summary.label}:</span>
@@ -171,6 +256,14 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
           onClick={() => ctx.openRename({ ptyId: tile.ptyId, taskId: task?.id ?? null, current: tile.title, provider: tile.provider })}
         >
           Rename
+        </button>
+        <button
+          className={`cockpit-btn${confirmClose ? ' is-danger' : ''}`}
+          disabled={busy}
+          title={tile.working ? 'Close this agent (it is working: asks once more)' : 'Close this agent and its tab'}
+          onClick={close}
+        >
+          <Icon name="close" size={11} /> {confirmClose ? 'Agent is working — close anyway?' : 'Close'}
         </button>
         <button className="cockpit-btn is-go" disabled={busy} onClick={() => ctx.goInto(tile.ptyId, 'tile')} title="Peek at this agent's terminal (Enter)">
           <Icon name="arrow-right" size={11} /> Peek <kbd>⏎</kbd>

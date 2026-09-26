@@ -112,7 +112,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     return () => window.clearTimeout(t);
   }, [notice]);
   /** "Spike…" asks for a prompt (prefilled with the node label). */
-  const [spikeForm, setSpikeForm] = useState<{ nodeId: string; prompt: string; busy: boolean } | null>(null);
+  // The session is part of the form: a spike always targets the exploration it was opened on.
+  const [spikeForm, setSpikeForm] = useState<{ sessionId: string; nodeId: string; prompt: string; busy: boolean } | null>(null);
 
   // Load sessions list on mount (and when the pane's workspace changes)
   useEffect(() => {
@@ -704,12 +705,22 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
 
   // Spike from a node: ask for a prompt, prefilled with the node's label
   const handleSpikeFrom = useCallback((nodeId: string) => {
-    const node = session?.nodes[nodeId];
-    setSpikeForm({ nodeId, prompt: node?.label ?? '', busy: false });
+    if (!session) return;
+    const node = session.nodes[nodeId];
+    setSpikeForm({ sessionId: session.session_id, nodeId, prompt: node?.label ?? '', busy: false });
   }, [session]);
 
+  // Switching sessions drops a spike form opened on another one.
+  const currentSessionId = session?.session_id ?? null;
+  const sessionRef = useRef<string | null>(currentSessionId);
+  sessionRef.current = currentSessionId;
+  useEffect(() => {
+    setSpikeForm((f) => (f && f.sessionId !== currentSessionId ? null : f));
+  }, [currentSessionId]);
+
   const submitSpike = useCallback(async () => {
-    if (!session || !spikeForm || !spikeForm.prompt.trim()) return;
+    if (!session || !spikeForm || !spikeForm.prompt.trim() || spikeForm.sessionId !== session.session_id) return;
+    const sessionId = spikeForm.sessionId;
     const launch = window.lee?.cockpit?.launch;
     if (!launch) {
       setError('Launching a spike needs the Cockpit runtime');
@@ -719,19 +730,20 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     setSpikeForm({ ...spikeForm, busy: true });
     const r = await startSpike(
       workspace,
-      session.session_id,
+      sessionId,
       { parent: spikeForm.nodeId, prompt, title: prompt.split('\n')[0].slice(0, 60) },
       (req) => launch(req),
     );
     if (!r.ok) {
-      setSpikeForm((f) => (f ? { ...f, busy: false } : f));
+      setSpikeForm((f) => (f && f.sessionId === sessionId ? { ...f, busy: false } : f));
       setError(`Couldn't start the spike: ${r.error}`);
-      await fetchSession(session.session_id, spikeForm.nodeId);
+      if (sessionRef.current === sessionId) await fetchSession(sessionId, spikeForm.nodeId);
       return;
     }
-    setSpikeForm(null);
+    setSpikeForm((f) => (f && f.sessionId === sessionId ? null : f));
     setNotice(r.data.launch.relayed === false ? 'Spike launched (task record queued for Hester)' : 'Spike launched');
-    await fetchSession(session.session_id, r.data.node.id);
+    // Don't pull the view back if you switched sessions meanwhile.
+    if (sessionRef.current === sessionId) await fetchSession(sessionId, r.data.node.id);
   }, [session, spikeForm, workspace, fetchSession]);
 
   const handleOpenDiff = useCallback((rel: string) => {

@@ -2825,6 +2825,7 @@ const App: React.FC = () => {
         activeTabId={activeTabId}
         copilot={copilot}
         onCreateTab={createTab}
+        onCloseTab={closeTab}
         onOpenTab={(tabId: number) => {
           const t = tabs.find((x) => x.id === tabId);
           if (!t) return;
