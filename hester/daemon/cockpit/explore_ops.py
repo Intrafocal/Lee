@@ -155,7 +155,12 @@ async def promote(ctx, exp_id: str, body: Dict[str, Any], now: Optional[datetime
         exp = store.record_promote(exp_id, "workstream", ws.id, node_ids, now)
         return {"exploration": to_api(exp), "workstream_id": ws.id, "title": ws.title, "phase": ws.phase.value}
 
+    # Never overwrite an earlier draft: you may have edited it.
     draft_rel = GOAL_DRAFTS_DIR / f"{exp_id}.md"
+    n = 2
+    while (Path(ctx.path) / draft_rel).exists():
+        draft_rel = GOAL_DRAFTS_DIR / f"{exp_id}-{n}.md"
+        n += 1
     _write_private(Path(ctx.path) / draft_rel, goal_draft(Path(ctx.path), exp, node_ids, title))
     exp = store.record_promote(exp_id, "goal", str(draft_rel), node_ids, now)
     return {"exploration": to_api(exp), "draft_path": str(draft_rel)}

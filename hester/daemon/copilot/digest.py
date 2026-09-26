@@ -115,7 +115,7 @@ def _git(workspace: Path, *args: str) -> Optional[str]:
     try:
         proc = subprocess.run(
             ["git", "-C", str(workspace), *args],
-            capture_output=True, text=True, timeout=GIT_TIMEOUT_S,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

@@ -269,7 +269,7 @@ def parse_messages(lines: List[str]) -> List[Dict[str, Any]]:
         if cur is not None:
             out.append({
                 "role": "user" if cur[0] == "You" else "assistant",
-                "content": "\n".join(buf).strip(),
+                "content": "\n".join(_unescape_line(b) for b in buf).strip(),
                 "timestamp": cur[1],
                 "metadata": {},
             })
@@ -292,12 +292,27 @@ def _root_log_lines(root_lines: List[str]) -> List[str]:
     return []
 
 
+def _heading_like(line: str) -> bool:
+    bare = line.lstrip(" ")
+    return bool(MSG_HEADING_RE.match(bare) or NODE_HEADING_RE.match(bare))
+
+
+def _escape_headings(text: str) -> str:
+    """Indent content lines shaped like our own headings (one more space each, so
+    it reverses exactly), so the parser never splits on them."""
+    return "\n".join(" " + line if _heading_like(line) else line for line in text.split("\n"))
+
+
+def _unescape_line(line: str) -> str:
+    return line[1:] if line.startswith(" ") and _heading_like(line) else line
+
+
 def _turn_text(user: Optional[str], assistant: Optional[str], stamp: str) -> str:
     parts = []
     if user and user.strip():
-        parts.append(f"\n### You · {stamp}\n\n{_clip(user, MAX_TURN_TEXT)}\n")
+        parts.append(f"\n### You · {stamp}\n\n{_escape_headings(_clip(user, MAX_TURN_TEXT))}\n")
     if assistant and assistant.strip():
-        parts.append(f"\n### Hester · {stamp}\n\n{_clip(assistant, MAX_TURN_TEXT)}\n")
+        parts.append(f"\n### Hester · {stamp}\n\n{_escape_headings(_clip(assistant, MAX_TURN_TEXT))}\n")
     return "".join(parts)
 
 
@@ -1056,6 +1071,26 @@ def _workspace_for_session(session_id: str, exp_id: str, working_directory: Opti
         if (cand / ".hester" / "explore" / f"{exp_id}.md").exists():
             return cand
     return None
+
+
+async def record_session_turn_locked(session_id: Any, working_directory: Optional[str], user: Optional[str], assistant: Optional[str]) -> bool:
+    """``record_session_turn`` under the workspace's lock, so it can't race spike syncs or routes. Never raises."""
+    exp_id = exploration_id_from_session(session_id)
+    if exp_id is None:
+        return False
+    ws = _workspace_for_session(session_id, exp_id, working_directory)
+    if ws is None:
+        return False
+    try:
+        from ..workspaces.registry import get_registry
+
+        ctx = get_registry().get(ws, source="request")
+    except Exception:
+        ctx = None
+    if ctx is None:
+        return record_session_turn(session_id, working_directory, user, assistant)
+    async with ctx.lock:
+        return record_session_turn(session_id, working_directory, user, assistant)
 
 
 def record_session_turn(session_id: Any, working_directory: Optional[str], user: Optional[str], assistant: Optional[str]) -> bool:

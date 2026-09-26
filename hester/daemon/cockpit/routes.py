@@ -476,6 +476,13 @@ def create_cockpit_router() -> APIRouter:
             unknown = set(b) - {"task_id", "status", "worktree"}
             if unknown:
                 raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
+            # The renderer marks a spike running right after launching it; by then
+            # the follower may already have moved it on. Never step backwards here.
+            if b.get("status") in ("pending", "running"):
+                node = next((n for n in store.nodes(exp_id) if n["id"] == node_id), None)
+                current = ((node or {}).get("spike") or {}).get("status")
+                if current not in (None, "pending", "running"):
+                    b = {k: v for k, v in b.items() if k != "status"}
             return store.update_spike(exp_id, node_id, b)
         return await _exp_op(request, op)
 

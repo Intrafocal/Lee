@@ -42,6 +42,7 @@ EVIDENCE_STATUSES = ("review", "done", "discarded")
 MAX_DIFF_BYTES = 512 * 1024
 MAX_EVIDENCE_FILES = 200
 MAX_UNTRACKED = 100
+MAX_DIFFSTAT_LINES = 40
 
 
 def parse_ref(ref: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -99,17 +100,24 @@ def capture_evidence(workspace: Path, exp_id: str, node_id: str, task: Dict[str,
     wt = Path(path) if isinstance(path, str) and path else None
     if wt is None or not wt.is_dir() or _git(wt, "rev-parse", "--is-inside-work-tree") is None:
         return evidence
-    branch = default_branch(Path(workspace)) if _git(Path(workspace), "rev-parse", "--git-dir") is not None else None
-    branch = branch or default_branch(wt)
-    base = _git(wt, "merge-base", "HEAD", branch) if branch else None
+    # Resolve the default branch to a commit in the workspace: inside the
+    # worktree, "HEAD" (the fallback name) would mean the spike's own tip.
+    ws_path = Path(workspace)
+    branch = default_branch(ws_path) if _git(ws_path, "rev-parse", "--git-dir") is not None else None
+    target = _git(ws_path, "rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}") if branch else None
+    target = target.strip() if target else None
+    base = _git(wt, "merge-base", "HEAD", target) if target else None
     base = base.strip() if base else None
     if not base:
         return evidence
-    stat = _git(wt, "diff", "--stat", base) or ""
-    diff = _git(wt, "diff", base) or ""
+    stat = _git(wt, "diff", "--no-color", "--no-ext-diff", "--stat", base) or ""
+    diff = _git(wt, "diff", "--no-color", "--no-ext-diff", base) or ""
     untracked = [u for u in (_git(wt, "ls-files", "--others", "--exclude-standard") or "").splitlines() if u.strip()]
     log = _git(wt, "log", "--format=%H", f"--max-count={MAX_COMMITS}", f"{base}..HEAD") or ""
-    evidence["diffstat"] = stat.rstrip("\n") or None
+    stat_lines = stat.rstrip("\n").splitlines()
+    if len(stat_lines) > MAX_DIFFSTAT_LINES:
+        stat_lines = [f"… {len(stat_lines) - MAX_DIFFSTAT_LINES} more lines"] + stat_lines[-MAX_DIFFSTAT_LINES:]
+    evidence["diffstat"] = "\n".join(stat_lines) or None
     evidence["commits"] = [line.strip()[:7] for line in log.splitlines() if line.strip()]
     evidence["untracked"] = untracked[:MAX_UNTRACKED]
     header = [f"# Spike evidence for {exp_id}/{node_id} (task {task.get('id')}), diff against merge-base {base[:12]}"]
