@@ -1212,7 +1212,7 @@ You are operating in: {working_dir}
                 await self.sessions.save(session)
 
                 # An Explore deep dive (session explore-<id>) writes each turn
-                # back to its exploration file (.hester/explore/<id>.md).
+                # back to its exploration file (.hester/explore/<id>/exploration.md).
                 await record_explore_turn(request.session_id, working_dir, cleaned_message, response_text)
 
                 # Extract any editor commands from response

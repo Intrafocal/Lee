@@ -20,7 +20,7 @@ import inspect
 import logging
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from ...shared.workspace import get_current_workspace
 from . import lee_events
@@ -29,6 +29,12 @@ logger = logging.getLogger("hester.daemon.copilot.model_log")
 
 current_trigger: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
     "hester_model_trigger", default=None
+)
+
+# Deep D1: a runner can collect the calls made inside a block (collect_calls),
+# e.g. deep-ask recording which model answered.
+call_sink: contextvars.ContextVar[Optional[List[Dict[str, Any]]]] = contextvars.ContextVar(
+    "hester_model_call_sink", default=None
 )
 
 TRIGGER_KINDS = ("user", "automatic", "unknown")
@@ -79,6 +85,20 @@ def surface_override(surface: Optional[str]) -> Iterator[None]:
         reset_trigger(token)
 
 
+@contextmanager
+def collect_calls() -> Iterator[List[Dict[str, Any]]]:
+    """Within this block, each model call also appends ``{location, name, ok}`` to the yielded list."""
+    calls: List[Dict[str, Any]] = []
+    token = call_sink.set(calls)
+    try:
+        yield calls
+    finally:
+        try:
+            call_sink.reset(token)
+        except ValueError:
+            call_sink.set(None)
+
+
 def get_trigger() -> Dict[str, Any]:
     value = current_trigger.get()
     return dict(value) if value else {"kind": "unknown"}
@@ -113,6 +133,9 @@ def record_model_call(
         }
         if duration_ms is not None:
             data["duration_ms"] = round(float(duration_ms), 1)
+        sink = call_sink.get()
+        if sink is not None:
+            sink.append({"location": location, "name": str(model or ""), "ok": bool(ok)})
         lee_events.ingest("model.call", data, workspace=_workspace(), actor={"kind": "hester"})
     except Exception as e:
         logger.debug(f"record_model_call failed: {e}")

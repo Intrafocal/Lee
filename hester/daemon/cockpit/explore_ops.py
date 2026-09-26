@@ -175,7 +175,7 @@ def goal_draft(workspace: Path, exp: Dict[str, Any], node_ids: Optional[List[str
     """A ``### G<next>`` block in GOALS.md's format; the human edits GOALS.md."""
     gid = next_goal_id(workspace)
     lines = [
-        f"<!-- Draft goal from exploration {exp['id']} (.hester/explore/{exp['id']}.md). "
+        f"<!-- Draft goal from exploration {exp['id']} (.hester/explore/{exp['id']}/exploration.md). "
         "Only a human edits GOALS.md: copy this block in, edited, if you want it. -->",
         "",
         f"### {gid} {(title or exp['title']).strip()}",
@@ -261,7 +261,7 @@ def knowledge_note(exp: Dict[str, Any], text: str, archived_at: str) -> str:
         f"# {exp['title']}",
         "",
         f"Explored {str(exp.get('created_at') or '')[:10]} to {archived_at[:10]}. "
-        f"Source: .hester/explore/{exp['id']}.md",
+        f"Source: .hester/explore/{exp['id']}/exploration.md",
         "",
         "## Seed",
         "",

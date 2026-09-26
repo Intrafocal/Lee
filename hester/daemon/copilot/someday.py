@@ -17,12 +17,19 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from ..cockpit.explorations import EXP_ID_RE
+
 ID_RE = re.compile(r"^sd_\d{8}T\d{6}_[0-9a-f]{4}$")
 STATUSES = ("open", "explored", "promoted", "dropped", "kept")
 AS_VALUES = ("someday", "explore")
 SURFACES = ("lee", "aeronaut", "dirigible", "device", "cli", "shared")
 TRIAGE_ACTIONS = {"explore": "explored", "promote": "promoted", "drop": "dropped", "keep": "kept"}
 MAX_TEXT = 10000
+# Deep D1: where a capture came from (a Page selection keeps its exploration and section).
+MAX_SOURCE_SECTION = 200
+MAX_SOURCE_URL = 2000
+MAX_SOURCE_FILE = 500
+MAX_SOURCE_CONTEXT = 500
 
 
 class SomedayError(ValueError):
@@ -49,7 +56,30 @@ def _parse_time(value: Any) -> Optional[datetime]:
     return None
 
 
+def _clip_str(value: Any, limit: int) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    return s if len(s) <= limit else s[: limit - 1] + "\u2026"
+
+
+def _workspace_relative(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > MAX_SOURCE_FILE:
+        return None
+    s = value.strip()
+    if s.startswith(("/", "~", "\\")) or re.match(r"^[A-Za-z]:", s):
+        return None
+    if any(part == ".." for part in re.split(r"[\\/]", s)):
+        return None
+    return s
+
+
 def normalize_source(source: Any) -> Dict[str, Any]:
+    """
+    ``surface`` (and ``device_id``), plus, from a Deep capture: ``exploration_id``,
+    ``section`` (<= 200), ``url`` (http/https, <= 2000), ``file`` (workspace-relative,
+    <= 500) and ``context`` (<= 500). Invalid values and unknown keys are dropped.
+    """
     src = source if isinstance(source, dict) else {}
     surface = str(src.get("surface") or "").strip().lower()
     device_id = src.get("device_id")
@@ -59,6 +89,21 @@ def normalize_source(source: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {"surface": surface}
     if device_id:
         out["device_id"] = device_id
+    exp_id = src.get("exploration_id")
+    if isinstance(exp_id, str) and EXP_ID_RE.match(exp_id):
+        out["exploration_id"] = exp_id
+    section = _clip_str(src.get("section"), MAX_SOURCE_SECTION)
+    if section:
+        out["section"] = section
+    url = src.get("url")
+    if isinstance(url, str) and re.match(r"^https?://\S+$", url.strip(), re.IGNORECASE) and len(url.strip()) <= MAX_SOURCE_URL:
+        out["url"] = url.strip()
+    rel = _workspace_relative(src.get("file"))
+    if rel:
+        out["file"] = rel
+    context = _clip_str(src.get("context"), MAX_SOURCE_CONTEXT)
+    if context:
+        out["context"] = context
     return out
 
 

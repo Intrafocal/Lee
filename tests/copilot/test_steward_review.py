@@ -461,7 +461,7 @@ def test_pull_usage_counts_user_steward_requests(tmp_path):
     write_events(tmp_path / "ev", events)
     rec = metrics.run(start, end, workspace="/w", events_dir=tmp_path / "ev", now=end + timedelta(days=1), task_workspaces=[])
     m = rec["metrics"]
-    assert rec["formula_version"] == metrics.FORMULA_VERSION == 5
+    assert rec["formula_version"] == metrics.FORMULA_VERSION == 6
     assert m["pull_requests"] == 4 and m["pull_usage"] == 2.0
     assert m["pull_usage_by_surface"] == {"evaluate": 1, "goal-edit": 1, "rail-ask": 1, "what-next": 1}
     status = goal_status.metric_status({"name": "pull_usage", "kind": "runnable", "target": {"direction": "rising"}},

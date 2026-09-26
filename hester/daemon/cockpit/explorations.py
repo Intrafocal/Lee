@@ -1,9 +1,13 @@
 """
 Explore: durable explorations (spec §7.5; v3 contracts: Explore absorbs the Library).
 
-One markdown file per exploration at
-``<workspace>/.hester/explore/<id>.md`` (0600, dir 0700; ``.hester/`` is
-gitignored), YAML frontmatter plus a free-form body:
+One directory per exploration (Deep D1 contract section 3) at
+``<workspace>/.hester/explore/<id>/`` (0700; ``.hester/`` is gitignored):
+``exploration.md`` (0600; the format below), ``page.md`` (the user's Page),
+and ``references.jsonl``, ``answers.jsonl`` and ``sessions.jsonl`` (see
+``deep.py``). Legacy flat files ``<id>.md`` move into their directory the
+first time they're loaded. ``exploration.md`` is YAML frontmatter plus a
+free-form body:
 
     ---
     id: exp-1a2b3c4d
@@ -14,6 +18,8 @@ gitignored), YAML frontmatter plus a free-form body:
     serves: [G1]
     promoted: [{to, ref, at, node_ids}]
     knowledge_path: null
+    links: [{kind: exploration, id, rel: child | parent, at}]
+    questions: [{id, text, source, anchor, status, at, closed_at}]
     ...
     ---
     # <title>
@@ -84,7 +90,7 @@ SESSION_PREFIX = "explore-"
 LIBRARY_PREFIX = "library-"
 ROOT = "root"
 STATUSES = ("active", "archived")
-ORIGIN_KINDS = ("cockpit", "someday", "hester", "library", "task")
+ORIGIN_KINDS = ("cockpit", "someday", "hester", "library", "task", "exploration", "opener")
 NODE_KINDS = ("thought", "source_file", "source_web", "source_db", "decision", "spike", "evidence")
 LOG_KINDS = ("thought", "source_file", "source_web", "source_db")
 MODES = ("ideate", "explore", "learn", "brainstorm", "visualize", "search")
@@ -93,8 +99,15 @@ PROMOTE_TARGETS = ("task", "workstream", "goal")
 FIELDS = (
     "id", "workspace", "title", "status", "seed", "origin", "session_id", "turns",
     "created_at", "updated_at", "last_touched_at", "archived_at", "version",
-    "nodes", "active_node", "serves", "promoted", "knowledge_path",
+    "nodes", "active_node", "serves", "promoted", "knowledge_path", "links", "questions",
 )
+# Derived on load from the exploration's directory (never written to frontmatter).
+DEEP_FIELDS = (
+    "page_chars", "page_updated_at", "answers_unread", "answers_pending", "open_questions", "last_session",
+)
+EXPLORATION_FILE = "exploration.md"
+PAGE_FILE = "page.md"
+LINK_RELS = ("child", "parent")
 MAX_TITLE = 200
 MAX_LABEL = 200
 MAX_SEED = 8000
@@ -102,6 +115,7 @@ MAX_TURN_TEXT = 8000
 MAX_DECISION_TEXT = 2000
 MAX_PROMPT = 8000
 CONTEXT_CHARS = 12000
+MAX_PAGE_BYTES = 1024 * 1024
 LOG_HEADING = "## Log"
 DEFAULT_TIMEBOX_MIN = 30
 
@@ -183,6 +197,39 @@ def _opt_reason(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         raise ExplorationError("reason must be a string or null")
     return _clip(value, MAX_DECISION_TEXT) or None
+
+
+_warned_both: Set[Tuple[Path, str]] = set()
+QUESTION_ID_RE = re.compile(r"^q-[0-9a-f]{8}$")
+
+
+def _norm_links(raw: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in raw if isinstance(raw, list) else []:
+        if not isinstance(r, dict) or r.get("kind") != "exploration" or r.get("rel") not in LINK_RELS:
+            continue
+        if not isinstance(r.get("id"), str) or not EXP_ID_RE.match(r["id"]):
+            continue
+        out.append({"kind": "exploration", "id": r["id"], "rel": r["rel"], "at": r.get("at")})
+    return out
+
+
+def _norm_questions(raw: Any) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in raw if isinstance(raw, list) else []:
+        if not isinstance(r, dict) or not QUESTION_ID_RE.match(str(r.get("id") or "")):
+            continue
+        q = {
+            "id": r["id"], "text": str(r.get("text") or ""),
+            "source": r.get("source") if r.get("source") in ("page", "ask") else "page",
+            "status": r.get("status") if r.get("status") in ("open", "closed") else "open", "at": r.get("at"),
+        }
+        if isinstance(r.get("anchor"), dict):
+            q["anchor"] = r["anchor"]
+        if r.get("closed_at"):
+            q["closed_at"] = r["closed_at"]
+        out.append(q)
+    return out
 
 
 def root_node(exp: Dict[str, Any]) -> Dict[str, Any]:
@@ -329,12 +376,69 @@ class ExplorationStore:
 
     # ---------------------------------------------------------------- files
 
-    def _path(self, exp_id: str) -> Path:
+    def _check_id(self, exp_id: str) -> str:
         if not isinstance(exp_id, str) or not EXP_ID_RE.match(exp_id):
             raise ExplorationError(f"invalid exploration id: {exp_id!r}")
-        return self.dir / f"{exp_id}.md"
+        return exp_id
 
-    def _load(self, path: Path) -> Optional[Tuple[Dict[str, Any], str]]:
+    def exp_dir(self, exp_id: str) -> Path:
+        """``.hester/explore/<id>/``: the exploration's directory."""
+        return self.dir / self._check_id(exp_id)
+
+    def _path(self, exp_id: str) -> Path:
+        return self.exp_dir(exp_id) / EXPLORATION_FILE
+
+    def _legacy_path(self, exp_id: str) -> Path:
+        return self.dir / f"{self._check_id(exp_id)}.md"
+
+    def page_path(self, exp_id: str) -> Path:
+        return self.exp_dir(exp_id) / PAGE_FILE
+
+    def exists(self, exp_id: str) -> bool:
+        return self._path(exp_id).exists() or self._legacy_path(exp_id).exists()
+
+    def migrate(self, exp_id: str) -> Path:
+        """
+        Move a legacy flat ``<id>.md`` into ``<id>/exploration.md`` and create an
+        empty ``page.md``. Idempotent. If both exist the directory wins and the
+        flat file is left alone (with a WARN, once). Returns the current path.
+        Callers normally hold the workspace lock; the move is a rename, so a
+        reader racing it only ever finds one of the two places.
+        """
+        path = self._path(exp_id)
+        legacy = self._legacy_path(exp_id)
+        if path.exists():
+            if legacy.exists() and (self.workspace, exp_id) not in _warned_both:
+                _warned_both.add((self.workspace, exp_id))
+                logger.warning(f"Both {legacy} and {path} exist; using the directory and leaving the flat file alone")
+            return path
+        if not legacy.exists():
+            return path
+        d = path.parent
+        try:
+            d.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(d, 0o700)
+            os.replace(legacy, path)
+        except FileNotFoundError:
+            return path  # another reader moved it first
+        except OSError as e:
+            logger.warning(f"Could not migrate {legacy} into {d}: {e}")
+            return legacy
+        self._ensure_page(exp_id)
+        logger.info(f"Migrated exploration {exp_id} to {d}")
+        return path
+
+    def _ensure_page(self, exp_id: str, text: str = "") -> None:
+        page = self.page_path(exp_id)
+        if page.exists():
+            return
+        atomic_write(page, text)
+        try:
+            os.chmod(page, 0o600)
+        except OSError:
+            pass
+
+    def _load(self, path: Path, deep: bool = True) -> Optional[Tuple[Dict[str, Any], str]]:
         try:
             content = path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
@@ -352,7 +456,7 @@ class ExplorationStore:
             return None
         meta = _stringify_times(meta)
         exp = {k: meta.get(k) for k in FIELDS}
-        exp["id"] = str(meta.get("id") or path.stem)
+        exp["id"] = str(meta.get("id") or (path.parent.name if path.name == EXPLORATION_FILE else path.stem))
         exp["workspace"] = str(meta.get("workspace") or self.workspace)
         exp["status"] = meta.get("status") if meta.get("status") in STATUSES else "active"
         exp["turns"] = int(meta.get("turns") or 0)
@@ -364,6 +468,12 @@ class ExplorationStore:
         exp["serves"] = [str(g) for g in meta.get("serves") or [] if isinstance(g, (str, int))]
         exp["promoted"] = [p for p in meta.get("promoted") or [] if isinstance(p, dict)]
         exp["knowledge_path"] = meta.get("knowledge_path") if isinstance(meta.get("knowledge_path"), str) else None
+        exp["links"] = _norm_links(meta.get("links"))
+        exp["questions"] = _norm_questions(meta.get("questions"))
+        if deep and path.name == EXPLORATION_FILE:
+            from . import deep as deep_files
+
+            exp.update(deep_files.summary(path.parent, exp))
         return exp, content[end + 5:]
 
     def _save(self, exp: Dict[str, Any], body: str, now: datetime) -> Dict[str, Any]:
@@ -371,11 +481,12 @@ class ExplorationStore:
         exp["updated_at"] = iso_s(now)
         exp["version"] = int(exp.get("version") or 0) + 1
         head = yaml.safe_dump({k: exp.get(k) for k in FIELDS}, sort_keys=False, allow_unicode=True, default_flow_style=False)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.dir, 0o700)
-        except OSError:
-            pass
+        for d in (self.dir, path.parent):
+            d.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(d, 0o700)
+            except OSError:
+                pass
         atomic_write(path, f"---\n{head}---\n{body}")
         try:
             os.chmod(path, 0o600)
@@ -384,7 +495,7 @@ class ExplorationStore:
         return exp
 
     def _open(self, exp_id: str) -> Tuple[Dict[str, Any], str]:
-        loaded = self._load(self._path(exp_id))
+        loaded = self._load(self.migrate(exp_id))
         if loaded is None:
             raise ExplorationNotFound(exp_id)
         return loaded
@@ -392,7 +503,7 @@ class ExplorationStore:
     # ---------------------------------------------------------------- reads
 
     def get(self, exp_id: str) -> Optional[Dict[str, Any]]:
-        loaded = self._load(self._path(exp_id))
+        loaded = self._load(self.migrate(exp_id))
         return loaded[0] if loaded else None
 
     def require(self, exp_id: str) -> Dict[str, Any]:
@@ -404,16 +515,24 @@ class ExplorationStore:
     def body(self, exp_id: str) -> str:
         return self._open(exp_id)[1]
 
+    def ids(self) -> List[str]:
+        """Every exploration id on disk (directories and legacy flat files), sorted."""
+        found: Set[str] = set()
+        try:
+            for p in self.dir.glob(f"exp-*/{EXPLORATION_FILE}"):
+                if EXP_ID_RE.match(p.parent.name):
+                    found.add(p.parent.name)
+            for p in self.dir.glob("exp-*.md"):
+                if EXP_ID_RE.match(p.stem):
+                    found.add(p.stem)
+        except OSError:
+            pass
+        return sorted(found)
+
     def load_all(self) -> List[Dict[str, Any]]:
         out = []
-        try:
-            paths = sorted(self.dir.glob("exp-*.md"))
-        except OSError:
-            return out
-        for p in paths:
-            if not EXP_ID_RE.match(p.stem):
-                continue
-            loaded = self._load(p)
+        for exp_id in self.ids():
+            loaded = self._load(self.migrate(exp_id))
             if loaded:
                 out.append(loaded[0])
         return out
@@ -462,9 +581,14 @@ class ExplorationStore:
             raise ExplorationError(f"origin.kind must be one of {', '.join(ORIGIN_KINDS)}")
         origin = {"kind": origin["kind"], "ref": origin.get("ref") if isinstance(origin.get("ref"), str) else None}
         serves = _str_list("serves", body.get("serves"))
+        page = body.get("page")
+        if page is not None:
+            if not isinstance(page, str):
+                raise ExplorationError("page must be a string")
+            if len(page.encode("utf-8")) > MAX_PAGE_BYTES:
+                raise ExplorationError("page is larger than 1 MB")
         exp_id = body.get("id") or new_exploration_id()
-        path = self._path(exp_id)
-        if path.exists():
+        if self.exists(exp_id):
             raise ExplorationError(f"exploration {exp_id} already exists")
         exp = {k: None for k in FIELDS}
         exp.update({
@@ -483,10 +607,14 @@ class ExplorationStore:
             "serves": serves,
             "promoted": [],
             "knowledge_path": None,
+            "links": _norm_links(body.get("links")),
+            "questions": [],
         })
         exp["nodes"] = [root_node(exp)]
         text = f"# {title}\n\n## Seed\n\n{seed or '(none)'}\n\n{LOG_HEADING}\n"
-        return self._save(exp, text, now)
+        self._save(exp, text, now)
+        self._ensure_page(exp_id, page or "")
+        return self.require(exp_id)
 
     def patch(self, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
@@ -805,7 +933,7 @@ class ExplorationStore:
             "thinking-out-loud investigation, not a task to finish. Build on what is "
             "already written, raise options and trade-offs, and ask what to dig into "
             f"next. The exploration is titled \"{exp['title']}\" and lives at "
-            f".hester/explore/{exp_id}.md in the workspace; each exchange here is "
+            f".hester/explore/{exp_id}/exploration.md in the workspace; each exchange here is "
             "appended to its Log automatically.\n\n"
             "The exploration so far:\n\n" + text
         )
@@ -822,7 +950,7 @@ class ExplorationStore:
             log = "…(earlier log omitted)…\n" + log[-limit:]
         return (
             "You are Hester in the Library, exploring one branch of an exploration tree with the user. "
-            f"The exploration is \"{exp['title']}\" (.hester/explore/{exp_id}.md); this branch is "
+            f"The exploration is \"{exp['title']}\" (.hester/explore/{exp_id}/exploration.md); this branch is "
             f"\"{node['label']}\". Each exchange here is appended to the file automatically.\n\n"
             f"Path to this branch: {crumb or node['label']}\n\n"
             + (f"This branch so far:\n\n{log}" if log else "This branch has no conversation yet.")
@@ -991,7 +1119,14 @@ def render_outline(exp: Dict[str, Any], node_ids: Optional[List[str]] = None) ->
 
 
 def to_api(exp: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: copy.deepcopy(exp.get(k)) for k in FIELDS}
+    data = {k: copy.deepcopy(exp.get(k)) for k in FIELDS}
+    data["links"] = data.get("links") or []
+    data["questions"] = data.get("questions") or []
+    for k in DEEP_FIELDS:
+        data[k] = copy.deepcopy(exp.get(k))
+    for k in ("page_chars", "answers_unread", "answers_pending", "open_questions"):
+        data[k] = int(data[k] or 0)
+    return data
 
 
 def to_api_with_conversations(exp: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -1040,7 +1175,7 @@ async def open_session(store: ExplorationStore, exp_id: str) -> Dict[str, Any]:
     if exp.get("seed"):
         lines.append(str(exp["seed"]))
     if int(exp.get("turns") or 0) > 0:
-        lines.append(f"_{exp['turns']} earlier exchange(s) are in .hester/explore/{exp_id}.md; I have them in context._")
+        lines.append(f"_{exp['turns']} earlier exchange(s) are in .hester/explore/{exp_id}/exploration.md; I have them in context._")
     lines.append("Where do you want to start?")
     session.add_message("assistant", "\n\n".join(lines))
     await manager.save(session)
@@ -1068,7 +1203,8 @@ def _workspace_for_session(session_id: str, exp_id: str, working_directory: Opti
         return ws
     if working_directory:
         cand = Path(working_directory)
-        if (cand / ".hester" / "explore" / f"{exp_id}.md").exists():
+        d = cand / ".hester" / "explore"
+        if (d / exp_id / EXPLORATION_FILE).exists() or (d / f"{exp_id}.md").exists():
             return cand
     return None
 

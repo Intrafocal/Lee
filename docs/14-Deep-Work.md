@@ -558,6 +558,7 @@ Deep work builds on 13's Explore (v3) and uses its Someday, tasks and hooks. It 
    - The **ending ritual** with `session_depth` (§7).
    - G0 metrics in the event log; `turn_churn` first, since the hooks exist.
    - **Success test:** over two weeks, time_to_deep under a minute in sessions that go deep, and at least half of Deep sessions rated deep or mixed.
+   - **Status (2026-09-26):** built to the contract, [`plans/2026-09-26-deep-d1-contracts.md`](plans/2026-09-26-deep-d1-contracts.md); the Hester side (explorations as directories, deep-ask, the opener, G0 metrics at formula v6) is in.
 2. **D2: Research and code.** **Browse** in Deep mode with bookmark and screenshot (§4.3); the **Board** with screenshots, reference and answer cards and text boxes (§4.2); **Spin off** with results as answer cards (§5.1, §5.3); **Workbench** with tabs, working set, Quick Open, terminals, multi-diff review, batched review comments and `human`-lead tasks (§4.4).
 3. **D3: Renders.** Render target detection and recipes, starting with Web/Storybook and Flutter, then iOS and Lee's own viewers (§9); markup-to-task; stale renders in the opener (§9.4).
 4. **Devices (13 v6, after D1):** the device Cockpit, Carry and Open next (§8.1); the reading list after D2.

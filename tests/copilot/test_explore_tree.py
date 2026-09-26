@@ -94,7 +94,10 @@ def test_v_now_file_loads_unchanged(tmp_path):
     assert exp["nodes"][0]["label"] == "Old one" and exp["nodes"][0]["turns"] == 1
     assert exp["active_node"] == "root" and exp["serves"] == [] and exp["promoted"] == [] and exp["knowledge_path"] is None
     assert [m["content"] for m in store.conversation(exp["id"])] == ["q", "a"]
-    assert path.read_text() == content, "reading never rewrites"
+    # Deep D1: loading moves the flat file into its directory, byte for byte.
+    moved = d / "exp-0a0b0c0d" / "exploration.md"
+    assert not path.exists() and moved.read_text() == content, "migration moves, never rewrites"
+    assert (d / "exp-0a0b0c0d" / "page.md").read_text() == ""
 
 
 # ---------------------------------------------------------------- nodes, decisions
@@ -498,7 +501,7 @@ def test_library_routes_shapes(cockpit_env):
     created = r.json()
     sid = created["session_id"]
     assert ex.EXP_ID_RE.match(sid) and created["root_id"] == "root" and set(created["nodes"]) == {"root"}
-    assert (env.b / ".hester" / "explore" / f"{sid}.md").exists()
+    assert (env.b / ".hester" / "explore" / sid / "exploration.md").exists()
     assert ExplorationStore(env.b).require(sid)["origin"] == {"kind": "library", "ref": None}
 
     listed = c.get("/library/sessions", headers=h).json()
@@ -541,7 +544,7 @@ def test_library_routes_shapes(cockpit_env):
 
     r = c.delete(f"/library/sessions/{sid}", headers=h)
     assert r.json() == {"status": "archived", "session_id": sid}
-    assert (env.b / ".hester" / "explore" / f"{sid}.md").exists() and store.require(sid)["status"] == "archived"
+    assert (env.b / ".hester" / "explore" / sid / "exploration.md").exists() and store.require(sid)["status"] == "archived"
     assert c.get("/library/sessions", headers=h).json()["count"] == 0
     assert c.get("/library/sessions/exp-00000000", headers=h).status_code == 404
     assert c.get("/library/sessions/not-an-id", headers=h).status_code == 404
