@@ -258,10 +258,12 @@ Hester works with agent and terminal tabs by typing into them and reading them b
 | `read_output` | `tab_id`, `since` (cursor) or `lines` | Returns buffered output (ANSI stripped) and a new cursor |
 | `state` | `tab_id` | `idle-at-prompt` \| `busy` \| `awaiting-input` \| `exited`, from telemetry where available, else a prompt heuristic plus output quiet time |
 
-**Check-in** (on request: "check in on Claude" or a tile's Check in button; or proposed by a deterministic rule, e.g. a hook-less agent busy for 20 minutes with no check-in, which is a fixed proposal, not a model call):
-1. Wait until the agent is `idle-at-prompt`. Never interrupt a running turn, and never answer a permission prompt. Approvals are always your click (§5).
-2. Send a fixed check-in prompt: *"Reply with only a `lee-status` block (status, summary, blockers, files, next) describing your current work. Don't change anything."*
-3. Parse the block, then create or update the tab's Task (§7.2) and post a feed event, exactly as for a hook report (§4.1).
+**Check-in** (on request: "check in on Claude" or a tile's Check in button; or proposed by a deterministic rule, e.g. a hook-less agent busy for 20 minutes with no check-in, which is a fixed proposal, not a model call). *Asynchronous and queued since 2026-09-26:* asking returns at once, and nothing waits on the agent.
+1. If the agent is `idle-at-prompt`, send now. If it is busy, **queue** the check-in: it is typed when the current turn ends (the `Stop` hook, or the tab back at its prompt for hook-less agents). If it is waiting on a permission prompt, it stays queued until you answer that prompt. Never interrupt a running turn, and never answer a permission prompt. Approvals are always your click (§5). There is no "stayed busy" failure; a queued check-in can be cancelled from its tile.
+2. Send a fixed check-in prompt: *"Reply with only a `lee-status` block (status, summary, blockers, files, next) describing your current work. Don't change anything."* The reply timeout starts here.
+3. Parse the block, then create or update the tab's Task (§7.2) and post a feed event, exactly as for a hook report (§4.1). The tile shows "check-in pending" / "checking in…" meanwhile, and the result (or a failure) arrives as a Feed entry and a toast.
+
+Check-ins Hester proposes still need your OK (C3); once you accept, they use the same queue.
 
 The check-in prompt and reply are visible in the tab, since that's where they're typed. A check-in only reads; it never tells the agent to do anything else.
 
@@ -385,7 +387,7 @@ Per workspace. The Cockpit answers three questions: **Where are we heading?** (g
 - **Copilot** is always present and is where you invoke Hester in steward mode and, later, see copilot mode (§8, §11): Ask Hester (about the last item you selected), the "since you left…" digest, the away summary, a work-lint summary, the weekly retro when due, and copilot mode's status (an empty state until Part IV is built). The default landing section stays Feed.
 - **Files** is a keyboard-navigable workspace file browser (the Workbench file tree's data sources); opening a file switches to the Workbench and opens it the way the Workbench does.
 - **Center:** the selected section, with a title, a one-line summary, and the **launch buttons** top right.
-- **Launch buttons:** `+ Task`, `+ Explore`, and `Run ▾` (operations menu). Goals are defined less often and are reached from the Goals section. A single `⌘N` opens the Launcher (mockup row 3). You type what you want and press **Enter**: it launches immediately. Placement is **deterministic** (kind from the button or a prefix, lead defaults to `delegate`, goal links only if you add them), and nothing waits on a model. Afterwards, a **suggestion** chip offers Hester's view (goals it might serve, a better lead, starting branches) on demand. Only new work with no goal and no urgency gets the one-line Q4 note (§2.2). You can also mark anything as **play** or **I'll do this myself** (§2.3), and neither is pushed back on. Launching works offline (C1).
+- **Launch buttons:** `+ Task`, `+ Explore`, and `Run ▾` (operations menu). Goals are defined less often and are reached from the Goals section. A single `⌘N` opens the Launcher (mockup row 3). You type what you want and press **Enter**: it launches immediately. Placement is **deterministic** (kind from the button or a prefix, lead defaults to `delegate`, goal links only if you add them), and nothing waits on a model. The Launcher also takes an optional **Name** (the session's display name, `claude --name`; it becomes the tab and tile label) and an optional **context picker**: workspace files (fuzzy search) and Hester context bundles, attached as `@path` references to the agent's initial prompt, so the agent reads them itself (deterministic, offline, nothing summarised; the task keeps only the paths and bundle ids). Afterwards, a **suggestion** chip offers Hester's view (goals it might serve, a better lead, starting branches) on demand. Only new work with no goal and no urgency gets the one-line Q4 note (§2.2). You can also mark anything as **play** or **I'll do this myself** (§2.3), and neither is pushed back on. Launching works offline (C1).
 
 ## 7. Sections
 
@@ -404,6 +406,8 @@ Short work handed to an agent. A Task is a **light record**:
 ```yaml
 id: task-7f3a
 title: Fix /fs/list 404 against packaged Lee
+name: Login loop                         # optional session name; shown instead of the title (below)
+context: { files: [src/auth.ts], bundles: [auth] }   # attached at launch; references only
 kind: bug | question | prototype | chore
 status: running | waiting | review | done | discarded
 agent: { provider: claude, tab_id: 3 }   # null once the tab closes
@@ -420,6 +424,7 @@ outcome: "one-paragraph summary written by Hester on close"
 created_at / closed_at
 ```
 
+- **Named** (optional): a name you type (Launcher, Rename, or renaming the agent's tab) wins; otherwise Claude's own session title is picked up from its transcript, a `/rename` in the session first (it also replaces a name you typed, when it is newer), then Claude's AI title; otherwise the title derived from the agent's summary. Only the title lines of the transcript are read. Pi tasks have your name or the derived title.
 - **Created** by `+ Task`, by the Launcher, from agent events (§4.1), or from a **check-in** (§4.2). Automatically created tasks are marked unconfirmed and don't count toward `attributed_agent_time` until you confirm or link them.
 - **Kept current by check-ins:** when asked, Hester has the agent report on its current work and updates the task's title, status and summary from the reply.
 - **Closed** when the agent's work is merged or discarded, or by hand. Hester writes the outcome from a final check-in plus the diff.
@@ -562,6 +567,8 @@ A flat view of every open tab, kept alongside the categories because "what is ru
 3. **Activity only:** other TUIs (lazygit, btop): active or idle, and for how long.
 
 Unlinked tabs show an "Assign…" action (to a task, operation or exploration).
+
+What counts as an agent follows the process, not how the tab was opened: tasks launched from the Cockpit open as agent tabs, and a terminal where you started `claude` or `pi` by hand becomes an agent (tile, wall, icon) while that agent runs. An agent's name (§7.2) is its tab label.
 
 ### 7.7 History
 
