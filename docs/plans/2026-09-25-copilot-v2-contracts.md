@@ -184,6 +184,10 @@ Every transition calls `window.lee.cockpit.logEvent({ type: 'cockpit.mode', data
 
 **Agent tab** (what the wall goes around): a tab whose `ptyId` is in `snapshot.agents[].pty_id`, or whose `type === 'agent'`, or whose PTY A reports with `kind: 'agent'` in `TabRuntimeInfo`. Everything else (editor, file viewers, plain terminals, browser, TUIs) is an **own tab**.
 
+**Exempt (always own tabs, decided 2026-09-25):** Hester chat and DevOps tabs (provider `hester`, tab types `hester`, `hester-qa`, `devops`) are never walled, whatever the snapshot or `TabRuntimeInfo` says; A's tab runtime never reports them as `kind: 'agent'`.
+
+**The wall covers every dock.** Agent tabs docked in the left, right or bottom panels are hidden from those strips in the workbench just like center ones (they stay mounted so their PTYs keep their size); going into one enters it. A tab that was an own tab while active and becomes an agent (you started it where you work) is entered silently, with no `go_into` log. Close and dock fallbacks pick only from the visible strip and don't switch mode.
+
 ### 3.2 Transitions
 
 | Trigger | From → to | reason |
@@ -265,7 +269,7 @@ One tile per agent PTY **in this window's workspace** (any window). Data, merged
 | `?` | key help |
 | `Esc` | close popovers / clear selection |
 
-`⌘1`–`⌘9`, ⇧⌘C and every other global chord keep working (the existing hotkey map runs first). Known gap: `⌘N` tab numbers follow `centerTabs`, not the filtered strip, so in the workbench they can activate a hidden agent tab (which then counts as going into it).
+`⌘1`–`⌘9`, ⇧⌘C and every other global chord keep working (the existing hotkey map runs first). `⌘1`–`⌘9` and next/previous tab index the filtered strip (`stripTabs`), so they match the ⌘N badges and never activate a hidden agent tab; `⌘I` (cycle idle) still may, which counts as going into it.
 
 ### 3.8 `App.tsx` integration (C only; five anchored edits)
 
@@ -578,7 +582,7 @@ Statuses beyond spec §7.2: `queued` (created, not started: `human` lead, Someda
 | `GET /cockpit/snapshot` | `?workspace=&since_version=` | `CockpitSnapshot` or `{"unchanged": true, "version": N}` |
 | `GET /cockpit/tasks` | `?workspace=&status=open\|closed\|all&limit=100` | `CockpitTask[]`, newest `updated_at` first |
 | `GET /cockpit/tasks/{id}` | `?workspace=` | `CockpitTask` |
-| `POST /cockpit/tasks` | `TaskCreate` (below) | `201 CockpitTask`. **Upsert on `id`**: an existing task is merged (fields given win, except `busy_ms`, `turns`, `files`, `sessions`, which only the follower changes) |
+| `POST /cockpit/tasks` | `TaskCreate` (below) | `201 CockpitTask`. **Upsert on `id`**: an existing task is merged (fields given win, except `busy_ms`, `turns`, `files`, `sessions`, which only the follower changes; once the follower has touched a task (`applied_through` set), a relay's `status` and `agent.pty_id` no longer overwrite it and existing `agent` keys are only filled when missing) |
 | `PATCH /cockpit/tasks/{id}` | any of `title`, `kind`, `lead`, `play`, `serves`, `workstream`, `timebox_min`, `due`, `status` (`queued`/`running`/`review` only) | `CockpitTask`; a changed `title` sets `title_source: 'user'` |
 | `POST /cockpit/tasks/{id}/confirm` | `{serves?, workstream?, title?}` | `CockpitTask` with `confirmed: true`, `confirmed_at` |
 | `POST /cockpit/tasks/{id}/link` | `{pty_id?, session_id?, provider?, tab_label?}` | attaches an agent (Tabs "Assign…"); sets `confirmed: true` |
@@ -1276,7 +1280,7 @@ Launch a delegate task from the Cockpit, let it finish a turn, Accept it: the ti
 | 30 | Devices | Deferred to v6; compatibility verified | Spec phasing; no cheap surface would move a metric enough |
 | 31 | Out of v2 though near | Q4 note, suggestion chip, rail "What next?", steward, message-slot lint cycling, Ask Hester on diagnostics, goal-impact wording in History | v4 (they need goals or the steward) |
 
-**Known gaps, accepted for v2:** commands typed in shells without integration (fish, custom) aren't captured; ⌘1–9 indexes follow `centerTabs`, not the filtered strip; a check-in turn also produces an ambient v0 `review` item; operation status for `detect: docker/supabase` services isn't live; Feed entries are lost on restart; stripped output of full-screen TUIs is noisy; spend per accepted task is busy time and model name, not tokens.
+**Known gaps, accepted for v2:** commands typed in shells without integration (fish, custom) aren't captured; a check-in turn also produces an ambient v0 `review` item; operation status for `detect: docker/supabase` services isn't live; Feed entries are lost on restart; stripped output of full-screen TUIs is noisy; spend per accepted task is busy time and model name, not tokens.
 
 ---
 

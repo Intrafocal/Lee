@@ -356,6 +356,7 @@ The two devices share one data model (the attention queue, Someday, the digest) 
 - Starting an agent (⇧⌘C) stays instant: in cockpit mode it opens a tile, with one key to go into its terminal (G2 speed of one-offs).
 - Going into a *finished* agent to review its result is normal, not penalised ("less reading vs informed review" in `GOALS.md`).
 - The test is `peek_rate`: it should fall without `attention_latency` rising.
+- Hester chat and DevOps tabs are your own tabs, never walled as agents. The wall covers agent terminals in every dock, side panels included.
 
 Per workspace. The Cockpit answers three questions: **Where are we heading?** (goals), **What's in flight?** (tasks, workstreams, explorations, operations, tabs), **What needs me?** (approvals, decisions, failures, drift).
 
