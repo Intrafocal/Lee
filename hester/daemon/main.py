@@ -38,10 +38,20 @@ from .settings import HesterDaemonSettings
 from ..shared.gemini_tools import PhaseUpdate, ReActPhase
 from ..shared.auth import auth_disabled, device_for_token, lee_api_token
 from ..shared.config import load_merged_config
-from ..shared.workspace import get_current_workspace, set_current_workspace, workspace_id
+from ..shared.workspace import (
+    get_active_workspace,
+    get_current_workspace,
+    request_workspace,
+    set_current_workspace,
+    workspace_id,
+)
+from .cockpit.follower import EventFollower
+from .cockpit.routes import create_cockpit_router
 from .copilot import lee_events, presence as copilot_presence
 from .copilot.model_log import install_model_call_logging, reset_trigger, set_trigger
 from .copilot.routes import create_copilot_router
+from .workspaces.registry import WorkspaceError, get_registry, init_registry, run_sync_loop, validate_workspace
+from .workspaces.routes import create_workspaces_router
 
 # Optional imports for knowledge management (graceful degradation if unavailable)
 try:
@@ -165,8 +175,13 @@ class AppState:
     # Orchestration state (agent telemetry tracking)
     agent_sessions: Dict[str, AgentTelemetry] = {}
 
-    # Workstream system
-    ws_store: Optional[Any] = None  # WorkstreamStore
+    # Unused since v2: workstream stores are per workspace in the registry
+    ws_store: Optional[Any] = None
+
+    # Per-workspace state (Cockpit tasks, readings, workstreams); see workspaces/
+    workspaces: Optional[Any] = None  # WorkspaceRegistry
+    workspace_sync_task: Optional[asyncio.Task] = None
+    cockpit_follower: Optional[EventFollower] = None
 
     # Plugin loader
     plugin_loader: Optional["PluginLoader"] = None
@@ -270,23 +285,16 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
     app_state.settings.working_directory = str(resolved)
     changes: Dict[str, Any] = {
         "workspace": str(resolved),
-        "workspace_id": workspace_id(),
+        "workspace_id": workspace_id(resolved),
         "previous": previous,
     }
 
     # 1. Plugins (unregisters the previous workspace's tools first)
     changes["plugins_loaded"] = _load_plugins_for_workspace(resolved)
 
-    # 2. .hester/-backed stores
-    try:
-        from .workstream.store import WorkstreamStore
-        app_state.ws_store = WorkstreamStore(working_dir=resolved)
-        from .tools.workstream_tools import init_workstream_tools
-        init_workstream_tools(app_state.ws_store)
-        changes["workstreams"] = "rebound"
-    except Exception as e:
-        logger.warning(f"Workstream store rebind failed: {e}")
-        changes["workstreams"] = f"failed: {e}"
+    # 2. .hester/-backed stores. Workstreams are per request through the
+    # workspace registry and need no rebinding.
+    changes["workstreams"] = "per-workspace"
 
     if CONTEXT_BUNDLES_AVAILABLE and app_state.bundle_service is not None:
         try:
@@ -355,7 +363,7 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
             logger.warning(f"Proactive watcher rebind failed: {e}")
             changes["watchers"] = f"failed: {e}"
 
-    logger.info(f"Workspace switched: {previous} -> {resolved} (id {workspace_id()})")
+    logger.info(f"Workspace switched: {previous} -> {resolved} (id {workspace_id(resolved)})")
     return changes
 
 
@@ -395,7 +403,8 @@ async def lifespan(app: FastAPI):
         app_state.settings.working_directory or os.getcwd()
     )
     app_state.settings.working_directory = str(boot_workspace)
-    logger.info(f"Workspace: {boot_workspace} (id {workspace_id()})")
+    logger.info(f"Workspace: {boot_workspace} (id {workspace_id(boot_workspace)})")
+    app_state.workspaces = init_registry(boot_workspace, lee_url=app_state.settings.lee_url)
 
     # Auth state — say it once, loudly, at boot.
     if _auth_is_disabled():
@@ -616,34 +625,36 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(app_state.proactive_watcher.start())
             logger.info("Proactive watcher started")
 
-    # Initialize Workstream system
+    # Workstream tools resolve the request's workspace through the registry
+    # (the /workstream router is included at import time with the same provider).
     try:
-        from .workstream.store import WorkstreamStore
-        from .workstream.routes import create_workstream_router
-
-        working_dir = Path(app_state.settings.working_directory or os.getcwd())
-        app_state.ws_store = WorkstreamStore(working_dir=working_dir)
-
-        # Initialize workstream tools for agent use
         from .tools.workstream_tools import init_workstream_tools
-        init_workstream_tools(app_state.ws_store)
-
-        ws_router = create_workstream_router(
-            ws_store=app_state.ws_store,
-            task_store=None,
-            bundle_service=app_state.bundle_service,
-        )
-        app.include_router(ws_router)
-        logger.info("Workstream system initialized at /workstream")
+        init_workstream_tools(_current_ws_store)
+        logger.info("Workstream tools initialized (per workspace)")
     except Exception as e:
-        logger.warning(f"Failed to initialize workstream system: {e}")
-        app_state.ws_store = None
+        logger.warning(f"Failed to initialize workstream tools: {e}")
+
+    # Multi-workspace: keep the registry in step with Lee's open windows, and
+    # follow Lee's event log into Cockpit task records (deterministic, no model).
+    app_state.workspace_sync_task = asyncio.create_task(run_sync_loop(app_state.workspaces))
+    app_state.cockpit_follower = EventFollower(registry=app_state.workspaces)
+    app_state.cockpit_follower.start()
+    logger.info("Cockpit follower started")
 
     logger.info("Hester daemon ready")
     yield
 
     # Shutdown
     logger.info("Shutting down Hester daemon...")
+
+    if app_state.cockpit_follower:
+        await app_state.cockpit_follower.stop()
+    if app_state.workspace_sync_task:
+        app_state.workspace_sync_task.cancel()
+        try:
+            await app_state.workspace_sync_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Stop background watchers first
     if app_state.git_watcher:
@@ -731,8 +742,20 @@ def _auth_is_disabled() -> bool:
 
 
 async def _call_as_user(request: Request, call_next, principal: Dict[str, Any]):
-    """Run the request with its principal and a `user` model-call trigger (C2 telemetry)."""
+    """Run the request with its principal, its workspace and a `user` model-call trigger (C2 telemetry)."""
     request.state.principal = principal
+    raw_ws = request.query_params.get("workspace") or request.headers.get("x-lee-workspace")
+    scoped = None
+    if raw_ws:
+        try:
+            scoped = validate_workspace(raw_ws)
+        except WorkspaceError:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "workspace must be an absolute directory"},
+            )
+        get_registry().get(scoped, source="request")
+    ws_token = request_workspace.set(scoped)
     token = set_trigger(
         "user",
         surface=request.headers.get("x-lee-trigger") or "http",
@@ -742,6 +765,7 @@ async def _call_as_user(request: Request, call_next, principal: Dict[str, Any]):
         return await call_next(request)
     finally:
         reset_trigger(token)
+        request_workspace.reset(ws_token)
 
 
 @app.middleware("http")
@@ -787,6 +811,44 @@ async def require_bearer_token(request: Request, call_next):
 
 
 app.include_router(create_copilot_router())
+app.include_router(create_cockpit_router())
+app.include_router(create_workspaces_router())
+
+
+def _current_ws_store():
+    """The WorkstreamStore of the workspace this request is about (else the active one)."""
+    return get_registry().get(get_current_workspace(), source="request").ws_store()
+
+
+def _ws_store_for(workstream_id: str):
+    """The store holding ``workstream_id``: the request's workspace first, then any open one."""
+    try:
+        current = _current_ws_store()
+        if current.get(workstream_id) is not None:
+            return current
+    except (WorkspaceError, OSError):
+        current = None
+    for ctx in get_registry().list():
+        store = ctx.ws_store()
+        if store is not current and store.get(workstream_id) is not None:
+            return store
+    return None
+
+
+def _bundle_service():
+    return app_state.bundle_service
+
+
+try:
+    from .workstream.routes import create_workstream_router
+
+    app.include_router(create_workstream_router(
+        ws_store_provider=_current_ws_store,
+        task_store=None,
+        bundle_service_provider=_bundle_service,
+    ))
+except Exception as e:  # pragma: no cover - import-time guard like the other optional systems
+    logger.warning(f"Failed to initialize workstream system: {e}")
 
 
 def get_agent() -> HesterDaemonAgent:
@@ -928,8 +990,8 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
         "port": app_state.settings.port,
         "deep": deep,
         "auth": "disabled" if _auth_is_disabled() else "bearer",
-        "workspace": str(get_current_workspace()),
-        "workspace_id": workspace_id(),
+        "workspace": str(get_active_workspace()),
+        "workspace_id": workspace_id(get_active_workspace()),
         "session_backend": "redis" if app_state.redis_available else "in-memory",
         "components": {
             "redis": redis_status,
@@ -954,21 +1016,23 @@ async def health_check_deep() -> Dict[str, Any]:
 
 @app.get("/workspace")
 async def get_workspace() -> Dict[str, Any]:
-    """Which workspace is the daemon currently serving?"""
+    """Which workspace is active (the focused Lee window's)?"""
+    active = get_active_workspace()
     return {
-        "workspace": str(get_current_workspace()),
-        "workspace_id": workspace_id(),
+        "workspace": str(active),
+        "workspace_id": workspace_id(active),
     }
 
 
 @app.post("/workspace")
 async def post_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Re-point the daemon at a different workspace.
+    Set the active workspace (the focused window's).
 
     Lee calls this when the user switches workspace, and when focus moves to a
-    window whose workspace differs. Cheaper and less disruptive than restarting
-    the daemon: sessions and Redis connections survive.
+    window whose workspace differs. The follow-active singletons (plugins,
+    knowledge, watchers) are re-pointed; per-workspace state lives in the
+    registry and is untouched. Sessions and Redis connections survive.
     """
     raw = payload.get("path") or payload.get("workspace")
     if not raw:
@@ -982,16 +1046,34 @@ async def post_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {target}")
 
-    if target == get_current_workspace():
+    registry = get_registry()
+    unchanged = target == get_active_workspace()
+    registry.set_active(target)
+    sync = asyncio.create_task(registry.sync_from_lee())
+    _background_tasks.add(sync)
+    sync.add_done_callback(_background_tasks.discard)
+
+    if unchanged:
         return {
             "success": True,
             "changed": False,
             "workspace": str(target),
-            "workspace_id": workspace_id(),
+            "workspace_id": workspace_id(target),
+            "workspaces": _workspace_list(),
         }
 
     changes = await _switch_workspace(target)
-    return {"success": True, "changed": True, **changes}
+    return {"success": True, "changed": True, **changes, "workspaces": _workspace_list()}
+
+
+_background_tasks: set = set()
+
+
+def _workspace_list() -> list:
+    return [
+        {"path": e["path"], "id": e["id"], "active": e["active"]}
+        for e in get_registry().entries()
+    ]
 
 
 @app.post("/shutdown")
@@ -1107,9 +1189,9 @@ async def process_telemetry(request: TelemetryRequest) -> TelemetryResponse:
             agent_telemetry.last_updated = datetime.now()
 
             # Bridge to workstream telemetry if associated
-            if agent_telemetry.workstream_id and hasattr(app_state, 'ws_store') and app_state.ws_store:
+            if agent_telemetry.workstream_id:
                 try:
-                    app_state.ws_store.push_telemetry(agent_telemetry.workstream_id, {
+                    _ws_store_for(agent_telemetry.workstream_id).push_telemetry(agent_telemetry.workstream_id, {
                         "event_type": "agent_update",
                         "session_id": request.session_id,
                         "tool": request.tool,
@@ -1154,9 +1236,9 @@ async def process_telemetry(request: TelemetryRequest) -> TelemetryResponse:
             )
 
             # Bridge completion to workstream telemetry
-            if agent_telemetry.workstream_id and hasattr(app_state, 'ws_store') and app_state.ws_store:
+            if agent_telemetry.workstream_id:
                 try:
-                    app_state.ws_store.push_telemetry(agent_telemetry.workstream_id, {
+                    _ws_store_for(agent_telemetry.workstream_id).push_telemetry(agent_telemetry.workstream_id, {
                         "event_type": "agent_completed",
                         "session_id": request.session_id,
                         "status": agent_telemetry.status.value,
@@ -2661,7 +2743,9 @@ async def promote_to_workstream(session_id: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not app_state.ws_store:
+    try:
+        ws_store = _current_ws_store()
+    except WorkspaceError:
         raise HTTPException(status_code=503, detail="Workstream system not available")
 
     # Render selected nodes as markdown (same pattern as save-as-idea)
@@ -2685,7 +2769,7 @@ async def promote_to_workstream(session_id: str, request: Request):
 
     # Create workstream via orchestrator
     from .workstream.orchestrator import WorkstreamOrchestrator
-    orchestrator = WorkstreamOrchestrator(ws_store=app_state.ws_store)
+    orchestrator = WorkstreamOrchestrator(ws_store=ws_store)
     ws = await orchestrator.promote_from_idea(
         session_id=session_id,
         title=title,

@@ -203,6 +203,16 @@ from .workstream_tools import (
     execute_workstream_advance_to_design,
     execute_workstream_list,
 )
+from .cockpit_tools import (
+    cockpit_tasks,
+    lee_tabs,
+    lee_tab_read,
+    lee_tab_checkin,
+    lee_operations,
+    lee_operation_run,
+    lee_operation_propose,
+    lee_operation_result,
+)
 
 # Task management tools - import from tasks package
 from ..tasks.tools import (
@@ -387,6 +397,15 @@ __all__ = [
     "execute_workstream_set_brief",
     "execute_workstream_advance_to_design",
     "execute_workstream_list",
+    # Cockpit tool handlers
+    "cockpit_tasks",
+    "lee_tabs",
+    "lee_tab_read",
+    "lee_tab_checkin",
+    "lee_operations",
+    "lee_operation_run",
+    "lee_operation_propose",
+    "lee_operation_result",
     # Environment-based tool filtering
     "get_available_tools",
 ]

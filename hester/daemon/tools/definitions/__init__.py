@@ -131,6 +131,17 @@ from .workstream_tools import (
     WORKSTREAM_LIST_TOOL,
     WORKSTREAM_TOOLS,
 )
+from .cockpit_tools import (
+    COCKPIT_TASKS_TOOL,
+    LEE_TABS_TOOL,
+    LEE_TAB_READ_TOOL,
+    LEE_TAB_CHECKIN_TOOL,
+    LEE_OPERATIONS_TOOL,
+    LEE_OPERATION_RUN_TOOL,
+    LEE_OPERATION_PROPOSE_TOOL,
+    LEE_OPERATION_RESULT_TOOL,
+    COCKPIT_TOOLS,
+)
 
 
 # All available tools - assembled from all categories
@@ -149,6 +160,7 @@ HESTER_TOOLS: List[ToolDefinition] = [
     *COPYWRITING_TOOLS,
     *VISUALIZATION_TOOLS,
     *WORKSTREAM_TOOLS,
+    *COCKPIT_TOOLS,
 ]
 
 
@@ -284,6 +296,18 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
         "workstream_set_brief",
         "workstream_advance_to_design",
         "workstream_list",
+    ],
+
+    # Cockpit - tasks (read-only), Lee tabs, operations (run defined / propose)
+    "cockpit": [
+        "cockpit_tasks",
+        "lee_tabs",
+        "lee_tab_read",
+        "lee_tab_checkin",
+        "lee_operations",
+        "lee_operation_run",
+        "lee_operation_propose",
+        "lee_operation_result",
     ],
 }
 
@@ -561,6 +585,16 @@ __all__ = [
     "WORKSTREAM_ADVANCE_TO_DESIGN_TOOL",
     "WORKSTREAM_LIST_TOOL",
     "WORKSTREAM_TOOLS",
+    # Cockpit tool definitions
+    "COCKPIT_TASKS_TOOL",
+    "LEE_TABS_TOOL",
+    "LEE_TAB_READ_TOOL",
+    "LEE_TAB_CHECKIN_TOOL",
+    "LEE_OPERATIONS_TOOL",
+    "LEE_OPERATION_RUN_TOOL",
+    "LEE_OPERATION_PROPOSE_TOOL",
+    "LEE_OPERATION_RESULT_TOOL",
+    "COCKPIT_TOOLS",
     # Functions
     "get_available_tools",
     "get_tools_description",

@@ -532,8 +532,15 @@ When running as a server (`hester daemon start`), exposes REST API:
 | POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`) |
 | GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
 | GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
+| GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
+| GET | `/workspaces` | Workspaces the daemon is serving (`POST /workspaces/open`, `/workspaces/close`) |
+| GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
+| GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote` |
+| GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks + readings, operation readings |
 
-Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`). Copilot endpoints take an explicit `workspace` (absolute path) and fall back to the daemon's current one.
+Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
+
+**Which workspace a request is about:** `?workspace=<abs>` or the `X-Lee-Workspace` header (the auth middleware validates it, 400 otherwise, and scopes `get_current_workspace()` to it for the request), else the active workspace. Copilot endpoints also accept a JSON-body `workspace`. One daemon serves every Lee window: Cockpit tasks, readings and workstreams are per workspace (`hester/daemon/workspaces/`), while plugins, knowledge, watchers and the bundle service follow the active workspace. The Cockpit event follower (`hester/daemon/cockpit/follower.py`) tails `~/.lee/events/` (cursor in `~/.hester/cockpit/follower.json`) and keeps task records current; it is deterministic and runs no model.
 
 ### Copilot: C1/C2 gating and model-call logging
 

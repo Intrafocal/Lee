@@ -139,6 +139,15 @@ from .tools import (
     execute_workstream_set_brief,
     execute_workstream_advance_to_design,
     execute_workstream_list,
+    # Cockpit tools
+    cockpit_tasks,
+    lee_tabs,
+    lee_tab_read,
+    lee_tab_checkin,
+    lee_operations,
+    lee_operation_run,
+    lee_operation_propose,
+    lee_operation_result,
 )
 from ..shared.gemini_tools import HybridGeminiCapability, ToolResult, PhaseCallback, PhaseUpdate, ReActPhase
 from .prepare import (
@@ -566,6 +575,15 @@ class HesterDaemonAgent(HybridGeminiCapability):
             "workstream_set_brief": execute_workstream_set_brief,
             "workstream_advance_to_design": execute_workstream_advance_to_design,
             "workstream_list": execute_workstream_list,
+            # Cockpit tools (read tasks; tabs and operations via Lee's tab/ops domains)
+            "cockpit_tasks": partial(cockpit_tasks, working_dir=working_dir),
+            "lee_tabs": partial(lee_tabs, working_dir=working_dir),
+            "lee_tab_read": partial(lee_tab_read, working_dir=working_dir),
+            "lee_tab_checkin": partial(lee_tab_checkin, working_dir=working_dir),
+            "lee_operations": partial(lee_operations, working_dir=working_dir),
+            "lee_operation_run": partial(lee_operation_run, working_dir=working_dir),
+            "lee_operation_propose": partial(lee_operation_propose, working_dir=working_dir),
+            "lee_operation_result": partial(lee_operation_result, working_dir=working_dir),
         }
 
         # Plugin tool handlers

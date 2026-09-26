@@ -28,6 +28,14 @@ class MessageProcessor:
         self._agent = None
         self._session_manager = None
 
+    def _daemon_headers(self) -> dict:
+        """Bearer token plus X-Lee-Workspace, so the daemon attributes this TUI's work to its workspace."""
+        extra = {}
+        workspace = os.path.abspath(os.path.expanduser(self.runner.working_directory or ""))
+        if self.runner.working_directory and os.path.isdir(workspace):
+            extra["X-Lee-Workspace"] = workspace
+        return auth_headers(extra)
+
     async def init_direct_agent(self):
         """Initialize the agent for direct mode (no daemon server)."""
         # Check for required environment variables early
@@ -102,7 +110,7 @@ class MessageProcessor:
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         f"{self.runner.daemon_url}/session/{session_id}/history",
-                        headers=auth_headers(),
+                        headers=self._daemon_headers(),
                         timeout=10.0,
                     )
                     if response.status_code == 200:
@@ -332,7 +340,7 @@ class MessageProcessor:
                     "POST",
                     f"{self.runner.daemon_url}/context/stream",
                     json=request_payload,
-                    headers=auth_headers(),
+                    headers=self._daemon_headers(),
                 ) as response:
                     response.raise_for_status()
 
@@ -420,7 +428,7 @@ class MessageProcessor:
 
                     continue_response = await client.post(
                         f"{self.runner.daemon_url}/context/continue",
-                        headers=auth_headers(),
+                        headers=self._daemon_headers(),
                         json={
                             "session_id": self.runner.tui.session_id,
                             "new_depth": new_depth.name,

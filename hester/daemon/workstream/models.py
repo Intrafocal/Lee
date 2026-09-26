@@ -364,6 +364,9 @@ class Workstream(BaseModel):
     # Agent registry
     agents: List[AgentRegistration] = Field(default_factory=list)
 
+    # Goal ids from GOALS.md this workstream serves (Cockpit links)
+    serves: List[str] = Field(default_factory=list)
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -398,6 +401,7 @@ class Workstream(BaseModel):
             "warehouse_bundle_ids": self.warehouse_bundle_ids,
             "warehouse_files": self.warehouse_files,
             "warehouse_notes": self.warehouse_notes,
+            "serves": self.serves,
             "agents": [a.model_dump() for a in self.agents],
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -418,6 +422,7 @@ class Workstream(BaseModel):
             warehouse_bundle_ids=data.get("warehouse_bundle_ids", []),
             warehouse_files=data.get("warehouse_files", []),
             warehouse_notes=data.get("warehouse_notes", ""),
+            serves=[str(g) for g in data.get("serves") or []],
             agents=agents,
             created_at=datetime.fromisoformat(data["created_at"]) if "created_at" in data else datetime.utcnow(),
             updated_at=datetime.fromisoformat(data["updated_at"]) if "updated_at" in data else datetime.utcnow(),
