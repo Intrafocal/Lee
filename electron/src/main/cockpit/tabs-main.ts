@@ -52,8 +52,13 @@ const LOCAL_USER: Principal = { kind: 'local-user' };
 const TABS_PUSH_MS = 500;
 const FEED_PUSH_MS = 250;
 
-const MODES = new Set(['cockpit', 'workbench']);
-const MODE_REASONS = new Set(['default', 'manual', 'focus_start', 'focus_end', 'handoff', 'return', 'go_into', 'open_tab']);
+const MODES = new Set(['cockpit', 'deep', 'manual']);
+const MODE_REASONS = new Set([
+  'default', 'manual', 'focus_start', 'focus_end', 'handoff', 'return', 'go_into', 'open_tab',
+  'deep_start', 'deep_end', 'hop', 'switcher',
+]);
+/** Deep D1 §1.1: 'workbench' is the legacy name for 'manual'. */
+const legacyMode = (m: unknown): unknown => (m === 'workbench' ? 'manual' : m);
 const GO_INTO_FROM = new Set(['tile', 'feed', 'drawer', 'hotkey', 'tabs', 'other-window']);
 const AGENT_STATES = new Set(['busy', 'idle', 'waiting', 'unknown', 'idle-at-prompt', 'awaiting-input', 'exited']);
 
@@ -64,8 +69,10 @@ export function validRendererEvent(ev: unknown): CockpitRendererEvent | null {
   const d = e.data && typeof e.data === 'object' ? (e.data as Record<string, unknown>) : null;
   if (!d) return null;
   if (e.type === 'cockpit.mode') {
-    if (!MODES.has(d.from as string) || !MODES.has(d.to as string) || !MODE_REASONS.has(d.reason as string)) return null;
-    return { type: 'cockpit.mode', data: { from: d.from, to: d.to, reason: d.reason } } as CockpitRendererEvent;
+    const from = legacyMode(d.from);
+    const to = legacyMode(d.to);
+    if (!MODES.has(from as string) || !MODES.has(to as string) || !MODE_REASONS.has(d.reason as string)) return null;
+    return { type: 'cockpit.mode', data: { from, to, reason: d.reason } } as CockpitRendererEvent;
   }
   if (e.type === 'cockpit.go_into') {
     if (!Number.isInteger(d.pty_id) || !AGENT_STATES.has(d.agent_state as string) || !GO_INTO_FROM.has(d.from as string)) return null;

@@ -513,7 +513,7 @@ test('stripNeighbor: next/prev cycle the visible strip only', () => {
 });
 
 test('wallRepair: enter a terminal that became an agent; redirect off a restored hidden agent', () => {
-  const base = { enabled: true, mode: 'workbench', isAgent: true, entered: false, ptyId: 13, becameAgent: false, holdEnded: false };
+  const base = { enabled: true, mode: 'manual', isAgent: true, entered: false, ptyId: 13, becameAgent: false, holdEnded: false };
   assert.equal(wallRepair({ ...base, becameAgent: true }), 'enter', 'you ran claude where you work');
   assert.equal(wallRepair({ ...base, becameAgent: true, mode: 'cockpit' }), 'enter');
   assert.equal(wallRepair({ ...base, holdEnded: true }), 'redirect', 'restore left a hidden agent active');
@@ -530,23 +530,23 @@ test('wallRepair: enter a terminal that became an agent; redirect off a restored
 // ---------------------------------------------------------------------------
 
 const C = { enabled: true, mode: 'cockpit' };
-const W = { enabled: true, mode: 'workbench' };
-const OFF = { enabled: false, mode: 'workbench' };
+const W = { enabled: true, mode: 'manual' };
+const OFF = { enabled: false, mode: 'manual' };
 
 test('§3.2 window load → default_mode (workbench when disabled)', () => {
   assert.deepEqual(nextMode(W, { kind: 'load', enabled: true, defaultMode: 'cockpit' }), { mode: 'cockpit', reason: 'default' });
-  assert.deepEqual(nextMode(W, { kind: 'load', enabled: true, defaultMode: 'workbench' }), { mode: 'workbench', reason: 'default' });
-  assert.deepEqual(nextMode(C, { kind: 'load', enabled: false, defaultMode: 'cockpit' }), { mode: 'workbench', reason: 'default' });
+  assert.deepEqual(nextMode(W, { kind: 'load', enabled: true, defaultMode: 'manual' }), { mode: 'manual', reason: 'default' });
+  assert.deepEqual(nextMode(C, { kind: 'load', enabled: false, defaultMode: 'cockpit' }), { mode: 'manual', reason: 'default' });
 });
 
 test('§3.2 ⌘0 / mode chip toggles (manual); nothing when disabled', () => {
-  assert.deepEqual(nextMode(C, { kind: 'toggle' }), { mode: 'workbench', reason: 'manual' });
+  assert.deepEqual(nextMode(C, { kind: 'toggle' }), { mode: 'manual', reason: 'manual' });
   assert.deepEqual(nextMode(W, { kind: 'toggle' }), { mode: 'cockpit', reason: 'manual' });
   assert.equal(nextMode(OFF, { kind: 'toggle' }), null);
 });
 
 test('§3.2 focus start → workbench, focus end → cockpit', () => {
-  assert.deepEqual(nextMode(C, { kind: 'focus', active: true }), { mode: 'workbench', reason: 'focus_start' });
+  assert.deepEqual(nextMode(C, { kind: 'focus', active: true }), { mode: 'manual', reason: 'focus_start' });
   assert.deepEqual(nextMode(W, { kind: 'focus', active: false }), { mode: 'cockpit', reason: 'focus_end' });
   assert.equal(nextMode(W, { kind: 'focus', active: true }), null);
   assert.equal(nextMode(OFF, { kind: 'focus', active: false }), null);
@@ -559,18 +559,18 @@ test('§3.2 handoff → cockpit; return → cockpit', () => {
 });
 
 test('§3.2 go into an agent → workbench, enter(pty), logged', () => {
-  assert.deepEqual(nextMode(C, { kind: 'go_into', ptyId: 12 }), { mode: 'workbench', reason: 'go_into', enter: 12, goInto: true });
-  assert.deepEqual(nextMode(W, { kind: 'go_into', ptyId: 12 }), { mode: 'workbench', reason: null, enter: 12, goInto: true });
+  assert.deepEqual(nextMode(C, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: 'go_into', enter: 12, goInto: true });
+  assert.deepEqual(nextMode(W, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: null, enter: 12, goInto: true });
 });
 
 test('§3.2 open an own tab from the drawer → workbench (open_tab)', () => {
-  assert.deepEqual(nextMode(C, { kind: 'open_tab' }), { mode: 'workbench', reason: 'open_tab' });
+  assert.deepEqual(nextMode(C, { kind: 'open_tab' }), { mode: 'manual', reason: 'open_tab' });
   assert.equal(nextMode(W, { kind: 'open_tab' }), null);
 });
 
 test('§3.2 own tab becomes active in cockpit (⌘1–9, Hester opens a file) → workbench', () => {
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: false, ptyId: 13, entered: false }), { mode: 'workbench', reason: 'open_tab' });
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: true, ptyId: null, entered: false }), { mode: 'workbench', reason: 'open_tab' });
+  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: false, ptyId: 13, entered: false }), { mode: 'manual', reason: 'open_tab' });
+  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: true, ptyId: null, entered: false }), { mode: 'manual', reason: 'open_tab' });
 });
 
 test('§3.2 new agent tab active in cockpit (⇧⌘C) → stay, select its tile', () => {
@@ -578,12 +578,12 @@ test('§3.2 new agent tab active in cockpit (⇧⌘C) → stay, select its tile'
 });
 
 test('§3.2 existing agent tab active in cockpit by another path → workbench, enter, go_into', () => {
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'workbench', reason: 'go_into', enter: 12, goInto: true });
+  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'manual', reason: 'go_into', enter: 12, goInto: true });
 });
 
 test('§3.2 workbench: ⇧⌘C agent is entered (not a peek); ⌘N onto a hidden agent counts as going in', () => {
-  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: true, ptyId: 12, entered: false }), { mode: 'workbench', reason: null, enter: 12, goInto: false });
-  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'workbench', reason: null, enter: 12, goInto: true });
+  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: true, ptyId: 12, entered: false }), { mode: 'manual', reason: null, enter: 12, goInto: false });
+  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'manual', reason: null, enter: 12, goInto: true });
   assert.equal(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: true }), null);
   assert.equal(nextMode(W, { kind: 'tab_activated', isAgent: false, isNew: false, ptyId: 13, entered: false }), null);
 });

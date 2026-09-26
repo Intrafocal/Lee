@@ -6,7 +6,7 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
-import type { Quadrant } from './cockpit';
+import type { DepthRating, Quadrant } from './cockpit';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -280,17 +280,33 @@ export type FocusItem =
   | { kind: 'files'; workspace: string | null; paths: string[] }
   | { kind: 'workspace'; workspace: string }
   /** v4 §7.4: focus on a Cockpit task; related to attention items from its agent pty. */
-  | { kind: 'task'; workspace: string; task_id: string; label: string };
+  | { kind: 'task'; workspace: string; task_id: string; label: string }
+  /** Deep D1 §2.1: a Deep session; exploration_id null = Deep with nothing open yet. */
+  | { kind: 'exploration'; workspace: string; exploration_id: string | null; title: string };
+
+export type FocusSource = 'manual' | 'inferred' | 'deep';
 
 export interface FocusState {
   active: boolean;
   session_id: string | null;
-  source: 'manual' | 'inferred' | null;
+  source: FocusSource | null;
   started_at: string | null;
   item: FocusItem | null;
   /** Non-blocking items held during this session. */
   quiet_count: number;
+  /** 'none' iff source === 'deep' (Deep D1 §2.3). */
+  policy: 'normal' | 'none';
+  deep: { exploration_id: string | null; title: string; workspace: string } | null;
 }
+
+export type FocusEndReason = 'manual' | 'away' | 'switch' | 'handoff' | 'quit' | 'deep_end';
+export interface DeepStartRequest { workspace: string; exploration_id: string | null; title?: string; surface?: string }
+export interface DeepEndRequest { reason: 'ritual' | 'esc'; rating?: DepthRating | null; stopped_at_chars?: number }
+// Deep D1 §12, implemented by package M:
+// CopilotAPI gains: deepStart(req): Promise<FocusState>; deepEnd(req): Promise<FocusState>;
+// window.lee.deep = { onAnswer(cb: (e: DeepAnswerEvent) => void): () => void };
+// window.lee.app.quit(): void;
+// Attention snapshot gains: mode: LeeMode; deep: { exploration_id: string | null; title: string } | null;
 
 export type SummaryPolicy = { mode: 'none' } | { mode: 'on_return' } | { mode: 'at'; at: string };
 

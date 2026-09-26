@@ -114,6 +114,8 @@ export function createFakeCopilotApi(): CopilotAPI {
     started_at: null,
     item: null,
     quiet_count: 0,
+    policy: 'normal',
+    deep: null,
   };
 
   const away: AwayState = {

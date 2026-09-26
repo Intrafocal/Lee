@@ -39,7 +39,12 @@ export type CockpitEventType =
   | 'lint.shown'
   | 'lint.outcome'
   | 'lint.demote'
-  | 'nudge.claim';
+  | 'nudge.claim'
+  | 'deep.input'
+  | 'deep.view'
+  | 'deep.action'
+  | 'deep.affordance'
+  | 'deep.switcher';
 
 // ---------------------------------------------------------------------------
 // Tabs (package A)
@@ -706,16 +711,76 @@ export interface NudgeClaim {
 }
 
 // ---------------------------------------------------------------------------
-// Cockpit / Workbench modes (renderer, package C)
+// Cockpit / Deep / Manual modes (renderer, package C)
 // ---------------------------------------------------------------------------
 
-export type LeeMode = 'cockpit' | 'workbench';
-export type ModeReason = 'default' | 'manual' | 'focus_start' | 'focus_end' | 'handoff' | 'return' | 'go_into' | 'open_tab';
+export type LeeMode = 'cockpit' | 'deep' | 'manual';
+export type ModeReason =
+  | 'default' | 'manual' | 'focus_start' | 'focus_end' | 'handoff' | 'return' | 'go_into' | 'open_tab'
+  | 'deep_start' | 'deep_end' | 'hop' | 'switcher';
 export type GoIntoFrom = 'tile' | 'feed' | 'drawer' | 'hotkey' | 'tabs' | 'other-window';
 
 export type CockpitRendererEvent =
   | { type: 'cockpit.mode'; data: { from: LeeMode; to: LeeMode; reason: ModeReason } }
-  | { type: 'cockpit.go_into'; data: { pty_id: number; agent_state: AgentState | TabRunState; from: GoIntoFrom } };
+  | { type: 'cockpit.go_into'; data: { pty_id: number; agent_state: AgentState | TabRunState; from: GoIntoFrom } }
+  | DeepRendererEvent;
+
+// ---------------------------------------------------------------------------
+// Deep (D1). Source of truth: docs/plans/2026-09-26-deep-d1-contracts.md §12.
+// ---------------------------------------------------------------------------
+
+export type DeepView = 'page';                       // 'board' | 'browse' | 'workbench' in D2
+export type DeepAction = 'capture' | 'keep' | 'ask' | 'explore' | 'insert' | 'follow_up' | 'dismiss';
+export type AffordancePattern = 'question' | 'url' | 'later';
+export type DeepRendererEvent =
+  | { type: 'deep.input'; data: { exploration_id: string; view: DeepView; keys: number; clicks: number; wheels: number; span_ms: number } }
+  | { type: 'deep.view'; data: { exploration_id: string; view: DeepView } }
+  | { type: 'deep.action'; data: { action: DeepAction; exploration_id: string; chars?: number } }
+  | { type: 'deep.affordance'; data: { pattern: AffordancePattern; outcome: 'accepted' | 'ignored' } }
+  | { type: 'deep.switcher'; data: { from: LeeMode; to: LeeMode; via: 'tap' | 'overlay' | 'chip' } };
+
+export type Anchor =
+  | { kind: 'page'; quote: string; offset: number; section: string | null }
+  | { kind: 'none' };
+export interface DeepReference {
+  id: string; kind: 'quote' | 'link'; quote?: string; url?: string; title?: string; note?: string;
+  section?: string | null; source?: { kind: 'page' | 'palette' | 'answer'; ref?: string };
+  at: string; opened_at?: string;
+}
+export type AnswerStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted';
+export interface DeepAnswer {
+  id: string; anchor: Anchor; question: string; status: AnswerStatus; answer?: string; error?: string;
+  surface: 'deep-ask'; model?: { location: 'local' | 'cloud'; name: string };
+  asked_at: string; answered_at?: string; read_at?: string; dismissed_at?: string;
+  inserted_at?: string; kept_at?: string; follow_up_of?: string;
+}
+export interface DeepQuestion {
+  id: string; text: string; source: 'page' | 'ask'; anchor?: Anchor;
+  status: 'open' | 'closed'; at: string; closed_at?: string;
+}
+export type DepthRating = 'deep' | 'mixed' | 'shallow';
+export interface DeepSessionRecord {
+  id: string; focus_session_id: string; started_at: string; ended_at: string;
+  reason: 'ritual' | 'esc' | 'away' | 'quit'; stopped_at: string | null;
+  rating: DepthRating | null; questions_kept: string[];
+}
+export type OpenerSurface =
+  | { kind: 'blank' }
+  | { kind: 'open_questions'; count: number; items: Array<{ exploration_id: string; exploration_title: string; question_id: string; text: string }> }
+  | { kind: 'captured_away'; count: number; items: Array<{ someday_id: string; text: string; surface: string; created_at: string }> }
+  | { kind: 'reading_list'; count: number; items: Array<{ exploration_id: string; reference_id: string; title: string; url: string }> }
+  | { kind: 'q2'; items: unknown[] }
+  | { kind: 'quiet'; items: Array<{ exploration_id: string; title: string; last_touched_at: string }> };
+export interface Opener {
+  generated_at: string; workspace: string;
+  pick_up: null | {
+    exploration: { id: string; title: string; last_touched_at: string };
+    stopped_at: string | null;
+    arrived: { answers: number; open_questions: number };
+  };
+  surfaces: OpenerSurface[];
+}
+export interface DeepAnswerEvent { workspace: string; exploration_id: string; answer_id: string; status: AnswerStatus }
 
 /** Main asks a window's renderer to create a tab and report its ids. */
 export interface CreateTabRequest {

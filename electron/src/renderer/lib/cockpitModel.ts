@@ -165,7 +165,7 @@ export interface WallRepairInput {
 export function wallRepair(input: WallRepairInput): 'enter' | 'redirect' | null {
   if (!input.enabled || !input.isAgent || input.ptyId == null || input.entered) return null;
   if (input.becameAgent) return 'enter';
-  if (input.holdEnded && input.mode === 'workbench') return 'redirect';
+  if (input.holdEnded && input.mode === 'manual') return 'redirect';
   return null;
 }
 
@@ -202,7 +202,7 @@ export interface ModeDecision {
 /** Decide what a trigger does. null = nothing changes. */
 export function nextMode(state: ModeInput, trigger: ModeTrigger): ModeDecision | null {
   if (trigger.kind === 'load') {
-    const mode: LeeMode = trigger.enabled ? trigger.defaultMode : 'workbench';
+    const mode: LeeMode = trigger.enabled ? trigger.defaultMode : 'manual';
     return { mode, reason: 'default' };
   }
   if (!state.enabled) return null;
@@ -211,27 +211,27 @@ export function nextMode(state: ModeInput, trigger: ModeTrigger): ModeDecision |
 
   switch (trigger.kind) {
     case 'toggle':
-      return { mode: state.mode === 'cockpit' ? 'workbench' : 'cockpit', reason: 'manual' };
+      return { mode: state.mode === 'cockpit' ? 'manual' : 'cockpit', reason: 'manual' };
     case 'focus':
-      return trigger.active ? to('workbench', 'focus_start') : to('cockpit', 'focus_end');
+      return trigger.active ? to('manual', 'focus_start') : to('cockpit', 'focus_end');
     case 'handoff':
       return to('cockpit', 'handoff');
     case 'return':
       return to('cockpit', 'return');
     case 'go_into':
-      return { mode: 'workbench', reason: state.mode === 'workbench' ? null : 'go_into', enter: trigger.ptyId, goInto: true };
+      return { mode: 'manual', reason: state.mode === 'manual' ? null : 'go_into', enter: trigger.ptyId, goInto: true };
     case 'open_tab':
-      return to('workbench', 'open_tab');
+      return to('manual', 'open_tab');
     case 'tab_activated': {
       const { isAgent, isNew, ptyId, entered } = trigger;
       if (state.mode === 'cockpit') {
-        if (!isAgent) return { mode: 'workbench', reason: 'open_tab' };
+        if (!isAgent) return { mode: 'manual', reason: 'open_tab' };
         if (ptyId == null) return null;
         if (isNew) return { mode: 'cockpit', reason: null, selectTile: ptyId };
-        return { mode: 'workbench', reason: 'go_into', enter: ptyId, goInto: true };
+        return { mode: 'manual', reason: 'go_into', enter: ptyId, goInto: true };
       }
       if (!isAgent || ptyId == null || entered) return null;
-      return { mode: 'workbench', reason: null, enter: ptyId, goInto: !isNew };
+      return { mode: 'manual', reason: null, enter: ptyId, goInto: !isNew };
     }
   }
 }

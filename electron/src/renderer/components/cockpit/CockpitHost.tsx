@@ -227,11 +227,11 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   // Configure once the cockpit API was probed and the workspace is known; config may lag.
   const enabledCfg = config?.enabled !== false;
-  const defaultMode = config?.default_mode === 'workbench' ? 'workbench' : 'cockpit';
+  const defaultMode = config?.default_mode === 'workbench' ? 'manual' : 'cockpit';
   useEffect(() => {
     if (!workspace || available == null) return;
     if (!available) {
-      cockpitModeStore.configure(false, 'workbench');
+      cockpitModeStore.configure(false, 'manual');
       return;
     }
     if (config) {
@@ -340,7 +340,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   useEffect(() => {
     const was = prevMode.current;
     prevMode.current = state.mode;
-    if (!state.enabled || was !== 'cockpit' || state.mode !== 'workbench') return;
+    if (!state.enabled || was !== 'cockpit' || state.mode !== 'manual') return;
     const active = tabsRef.current.find((x) => x.id === activeRef.current);
     if (state.reason !== 'go_into' && active && mode.isAgentTab(active) && (active.ptyId == null || !state.enteredPtys.has(active.ptyId))) {
       const fallback = tabsRef.current.find((x) => x.id === lastOwnTab.current) ?? ownTabs.find((x) => x.dockPosition === 'center');

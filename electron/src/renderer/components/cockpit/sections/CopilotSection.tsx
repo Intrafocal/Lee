@@ -29,6 +29,7 @@ import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
 import { openItem } from '../Proposals';
 import { RetroCard } from '../../copilot/RetroCard';
+import { OpenerCard } from '../../deep/OpenerCard';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 interface CopilotSectionProps {
@@ -242,6 +243,8 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
           </span>
         )}
       </header>
+
+      <OpenerCard workspace={workspace} returnNonce={returnNonce} />
 
       <div
         className={`cockpit-brief-card${selected(ASK_ROW)}`}

@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AgentState, AttentionSnapshot } from '../../../shared/copilot';
-import type { AboutRef, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
+import type { AboutRef, DeepView, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
 import {
   agentPtysFromSnapshot,
   isAgentTab as isAgentTabPure,
@@ -47,6 +47,15 @@ export interface CockpitModeState {
   needsCount: number;
   /** Bumped when a hold() ends, so the wall re-checks the active tabs. */
   holdEpoch: number;
+  /** This window's Deep memory (Deep D1 §14): the open exploration and view. */
+  deep: DeepNav;
+}
+
+/** What Deep shows in this window (Deep D1 §4.4). */
+export interface DeepNav {
+  exploration_id: string | null;
+  title: string;
+  view: DeepView;
 }
 
 /** What the tab strip shows for an agent pty: its provider (icon) and session name (label). */
@@ -60,7 +69,7 @@ type Listener = () => void;
 let state: CockpitModeState = {
   enabled: false,
   configured: false,
-  mode: 'workbench',
+  mode: 'manual',
   reason: 'default',
   since: Date.now(),
   section: DEFAULT_SECTION,
@@ -70,9 +79,14 @@ let state: CockpitModeState = {
   tabDisplay: new Map(),
   needsCount: 0,
   holdEpoch: 0,
+  deep: { exploration_id: null, title: '', view: 'page' },
 };
 
 const listeners = new Set<Listener>();
+/** A Deep focus session is active in this window's workspace (fed by useCockpitMode). */
+let deepSessionActive = false;
+const endSessionListeners = new Set<() => void>();
+const focusOpenerListeners = new Set<() => void>();
 let holdUntil = 0;
 let holdTimer: ReturnType<typeof setTimeout> | null = null;
 /** Tab ids whose next activation Lee made, not you (close/dock fallbacks, wall redirects). */
@@ -342,6 +356,42 @@ export const cockpitModeStore = {
   decide(trigger: ModeTrigger): ModeDecision | null {
     return nextMode(state, trigger);
   },
+  /** Remember the exploration and show it in Deep (reason 'hop' when a Deep session is already active). */
+  openDeep(exploration_id: string, title: string): void {
+    const d = state.deep;
+    if (d.exploration_id !== exploration_id || d.title !== title) {
+      emit({ deep: { exploration_id, title, view: d.exploration_id === exploration_id ? d.view : 'page' } });
+    }
+    if (!state.enabled) return;
+    cockpitModeStore.set('deep', deepSessionActive ? 'hop' : 'deep_start');
+  },
+  /** This window's Deep memory. */
+  getDeep(): DeepNav {
+    return state.deep;
+  },
+  /** The mode chip's "End session": the Deep surface opens the ending ritual. */
+  requestEndSession(): void {
+    for (const fn of endSessionListeners) fn();
+  },
+  onEndSessionRequest(cb: () => void): () => void {
+    endSessionListeners.add(cb);
+    return () => {
+      endSessionListeners.delete(cb);
+    };
+  },
+  /** Show the Cockpit on Copilot and focus the opener's field (Go deep with nothing open). */
+  focusOpener(): void {
+    if (!state.enabled) return;
+    if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'manual');
+    cockpitModeStore.setSection('copilot');
+    for (const fn of focusOpenerListeners) fn();
+  },
+  onFocusOpener(cb: () => void): () => void {
+    focusOpenerListeners.add(cb);
+    return () => {
+      focusOpenerListeners.delete(cb);
+    };
+  },
 };
 
 function getTabDisplay(): ReadonlyMap<number, TabDisplayInfo> {
@@ -400,6 +450,11 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
   const agentKey = Array.from(agentPtysFromSnapshot(snapshot)).sort((a, b) => a - b).join(',');
   const snapshotAgents = useMemo(() => new Set(agentKey ? agentKey.split(',').map(Number) : []), [agentKey]);
   const sets = useMemo<AgentSets>(() => ({ snapshotAgents, runtimeAgents: s.runtimeAgents }), [snapshotAgents, s.runtimeAgents]);
+
+  const deepActive = !!snapshot?.focus.active && snapshot.focus.source === 'deep';
+  useEffect(() => {
+    deepSessionActive = deepActive;
+  }, [deepActive]);
 
   const focusActive = snapshot ? snapshot.focus.active : null;
   const prevFocus = useRef<boolean | null>(null);

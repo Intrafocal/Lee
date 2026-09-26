@@ -11,7 +11,7 @@ import './cockpit.css';
 export const CockpitModeChip: React.FC = () => {
   const s = useCockpitModeState();
   if (!s.enabled) return null;
-  const workbench = s.mode === 'workbench';
+  const workbench = s.mode === 'manual';
   return (
     <button
       className={`cockpit-mode-chip${workbench ? ' is-workbench' : ''}`}

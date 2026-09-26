@@ -149,6 +149,8 @@ export class FocusTracker {
       started_at: s ? new Date(s.started_at).toISOString() : null,
       item: s ? cloneItem(s.item) : null,
       quiet_count: s ? quietCount : 0,
+      policy: 'normal',
+      deep: null,
     };
   }
 
