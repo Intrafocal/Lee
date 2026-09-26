@@ -224,7 +224,14 @@ export type TaskKind = 'bug' | 'question' | 'prototype' | 'chore' | 'unknown';
 export type TaskLead = 'delegate' | 'human' | 'plan';
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'review' | 'done' | 'discarded';
 
-export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester';
+export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore';
+
+/** A launch's git worktree (claude `--worktree <slug>`), contract v3 §4. */
+export interface TaskWorktree {
+  slug: string;
+  path: string;
+  branch: string;
+}
 
 export interface TaskOrigin {
   kind: TaskOriginKind;
@@ -276,6 +283,8 @@ export interface CockpitTask {
   timebox_min: number | null;
   due: string | null;
   origin: TaskOrigin | null;
+  /** The launch's git worktree, when it ran in one. Older daemons omit it. */
+  worktree?: TaskWorktree | null;
   busy_ms: number;
   turns: number;
   files: string[];

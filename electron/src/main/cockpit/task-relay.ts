@@ -17,6 +17,7 @@ import {
   type TaskLead,
   type TaskOrigin,
   type TaskStatus,
+  type TaskWorktree,
 } from '../../shared/cockpit';
 
 const RETRY_MS = 60_000;
@@ -41,6 +42,8 @@ export interface TaskRecord {
   name_source?: AgentNameSource | null;
   /** Context attached at launch: workspace-relative paths and bundle ids only. */
   context?: TaskContextRef | null;
+  /** The launch's git worktree (contract v3 §4). */
+  worktree?: TaskWorktree | null;
 }
 
 /** A name change for a task (by id) or an agent session (by session id). */

@@ -74,6 +74,9 @@ export interface TabData extends Tab {
   browserCheckpointReady?: boolean; // True when session+email captured for Frame checkpoint
   // Workstream-specific data (for type='workstream')
   workstreamId?: string;
+  /** Library tabs: the exploration to show (Cockpit "Open tree"); the nonce re-selects the same one. */
+  librarySessionId?: string;
+  librarySessionNonce?: number;
   /** Hester chat tabs resumed on a known session (an Explore deep dive), so a second open refocuses it. */
   hesterSessionId?: string;
   // Machine-specific data (for type='spyglass' or 'bridge')
@@ -1462,6 +1465,9 @@ const App: React.FC = () => {
           active={active}
           workspace={workspace}
           onOpenFile={handleFileOpen}
+          openSessionId={tabData.librarySessionId ?? null}
+          openSessionNonce={tabData.librarySessionNonce ?? 0}
+          onOpenWorkstream={handleWorkstreamSelect}
         />
       );
     }
@@ -1602,6 +1608,48 @@ const App: React.FC = () => {
       ptyId: null,
       dockPosition: 'center',
       workstreamId: wsId,
+    };
+    setTabs(prev => [...prev, newTab]);
+    setActiveTabId(tabId);
+    setFocusedPanel('center');
+  }, []);
+
+  // Open (or refocus) the Library tab on an exploration (Cockpit "Open tree").
+  const handleOpenLibrary = useCallback((expId: string) => {
+    const existing = tabsRef.current.find(t => t.type === 'library');
+    if (existing) {
+      setTabs(prev => prev.map(t => (t.id === existing.id
+        ? { ...t, librarySessionId: expId, librarySessionNonce: (t.librarySessionNonce ?? 0) + 1 }
+        : t)));
+      switch (existing.dockPosition) {
+        case 'left':
+          setActiveLeftTabId(existing.id);
+          setFocusedPanel('left');
+          break;
+        case 'right':
+          setActiveRightTabId(existing.id);
+          setFocusedPanel('right');
+          break;
+        case 'bottom':
+          setActiveBottomTabId(existing.id);
+          setFocusedPanel('bottom');
+          break;
+        default:
+          setActiveTabId(existing.id);
+          setFocusedPanel('center');
+      }
+      return;
+    }
+    const tabId = nextTabIdRef.current++;
+    const newTab: TabData = {
+      id: tabId,
+      type: 'library',
+      label: 'Library',
+      closable: true,
+      ptyId: null,
+      dockPosition: 'center',
+      librarySessionId: expId,
+      librarySessionNonce: 1,
     };
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(tabId);
@@ -2004,6 +2052,7 @@ const App: React.FC = () => {
           ...(t.provider ? { provider: t.provider } : {}),
           ...(t.filePath ? { filePath: t.filePath } : {}),
           ...(t.workstreamId ? { workstreamId: t.workstreamId } : {}),
+          ...(t.librarySessionId ? { librarySessionId: t.librarySessionId } : {}),
           ...(t.machineConfig ? { machineName: t.machineConfig.name, machineHost: t.machineConfig.host } : {}),
         })),
         activeTabId,
@@ -2783,6 +2832,8 @@ const App: React.FC = () => {
         }}
         onOpenFile={(path: string) => handleFileOpenRef.current(path)}
         onOpenHesterSession={(sessionId: string, label: string) => handleOpenHesterTab(sessionId, label)}
+        onOpenLibrary={handleOpenLibrary}
+        onOpenWorkstream={handleWorkstreamSelect}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
         onNotify={(message: string, level: 'info' | 'error') => notify(level === 'error' ? 'warn' : 'info', message, { id: 'cockpit-checkin' })}
       />

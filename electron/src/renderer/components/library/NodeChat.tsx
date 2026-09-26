@@ -17,7 +17,10 @@ import {
   AgentMode,
   SearchResults,
   NodeType,
+  NODE_TYPE_CONFIG,
   SynthesisAction,
+  isReadOnlyNode,
+  nodeKind,
 } from './types';
 import { Icon, type IconName } from '../Icon';
 
@@ -52,6 +55,8 @@ interface NodeChatProps {
   onSynthesize?: (action: SynthesisAction, nodeIds: string[]) => void;
   onCopyToMarkdown?: (nodeIds: string[]) => void;
   onVisualize?: (nodeIds: string[]) => void;
+  /** Open an evidence diff (workspace-relative path) in the Workbench editor. */
+  onOpenDiff?: (path: string) => void;
 }
 
 export const NodeChat: React.FC<NodeChatProps> = ({
@@ -75,6 +80,7 @@ export const NodeChat: React.FC<NodeChatProps> = ({
   onSynthesize,
   onCopyToMarkdown,
   onVisualize,
+  onOpenDiff,
 }) => {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -266,6 +272,11 @@ export const NodeChat: React.FC<NodeChatProps> = ({
         </div>
       </div>
     );
+  }
+
+  // Decision, spike and evidence nodes: read-only, no chat (contract v3 §9)
+  if (isReadOnlyNode(node)) {
+    return <ReadOnlyNodeView node={node} onOpenDiff={onOpenDiff} />;
   }
 
   // Session overview — when the root node is selected
@@ -692,3 +703,58 @@ const ChatMessage: React.FC<{
 };
 
 export default NodeChat;
+
+const READ_ONLY_TITLE: Record<string, string> = { decision: 'Decision', spike: 'Spike', evidence: 'Evidence' };
+
+/** A decision, spike or evidence node: its frontmatter text, read-only. */
+const ReadOnlyNodeView: React.FC<{ node: ExplorationNode; onOpenDiff?: (path: string) => void }> = ({ node, onOpenDiff }) => {
+  const kind = nodeKind(node) ?? 'decision';
+  const d = node.decision;
+  const sp = node.spike;
+  const ev = node.evidence;
+  return (
+    <div className="library-chat">
+      <div className="library-chat-header">
+        <span className="library-chat-mode-badge" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+          <Icon name={NODE_TYPE_CONFIG[kind].icon} size={13} className="icon-inline" /> {READ_ONLY_TITLE[kind] ?? kind}
+        </span>
+        <span className="library-chat-node-label">{node.label}</span>
+      </div>
+      <div className="library-chat-messages library-readonly">
+        {d && (
+          <>
+            <div className="library-readonly-text">{d.text || node.label}</div>
+            {d.chosen.length > 0 && <div className="library-readonly-meta">Chosen: {d.chosen.join(', ')}</div>}
+            {d.pruned.length > 0 && <div className="library-readonly-meta">Pruned: {d.pruned.join(', ')}</div>}
+            <div className="library-readonly-meta">{d.reason ? `Reason: ${d.reason}` : 'No reason given (add one from the Cockpit’s Explore section).'}</div>
+          </>
+        )}
+        {sp && (
+          <>
+            <div className="library-readonly-meta">
+              Status: <strong>{sp.status}</strong> · timebox {sp.timebox_min}m{sp.task_id ? ` · task ${sp.task_id}` : ''}
+            </div>
+            {sp.worktree && <div className="library-readonly-meta">Worktree: {sp.worktree.branch} ({sp.worktree.path})</div>}
+            <div className="library-readonly-label">Prompt</div>
+            <div className="library-readonly-text">{sp.prompt}</div>
+          </>
+        )}
+        {ev && (
+          <>
+            <div className="library-readonly-label">Agent’s claim</div>
+            <div className="library-readonly-text">{ev.summary || '(no summary)'}</div>
+            {ev.diffstat && <pre className="library-readonly-pre">{ev.diffstat}</pre>}
+            {ev.files.length > 0 && <div className="library-readonly-meta">Files: {ev.files.slice(0, 20).join(', ')}</div>}
+            {ev.commits.length > 0 && <div className="library-readonly-meta">Commits: {ev.commits.map((c) => c.slice(0, 8)).join(', ')}</div>}
+            {ev.diff_path && onOpenDiff && (
+              <button className="library-search-promote-btn" onClick={() => onOpenDiff(ev.diff_path as string)}>
+                Open diff
+              </button>
+            )}
+          </>
+        )}
+        {!d && !sp && !ev && <div className="library-readonly-meta">{node.label}</div>}
+      </div>
+    </div>
+  );
+};

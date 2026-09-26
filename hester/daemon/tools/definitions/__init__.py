@@ -133,6 +133,7 @@ from .workstream_tools import (
 )
 from .cockpit_tools import (
     COCKPIT_TASKS_TOOL,
+    KNOWLEDGE_NOTES_TOOL,
     LEE_TABS_TOOL,
     LEE_TAB_READ_TOOL,
     LEE_TAB_CHECKIN_TOOL,
@@ -301,6 +302,7 @@ TOOL_CATEGORIES: Dict[str, List[str]] = {
     # Cockpit - tasks (read-only), Lee tabs, operations (run defined / propose)
     "cockpit": [
         "cockpit_tasks",
+        "knowledge_notes",
         "lee_tabs",
         "lee_tab_read",
         "lee_tab_checkin",
@@ -587,6 +589,7 @@ __all__ = [
     "WORKSTREAM_TOOLS",
     # Cockpit tool definitions
     "COCKPIT_TASKS_TOOL",
+    "KNOWLEDGE_NOTES_TOOL",
     "LEE_TABS_TOOL",
     "LEE_TAB_READ_TOOL",
     "LEE_TAB_CHECKIN_TOOL",

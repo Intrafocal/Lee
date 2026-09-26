@@ -101,6 +101,23 @@ async def cockpit_tasks(status: str = "open", limit: int = 20, working_dir: Opti
     return {"success": True, "data": {"workspace": ws, "tasks": rows}}
 
 
+async def knowledge_notes(name: Optional[str] = None, working_dir: Optional[str] = None) -> Dict[str, Any]:
+    """This workspace's knowledge notes (.hester/knowledge/): list, or read one by name. Read-only."""
+    from ..cockpit.explore_ops import list_knowledge, read_knowledge
+    from ..cockpit.explorations import ExplorationError
+
+    ws = _workspace(working_dir)
+    if not name:
+        return {"success": True, "data": {"workspace": ws, "notes": list_knowledge(Path(ws))}}
+    try:
+        text = read_knowledge(Path(ws), str(name))
+    except ExplorationError as e:
+        return {"success": False, "error": str(e)}
+    if text is None:
+        return {"success": False, "error": f"no knowledge note named {name}"}
+    return {"success": True, "data": {"workspace": ws, "name": str(name).removesuffix(".md"), "content": text}}
+
+
 async def lee_tabs(working_dir: Optional[str] = None) -> Dict[str, Any]:
     ws = _workspace(working_dir)
     return _result(await lee_command("tab", "list", {"workspace": ws}, ws))

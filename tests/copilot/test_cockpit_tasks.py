@@ -204,7 +204,7 @@ def test_cockpit_tools_are_read_or_propose_only(cockpit_env, monkeypatch):
     from hester.daemon.tools.definitions import get_tools_by_categories
 
     names = set(get_tools_by_categories(["cockpit"]))
-    assert names == {"cockpit_tasks", "lee_tabs", "lee_tab_read", "lee_tab_checkin", "lee_operations",
+    assert names == {"cockpit_tasks", "knowledge_notes", "lee_tabs", "lee_tab_read", "lee_tab_checkin", "lee_operations",
                      "lee_operation_run", "lee_operation_propose", "lee_operation_result"}
 
     calls = []

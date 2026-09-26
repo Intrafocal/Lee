@@ -31,11 +31,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..copilot.digest import _norm
 from ..copilot.event_reader import events_dir as default_events_dir
 from ..copilot.event_reader import list_files, parse_ts
+from . import spikes
 from .plain import plain_title
 from .tasks import (
     CLOSED_STATUSES,
     MAX_FILES,
     atomic_write,
+    clean_worktree,
     clip,
     default_task,
     is_open,
@@ -99,6 +101,14 @@ def already_applied(task: Dict[str, Any], ev: Dict[str, Any]) -> bool:
 def status_from_lee_status(lee_status: Any) -> str:
     s = lee_status.get("status") if isinstance(lee_status, dict) else None
     return LEE_STATUS_MAP.get(s, "idle")
+
+
+def launch_ref(data: Dict[str, Any]) -> Optional[str]:
+    """The origin ref a ``task.launch`` event carries (``origin_ref``, or ``origin.ref``)."""
+    ref = data.get("origin_ref")
+    if ref is None and isinstance(data.get("origin"), dict):
+        ref = data["origin"].get("ref")
+    return str(ref) if isinstance(ref, str) and ref else None
 
 
 def _file_key(name: str) -> Optional[Tuple[str, int]]:
@@ -411,6 +421,7 @@ class EventFollower:
         dirty: set = set()
         notes: List[Tuple[str, str, str, str]] = []
         removed: set = set()
+        turn_ends: set = set()
 
         def load(task_id: str) -> Optional[Dict[str, Any]]:
             if task_id not in cache:
@@ -597,7 +608,7 @@ class EventFollower:
                         "title": "(untitled)",
                         "title_source": "auto",
                         "status": "running" if (pty is not None or sid) else "queued",
-                        "origin": {"kind": data.get("origin_kind") or "launcher", "ref": None},
+                        "origin": {"kind": data.get("origin_kind") or "launcher", "ref": launch_ref(data)},
                         "timebox_min": 30 if lead == "delegate" else None,
                     })
                     if data.get("confirmed"):
@@ -611,6 +622,12 @@ class EventFollower:
                     notes.append(("created", task["id"], "Task launched", iso_s(ev["_ts"])))
                 if adopted is not None:
                     fold(adopted, task)
+                worktree = clean_worktree(data.get("worktree"))
+                if worktree is not None and not task.get("worktree"):
+                    task["worktree"] = worktree
+                origin = task.get("origin") or {}
+                if data.get("origin_kind") == "explore" and origin.get("kind") == "explore" and not origin.get("ref"):
+                    task["origin"] = {"kind": "explore", "ref": launch_ref(data)}
                 if pty is not None or sid:
                     attach_session(task, sid, pty, data.get("provider"))
                 if sid:
@@ -694,6 +711,7 @@ class EventFollower:
                     task["busy_ms"] = int(task.get("busy_ms") or 0) + int(busy)
                 task["turns"] = int(task.get("turns") or 0) + 1
                 apply_report(task, data, ev, respect_agent_title=True)
+                turn_ends.add(task["id"])
             elif t in ("agent.session_end", "agent.exit"):
                 old_pty = (task.get("agent") or {}).get("pty_id")
                 if task.get("agent"):
@@ -715,6 +733,11 @@ class EventFollower:
             store.save(task)
         for task_id in removed:
             store.delete(task_id)
+        # Spike nodes follow their explore-origin tasks (launch, status, evidence).
+        for task_id in dirty:
+            task = cache.get(task_id)
+            if task_id not in removed and task is not None and (task.get("origin") or {}).get("kind") == "explore":
+                spikes.sync(ctx, task, turn_end=task_id in turn_ends)
         for kind, task_id, text, at in notes:
             if task_id in cache and task_id not in removed:
                 store.record_event(kind, cache[task_id], text, at=at)

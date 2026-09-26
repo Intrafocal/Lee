@@ -142,6 +142,7 @@ from .tools import (
     execute_workstream_list,
     # Cockpit tools
     cockpit_tasks,
+    knowledge_notes,
     lee_tabs,
     lee_tab_read,
     lee_tab_checkin,
@@ -578,6 +579,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
             "workstream_list": execute_workstream_list,
             # Cockpit tools (read tasks; tabs and operations via Lee's tab/ops domains)
             "cockpit_tasks": partial(cockpit_tasks, working_dir=working_dir),
+            "knowledge_notes": partial(knowledge_notes, working_dir=working_dir),
             "lee_tabs": partial(lee_tabs, working_dir=working_dir),
             "lee_tab_read": partial(lee_tab_read, working_dir=working_dir),
             "lee_tab_checkin": partial(lee_tab_checkin, working_dir=working_dir),

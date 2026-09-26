@@ -7,10 +7,7 @@ NOTE: HesterDaemonAgent is NOT auto-imported to avoid pulling in heavy dependenc
 Import it explicitly: from hester.daemon.agent import HesterDaemonAgent
 """
 
-from .session import (
-    SessionManager, HesterSession, InMemorySessionManager,
-    ExplorationNode, ExplorationSession, ExplorationSessionManager,
-)
+from .session import SessionManager, HesterSession, InMemorySessionManager
 from .models import (
     ContextRequest,
     ContextResponse,
@@ -36,9 +33,6 @@ __all__ = [
     "EditorState",
     "EditorCommand",
     "ImageData",
-    "ExplorationNode",
-    "ExplorationSession",
-    "ExplorationSessionManager",
     "HesterDaemonSettings",
     "get_daemon_settings",
 ]

@@ -4,7 +4,10 @@
  * every exploration call names its workspace as ?workspace= and as the
  * percent-encoded X-Lee-Workspace header, carries the bearer token, uses the
  * route/method of the contracts addendum, and unwraps the copilot envelope.
- * Also Someday "Promote → Explore" (triage with to: 'explore'). Bundles the
+ * Also Someday "Promote → Explore" (triage with to: 'explore'), the v3 tree
+ * routes (nodes, prune, decisions, spikes, promote, archive, escalate) and
+ * the spike launch flow (spike node, delegate launch in a worktree with
+ * origin explore, PATCH running). Bundles the
  * real source with esbuild; fetch and window.lee are stubs. No Hester needed.
  *
  * Run: node scripts/cockpit-explore-smoke.mjs
@@ -38,7 +41,25 @@ try {
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
-const { listExplorations, createExploration, getExploration, patchExploration, openExploration, triageSomeday } = mod;
+const {
+  listExplorations,
+  createExploration,
+  getExploration,
+  patchExploration,
+  openExploration,
+  triageSomeday,
+  addExploreNode,
+  patchExploreNode,
+  pruneExploreNode,
+  decideExploration,
+  addSpike,
+  patchSpike,
+  promoteExploration,
+  archiveExploration,
+  escalateTask,
+  startSpike,
+  workspacePath,
+} = mod;
 
 let passed = 0;
 async function test(name, fn) {
@@ -124,6 +145,99 @@ await test('Someday Promote → Explore: triage explore with to: explore', async
   assert.equal(r.data.exploration.id, exp.id);
   assert.equal(scoped(calls[0]).pathname, '/someday/sd_1/triage');
   assert.deepEqual(calls[0].body, { action: 'explore', to: 'explore', workspace: WS });
+});
+
+await test('v3 tree: nodes / prune / decisions / spikes use the contract routes and bodies', async () => {
+  reply = { status: 201, body: { success: true, data: { id: 'n-0000abcd', parent: 'root', label: 'x', kind: 'thought' } } };
+  await addExploreNode(WS, exp.id, { parent: 'root', label: 'Try files' });
+  await patchExploreNode(WS, exp.id, 'n-0000abcd', { label: 'Try a file-first store' });
+  await patchExploreNode(WS, exp.id, 'n-1111abcd', { reason: 'too slow' });
+  await pruneExploreNode(WS, exp.id, 'n-0000abcd');
+  await pruneExploreNode(WS, exp.id, 'n-0000abcd', 'dead end');
+  await decideExploration(WS, exp.id, { text: 'Use files' });
+  await addSpike(WS, exp.id, { parent: 'n-0000abcd', prompt: 'Try it', title: 'Try it' });
+  await patchSpike(WS, exp.id, 'n-2222abcd', { task_id: 'task-1', status: 'running' });
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes'],
+    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd'],
+    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-1111abcd'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd/prune'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd/prune'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/decisions'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/spikes'],
+    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/spikes/n-2222abcd'],
+  ]);
+  assert.deepEqual(calls[0].body, { parent: 'root', label: 'Try files' });
+  assert.deepEqual(calls[2].body, { reason: 'too slow' });
+  assert.deepEqual(calls[3].body, {}, 'no reason required');
+  assert.deepEqual(calls[4].body, { reason: 'dead end' });
+  assert.deepEqual(calls[5].body, { text: 'Use files' });
+  assert.deepEqual(calls[7].body, { task_id: 'task-1', status: 'running' });
+});
+
+await test('v3 promote / archive / escalate / serves', async () => {
+  reply = { status: 200, body: { success: true, data: { exploration: exp, workstream_id: 'ws-1', title: 'T', phase: 'exploration' } } };
+  const p = await promoteExploration(WS, exp.id, { to: 'workstream' });
+  assert.equal(p.data.workstream_id, 'ws-1');
+  await promoteExploration(WS, exp.id, { to: 'goal', node_ids: ['root'] });
+  await archiveExploration(WS, exp.id);
+  await archiveExploration(WS, exp.id, true);
+  await escalateTask(WS, 'task-9');
+  await patchExploration(WS, exp.id, { serves: ['G1'] });
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/promote'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/promote'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/archive'],
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/archive'],
+    ['POST', '/cockpit/tasks/task-9/escalate'],
+    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d'],
+  ]);
+  assert.deepEqual(calls[0].body, { to: 'workstream' });
+  assert.deepEqual(calls[1].body, { to: 'goal', node_ids: ['root'] });
+  assert.deepEqual(calls[2].body, {});
+  assert.deepEqual(calls[3].body, { as_knowledge: true });
+  assert.deepEqual(calls[4].body, {});
+  assert.deepEqual(calls[5].body, { serves: ['G1'], workspace: WS });
+  assert.equal(workspacePath(WS, '.hester/explore/evidence/a.diff'), `${WS}/.hester/explore/evidence/a.diff`);
+  assert.equal(workspacePath(WS, '/abs/x.md'), '/abs/x.md');
+});
+
+await test('spike launch flow: spike node, delegate worktree launch with origin explore, PATCH running', async () => {
+  reply = { status: 201, body: { success: true, data: { id: 'n-3333abcd', parent: 'root', label: 'Spike', kind: 'spike' } } };
+  const launches = [];
+  const r = await startSpike(WS, exp.id, { parent: 'n-0000abcd', prompt: 'Try a file-first store', title: 'File store' }, async (req) => {
+    launches.push(req);
+    return { success: true, task_id: 'task-abcd1234', pty_id: 3 };
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(launches[0], {
+    workspace: WS,
+    lead: 'delegate',
+    kind: 'prototype',
+    worktree: true,
+    prompt: 'Try a file-first store',
+    title: 'File store',
+    name: 'Spike: File store',
+    origin: { kind: 'explore', ref: 'exp-1a2b3c4d/n-3333abcd' },
+  });
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
+    ['POST', '/cockpit/explorations/exp-1a2b3c4d/spikes'],
+    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/spikes/n-3333abcd'],
+  ]);
+  assert.deepEqual(calls[0].body, { parent: 'n-0000abcd', prompt: 'Try a file-first store', title: 'File store' });
+  assert.deepEqual(calls[1].body, { task_id: 'task-abcd1234', status: 'running' });
+
+  calls.length = 0;
+  const bad = await startSpike(WS, exp.id, { prompt: 'x', title: 'x' }, async () => ({ success: false, error: 'no_window' }));
+  assert.deepEqual(bad, { ok: false, error: 'no_window' });
+  assert.deepEqual(calls[1].body, { status: 'failed' });
+
+  calls.length = 0;
+  reply = { status: 503, body: { success: false, error: 'down' } };
+  let launched = false;
+  const off = await startSpike(WS, exp.id, { prompt: 'x', title: 'x' }, async () => ((launched = true), { success: true, task_id: 't' }));
+  assert.equal(off.ok, false);
+  assert.equal(launched, false, 'no launch without a spike node');
 });
 
 console.log(process.exitCode ? '\nsome FAILED' : `\n${passed} passed`);

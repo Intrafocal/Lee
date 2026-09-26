@@ -1,5 +1,5 @@
 """
-Explore: durable explorations (spec §7.5, v-now scope: section + persistence).
+Explore: durable explorations (spec §7.5; v3 contracts: Explore absorbs the Library).
 
 One markdown file per exploration at
 ``<workspace>/.hester/explore/<id>.md`` (0600, dir 0700; ``.hester/`` is
@@ -9,6 +9,11 @@ gitignored), YAML frontmatter plus a free-form body:
     id: exp-1a2b3c4d
     title: ...
     status: active | archived
+    nodes: [...]            # the tree; absent in v-now files => just the root
+    active_node: root
+    serves: [G1]
+    promoted: [{to, ref, at, node_ids}]
+    knowledge_path: null
     ...
     ---
     # <title>
@@ -17,7 +22,7 @@ gitignored), YAML frontmatter plus a free-form body:
 
     <seed text>
 
-    ## Log
+    ## Log                                    <- the root node's conversation
 
     ### You · 2026-09-26T10:00:00Z
 
@@ -27,15 +32,32 @@ gitignored), YAML frontmatter plus a free-form body:
 
     ...
 
-This replaces nothing yet: the Library pane's tree sessions (Redis, 2 h TTL)
-are untouched. An exploration's deep dive is a Hester chat session with the
-deterministic id ``explore-<id>``: POST .../open seeds that session from the
-file, and every finished turn in it is appended back to the file's Log
-(``record_turn``), so the file outlives the session's TTL and a later open
-re-seeds from it.
+    ## Node n-1a2b3c4d · Try a file-first store   <- one section per non-root node with a log
+    ### You · 2026-09-26T10:03:00Z
+    ...
 
-Not in scope yet (spec §7.5, later): spikes, decision nodes, archive as
-knowledge, promote to goal/workstream/task.
+This is the one store for open-ended work. The Library pane is a tree view onto
+the same files (``/library/*`` in main.py; ``session_id`` is the exploration
+id, node ids are ``root`` or ``n-<8 hex>``); nothing about an exploration
+expires. Nodes are branches (``thought`` and ``source_*``, each with its own
+log section), ``decision`` nodes (a choice, what was chosen and pruned, an
+optional reason), ``spike`` nodes (a timeboxed agent task in a git worktree,
+kept current by ``spikes.sync``) and ``evidence`` nodes (one per spike: the
+agent's claim, files, diffstat, diff file and commits). Decision, spike and
+evidence nodes have no log; their text lives in the frontmatter.
+
+The parser splits only on exact headings (``### You|Hester · <iso>`` and
+``## Node n-<hex> · <label>`` for a known node), so markdown headings inside
+answers are safe.
+
+An exploration's deep dive is a Hester chat session with the deterministic id
+``explore-<id>``: POST .../open seeds that session from the file, and every
+finished turn in it is appended back to the root Log (``record_turn``), so the
+file outlives the session's TTL and a later open re-seeds from it. Library
+per-node chats use ``library-<id>-<node>`` the same way (``open_node_session``).
+
+Everything here is deterministic; no model runs in the store. Promotes, escalate
+and archive-as-knowledge live in ``explore_ops.py``.
 """
 
 import copy
@@ -45,7 +67,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
@@ -55,18 +77,33 @@ from .tasks import atomic_write, iso_s
 logger = logging.getLogger("hester.daemon.cockpit.explorations")
 
 EXP_ID_RE = re.compile(r"^exp-[0-9a-f]{8}$")
+NODE_ID_RE = re.compile(r"^n-[0-9a-f]{8}$")
+MSG_HEADING_RE = re.compile(r"^### (You|Hester) · (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)$")
+NODE_HEADING_RE = re.compile(r"^## Node (n-[0-9a-f]{8}) · .*$")
 SESSION_PREFIX = "explore-"
+LIBRARY_PREFIX = "library-"
+ROOT = "root"
 STATUSES = ("active", "archived")
-ORIGIN_KINDS = ("cockpit", "someday", "hester")
+ORIGIN_KINDS = ("cockpit", "someday", "hester", "library", "task")
+NODE_KINDS = ("thought", "source_file", "source_web", "source_db", "decision", "spike", "evidence")
+LOG_KINDS = ("thought", "source_file", "source_web", "source_db")
+MODES = ("ideate", "explore", "learn", "brainstorm", "visualize", "search")
+SPIKE_STATUSES = ("pending", "running", "review", "done", "discarded", "failed")
+PROMOTE_TARGETS = ("task", "workstream", "goal")
 FIELDS = (
     "id", "workspace", "title", "status", "seed", "origin", "session_id", "turns",
     "created_at", "updated_at", "last_touched_at", "archived_at", "version",
+    "nodes", "active_node", "serves", "promoted", "knowledge_path",
 )
 MAX_TITLE = 200
+MAX_LABEL = 200
 MAX_SEED = 8000
 MAX_TURN_TEXT = 8000
+MAX_DECISION_TEXT = 2000
+MAX_PROMPT = 8000
 CONTEXT_CHARS = 12000
 LOG_HEADING = "## Log"
+DEFAULT_TIMEBOX_MIN = 30
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
@@ -87,8 +124,17 @@ def new_exploration_id() -> str:
     return f"exp-{secrets.token_hex(4)}"
 
 
+def new_node_id() -> str:
+    return f"n-{secrets.token_hex(4)}"
+
+
 def session_id_for(exp_id: str) -> str:
     return f"{SESSION_PREFIX}{exp_id}"
+
+
+def node_session_id(exp_id: str, node_id: str) -> str:
+    """The Hester chat session behind a Library node's chat."""
+    return f"{LIBRARY_PREFIX}{exp_id}-{node_id}"
 
 
 def exploration_id_from_session(session_id: Any) -> Optional[str]:
@@ -104,11 +150,159 @@ def _clip(text: Any, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _stringify_times(meta: Dict[str, Any]) -> Dict[str, Any]:
-    for k, v in list(meta.items()):
-        if isinstance(v, datetime):
-            meta[k] = iso_s(v if v.tzinfo else v.replace(tzinfo=timezone.utc))
-    return meta
+def _one_line(text: Any, limit: int) -> str:
+    return _clip(" ".join(str(text or "").split()), limit)
+
+
+def _stringify_times(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return iso_s(value if value.tzinfo else value.replace(tzinfo=timezone.utc))
+    if isinstance(value, dict):
+        return {k: _stringify_times(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_stringify_times(v) for v in value]
+    return value
+
+
+def _str_list(name: str, value: Any) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ExplorationError(f"{name} must be a list of strings")
+    out: List[str] = []
+    for v in value:
+        v = v.strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _opt_reason(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ExplorationError("reason must be a string or null")
+    return _clip(value, MAX_DECISION_TEXT) or None
+
+
+def root_node(exp: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": ROOT, "parent": None, "label": exp.get("title") or "", "kind": "thought", "mode": "ideate",
+        "collapsed": False, "pruned": False, "created_at": exp.get("created_at"), "turns": int(exp.get("turns") or 0),
+    }
+
+
+def _norm_node(raw: Dict[str, Any]) -> Dict[str, Any]:
+    kind = raw.get("kind") if raw.get("kind") in NODE_KINDS else "thought"
+    node = {
+        "id": str(raw.get("id")),
+        "parent": raw.get("parent"),
+        "label": str(raw.get("label") or ""),
+        "kind": kind,
+        "mode": raw.get("mode") if raw.get("mode") in MODES else ("ideate" if kind in LOG_KINDS else None),
+        "collapsed": bool(raw.get("collapsed")),
+        "pruned": bool(raw.get("pruned")),
+        "created_at": raw.get("created_at"),
+        "turns": int(raw.get("turns") or 0),
+    }
+    for key in ("decision", "spike", "evidence"):
+        if isinstance(raw.get(key), dict):
+            node[key] = raw[key]
+    return node
+
+
+def _norm_nodes(exp: Dict[str, Any], raw: Any) -> List[Dict[str, Any]]:
+    """The node list from frontmatter; a v-now file (no nodes) is just the root."""
+    nodes: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    if isinstance(raw, list):
+        for r in raw:
+            if not isinstance(r, dict) or not r.get("id"):
+                continue
+            n = _norm_node(r)
+            if n["id"] in seen or (n["id"] != ROOT and not NODE_ID_RE.match(n["id"])):
+                continue
+            seen.add(n["id"])
+            nodes.append(n)
+    root = next((n for n in nodes if n["id"] == ROOT), None)
+    if root is None:
+        root = root_node(exp)
+    else:
+        nodes.remove(root)
+    root.update({"parent": None, "label": exp.get("title") or root["label"]})
+    if root["kind"] not in LOG_KINDS:
+        root["kind"] = "thought"
+    ids = {ROOT} | {n["id"] for n in nodes}
+    for n in nodes:
+        if n["parent"] not in ids or n["parent"] == n["id"]:
+            n["parent"] = ROOT
+    return [root] + nodes
+
+
+# ---------------------------------------------------------------------------
+# Body: exact-heading parser
+# ---------------------------------------------------------------------------
+
+
+def _node_sections(lines: List[str], known: Iterable[str]) -> Tuple[int, Dict[str, Tuple[int, int]]]:
+    """(end of the root part, {node id: (heading line, end)}); only known node ids split."""
+    known = set(known)
+    starts: List[Tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = NODE_HEADING_RE.match(line)
+        if m and m.group(1) in known and all(nid != m.group(1) for _, nid in starts):
+            starts.append((i, m.group(1)))
+    sections: Dict[str, Tuple[int, int]] = {}
+    for k, (i, nid) in enumerate(starts):
+        end = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        sections[nid] = (i, end)
+    return (starts[0][0] if starts else len(lines)), sections
+
+
+def parse_messages(lines: List[str]) -> List[Dict[str, Any]]:
+    """Messages between exact ``### You|Hester · <iso>`` headings, trimmed."""
+    out: List[Dict[str, Any]] = []
+    cur: Optional[Tuple[str, str]] = None
+    buf: List[str] = []
+
+    def flush():
+        if cur is not None:
+            out.append({
+                "role": "user" if cur[0] == "You" else "assistant",
+                "content": "\n".join(buf).strip(),
+                "timestamp": cur[1],
+                "metadata": {},
+            })
+
+    for line in lines:
+        m = MSG_HEADING_RE.match(line)
+        if m:
+            flush()
+            cur, buf = (m.group(1), m.group(2)), []
+        elif cur is not None:
+            buf.append(line)
+    flush()
+    return out
+
+
+def _root_log_lines(root_lines: List[str]) -> List[str]:
+    for i, line in enumerate(root_lines):
+        if line == LOG_HEADING:
+            return root_lines[i + 1:]
+    return []
+
+
+def _turn_text(user: Optional[str], assistant: Optional[str], stamp: str) -> str:
+    parts = []
+    if user and user.strip():
+        parts.append(f"\n### You · {stamp}\n\n{_clip(user, MAX_TURN_TEXT)}\n")
+    if assistant and assistant.strip():
+        parts.append(f"\n### Hester · {stamp}\n\n{_clip(assistant, MAX_TURN_TEXT)}\n")
+    return "".join(parts)
+
+
+def _node_heading(nid: str, label: str) -> str:
+    return f"## Node {nid} · {_one_line(label, MAX_LABEL)}"
 
 
 class ExplorationStore:
@@ -149,6 +343,12 @@ class ExplorationStore:
         exp["turns"] = int(meta.get("turns") or 0)
         exp["version"] = int(meta.get("version") or 0)
         exp["session_id"] = meta.get("session_id") or session_id_for(exp["id"])
+        exp["nodes"] = _norm_nodes(exp, meta.get("nodes"))
+        ids = {n["id"] for n in exp["nodes"]}
+        exp["active_node"] = meta.get("active_node") if meta.get("active_node") in ids else ROOT
+        exp["serves"] = [str(g) for g in meta.get("serves") or [] if isinstance(g, (str, int))]
+        exp["promoted"] = [p for p in meta.get("promoted") or [] if isinstance(p, dict)]
+        exp["knowledge_path"] = meta.get("knowledge_path") if isinstance(meta.get("knowledge_path"), str) else None
         return exp, content[end + 5:]
 
     def _save(self, exp: Dict[str, Any], body: str, now: datetime) -> Dict[str, Any]:
@@ -168,6 +368,12 @@ class ExplorationStore:
             pass
         return exp
 
+    def _open(self, exp_id: str) -> Tuple[Dict[str, Any], str]:
+        loaded = self._load(self._path(exp_id))
+        if loaded is None:
+            raise ExplorationNotFound(exp_id)
+        return loaded
+
     # ---------------------------------------------------------------- reads
 
     def get(self, exp_id: str) -> Optional[Dict[str, Any]]:
@@ -181,10 +387,7 @@ class ExplorationStore:
         return exp
 
     def body(self, exp_id: str) -> str:
-        loaded = self._load(self._path(exp_id))
-        if loaded is None:
-            raise ExplorationNotFound(exp_id)
-        return loaded[1]
+        return self._open(exp_id)[1]
 
     def load_all(self) -> List[Dict[str, Any]]:
         out = []
@@ -209,6 +412,23 @@ class ExplorationStore:
         items.sort(key=lambda e: (str(e.get("last_touched_at") or e.get("updated_at") or ""), e["id"]), reverse=True)
         return items[: max(0, limit)]
 
+    def nodes(self, exp_id: str) -> List[Dict[str, Any]]:
+        return self.require(exp_id)["nodes"]
+
+    def node(self, exp_id: str, node_id: str) -> Dict[str, Any]:
+        return _find(self.require(exp_id), node_id)
+
+    def conversation(self, exp_id: str, node_id: str = ROOT) -> List[Dict[str, Any]]:
+        """A node's parsed log: [{role, content, timestamp, metadata}]."""
+        exp, text = self._open(exp_id)
+        _find(exp, node_id)
+        return conversation_of(exp, text, node_id)
+
+    def conversations(self, exp_id: str) -> Tuple[Dict[str, Any], Dict[str, List[Dict[str, Any]]]]:
+        """The exploration plus every log node's conversation, parsed once."""
+        exp, text = self._open(exp_id)
+        return exp, all_conversations(exp, text)
+
     # ---------------------------------------------------------------- writes
 
     def create(self, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -226,6 +446,7 @@ class ExplorationStore:
         if not isinstance(origin, dict) or origin.get("kind") not in ORIGIN_KINDS:
             raise ExplorationError(f"origin.kind must be one of {', '.join(ORIGIN_KINDS)}")
         origin = {"kind": origin["kind"], "ref": origin.get("ref") if isinstance(origin.get("ref"), str) else None}
+        serves = _str_list("serves", body.get("serves"))
         exp_id = body.get("id") or new_exploration_id()
         path = self._path(exp_id)
         if path.exists():
@@ -243,49 +464,74 @@ class ExplorationStore:
             "created_at": iso_s(now),
             "last_touched_at": iso_s(now),
             "version": 0,
+            "active_node": ROOT,
+            "serves": serves,
+            "promoted": [],
+            "knowledge_path": None,
         })
+        exp["nodes"] = [root_node(exp)]
         text = f"# {title}\n\n## Seed\n\n{seed or '(none)'}\n\n{LOG_HEADING}\n"
         return self._save(exp, text, now)
 
     def patch(self, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
-        loaded = self._load(self._path(exp_id))
-        if loaded is None:
-            raise ExplorationNotFound(exp_id)
-        exp, text = loaded
-        unknown = set(body) - {"title", "status"}
+        exp, text = self._open(exp_id)
+        unknown = set(body) - {"title", "status", "serves", "active_node"}
         if unknown:
             raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
         if "title" in body:
             if not isinstance(body["title"], str) or not body["title"].strip():
                 raise ExplorationError("title must be a non-empty string")
-            exp["title"] = _clip(body["title"], MAX_TITLE)
+            text = _retitle(exp, text, _clip(body["title"], MAX_TITLE))
         if "status" in body:
             if body["status"] not in STATUSES:
                 raise ExplorationError("status must be active or archived")
             if body["status"] != exp["status"]:
                 exp["status"] = body["status"]
                 exp["archived_at"] = iso_s(now) if body["status"] == "archived" else None
+        if "serves" in body:
+            exp["serves"] = _str_list("serves", body["serves"])
+        if "active_node" in body:
+            exp["active_node"] = _find(exp, body["active_node"])["id"]
         return self._save(exp, text, now)
 
-    def record_turn(self, exp_id: str, user: Optional[str], assistant: Optional[str], now: Optional[datetime] = None) -> Dict[str, Any]:
-        """Append one exchange of the deep dive to the Log and touch the exploration."""
+    def record_turn(
+        self,
+        exp_id: str,
+        user: Optional[str],
+        assistant: Optional[str],
+        node_id: str = ROOT,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Append one exchange to a node's log (the root's is ``## Log``) and touch the exploration."""
+        if isinstance(node_id, datetime):  # the v-now signature took ``now`` fourth
+            node_id, now = ROOT, node_id
         now = now or utc_now()
-        loaded = self._load(self._path(exp_id))
-        if loaded is None:
-            raise ExplorationNotFound(exp_id)
-        exp, text = loaded
-        if LOG_HEADING not in text:
-            text = text.rstrip("\n") + f"\n\n{LOG_HEADING}\n"
+        exp, text = self._open(exp_id)
+        node = _find(exp, node_id)
+        if node["kind"] not in LOG_KINDS:
+            raise ExplorationError(f"a {node['kind']} node has no log")
         stamp = iso_s(now)
-        parts = []
-        if user and user.strip():
-            parts.append(f"\n### You · {stamp}\n\n{_clip(user, MAX_TURN_TEXT)}\n")
-        if assistant and assistant.strip():
-            parts.append(f"\n### Hester · {stamp}\n\n{_clip(assistant, MAX_TURN_TEXT)}\n")
-        if not parts:
+        add = _turn_text(user, assistant, stamp)
+        if not add:
             return exp
-        text = text.rstrip("\n") + "\n" + "".join(parts)
+        lines = text.split("\n")
+        root_end, sections = _node_sections(lines, (n["id"] for n in exp["nodes"] if n["id"] != ROOT))
+        if node_id == ROOT:
+            root_part = "\n".join(lines[:root_end])
+            rest = "\n".join(lines[root_end:])
+            if LOG_HEADING not in lines[:root_end]:
+                root_part = root_part.rstrip("\n") + f"\n\n{LOG_HEADING}\n"
+            root_part = root_part.rstrip("\n") + "\n" + add
+            text = root_part + ("\n" + rest.lstrip("\n") if rest.strip() else "")
+        elif node_id in sections:
+            start, end = sections[node_id]
+            section = "\n".join(lines[start:end]).rstrip("\n") + "\n" + add
+            after = "\n".join(lines[end:])
+            text = "\n".join(lines[:start]) + "\n" + section + ("\n" + after if after.strip() else "")
+        else:
+            text = text.rstrip("\n") + f"\n\n{_node_heading(node_id, node['label'])}\n" + add
+        node["turns"] = int(node.get("turns") or 0) + 1
         exp["turns"] = int(exp.get("turns") or 0) + 1
         exp["last_touched_at"] = stamp
         if exp["status"] == "archived":
@@ -294,12 +540,242 @@ class ExplorationStore:
 
     def touch(self, exp_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
-        loaded = self._load(self._path(exp_id))
-        if loaded is None:
-            raise ExplorationNotFound(exp_id)
-        exp, text = loaded
+        exp, text = self._open(exp_id)
         exp["last_touched_at"] = iso_s(now)
         return self._save(exp, text, now)
+
+    # ---------------------------------------------------------------- nodes
+
+    def add_node(
+        self,
+        exp_id: str,
+        parent: Optional[str],
+        label: Any,
+        kind: str = "thought",
+        mode: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        node = self._new_node(exp, parent or ROOT, label, kind, mode, extra, now)
+        exp["active_node"] = node["id"] if kind in LOG_KINDS else exp.get("active_node") or ROOT
+        exp["last_touched_at"] = iso_s(now)
+        self._save(exp, text, now)
+        return node
+
+    def _new_node(self, exp, parent_id, label, kind, mode, extra, now) -> Dict[str, Any]:
+        if kind not in NODE_KINDS:
+            raise ExplorationError(f"kind must be one of {', '.join(NODE_KINDS)}")
+        if mode is not None and mode not in MODES:
+            raise ExplorationError(f"mode must be one of {', '.join(MODES)}")
+        if not isinstance(label, str) or not label.strip():
+            raise ExplorationError("label must be a non-empty string")
+        if kind not in LOG_KINDS and not (extra and isinstance(extra.get(kind), dict)):
+            raise ExplorationError(f"use the {kind} route to add a {kind} node")
+        parent = _find(exp, parent_id)
+        if kind == "evidence":
+            if parent["kind"] != "spike":
+                raise ExplorationError("evidence goes under a spike")
+        elif parent["kind"] in ("spike", "evidence"):
+            raise ExplorationError(f"a {parent['kind']} node cannot have children")
+        ids = {n["id"] for n in exp["nodes"]}
+        nid = new_node_id()
+        while nid in ids:
+            nid = new_node_id()
+        node = {
+            "id": nid, "parent": parent["id"], "label": _one_line(label, MAX_LABEL), "kind": kind,
+            "mode": (mode or "ideate") if kind in LOG_KINDS else None,
+            "collapsed": False, "pruned": False, "created_at": iso_s(now), "turns": 0,
+        }
+        for key in ("decision", "spike", "evidence"):
+            if extra and isinstance(extra.get(key), dict):
+                node[key] = copy.deepcopy(extra[key])
+        exp["nodes"].append(node)
+        return node
+
+    def patch_node(self, exp_id: str, node_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """PATCH a node: {label?, collapsed?, reason?} (``reason`` only on decisions)."""
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        node = _find(exp, node_id)
+        unknown = set(body) - {"label", "collapsed", "reason", "mode"}
+        if unknown:
+            raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
+        if "reason" in body:
+            if node["kind"] != "decision":
+                raise ExplorationError("reason is only on decision nodes")
+            node["decision"] = dict(node.get("decision") or {}, reason=_opt_reason(body["reason"]))
+        if "collapsed" in body:
+            if not isinstance(body["collapsed"], bool):
+                raise ExplorationError("collapsed must be a boolean")
+            node["collapsed"] = body["collapsed"]
+        if "mode" in body:
+            if node["kind"] not in LOG_KINDS or body["mode"] not in MODES:
+                raise ExplorationError(f"mode must be one of {', '.join(MODES)} on a thought or source node")
+            node["mode"] = body["mode"]
+        if "label" in body:
+            if not isinstance(body["label"], str) or not body["label"].strip():
+                raise ExplorationError("label must be a non-empty string")
+            if node_id == ROOT:
+                text = _retitle(exp, text, _clip(body["label"], MAX_TITLE))
+            else:
+                node["label"] = _one_line(body["label"], MAX_LABEL)
+                text = _rename_section(exp, text, node)
+        self._save(exp, text, now)
+        return node
+
+    def rename_node(self, exp_id: str, node_id: str, label: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+        return self.patch_node(exp_id, node_id, {"label": label}, now)
+
+    def set_collapsed(self, exp_id: str, node_id: str, collapsed: bool, now: Optional[datetime] = None) -> Dict[str, Any]:
+        return self.patch_node(exp_id, node_id, {"collapsed": collapsed}, now)
+
+    # ---------------------------------------------------------------- decisions
+
+    def decide(self, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """A decision node: {text, parent?, chosen?, pruned?, reason?}. Marks ``pruned`` nodes."""
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        node = self._decide(exp, body, now)
+        exp["last_touched_at"] = iso_s(now)
+        self._save(exp, text, now)
+        return node
+
+    def _decide(self, exp: Dict[str, Any], body: Dict[str, Any], now: datetime, auto: bool = False) -> Dict[str, Any]:
+        dtext = body.get("text")
+        if not isinstance(dtext, str) or not dtext.strip():
+            raise ExplorationError("text must be a non-empty string")
+        chosen = _str_list("chosen", body.get("chosen"))
+        pruned = _str_list("pruned", body.get("pruned"))
+        for nid in chosen + pruned:
+            _find(exp, nid)
+        if ROOT in pruned:
+            raise ExplorationError("the root cannot be pruned")
+        parent = _find(exp, body.get("parent") or ROOT)
+        by_id = {n["id"]: n for n in exp["nodes"]}
+        while parent["kind"] in ("spike", "evidence") and parent["parent"]:
+            parent = by_id[parent["parent"]]
+        decision = {"text": _clip(dtext, MAX_DECISION_TEXT), "chosen": chosen, "pruned": pruned, "reason": _opt_reason(body.get("reason"))}
+        if auto:
+            decision["auto"] = True
+        label = _one_line(dtext, 120)
+        node = self._new_node(exp, parent["id"], label, "decision", None, {"decision": decision}, now)
+        for nid in pruned:
+            by_id[nid]["pruned"] = True
+        return node
+
+    def prune(self, exp_id: str, node_id: str, reason: Optional[str] = None, now: Optional[datetime] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """``decide`` with ``pruned=[node]`` under the node's parent. Returns (node, decision)."""
+        exp = self.require(exp_id)
+        node = _find(exp, node_id)
+        if node_id == ROOT:
+            raise ExplorationError("the root cannot be pruned")
+        decision = self.decide(exp_id, {
+            "text": f"Pruned: {node['label']}", "parent": node["parent"], "pruned": [node_id], "reason": reason,
+        }, now)
+        return self.node(exp_id, node_id), decision
+
+    # ---------------------------------------------------------------- spikes
+
+    def add_spike(self, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """A spike node (status pending): {parent?, prompt, title?, timebox_min=30}."""
+        now = now or utc_now()
+        prompt = body.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ExplorationError("prompt must be a non-empty string")
+        title = body.get("title")
+        if title is not None and not isinstance(title, str):
+            raise ExplorationError("title must be a string")
+        timebox = body.get("timebox_min", DEFAULT_TIMEBOX_MIN)
+        if timebox is not None and (isinstance(timebox, bool) or not isinstance(timebox, int) or timebox < 0):
+            raise ExplorationError("timebox_min must be a non-negative integer or null")
+        label = (title or "").strip() or plain_title(prompt, 80) or "Spike"
+        spike = {
+            "prompt": _clip(prompt, MAX_PROMPT), "task_id": None, "status": "pending", "timebox_min": timebox,
+            "worktree": None, "started_at": None, "ended_at": None,
+        }
+        return self.add_node(exp_id, body.get("parent") or ROOT, label, "spike", None, {"spike": spike}, now)
+
+    def update_spike(self, exp_id: str, node_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        node = _find(exp, node_id)
+        if node["kind"] != "spike":
+            raise ExplorationError(f"{node_id} is not a spike")
+        unknown = set(body) - {"task_id", "status", "worktree", "started_at", "ended_at"}
+        if unknown:
+            raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
+        spike = dict(node.get("spike") or {})
+        if "task_id" in body:
+            if body["task_id"] is not None and not isinstance(body["task_id"], str):
+                raise ExplorationError("task_id must be a string or null")
+            spike["task_id"] = body["task_id"] or None
+        if "worktree" in body:
+            spike["worktree"] = _worktree(body["worktree"])
+        for key in ("started_at", "ended_at"):
+            if key in body:
+                if body[key] is not None and not isinstance(body[key], str):
+                    raise ExplorationError(f"{key} must be a string or null")
+                spike[key] = body[key]
+        if "status" in body:
+            if body["status"] not in SPIKE_STATUSES:
+                raise ExplorationError(f"status must be one of {', '.join(SPIKE_STATUSES)}")
+            spike["status"] = body["status"]
+            if body["status"] == "running" and not spike.get("started_at"):
+                spike["started_at"] = iso_s(now)
+            if body["status"] in ("done", "discarded", "failed") and not spike.get("ended_at"):
+                spike["ended_at"] = iso_s(now)
+        node["spike"] = spike
+        exp["last_touched_at"] = iso_s(now)
+        self._save(exp, text, now)
+        return node
+
+    def add_evidence(self, exp_id: str, spike_node_id: str, evidence: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """The spike's evidence node, replaced in place when it already has one."""
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        spike = _find(exp, spike_node_id)
+        if spike["kind"] != "spike":
+            raise ExplorationError(f"{spike_node_id} is not a spike")
+        summary = evidence.get("summary")
+        label = f"Evidence: {plain_title(summary, 60)}" if summary and plain_title(summary, 60) else "Evidence"
+        existing = next((n for n in exp["nodes"] if n["kind"] == "evidence" and n["parent"] == spike_node_id), None)
+        if existing is not None:
+            existing["evidence"] = copy.deepcopy(evidence)
+            existing["label"] = label
+            node = existing
+        else:
+            node = self._new_node(exp, spike_node_id, label, "evidence", None, {"evidence": evidence}, now)
+        exp["last_touched_at"] = iso_s(now)
+        self._save(exp, text, now)
+        return node
+
+    # ---------------------------------------------------------------- promotes / archive bookkeeping
+
+    def record_promote(
+        self, exp_id: str, to: str, ref: str, node_ids: Optional[List[str]], now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Append to ``promoted`` and add a ``Promoted to <to>: <ref>`` decision node."""
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        exp["promoted"] = list(exp.get("promoted") or []) + [{"to": to, "ref": ref, "at": iso_s(now), "node_ids": node_ids}]
+        self._decide(exp, {"text": f"Promoted to {to}: {ref}", "chosen": [n for n in (node_ids or []) if n != ROOT]}, now, auto=True)
+        exp["last_touched_at"] = iso_s(now)
+        return self._save(exp, text, now)
+
+    def set_knowledge(self, exp_id: str, knowledge_path: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+        now = now or utc_now()
+        exp, text = self._open(exp_id)
+        exp["knowledge_path"] = knowledge_path
+        if exp["status"] != "archived":
+            exp["status"], exp["archived_at"] = "archived", iso_s(now)
+        return self._save(exp, text, now)
+
+    # ---------------------------------------------------------------- outline
+
+    def outline(self, exp_id: str, node_ids: Optional[List[str]] = None) -> str:
+        return render_outline(self.require(exp_id), node_ids)
 
     # ---------------------------------------------------------------- seeding
 
@@ -319,9 +795,198 @@ class ExplorationStore:
             "The exploration so far:\n\n" + text
         )
 
+    def node_context_text(self, exp_id: str, node_id: str, limit: int = CONTEXT_CHARS) -> str:
+        """System-message seed for a Library node chat: breadcrumb plus the node's log tail."""
+        exp, convs = self.conversations(exp_id)
+        node = _find(exp, node_id)
+        crumb = breadcrumb(exp, convs, node_id)
+        log = "\n\n".join(
+            f"{'You' if m['role'] == 'user' else 'Hester'}: {m['content']}" for m in convs.get(node_id, [])
+        )
+        if len(log) > limit:
+            log = "…(earlier log omitted)…\n" + log[-limit:]
+        return (
+            "You are Hester in the Library, exploring one branch of an exploration tree with the user. "
+            f"The exploration is \"{exp['title']}\" (.hester/explore/{exp_id}.md); this branch is "
+            f"\"{node['label']}\". Each exchange here is appended to the file automatically.\n\n"
+            f"Path to this branch: {crumb or node['label']}\n\n"
+            + (f"This branch so far:\n\n{log}" if log else "This branch has no conversation yet.")
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers on a loaded exploration
+# ---------------------------------------------------------------------------
+
+
+def _find(exp: Dict[str, Any], node_id: Any) -> Dict[str, Any]:
+    for n in exp["nodes"]:
+        if n["id"] == node_id:
+            return n
+    raise ExplorationNotFound(f"{exp['id']}/{node_id}")
+
+
+def _worktree(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ExplorationError("worktree must be an object or null")
+    return {k: (str(value[k]) if value.get(k) is not None else None) for k in ("slug", "path", "branch")}
+
+
+def _retitle(exp: Dict[str, Any], text: str, title: str) -> str:
+    """Rename the exploration: title, the root node's label and the ``# <title>`` line."""
+    exp["title"] = title
+    exp["nodes"][0]["label"] = title
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            lines[i] = f"# {_one_line(title, MAX_TITLE)}"
+            break
+        if line.startswith("## "):
+            break
+    return "\n".join(lines)
+
+
+def _rename_section(exp: Dict[str, Any], text: str, node: Dict[str, Any]) -> str:
+    lines = text.split("\n")
+    _, sections = _node_sections(lines, (n["id"] for n in exp["nodes"] if n["id"] != ROOT))
+    if node["id"] in sections:
+        lines[sections[node["id"]][0]] = _node_heading(node["id"], node["label"])
+    return "\n".join(lines)
+
+
+def all_conversations(exp: Dict[str, Any], text: str) -> Dict[str, List[Dict[str, Any]]]:
+    lines = text.split("\n")
+    root_end, sections = _node_sections(lines, (n["id"] for n in exp["nodes"] if n["id"] != ROOT))
+    out = {ROOT: parse_messages(_root_log_lines(lines[:root_end]))}
+    for n in exp["nodes"]:
+        if n["id"] != ROOT and n["kind"] in LOG_KINDS:
+            start, end = sections.get(n["id"], (0, 0))
+            out[n["id"]] = parse_messages(lines[start + 1:end]) if end else []
+    return out
+
+
+def conversation_of(exp: Dict[str, Any], text: str, node_id: str) -> List[Dict[str, Any]]:
+    return all_conversations(exp, text).get(node_id, [])
+
+
+def children_of(exp: Dict[str, Any]) -> Dict[str, List[str]]:
+    kids: Dict[str, List[str]] = {n["id"]: [] for n in exp["nodes"]}
+    for n in exp["nodes"]:
+        if n["parent"] in kids:
+            kids[n["parent"]].append(n["id"])
+    return kids
+
+
+def subtree_ids(exp: Dict[str, Any], node_ids: Iterable[str]) -> List[str]:
+    """The given nodes and all their descendants, in file order."""
+    kids = children_of(exp)
+    keep: Set[str] = set()
+    stack = [n for n in node_ids if n in kids]
+    while stack:
+        nid = stack.pop()
+        if nid in keep:
+            continue
+        keep.add(nid)
+        stack.extend(kids[nid])
+    return [n["id"] for n in exp["nodes"] if n["id"] in keep]
+
+
+def breadcrumb(exp: Dict[str, Any], convs: Dict[str, List[Dict[str, Any]]], node_id: str) -> str:
+    """Root > ... > node, each with the first line of its first answer (≤ 200 chars)."""
+    by_id = {n["id"]: n for n in exp["nodes"]}
+    chain = []
+    cur = by_id.get(node_id)
+    while cur is not None:
+        chain.append(cur)
+        cur = by_id.get(cur["parent"]) if cur["parent"] else None
+    parts = []
+    for n in reversed(chain):
+        summary = n["label"]
+        first = next((m["content"] for m in convs.get(n["id"], []) if m["role"] == "assistant"), None)
+        if first:
+            summary += f": {first[:200]}"
+        parts.append(summary)
+    return " > ".join(parts)
+
+
+def outline_line(n: Dict[str, Any], by_id: Dict[str, Dict[str, Any]]) -> str:
+    labels = lambda ids: ", ".join(by_id[i]["label"] if i in by_id else i for i in ids)  # noqa: E731
+    kind = n["kind"]
+    if kind == "decision":
+        d = n.get("decision") or {}
+        s = f"Decision: {_one_line(d.get('text'), 300)}"
+        if d.get("chosen"):
+            s += f"; chose: {labels(d['chosen'])}"
+        if d.get("pruned"):
+            s += f"; pruned: {labels(d['pruned'])}"
+        if d.get("reason"):
+            s += f"; reason: {_one_line(d['reason'], 300)}"
+        return s
+    if kind == "spike":
+        sp = n.get("spike") or {}
+        s = f"Spike [{sp.get('status') or 'pending'}]: {n['label']}"
+        if sp.get("task_id"):
+            s += f" (task {sp['task_id']})"
+        if sp.get("timebox_min"):
+            s += f", timebox {sp['timebox_min']} min"
+        return s
+    if kind == "evidence":
+        ev = n.get("evidence") or {}
+        s = f"Evidence (agent's claim): {_one_line(ev.get('summary') or '(no summary)', 300)}"
+        stat = (ev.get("diffstat") or "").strip().splitlines()
+        if stat:
+            s += f"; {stat[-1].strip()}"
+        if ev.get("commits"):
+            s += f"; {len(ev['commits'])} commit(s)"
+        if ev.get("diff_path"):
+            s += f"; diff: {ev['diff_path']}"
+        return s
+    label = f"~~{n['label']}~~ (pruned)" if n.get("pruned") else n["label"]
+    if kind != "thought":
+        label += f" [{kind.replace('_', ' ')}]"
+    return label
+
+
+def render_outline(exp: Dict[str, Any], node_ids: Optional[List[str]] = None) -> str:
+    """Deterministic markdown outline of the tree (or of ``node_ids``' subtrees and their decisions)."""
+    by_id = {n["id"]: n for n in exp["nodes"]}
+    kids = children_of(exp)
+    if node_ids:
+        include = set(subtree_ids(exp, [n for n in node_ids if n in by_id]))
+        for n in exp["nodes"]:
+            d = n.get("decision") or {}
+            if n["kind"] == "decision" and include.intersection((d.get("chosen") or []) + (d.get("pruned") or [])):
+                include.add(n["id"])
+    else:
+        include = set(by_id)
+    lines = [f"Exploration: {exp['title']} ({exp['id']})", ""]
+
+    def walk(nid: str, depth: int) -> None:
+        n = by_id[nid]
+        here = nid in include
+        if here:
+            lines.append(f"{'  ' * depth}- {outline_line(n, by_id)}")
+        for child in kids.get(nid, []):
+            walk(child, depth + 1 if here else depth)
+
+    walk(ROOT, 0)
+    return "\n".join(lines).rstrip() + "\n"
+
 
 def to_api(exp: Dict[str, Any]) -> Dict[str, Any]:
     return {k: copy.deepcopy(exp.get(k)) for k in FIELDS}
+
+
+def to_api_with_conversations(exp: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """GET /cockpit/explorations/{id}: nodes each carry ``conversation`` (thought/source nodes)."""
+    data = to_api(exp)
+    convs = all_conversations(exp, text)
+    for n in data["nodes"]:
+        if n["kind"] in LOG_KINDS:
+            n["conversation"] = convs.get(n["id"], [])
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +1028,21 @@ async def open_session(store: ExplorationStore, exp_id: str) -> Dict[str, Any]:
         lines.append(f"_{exp['turns']} earlier exchange(s) are in .hester/explore/{exp_id}.md; I have them in context._")
     lines.append("Where do you want to start?")
     session.add_message("assistant", "\n\n".join(lines))
+    await manager.save(session)
+    return {"session_id": sid, "seeded": True}
+
+
+async def open_node_session(store: ExplorationStore, exp_id: str, node_id: str) -> Dict[str, Any]:
+    """Make sure ``library-<id>-<node>`` exists, seeded from the file when missing."""
+    store.require(exp_id)
+    sid = node_session_id(exp_id, node_id)
+    manager = _sessions()
+    if manager is None:
+        return {"session_id": sid, "seeded": False}
+    if await manager.get(sid) is not None:
+        return {"session_id": sid, "seeded": False}
+    session = await manager.create(sid, str(store.workspace))
+    session.add_message("system", store.node_context_text(exp_id, node_id))
     await manager.save(session)
     return {"session_id": sid, "seeded": True}
 

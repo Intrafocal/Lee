@@ -3,7 +3,9 @@
  *
  * Renders the idea exploration tree with expand/collapse, node selection,
  * selection mode (right-click → Select → checkboxes + action bar),
- * inline rename (double-click), and context menus.
+ * inline rename (double-click), and context menus. Decision, spike and
+ * evidence nodes (Explore, contract v3 §9) render read-only with their own
+ * icon; pruned nodes are struck through.
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
@@ -13,8 +15,12 @@ import {
   SessionSummary,
   AGENT_MODE_CONFIG,
   AgentMode,
+  NODE_TYPE_CONFIG,
   SynthesisAction,
+  isReadOnlyNode,
+  nodeKind,
 } from './types';
+import type { ExplorationPromoteTo } from '../../lib/hesterCockpit';
 import { Icon } from '../Icon';
 
 interface ExplorationTreeProps {
@@ -29,10 +35,13 @@ interface ExplorationTreeProps {
   onExitSelectionMode: () => void;
   onCreateSession: (title: string) => void;
   onSwitchSession: (sessionId: string) => void;
-  onDeleteSession: (sessionId: string) => void;
+  /** Archives the exploration (a file is never deleted). */
+  onArchiveSession: (sessionId: string) => void;
   onDeleteNode?: (nodeId: string) => void;
   onSaveAsIdea?: (nodeId: string) => void;
-  onPromoteToWorkstream?: (nodeId: string) => void;
+  onPrune?: (nodeId: string) => void;
+  onSpikeFrom?: (nodeId: string) => void;
+  onPromote?: (nodeId: string, to: ExplorationPromoteTo) => void;
   onRenameNode?: (nodeId: string, newLabel: string) => void;
   onSynthesize?: (action: SynthesisAction, nodeIds: string[]) => void;
   onCopyToMarkdown?: (nodeIds: string[]) => void;
@@ -58,10 +67,12 @@ export const ExplorationTree: React.FC<ExplorationTreeProps> = ({
   onExitSelectionMode,
   onCreateSession,
   onSwitchSession,
-  onDeleteSession,
+  onArchiveSession,
   onDeleteNode,
   onSaveAsIdea,
-  onPromoteToWorkstream,
+  onPrune,
+  onSpikeFrom,
+  onPromote,
   onRenameNode,
   onSynthesize,
   onCopyToMarkdown,
@@ -144,6 +155,11 @@ export const ExplorationTree: React.FC<ExplorationTreeProps> = ({
     setRenamingNodeId(nodeId);
     setContextMenu(prev => ({ ...prev, visible: false }));
   }, []);
+
+  const closeMenu = useCallback(() => setContextMenu(prev => ({ ...prev, visible: false })), []);
+  const menuNode = session && contextMenu.nodeId ? session.nodes[contextMenu.nodeId] : undefined;
+  const menuReadOnly = isReadOnlyNode(menuNode);
+  const menuIsRoot = !!session && contextMenu.nodeId === session.root_id;
 
   const selectedCount = selectedNodeIds.size;
   const selectedArray = Array.from(selectedNodeIds);
@@ -270,14 +286,14 @@ export const ExplorationTree: React.FC<ExplorationTreeProps> = ({
                 {s.node_count} nodes
               </span>
               <button
-                className="library-tree-session-delete"
+                className="library-tree-session-delete is-archive"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDeleteSession(s.session_id);
+                  onArchiveSession(s.session_id);
                 }}
-                title="Delete session"
+                title="Archive exploration (kept in .hester/explore/)"
               >
-                ×
+                <Icon name="package" size={12} />
               </button>
             </div>
           ))}
@@ -327,90 +343,127 @@ export const ExplorationTree: React.FC<ExplorationTreeProps> = ({
           >
             Open
           </div>
-          {onSynthesize && (
+          {!menuReadOnly && onSynthesize && (
             <div
               className="context-menu-item"
               onClick={() => {
                 onSynthesize('summarize', [contextMenu.nodeId!]);
-                setContextMenu(prev => ({ ...prev, visible: false }));
+                closeMenu();
               }}
             >
               Summarize
             </div>
           )}
-          {onVisualize && (
+          {!menuReadOnly && onVisualize && (
             <div
               className="context-menu-item"
               onClick={() => {
                 onVisualize([contextMenu.nodeId!]);
-                setContextMenu(prev => ({ ...prev, visible: false }));
+                closeMenu();
               }}
             >
               Visualize
             </div>
           )}
-          {onCopyToMarkdown && (
+          {!menuReadOnly && onCopyToMarkdown && (
             <div
               className="context-menu-item"
               onClick={() => {
                 onCopyToMarkdown([contextMenu.nodeId!]);
-                setContextMenu(prev => ({ ...prev, visible: false }));
+                closeMenu();
               }}
             >
               Copy to Markdown
             </div>
           )}
-          <div className="context-menu-separator" />
-          <div
-            className="context-menu-item"
-            onClick={() => {
-              onEnterSelectionMode(contextMenu.nodeId!);
-              setContextMenu(prev => ({ ...prev, visible: false }));
-            }}
-          >
-            Select
-          </div>
-          {onRenameNode && (
-            <div
-              className="context-menu-item"
-              onClick={() => startRename(contextMenu.nodeId!)}
-            >
-              Rename
-            </div>
-          )}
-          {onSaveAsIdea && (
-            <div
-              className="context-menu-item"
-              onClick={() => {
-                onSaveAsIdea(contextMenu.nodeId!);
-                setContextMenu(prev => ({ ...prev, visible: false }));
-              }}
-            >
-              Save as Idea
-            </div>
-          )}
-          {onPromoteToWorkstream && (
-            <div
-              className="context-menu-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onPromoteToWorkstream(contextMenu.nodeId!);
-                setContextMenu({ visible: false, x: 0, y: 0, nodeId: null });
-              }}
-            >
-              Create Workstream
-            </div>
-          )}
-          {onDeleteNode && contextMenu.nodeId !== session?.root_id && (
-            <div
-              className="context-menu-item"
-              onClick={() => {
-                onDeleteNode(contextMenu.nodeId!);
-                setContextMenu(prev => ({ ...prev, visible: false }));
-              }}
-            >
-              Delete Node
-            </div>
+          {!menuReadOnly && (
+            <>
+              <div className="context-menu-separator" />
+              <div
+                className="context-menu-item"
+                onClick={() => {
+                  onEnterSelectionMode(contextMenu.nodeId!);
+                  closeMenu();
+                }}
+              >
+                Select
+              </div>
+              {onRenameNode && (
+                <div
+                  className="context-menu-item"
+                  onClick={() => startRename(contextMenu.nodeId!)}
+                >
+                  Rename
+                </div>
+              )}
+              {onSaveAsIdea && (
+                <div
+                  className="context-menu-item"
+                  onClick={() => {
+                    onSaveAsIdea(contextMenu.nodeId!);
+                    closeMenu();
+                  }}
+                >
+                  Save to Someday
+                </div>
+              )}
+              {(onPrune || onSpikeFrom) && <div className="context-menu-separator" />}
+              {onPrune && !menuIsRoot && !menuNode?.pruned && (
+                <div
+                  className="context-menu-item"
+                  onClick={() => {
+                    onPrune(contextMenu.nodeId!);
+                    closeMenu();
+                  }}
+                >
+                  Prune
+                </div>
+              )}
+              {onSpikeFrom && !menuNode?.pruned && (
+                <div
+                  className="context-menu-item"
+                  onClick={() => {
+                    onSpikeFrom(contextMenu.nodeId!);
+                    closeMenu();
+                  }}
+                >
+                  Spike from here…
+                </div>
+              )}
+              {onPromote && (
+                <>
+                  <div className="context-menu-separator" />
+                  {([
+                    ['task', 'Promote → Task'],
+                    ['workstream', 'Promote → Workstream'],
+                    ['goal', 'Promote → Goal draft'],
+                  ] as Array<[ExplorationPromoteTo, string]>).map(([to, label]) => (
+                    <div
+                      key={to}
+                      className="context-menu-item"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPromote(contextMenu.nodeId!, to);
+                        setContextMenu({ visible: false, x: 0, y: 0, nodeId: null });
+                      }}
+                    >
+                      {label}
+                    </div>
+                  ))}
+                </>
+              )}
+              {onDeleteNode && !menuIsRoot && (
+                <div
+                  className="context-menu-item"
+                  onClick={() => {
+                    onDeleteNode(contextMenu.nodeId!);
+                    closeMenu();
+                  }}
+                >
+                  Delete Node
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -454,13 +507,17 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 }) => {
   if (!node) return null;
 
-  const hasChildren = node.children.length > 0;
+  const children = node.children ?? [];
+  const hasChildren = children.length > 0;
   const isCollapsed = collapsed.has(node.id);
   const isActive = activeNodeId === node.id;
   const isSelected = selectedNodeIds.has(node.id);
   const isRenaming = renamingNodeId === node.id;
   const modeConfig = AGENT_MODE_CONFIG[node.agent_mode as AgentMode];
-  const hasConversation = node.conversation_history.length > 0;
+  const readOnly = isReadOnlyNode(node);
+  const kind = nodeKind(node);
+  const icon = readOnly && kind ? NODE_TYPE_CONFIG[kind].icon : modeConfig?.icon || 'edit';
+  const hasConversation = (node.conversation_history?.length ?? 0) > 0;
 
   const handleClick = useCallback((_e: React.MouseEvent) => {
     if (isRenaming) return;
@@ -474,15 +531,15 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   return (
     <div className="library-tree-node">
       <div
-        className={`library-tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}`}
+        className={`library-tree-item ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}${readOnly ? ` is-readonly is-${kind}` : ''}${node.pruned ? ' is-pruned' : ''}`}
         style={{
           paddingLeft: `${depth * 16 + 8}px`,
-          borderLeftColor: modeConfig?.color || 'transparent',
+          borderLeftColor: readOnly ? 'transparent' : modeConfig?.color || 'transparent',
         }}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, node.id)}
         onDoubleClick={(e) => {
-          if (selectionMode) return;
+          if (selectionMode || readOnly) return;
           e.stopPropagation();
           onStartRename(node.id);
         }}
@@ -508,7 +565,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           </span>
         )}
         {!hasChildren && <span className="library-tree-expand-spacer" />}
-        <span className="library-tree-icon"><Icon name={modeConfig?.icon || 'edit'} size={13} /></span>
+        <span className="library-tree-icon"><Icon name={icon} size={13} /></span>
         {isRenaming ? (
           <RenameInput
             initialValue={node.label}
@@ -516,8 +573,11 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             onCancel={() => onRenameCommit(node.id, node.label)}
           />
         ) : (
-          <span className="library-tree-label">{node.label}</span>
+          <span className="library-tree-label" title={node.label}>
+            {kind === 'decision' && node.decision?.text ? node.decision.text : node.label}
+          </span>
         )}
+        {!isRenaming && node.spike && <span className="library-tree-badge">{node.spike.status}</span>}
         {!isRenaming && hasConversation && (
           <span className="library-tree-badge">
             {node.conversation_history.filter(m => m.role === 'assistant').length}
@@ -527,7 +587,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
       {hasChildren && !isCollapsed && (
         <div className="library-tree-children">
-          {node.children.map((childId) => {
+          {children.map((childId) => {
             const child = session.nodes[childId];
             if (!child) return null;
             return (

@@ -137,3 +137,22 @@ def test_someday_promote_to_explore(cockpit_env):
     missing = c.post("/someday/sd_nope/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert missing.status_code in (400, 404)
     assert c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"][0]["id"] == exp["id"]
+
+
+def test_v3_fields_and_record_turn_signatures(tmp_path):
+    from datetime import datetime, timezone
+
+    store = ExplorationStore(tmp_path)
+    exp = store.create({"title": "Fields", "serves": ["G2"], "origin": {"kind": "library"}})
+    assert exp["nodes"][0]["id"] == "root" and exp["serves"] == ["G2"] and exp["origin"]["kind"] == "library"
+    when = datetime(2026, 9, 26, 10, 0, tzinfo=timezone.utc)
+    store.record_turn(exp["id"], "q", "a", now=when)
+    store.record_turn(exp["id"], "q2", "a2", when)  # the v-now positional ``now``
+    node = store.add_node(exp["id"], "root", "Branch")
+    store.record_turn(exp["id"], "bq", "ba", node["id"])
+    conv = store.conversation(exp["id"])
+    assert [m["content"] for m in conv] == ["q", "a", "q2", "a2"] and conv[0]["timestamp"] == "2026-09-26T10:00:00Z"
+    assert store.require(exp["id"])["turns"] == 3
+    assert store.patch(exp["id"], {"serves": ["G1", "G1"]})["serves"] == ["G1"]
+    assert store.patch(exp["id"], {"title": "New"})["nodes"][0]["label"] == "New"
+    assert store.body(exp["id"]).startswith("# New\n")

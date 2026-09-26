@@ -38,7 +38,8 @@ hester/
 ├── daemon/                 # FastAPI daemon service
 │   ├── main.py             # HTTP server on port 9000
 │   ├── agent.py            # ReAct loop agent
-│   ├── session.py          # Redis session management
+│   ├── session.py          # Redis session management (chat sessions)
+│   ├── cockpit/            # Cockpit tasks, follower, Explore store (explorations.py, spikes.py, explore_ops.py)
 │   ├── settings.py         # Configuration
 │   ├── models.py           # Pydantic models
 │   ├── thinking_depth.py   # Response depth control
@@ -537,7 +538,11 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
 | GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote` |
 | GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks + readings, operation readings |
-| GET/POST/PATCH | `/cockpit/explorations[/{id}]` | Explorations in `<ws>/.hester/explore/`; `/{id}/open` seeds the Hester chat session `explore-<id>`, whose turns are written back to the file |
+| GET/POST/PATCH | `/cockpit/explorations[/{id}]` | Explorations in `<ws>/.hester/explore/` (one markdown file each, with a node tree); `/{id}/open` seeds the Hester chat session `explore-<id>`, whose turns are written back to the file |
+| POST/PATCH | `/cockpit/explorations/{id}/nodes[/{nid}]`, `/nodes/{nid}/prune`, `/decisions`, `/spikes[/{nid}]` | Tree edits: branches, decisions (reason optional), spikes (agent tasks in a worktree whose evidence comes back as a node) |
+| POST | `/cockpit/explorations/{id}/promote`, `/archive` | Promote to a task, workstream or goal draft (`.hester/goals/drafts/`); archive, optionally as knowledge (`.hester/knowledge/explore-<id>.md`, read by the `knowledge_notes` tool) |
+| POST | `/cockpit/tasks/{id}/escalate` | Open an exploration from a task (the task stays open) |
+| * | `/library/sessions[/{id}/...]` | The Library pane: a tree view onto the same exploration files (`session_id` = exploration id). DELETE archives; per-node chats (`library-<id>-<node>` sessions) write each exchange to the file; save goes to Someday |
 
 Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
 

@@ -101,6 +101,10 @@ export interface CockpitCtx {
   openFile: (path: string) => void;
   /** Seed an exploration's Hester session and open it as a Hester tab in the Workbench. */
   openExploration: (exp: Exploration) => Promise<void>;
+  /** Open (or refocus) the Library tab on this exploration's tree, then switch to the Workbench. */
+  openLibrary: (expId: string) => void;
+  /** Open a workstream's tab, then switch to the Workbench. */
+  openWorkstream: (id: string, title: string) => void;
   focusPty: (ptyId: number) => void;
   notify: (message: string, level?: 'info' | 'error') => void;
   openLauncher: (prefill?: LauncherPrefill) => void;
@@ -126,6 +130,10 @@ interface CockpitHostProps {
   onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
   /** Open (or refocus) a Hester chat tab resumed on this session (App.handleOpenHesterTab). */
   onOpenHesterSession?: (sessionId: string, label: string) => Promise<number | null> | void;
+  /** Open (or refocus) the Library tab on an exploration (App: librarySessionId on the tab's data). */
+  onOpenLibrary?: (expId: string) => void;
+  /** Open a workstream tab (App.handleWorkstreamSelect). */
+  onOpenWorkstream?: (id: string, title: string) => void;
   onAskHester: (prompt: string) => void;
   /** App-level toast, for results that arrive while the Cockpit is hidden (async check-ins). */
   onNotify?: (message: string, level: 'info' | 'error') => void;
@@ -172,6 +180,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onOpenTab,
   onOpenFile,
   onOpenHesterSession,
+  onOpenLibrary,
+  onOpenWorkstream,
   onAskHester,
   onNotify,
 }) => {
@@ -249,6 +259,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   openFileRef.current = onOpenFile;
   const openHesterRef = useRef(onOpenHesterSession);
   openHesterRef.current = onOpenHesterSession;
+  const openLibraryRef = useRef(onOpenLibrary);
+  openLibraryRef.current = onOpenLibrary;
+  const openWorkstreamRef = useRef(onOpenWorkstream);
+  openWorkstreamRef.current = onOpenWorkstream;
 
   const hesterTasks = useMemo(
     () => [...(hester.snapshot?.tasks.open ?? []), ...(hester.snapshot?.tasks.recent_closed ?? [])],
@@ -362,6 +376,32 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       Promise.resolve(open(path))
         .then(() => cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' })))
         .catch(() => notify('Could not open that file', 'error'));
+    },
+    [notify],
+  );
+
+  const openLibrary = useCallback(
+    (expId: string) => {
+      const open = openLibraryRef.current;
+      if (!open) {
+        notify('The Library is not available here', 'error');
+        return;
+      }
+      open(expId);
+      cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
+    },
+    [notify],
+  );
+
+  const openWorkstream = useCallback(
+    (id: string, title: string) => {
+      const open = openWorkstreamRef.current;
+      if (!open) {
+        notify('Workstream tabs are not available here', 'error');
+        return;
+      }
+      open(id, title);
+      cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
     },
     [notify],
   );
@@ -721,6 +761,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     openOwnTab,
     openFile,
     openExploration: openExplorationTab,
+    openLibrary,
+    openWorkstream,
     focusPty,
     notify,
     openLauncher,

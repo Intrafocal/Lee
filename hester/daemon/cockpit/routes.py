@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse
 
 from ...shared.workspace import request_workspace
 from ..workspaces.registry import WorkspaceError, get_registry, validate_workspace
+from . import explore_ops, spikes
 from .explorations import ExplorationError, ExplorationNotFound, open_session
 from .explorations import to_api as exploration_to_api
+from .explorations import to_api_with_conversations
 from .goals import load_goals
 from .history import MAX_DAYS, build_history
 from .tasks import (
@@ -230,6 +232,7 @@ def create_cockpit_router() -> APIRouter:
             ctx = context_for(body.get("workspace"))
             async with ctx.lock:
                 task, created = ctx.tasks().upsert(body)
+                await _sync_spike(ctx, task)
         except BadRequest as e:
             return _err(str(e), e.status)
         except TaskError as e:
@@ -259,20 +262,28 @@ def create_cockpit_router() -> APIRouter:
             store = ctx.tasks()
             async with ctx.lock:
                 if op == "patch":
-                    return _ok(ctx, to_api(store.patch(task_id, body)))
+                    task = store.patch(task_id, body)
+                    await _sync_spike(ctx, task)
+                    return _ok(ctx, to_api(task))
                 if op == "confirm":
                     return _ok(ctx, to_api(store.confirm(task_id, body)))
                 if op == "link":
                     return _ok(ctx, to_api(store.link(task_id, body)))
                 if op == "close":
                     task = await asyncio.to_thread(store.close, task_id, body)
+                    await _sync_spike(ctx, task)
                     return _ok(ctx, to_api(task))
                 if op == "promote":
                     task, ws_id = store.promote(task_id, body, ctx.ws_store())
                     return _ok(ctx, {"task": to_api(task), "workstream_id": ws_id})
+                if op == "escalate":
+                    task, exp = explore_ops.escalate(ctx, task_id)
+                    return _ok(ctx, {"task": to_api(task), "exploration": exploration_to_api(exp)}, 201)
         except BadRequest as e:
             return _err(str(e), e.status)
         except TaskError as e:
+            return _err(str(e))
+        except ExplorationError as e:
             return _err(str(e))
         except TaskNotFound:
             return _err("not found", 404)
@@ -297,6 +308,11 @@ def create_cockpit_router() -> APIRouter:
     @router.post("/cockpit/tasks/{task_id}/promote")
     async def cockpit_task_promote(task_id: str, request: Request):
         return await _mutate(request, task_id, "promote")
+
+    @router.post("/cockpit/tasks/{task_id}/escalate")
+    async def cockpit_task_escalate(task_id: str, request: Request):
+        """Escalate a task into an exploration; the task stays open."""
+        return await _mutate(request, task_id, "escalate")
 
     @router.get("/cockpit/context/bundles")
     async def cockpit_context_bundles():
@@ -367,8 +383,10 @@ def create_cockpit_router() -> APIRouter:
         try:
             ctx = context_for()
             store = ctx.explorations()
-            data = exploration_to_api(store.require(exp_id))
-            data["body"] = store.body(exp_id)
+            exp = store.require(exp_id)
+            body = store.body(exp_id)
+            data = to_api_with_conversations(exp, body)
+            data["body"] = body
             return _ok(ctx, data)
         except BadRequest as e:
             return _err(str(e), e.status)
@@ -410,4 +428,74 @@ def create_cockpit_router() -> APIRouter:
             return _err("not found", 404)
         return _ok(ctx, {"exploration": exploration_to_api(exp), **opened})
 
+    async def _exp_op(request: Request, fn, status: int = 200):
+        """Run ``fn(ctx, store, body)`` (sync or async) on an exploration under the workspace lock."""
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                data = fn(ctx, ctx.explorations(), body)
+                if asyncio.iscoroutine(data):
+                    data = await data
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except (ExplorationError, TaskError) as e:
+            return _err(str(e))
+        except (ExplorationNotFound, TaskNotFound):
+            return _err("not found", 404)
+        return _ok(ctx, data, status)
+
+    @router.post("/cockpit/explorations/{exp_id}/nodes")
+    async def cockpit_exploration_node_add(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: store.add_node(
+            exp_id, b.get("parent") or "root", b.get("label"), b.get("kind") or "thought", b.get("mode"),
+        ), 201)
+
+    @router.patch("/cockpit/explorations/{exp_id}/nodes/{node_id}")
+    async def cockpit_exploration_node_patch(exp_id: str, node_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: store.patch_node(exp_id, node_id, b))
+
+    @router.post("/cockpit/explorations/{exp_id}/nodes/{node_id}/prune")
+    async def cockpit_exploration_node_prune(exp_id: str, node_id: str, request: Request):
+        def op(ctx, store, b):
+            node, decision = store.prune(exp_id, node_id, b.get("reason"))
+            return {"node": node, "decision": decision}
+        return await _exp_op(request, op)
+
+    @router.post("/cockpit/explorations/{exp_id}/decisions")
+    async def cockpit_exploration_decide(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: store.decide(exp_id, b), 201)
+
+    @router.post("/cockpit/explorations/{exp_id}/spikes")
+    async def cockpit_exploration_spike(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: store.add_spike(exp_id, b), 201)
+
+    @router.patch("/cockpit/explorations/{exp_id}/spikes/{node_id}")
+    async def cockpit_exploration_spike_patch(exp_id: str, node_id: str, request: Request):
+        def op(ctx, store, b):
+            unknown = set(b) - {"task_id", "status", "worktree"}
+            if unknown:
+                raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
+            return store.update_spike(exp_id, node_id, b)
+        return await _exp_op(request, op)
+
+    @router.post("/cockpit/explorations/{exp_id}/promote")
+    async def cockpit_exploration_promote(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: explore_ops.promote(ctx, exp_id, b))
+
+    @router.post("/cockpit/explorations/{exp_id}/archive")
+    async def cockpit_exploration_archive(exp_id: str, request: Request):
+        def op(ctx, store, b):
+            as_knowledge = b.get("as_knowledge", False)
+            if not isinstance(as_knowledge, bool):
+                raise ExplorationError("as_knowledge must be a boolean")
+            return explore_ops.archive(ctx, exp_id, as_knowledge)
+        return await _exp_op(request, op)
+
     return router
+
+
+async def _sync_spike(ctx, task: Dict[str, Any]) -> None:
+    """A task with an ``explore`` origin moves its spike node along (never raises)."""
+    if (task.get("origin") or {}).get("kind") == "explore":
+        await asyncio.to_thread(spikes.sync, ctx, task)

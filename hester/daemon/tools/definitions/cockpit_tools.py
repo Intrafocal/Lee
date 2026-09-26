@@ -1,5 +1,5 @@
 """
-Cockpit tool definitions: tasks (read-only), Lee tabs and operations.
+Cockpit tool definitions: tasks and knowledge notes (read-only), Lee tabs and operations.
 
 No tool here can type into a terminal, confirm/link/close tasks, approve
 proposals or launch agents (C3).
@@ -21,6 +21,20 @@ You cannot confirm, link, close or promote tasks; those are the user's decisions
         "properties": {
             "status": {"type": "string", "enum": ["open", "closed", "all"], "description": "Which tasks (default open)"},
             "limit": {"type": "integer", "description": "Max tasks (default 20, max 100)"},
+        },
+    },
+    environments=_COCKPIT_ENVIRONMENTS,
+)
+
+KNOWLEDGE_NOTES_TOOL = ToolDefinition(
+    name="knowledge_notes",
+    description="""Read-only access to this workspace's knowledge notes (.hester/knowledge/), such as
+explorations archived as knowledge. With no name, list the notes (name, title, archived_at);
+with a name, read that note. Use them for what was already explored, decided or pruned.""",
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "A note name from the list (e.g. explore-exp-1a2b3c4d)"},
         },
     },
     environments=_COCKPIT_ENVIRONMENTS,
@@ -115,6 +129,7 @@ a log tail). Use it to answer "did it pass?" or to suggest a task for a failure.
 
 COCKPIT_TOOLS = [
     COCKPIT_TASKS_TOOL,
+    KNOWLEDGE_NOTES_TOOL,
     LEE_TABS_TOOL,
     LEE_TAB_READ_TOOL,
     LEE_TAB_CHECKIN_TOOL,

@@ -6399,3 +6399,102 @@ select:focus-visible,
   font-size: 12px;
   cursor: pointer;
 }
+
+/* LibraryPane (Copilot v3): confirmations, the spike prompt, read-only nodes */
+.library-notice-banner {
+  padding: 6px 12px;
+  background: rgba(var(--phosphor-rgb), 0.12);
+  border-bottom: 1px solid rgba(var(--phosphor-rgb), 0.4);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.library-spike-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.library-spike-form-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.library-spike-form-input {
+  width: 100%;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.library-spike-form-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.library-spike-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.library-tree-item.is-pruned .library-tree-label {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.library-tree-item.is-readonly .library-tree-icon,
+.library-tree-item.is-readonly .library-tree-label {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.library-tree-session-delete.is-archive:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.library-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.library-readonly-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.library-readonly-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-readonly-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.library-readonly-pre {
+  margin: 0;
+  padding: 6px 8px;
+  max-width: 100%;
+  overflow: auto;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}

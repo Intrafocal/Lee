@@ -1,13 +1,20 @@
 /**
  * Library Exploration Types
  *
- * Shared TypeScript types for the exploration workspace,
- * mirroring the backend ExplorationNode/ExplorationSession models.
+ * Shared TypeScript types for the exploration workspace. Since Copilot v3
+ * the Library is a tree view onto Explore's files (.hester/explore/<id>.md):
+ * a session id is an exploration id and node ids are `root` or `n-…`
+ * (contract §8). Decision, spike and evidence nodes are read-only here.
  */
+
+import type { ExploreDecision, ExploreEvidence, ExploreSpike } from '../../lib/hesterCockpit';
 
 export type AgentMode = 'ideate' | 'explore' | 'learn' | 'brainstorm' | 'docs' | 'web' | 'visualize';
 
-export type NodeType = 'thought' | 'source_file' | 'source_web' | 'source_db';
+export type NodeType = 'thought' | 'source_file' | 'source_web' | 'source_db' | 'decision' | 'spike' | 'evidence';
+
+/** Nodes with no chat: their text lives in the exploration's frontmatter. */
+export const READ_ONLY_NODE_TYPES: readonly NodeType[] = ['decision', 'spike', 'evidence'];
 
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system';
@@ -26,6 +33,23 @@ export interface ExplorationNode {
   children: string[];
   collapsed: boolean;
   created_at: string;
+  /** Set by a prune; a pruned node stays in the file. */
+  pruned?: boolean;
+  /** Explore's node kind (same values as node_type). */
+  kind?: NodeType;
+  decision?: ExploreDecision;
+  spike?: ExploreSpike;
+  evidence?: ExploreEvidence;
+}
+
+export function nodeKind(node: ExplorationNode | null | undefined): NodeType | null {
+  if (!node) return null;
+  return node.kind ?? node.node_type ?? null;
+}
+
+export function isReadOnlyNode(node: ExplorationNode | null | undefined): boolean {
+  const k = nodeKind(node);
+  return !!k && READ_ONLY_NODE_TYPES.includes(k);
 }
 
 export interface ExplorationSession {
@@ -110,4 +134,7 @@ export const NODE_TYPE_CONFIG: Record<NodeType, { icon: IconName }> = {
   source_file: { icon: 'file-code' },
   source_web: { icon: 'browser' },
   source_db: { icon: 'sql' },
+  decision: { icon: 'check' },
+  spike: { icon: 'play' },
+  evidence: { icon: 'document' },
 };

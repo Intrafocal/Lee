@@ -551,12 +551,14 @@ Someday is quick idea capture; Explore is for deeper dives.
 - Explorations are **persisted to disk**, one markdown file each in the workspace's gitignored `.hester/explore/<id>.md` (frontmatter, a Seed and a Log), file-first like the Cockpit task store, instead of Redis with a 2 h TTL.
 - The **Explore** section (right after Someday) lists them (title, last touched, exchanges, archived), `+ Explore` (header or section) creates one, and **Dive in / Continue** opens a Hester chat tab on the session `explore-<id>`, seeded from the file. Every finished turn there is appended to the file's Log, so the file outlives the chat session and a later dive re-seeds from it. Explorations can be archived.
 - **Promote → Explore** on a Someday item creates an exploration seeded from the idea.
-- The Library pane's tree sessions are unchanged for now (still Redis).
 
-**Later:**
-- The node tree gains **decision** and **spike** nodes. Pruning a branch records a decision; a reason is optional and can be added later. A spike runs an agent in a git worktree as a task with `delegate` lead and a timebox, and its summary and diff come back as an evidence node.
-- Promote actions: to Goal (seeds a GOALS.md draft), to Workstream, to Task. Promotion carries the tree's decisions and evidence, not a transcript dump.
-- An exploration can be **archived as knowledge**: a summary note kept with the workspace, which Hester can draw on later.
+**Done in v3 (2026-09-26, Explore absorbs the Library;** contract: [`plans/2026-09-26-copilot-v3-contracts.md`](plans/2026-09-26-copilot-v3-contracts.md)**):**
+- **One store.** The Library pane is a tree view onto the same `.hester/explore/<id>.md` files (`session_id` is the exploration id). Its Redis tree sessions (2 h TTL) are gone; nothing about an exploration expires, and deleting in the Library archives. Per-node chats keep their agents and write each finished exchange to the node's `## Node <id> · <label>` section of the file.
+- The node tree has **decision**, **spike** and **evidence** nodes. Pruning a branch records a decision; a reason is optional and can be added later. A spike runs an agent in a git worktree as a task with `delegate` lead and a timebox (origin `explore`, ref `<exp>/<node>`); the follower keeps the spike's status in step with the task, and on review or close its summary (labelled as the agent's claim), files, diffstat, diff (`.hester/explore/evidence/<exp>-<node>.diff`) and commits come back as an evidence node.
+- Promote actions: to Task, to Workstream (decision nodes become design decisions), to Goal (a **draft** in `.hester/goals/drafts/<exp>.md`, never GOALS.md). Promotion carries the tree's outline (decisions, spikes, evidence), not a transcript dump.
+- A task can be **escalated** to an exploration (seeded from its title, the agent's last report and its files; the task stays open).
+- An exploration can be **archived as knowledge**: a deterministic note at `.hester/knowledge/explore-<id>.md`, which Hester reads with the `knowledge_notes` tool.
+- Everything except the per-node chats (which you trigger) is deterministic; no action requires a reason.
 
 ### 7.6 Tabs
 
@@ -806,7 +808,9 @@ hester:
 | Someday (single capture store, shared with devices; replaces the broken `hester ideas`) | `.hester/someday/` | No |
 | Tasks | `.hester/tasks/` (light records, §7.2) | No |
 | Workstreams | `.hester/workstreams/` (existing) | No |
-| Explorations | `.hester/explorations/` (new; replaces Redis TTL) | No |
+| Explorations (Explore and the Library; one markdown file each, plus spike diffs in `evidence/`) | `.hester/explore/` (replaces the Library's Redis TTL) | No |
+| Knowledge notes (explorations archived as knowledge) | `.hester/knowledge/` | No |
+| Goal drafts (promoted explorations; GOALS.md is edited only by a human) | `.hester/goals/drafts/` | No |
 | Operations | `.lee/config.yaml` `operations:` / `services:` | No |
 | Lint config | `.lee/config.yaml` `lint:` | No |
 | Lint outcomes and suppressions | `.hester/lint/` | No |
@@ -829,8 +833,8 @@ hester:
 
 | Area | State | Needed |
 |---|---|---|
-| Library → Workstream promote | Broken twice: preload lacks `sendCommand` (punch list C27), and `promote_to_workstream` calls nonexistent `manager.get_session` (`hester/daemon/main.py`) | Fix both; replace the transcript-dump brief |
-| Library persistence | Redis with a 2 h TTL (`hester/daemon/session.py`) | File-first store |
+| Library → Workstream promote | **Fixed in v3.** Was broken twice: preload lacked `sendCommand` (punch list C27), and `promote_to_workstream` called nonexistent `manager.get_session` | Now the Explore promote (`hester/daemon/cockpit/explore_ops.py`): an outline brief plus design decisions; the pane opens the workstream through `onOpenWorkstream` |
+| Library persistence | **Fixed in v3.** Was Redis with a 2 h TTL (`hester/daemon/session.py`) | The Explore file store (`.hester/explore/`); the Redis managers are deleted |
 | Workstream backend | Complete on the backend; UI partial | `serves:`, soft phases |
 | DevOps services | `services:` model plus TUI | Extend to `operations:`, one-shots, `produces:`, `idle_ok:` |
 | Agent telemetry and hooks | `AgentTelemetry` with task and workstream IDs; `workstream/hooks.py` registers SessionStart, PreToolUse, PostToolUse, Stop, treats Stop as completion, and writes into `.claude/settings.local.json` | Report hooks (§4.1): `lee-status` parsing, Notification, SessionEnd, per-session install; screen-tail tier |

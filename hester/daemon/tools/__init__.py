@@ -205,6 +205,7 @@ from .workstream_tools import (
 )
 from .cockpit_tools import (
     cockpit_tasks,
+    knowledge_notes,
     lee_tabs,
     lee_tab_read,
     lee_tab_checkin,
@@ -399,6 +400,7 @@ __all__ = [
     "execute_workstream_list",
     # Cockpit tool handlers
     "cockpit_tasks",
+    "knowledge_notes",
     "lee_tabs",
     "lee_tab_read",
     "lee_tab_checkin",

@@ -898,6 +898,58 @@ async function main() {
     relay.stop();
   });
 
+  await check('launch (v3 §4): a spike carries its worktree on task.launch and the relayed record; origin explore validates', async () => {
+    const { validOrigin, worktreeFor } = cockpit('launcher.js');
+    assert.deepStrictEqual(validOrigin({ kind: 'explore', ref: 'exp-1/n-0000abcd' }), { kind: 'explore', ref: 'exp-1/n-0000abcd' });
+    assert.strictEqual(validOrigin({ kind: 'nope' }), null);
+    const relayed = [];
+    const stubRelay = { relay: async (r) => (relayed.push(r), true) };
+    const l2 = new TaskLauncherImpl(rt, stubRelay);
+    sentToWindow.length = 0;
+    const origSend = bw.webContents.send;
+    bw.webContents.send = (channel, payload) => {
+      sentToWindow.push([channel, payload]);
+      if (channel === 'cockpit:create-tab') {
+        setTimeout(() => {
+          host.add(88, { claude: true, name: payload.label });
+          tabs.push({ id: 188, type: 'agent', provider: 'claude', label: payload.label, ptyId: 88, dockPosition: 'center', state: 'idle' });
+          rt.resolveCreateTab({ request_id: payload.request_id, tab_id: 188, pty_id: 88 });
+        }, 10);
+      }
+    };
+    const res = await l2.launch(
+      {
+        workspace: WS,
+        lead: 'delegate',
+        kind: 'prototype',
+        worktree: true,
+        prompt: 'Try a file-first store',
+        title: 'File store',
+        name: 'Spike: File store',
+        origin: { kind: 'explore', ref: 'exp-1/n-0000abcd' },
+      },
+      LOCAL,
+      1,
+    );
+    const noWt = await l2.launch({ workspace: WS, prompt: 'x', worktree: false }, LOCAL, 1);
+    bw.webContents.send = origSend;
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    const req = sentToWindow.find(([c]) => c === 'cockpit:create-tab')[1];
+    const slug = req.args[req.args.indexOf('--worktree') + 1];
+    assert.ok(/^file-store-[0-9a-f]{4}$/.test(slug), slug);
+    const expected = { slug, path: path.join(WS, '.claude', 'worktrees', slug), branch: `worktree-${slug}` };
+    assert.deepStrictEqual(worktreeFor(WS, slug), expected);
+    const rec = relayed.find((r) => r.id === res.task_id);
+    assert.deepStrictEqual(rec.worktree, expected);
+    assert.deepStrictEqual(rec.origin, { kind: 'explore', ref: 'exp-1/n-0000abcd' });
+    const ev = events.filter((e) => e.type === 'task.launch').find((e) => e.data.task_id === res.task_id);
+    assert.deepStrictEqual(ev.data.worktree, expected);
+    assert.strictEqual(ev.data.origin_kind, 'explore');
+    const ev2 = events.filter((e) => e.type === 'task.launch').find((e) => e.data.task_id === noWt.task_id);
+    assert.strictEqual(ev2.data.worktree, false);
+    assert.strictEqual(relayed.find((r) => r.id === noWt.task_id).worktree, undefined);
+  });
+
   await check('relay: a non-ASCII workspace path is percent-encoded in X-Lee-Workspace (a raw header would throw and block the spool)', async () => {
     const got = [];
     const server = http.createServer((req, res2) => {

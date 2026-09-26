@@ -1,7 +1,8 @@
 /**
  * TasksSection - Hester's task records for this workspace (contracts §4.2,
  * §6.3): running, waiting, idle, review, queued, then closed in the last 7
- * days. Confirm, Link…, Accept/Discard, Promote…, Peek, Check in.
+ * days. Confirm, Link…, Accept/Discard, Promote…, Escalate → Explore, Peek,
+ * Check in.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -12,6 +13,7 @@ import { AgentMarkdown } from '../AgentMarkdown';
 import {
   closeTask,
   confirmTask,
+  escalateTask,
   fetchGoals,
   fetchWorkstreams,
   promoteTask,
@@ -192,6 +194,28 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
               onClick={() => run(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream')}
             >
               Promote…
+            </button>
+            <button
+              className="cockpit-btn"
+              disabled={busy}
+              title="Open an exploration seeded from this task (the task stays open)"
+              onClick={() => {
+                setBusy(true);
+                escalateTask(ctx.workspace, task.id)
+                  .then((r) => {
+                    if (!r.ok) {
+                      ctx.notify(r.error, 'error');
+                      return;
+                    }
+                    ctx.hester.refresh();
+                    ctx.notify(`Exploration started: ${r.data.exploration.title}`);
+                    ctx.setSection('explore');
+                    ctx.selectRow(`explore:${r.data.exploration.id}`);
+                  })
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Escalate → Explore
             </button>
             {tile && (
               <button className="cockpit-btn" onClick={() => ctx.goInto(tile.ptyId, 'tabs')}>

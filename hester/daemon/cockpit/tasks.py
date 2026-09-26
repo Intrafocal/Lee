@@ -29,7 +29,7 @@ CLOSED_STATUSES = ("done", "discarded")
 STATUSES = OPEN_STATUSES + CLOSED_STATUSES
 PATCH_STATUSES = ("queued", "running", "review")
 TITLE_SOURCES = ("user", "agent", "auto")
-ORIGIN_KINDS = ("launcher", "agent", "checkin", "someday", "operation", "lint", "hester")
+ORIGIN_KINDS = ("launcher", "agent", "checkin", "someday", "operation", "lint", "hester", "explore")
 MAX_FILES = 200
 MAX_TEXT = 2000
 MAX_TITLE = 200
@@ -49,7 +49,7 @@ FIELDS = (
     "sessions", "serves", "workstream", "confirmed", "confirmed_at", "urgency", "quadrant",
     "timebox_min", "due", "origin", "busy_ms", "turns", "files", "files_count", "summary",
     "lee_status", "last_checkin_at", "commits", "outcome", "accepted", "created_at",
-    "updated_at", "closed_at", "version",
+    "updated_at", "closed_at", "version", "worktree",
 )
 FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions")
 # Persisted in the frontmatter but not part of the API shape.
@@ -181,6 +181,7 @@ def default_task(task_id: str, workspace: str, now: Optional[datetime] = None) -
         "updated_at": stamp,
         "closed_at": None,
         "version": 0,
+        "worktree": None,
         "applied_through": None,
     }
 
@@ -318,6 +319,14 @@ def _context(value: Any) -> Optional[Dict[str, Any]]:
         if f.startswith("/") or ".." in f.split("/"):
             raise TaskError("context.files must be workspace-relative paths")
     return {"files": files[:MAX_CONTEXT_FILES], "bundles": bundles[:MAX_CONTEXT_BUNDLES]}
+
+
+def clean_worktree(value: Any) -> Optional[Dict[str, Any]]:
+    """A spike's worktree {slug, path, branch} from the relay or the task.launch event; else None."""
+    if not isinstance(value, dict):
+        return None
+    out = {k: (str(value[k]) if isinstance(value.get(k), (str, int)) and str(value[k]) else None) for k in ("slug", "path", "branch")}
+    return out if out["path"] or out["slug"] else None
 
 
 def _origin(value: Any) -> Optional[Dict[str, Any]]:
@@ -554,6 +563,12 @@ class CockpitTaskStore:
             task["workstream"] = _opt_str("workstream", payload["workstream"])
         if "origin" in payload and payload["origin"] is not None:
             task["origin"] = _origin(payload["origin"])
+        if payload.get("worktree") is not None:
+            if not isinstance(payload["worktree"], (dict, bool)):
+                raise TaskError("worktree must be an object or null")
+            worktree = clean_worktree(payload["worktree"])
+            if worktree is not None:
+                task["worktree"] = worktree
         if "timebox_min" in payload:
             task["timebox_min"] = _opt_int("timebox_min", payload["timebox_min"])
         if "due" in payload:

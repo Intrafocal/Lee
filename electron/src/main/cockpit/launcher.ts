@@ -8,7 +8,7 @@
 import * as crypto from 'crypto';
 import * as path from 'path';
 import type { Principal } from '../../shared/copilot';
-import type { ClaudePermissionMode, LaunchRequest, LaunchResult, TaskKind, TaskLead, TaskOrigin } from '../../shared/cockpit';
+import type { ClaudePermissionMode, LaunchRequest, LaunchResult, TaskKind, TaskLead, TaskOrigin, TaskWorktree } from '../../shared/cockpit';
 import { COCKPIT_IPC } from '../../shared/cockpit';
 import { windowRegistry } from '../window-registry';
 import { logCockpitEvent, type TaskCreateInput, type TaskLauncher } from './cockpit-bus';
@@ -73,6 +73,19 @@ export function launchName(req: LaunchRequest): string | null {
   return cleanName(req.name) ?? (typeof req.title === 'string' ? cleanName(req.title) : null);
 }
 
+/** A worktree slug for a launch: named after a given title, never the prompt. */
+export function worktreeSlug(plan: LaunchPlan): string {
+  return slugify(plan.titled ? plan.title : 'task', crypto.randomBytes(2).toString('hex'));
+}
+
+/**
+ * Where `claude --worktree <slug>` puts the worktree (contract v3 §4):
+ * `<ws>/.claude/worktrees/<slug>` on branch `worktree-<slug>`.
+ */
+export function worktreeFor(workspace: string, slug: string): TaskWorktree {
+  return { slug, path: path.join(workspace, '.claude', 'worktrees', slug), branch: `worktree-${slug}` };
+}
+
 /**
  * Claude argv for a launch (pure). The prompt follows `--`, so a leading '-'
  * stays positional. `refs` are context references (`@path`) appended to it.
@@ -83,7 +96,7 @@ export function buildClaudeArgs(
 ): string[] {
   const plan = launchPlan(req, { worktree_for_delegate: ids.worktree_for_delegate ?? true });
   // The worktree dir and branch are on disk: named after a given title, never the prompt.
-  const slug = plan.worktree ? ids.slug ?? slugify(plan.titled ? plan.title : 'task', crypto.randomBytes(2).toString('hex')) : null;
+  const slug = plan.worktree ? ids.slug ?? worktreeSlug(plan) : null;
   const prompt = withContext(typeof req.prompt === 'string' ? req.prompt.trim() : '', ids.refs ?? []);
   const name = launchName(req);
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : []);
@@ -131,10 +144,10 @@ function openWorkspace(requested: unknown): string | null {
   return null;
 }
 
-function validOrigin(o: unknown): TaskOrigin | null {
+export function validOrigin(o: unknown): TaskOrigin | null {
   if (!o || typeof o !== 'object') return null;
   const v = o as Record<string, unknown>;
-  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester'];
+  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester', 'explore'];
   if (typeof v.kind !== 'string' || !kinds.includes(v.kind)) return null;
   return { kind: v.kind as TaskOrigin['kind'], ref: typeof v.ref === 'string' ? v.ref : null };
 }
@@ -169,6 +182,11 @@ export class TaskLauncherImpl implements TaskLauncher {
     const name = launchName(req);
     // Context: paths and bundle ids only; the references go into the argv.
     const ctx = contextRefs(workspace, req.context);
+    const provider = typeof req.provider === 'string' && req.provider ? req.provider : cfg.launch.provider;
+    // Only a claude launch runs in a worktree; its slug is fixed here so the
+    // argv, the relayed record and the task.launch event all name the same one.
+    const worktree: TaskWorktree | null =
+      plan.lead !== 'human' && provider === 'claude' && plan.worktree ? worktreeFor(workspace, worktreeSlug(plan)) : null;
     const record = (status: TaskRecord['status'], agent: TaskRecord['agent']): TaskRecord => ({
       id: taskId,
       workspace,
@@ -187,6 +205,7 @@ export class TaskLauncherImpl implements TaskLauncher {
       origin,
       ...(name ? { name, name_source: 'user' as const } : {}),
       ...(ctx.files.length || ctx.bundles.length ? { context: { files: ctx.files, bundles: ctx.bundles } } : {}),
+      ...(worktree ? { worktree } : {}),
     });
 
     if (plan.lead === 'human') {
@@ -194,7 +213,6 @@ export class TaskLauncherImpl implements TaskLauncher {
       return { success: true, task_id: taskId, pty_id: null, tab_id: null, session_id: null, relayed };
     }
 
-    const provider = typeof req.provider === 'string' && req.provider ? req.provider : cfg.launch.provider;
     // The tab label reaches lee.log (PTY name) and the saved session, so it is
     // never derived from the prompt: an explicit label or title, else generic.
     const explicitTitle = typeof req.title === 'string' && req.title.trim() ? req.title.trim().slice(0, TITLE_MAX) : null;
@@ -204,7 +222,12 @@ export class TaskLauncherImpl implements TaskLauncher {
     let opened: { pty_id: number | null; tab_id: number | null; error?: string };
     if (provider === 'claude') {
       sessionId = crypto.randomUUID();
-      const args = buildClaudeArgs(req, { session_id: sessionId, worktree_for_delegate: cfg.launch.worktree_for_delegate, refs: ctx.refs });
+      const args = buildClaudeArgs(req, {
+        session_id: sessionId,
+        slug: worktree?.slug ?? null,
+        worktree_for_delegate: cfg.launch.worktree_for_delegate,
+        refs: ctx.refs,
+      });
       // An agent tab (type 'agent', provider 'claude'), so it is typed, walled,
       // iconed and restored like ⇧⌘C Claude tabs; the argv carries the
       // pre-assigned session id and prompt, and hooks are added at spawn.
@@ -247,10 +270,12 @@ export class TaskLauncherImpl implements TaskLauncher {
         kind: plan.kind,
         confirmed: true,
         play: !!req.play,
-        worktree: provider === 'claude' ? plan.worktree : false,
+        // An object when the agent runs in a worktree (truthy, as the old boolean was), else false.
+        worktree: worktree ?? false,
         ...(provider === 'claude' ? { permission_mode: plan.permission_mode } : {}),
         ...(model ? { model } : {}),
         origin_kind: origin.kind,
+        ...(origin.ref ? { origin_ref: origin.ref } : {}),
         named: !!name,
         ...(ctx.files.length ? { context_files: ctx.files.length } : {}),
         ...(ctx.bundles.length ? { context_bundles: ctx.bundles.length } : {}),

@@ -11,6 +11,12 @@
  * ├─────────────────────┴──────────────────────────┤
  * │  InputBar (mode buttons + breadcrumb + input)   │
  * └────────────────────────────────────────────────┘
+ *
+ * Since Copilot v3 (Explore absorbs the Library) a session is an Explore
+ * file (.hester/explore/<id>.md): nothing expires, "Archive" replaces
+ * delete, and every call names its workspace (X-Lee-Workspace). Decision,
+ * spike and evidence nodes are read-only; Prune, Spike from here and
+ * Promote → Task / Workstream / Goal draft are deterministic (no model).
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
@@ -28,21 +34,52 @@ import {
   SearchResults,
   SendIntent,
   SynthesisAction,
+  isReadOnlyNode,
 } from './library/types';
-
-const HESTER_DAEMON = 'http://127.0.0.1:9000';
+import {
+  HESTER_DAEMON_URL,
+  hesterHeaders,
+  promoteExploration,
+  pruneExploreNode,
+  startSpike,
+  workspacePath,
+  type ExplorationPromoteTo,
+} from '../lib/hesterCockpit';
 
 interface LibraryPaneProps {
   active: boolean;
   workspace: string;
   onOpenFile?: (path: string) => void;
+  /** Select this exploration (session id = exploration id) on mount or change. */
+  openSessionId?: string | null;
+  /** Bumped by each "Open tree", so asking for the same exploration again re-selects it. */
+  openSessionNonce?: number;
+  /** Open a workstream tab (App.handleWorkstreamSelect). */
+  onOpenWorkstream?: (id: string, title: string) => void;
+}
+
+/** Library routes keep their bare shapes; tolerate a `{success, data}` envelope too. */
+function unwrap(json: any): any {
+  if (json && typeof json === 'object' && !Array.isArray(json) && 'success' in json && 'data' in json) return json.data;
+  return json;
 }
 
 export const LibraryPane: React.FC<LibraryPaneProps> = ({
   active,
   workspace,
-  onOpenFile: _onOpenFile,
+  onOpenFile,
+  openSessionId,
+  openSessionNonce = 0,
+  onOpenWorkstream,
 }) => {
+  // Every call names this pane's workspace (contract v3 §8).
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const libFetch = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = await hesterHeaders(workspaceRef.current, (init.headers as Record<string, string>) ?? {});
+    return fetch(`${HESTER_DAEMON_URL}${path}`, { ...init, headers });
+  }, []);
+
   // Session state
   const [session, setSession] = useState<ExplorationSession | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -67,19 +104,29 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
    */
   const [error, setError] = useState<string | null>(null);
 
-  // Load sessions list on mount
+  /** Short-lived confirmation for a deterministic action (spike, promote, prune). */
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+  /** "Spike…" asks for a prompt (prefilled with the node label). */
+  const [spikeForm, setSpikeForm] = useState<{ nodeId: string; prompt: string; busy: boolean } | null>(null);
+
+  // Load sessions list on mount (and when the pane's workspace changes)
   useEffect(() => {
     if (active) {
       fetchSessions();
     }
-  }, [active]);
+  }, [active, workspace]);
 
   // Fetch session list
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch(`${HESTER_DAEMON}/library/sessions`);
+      const res = await libFetch(`/library/sessions`);
       if (!res.ok) return;
-      const data = await res.json();
+      const data = unwrap(await res.json());
       setSessions(data.sessions || []);
     } catch {
       // Best-effort background poll; a down daemon is reported once by the
@@ -88,11 +135,11 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
   }, []);
 
   // Fetch full session tree
-  const fetchSession = useCallback(async (sessionId: string) => {
+  const fetchSession = useCallback(async (sessionId: string, keepActiveNodeId?: string | null): Promise<boolean> => {
     try {
-      const res = await fetch(`${HESTER_DAEMON}/library/sessions/${sessionId}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const res = await libFetch(`/library/sessions/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) return false;
+      const data = unwrap(await res.json());
       setSession({
         session_id: data.session_id,
         title: data.title,
@@ -102,23 +149,33 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
         created_at: data.created_at,
         last_activity: data.last_activity,
       });
-      setActiveNodeId(data.active_node_id || data.root_id);
+      setActiveNodeId(keepActiveNodeId && data.nodes?.[keepActiveNodeId] ? keepActiveNodeId : data.active_node_id || data.root_id);
+      return true;
     } catch {
       // Best-effort background poll; a down daemon is reported once by the
       // status bar rather than on every refresh.
+      return false;
     }
   }, []);
+
+  // Open the exploration the Cockpit asked for ("Open tree").
+  useEffect(() => {
+    if (!openSessionId) return;
+    void fetchSession(openSessionId).then((ok) => {
+      if (!ok) setError('Couldn\'t open that exploration — is the Hester daemon running?');
+    });
+  }, [openSessionId, openSessionNonce, workspace, fetchSession]);
 
   // Create new session
   const handleCreateSession = useCallback(async (title: string) => {
     try {
-      const res = await fetch(`${HESTER_DAEMON}/library/sessions`, {
+      const res = await libFetch(`/library/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, working_directory: workspace }),
       });
       if (!res.ok) return;
-      const data = await res.json();
+      const data = unwrap(await res.json());
       await fetchSession(data.session_id);
       await fetchSessions();
     } catch {
@@ -132,19 +189,21 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     await fetchSession(sessionId);
   }, [fetchSession]);
 
-  // Delete session
-  const handleDeleteSession = useCallback(async (sessionId: string) => {
+  // Archive session (DELETE archives: an Explore file is never deleted)
+  const handleArchiveSession = useCallback(async (sessionId: string) => {
     try {
-      await fetch(`${HESTER_DAEMON}/library/sessions/${sessionId}`, {
+      const res = await libFetch(`/library/sessions/${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setNotice('Archived (kept in .hester/explore/)');
       if (session?.session_id === sessionId) {
         setSession(null);
         setActiveNodeId(null);
       }
       await fetchSessions();
     } catch {
-      // Ignore
+      setError('Couldn\'t archive that exploration — is the Hester daemon running?');
     }
   }, [session, fetchSessions]);
 
@@ -231,7 +290,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     abortRef.current = abort;
 
     try {
-      const res = await fetch(url, {
+      const res = await libFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -327,7 +386,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     message: string,
   ) => {
     await streamNodeSSE(
-      `${HESTER_DAEMON}/library/sessions/${sessionId}/nodes/${nodeId}/chat`,
+      `/library/sessions/${sessionId}/nodes/${nodeId}/chat`,
       { message },
       nodeId,
     );
@@ -337,7 +396,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
   const handleContinue = useCallback(async () => {
     if (!session || !activeNodeId) return;
     await streamNodeSSE(
-      `${HESTER_DAEMON}/library/sessions/${session.session_id}/nodes/${activeNodeId}/continue`,
+      `/library/sessions/${session.session_id}/nodes/${activeNodeId}/continue`,
       {},
       activeNodeId,
     );
@@ -349,8 +408,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
 
     try {
       if (searchMode === 'docs') {
-        const docRes = await fetch(
-          `${HESTER_DAEMON}/docs/search?q=${encodeURIComponent(query)}&limit=5`
+        const docRes = await libFetch(
+          `/docs/search?q=${encodeURIComponent(query)}&limit=5`
         )
           .then(r => r.json())
           .catch(() => ({ results: [], error: 'Doc search unavailable' }));
@@ -363,7 +422,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
           isSearching: false,
         });
       } else {
-        const webRes = await fetch(`${HESTER_DAEMON}/research/web`, {
+        const webRes = await libFetch(`/research/web`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query, max_sources: 5 }),
@@ -394,18 +453,18 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       const now = new Date();
       const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       const title = `Session (${time})`;
-      const res = await fetch(`${HESTER_DAEMON}/library/sessions`, {
+      const res = await libFetch(`/library/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, working_directory: workspace }),
       });
       if (!res.ok) return null;
-      const data = await res.json();
+      const data = unwrap(await res.json());
 
       // Fetch the full session to get root node
-      const sessionRes = await fetch(`${HESTER_DAEMON}/library/sessions/${data.session_id}`);
+      const sessionRes = await libFetch(`/library/sessions/${data.session_id}`);
       if (!sessionRes.ok) return null;
-      const sessionData = await sessionRes.json();
+      const sessionData = unwrap(await sessionRes.json());
 
       const newSession: ExplorationSession = {
         session_id: sessionData.session_id,
@@ -433,8 +492,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     message: string,
     agentMode: AgentMode,
   ) => {
-    const res = await fetch(
-      `${HESTER_DAEMON}/library/sessions/${sessionId}/nodes`,
+    const res = await libFetch(
+      `/library/sessions/${sessionId}/nodes`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -447,7 +506,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
       }
     );
     if (!res.ok) return;
-    const nodeData = await res.json();
+    const nodeData = unwrap(await res.json());
     const newNodeId = nodeData.node_id;
 
     const nodeWithMessage = {
@@ -551,8 +610,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     if (!session || !activeNodeId) return;
 
     try {
-      const res = await fetch(
-        `${HESTER_DAEMON}/library/sessions/${session.session_id}/nodes`,
+      const res = await libFetch(
+        `/library/sessions/${session.session_id}/nodes`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -565,11 +624,11 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
         }
       );
       if (!res.ok) return;
-      const nodeData = await res.json();
+      const nodeData = unwrap(await res.json());
 
       // Add the content as a system message on the new node
-      await fetch(
-        `${HESTER_DAEMON}/library/sessions/${session.session_id}/nodes/${nodeData.node_id}/chat`,
+      await libFetch(
+        `/library/sessions/${session.session_id}/nodes/${nodeData.node_id}/chat`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -589,8 +648,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
   const handlePromoteToWorkstream = useCallback(async (nodeId: string) => {
     if (!session) return;
     try {
-      const res = await fetch(
-        `${HESTER_DAEMON}/library/sessions/${session.session_id}/promote-to-workstream`,
+      const res = await libFetch(
+        `/library/sessions/${session.session_id}/promote-to-workstream`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -598,41 +657,103 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
         }
       );
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const data = await res.json();
-      // Open workstream tab via Lee API.
-      // NOTE: `lee.sendCommand` is not part of the preload surface (see
-      // src/shared/lee-api.ts) - this branch has never run. Kept as an
-      // `any` cast rather than silently deleted; tracked as C27.
-      if ((window as any).lee?.sendCommand) {
-        (window as any).lee.sendCommand({
-          domain: 'system',
-          action: 'create_tab',
-          params: { type: 'workstream', id: data.workstream_id, title: data.title },
-        });
-      }
+      const data = unwrap(await res.json());
+      if (!data?.workstream_id) throw new Error('No workstream id');
+      // Open the workstream's tab (App.handleWorkstreamSelect; fixes C27).
+      if (onOpenWorkstream) onOpenWorkstream(data.workstream_id, data.title || session.title);
+      else setNotice(`Promoted to workstream ${data.title || data.workstream_id}`);
+      await fetchSession(session.session_id, nodeId);
     } catch (err) {
       console.error('Failed to promote to workstream:', err);
       setError('Couldn\'t promote that node to a workstream');
     }
+  }, [session, onOpenWorkstream, fetchSession]);
+
+  // Promote → Task / Workstream / Goal draft (deterministic; contract v3 §5)
+  const handlePromote = useCallback(async (nodeId: string, to: ExplorationPromoteTo) => {
+    if (!session) return;
+    if (to === 'workstream') {
+      await handlePromoteToWorkstream(nodeId);
+      return;
+    }
+    const r = await promoteExploration(workspace, session.session_id, { to, node_ids: [nodeId] });
+    if (!r.ok) {
+      setError(`Couldn't promote: ${r.error}`);
+      return;
+    }
+    if (to === 'goal' && r.data.draft_path) {
+      onOpenFile?.(workspacePath(workspace, r.data.draft_path));
+      setNotice(`Goal draft written: ${r.data.draft_path}`);
+    } else {
+      setNotice(`Promoted to a task${r.data.task ? `: ${r.data.task.title}` : ''}`);
+    }
+    await fetchSession(session.session_id, nodeId);
+  }, [session, workspace, onOpenFile, handlePromoteToWorkstream, fetchSession]);
+
+  // Prune a branch (a decision node records it; no reason needed)
+  const handlePrune = useCallback(async (nodeId: string) => {
+    if (!session) return;
+    const r = await pruneExploreNode(workspace, session.session_id, nodeId);
+    if (!r.ok) {
+      setError(`Couldn't prune: ${r.error}`);
+      return;
+    }
+    setNotice('Pruned');
+    await fetchSession(session.session_id, nodeId);
+  }, [session, workspace, fetchSession]);
+
+  // Spike from a node: ask for a prompt, prefilled with the node's label
+  const handleSpikeFrom = useCallback((nodeId: string) => {
+    const node = session?.nodes[nodeId];
+    setSpikeForm({ nodeId, prompt: node?.label ?? '', busy: false });
   }, [session]);
+
+  const submitSpike = useCallback(async () => {
+    if (!session || !spikeForm || !spikeForm.prompt.trim()) return;
+    const launch = window.lee?.cockpit?.launch;
+    if (!launch) {
+      setError('Launching a spike needs the Cockpit runtime');
+      return;
+    }
+    const prompt = spikeForm.prompt.trim();
+    setSpikeForm({ ...spikeForm, busy: true });
+    const r = await startSpike(
+      workspace,
+      session.session_id,
+      { parent: spikeForm.nodeId, prompt, title: prompt.split('\n')[0].slice(0, 60) },
+      (req) => launch(req),
+    );
+    if (!r.ok) {
+      setSpikeForm((f) => (f ? { ...f, busy: false } : f));
+      setError(`Couldn't start the spike: ${r.error}`);
+      await fetchSession(session.session_id, spikeForm.nodeId);
+      return;
+    }
+    setSpikeForm(null);
+    setNotice(r.data.launch.relayed === false ? 'Spike launched (task record queued for Hester)' : 'Spike launched');
+    await fetchSession(session.session_id, r.data.node.id);
+  }, [session, spikeForm, workspace, fetchSession]);
+
+  const handleOpenDiff = useCallback((rel: string) => {
+    onOpenFile?.(workspacePath(workspace, rel));
+  }, [onOpenFile, workspace]);
 
   // Save session as idea
   const handleSaveAsIdea = useCallback(async (nodeId: string) => {
     if (!session) return;
     try {
-      const res = await fetch(
-        `${HESTER_DAEMON}/library/sessions/${session.session_id}/save`,
+      const res = await libFetch(
+        `/library/sessions/${session.session_id}/save`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ node_id: nodeId, tags: ['exploration', 'library'] }),
         }
       );
-      const data = await res.json();
-      if (data.success) {
-        // Could show a toast/notification here
-        console.log('Saved as idea:', data.idea_id);
-      }
+      const data = unwrap(await res.json());
+      // Saved to Someday (contract v3 §8), not the plugin idea store.
+      if (data?.success) setNotice('Saved to Someday');
+      else setError('Couldn\'t save that to Someday');
     } catch (err) {
       console.error('Failed to save as idea:', err);
       setError('Couldn\'t save that as an idea — is the Hester daemon running?');
@@ -643,8 +764,8 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
   const handleRenameNode = useCallback(async (nodeId: string, newLabel: string) => {
     if (!session) return;
     try {
-      const res = await fetch(
-        `${HESTER_DAEMON}/library/sessions/${session.session_id}/nodes/${nodeId}`,
+      const res = await libFetch(
+        `/library/sessions/${session.session_id}/nodes/${nodeId}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -683,7 +804,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     setSearchResults(null);
 
     // Stream the synthesis SSE endpoint
-    const url = `${HESTER_DAEMON}/library/sessions/${session.session_id}/synthesize`;
+    const url = `/library/sessions/${session.session_id}/synthesize`;
     const body = { action, node_ids: nodeIds, parent_id: session.root_id };
 
     if (abortRef.current) {
@@ -698,7 +819,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     abortRef.current = abort;
 
     try {
-      const res = await fetch(url, {
+      const res = await libFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(body),
@@ -823,7 +944,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     setSelectedNodeIds(new Set());
     setSearchResults(null);
 
-    const url = `${HESTER_DAEMON}/library/sessions/${session.session_id}/visualize`;
+    const url = `/library/sessions/${session.session_id}/visualize`;
     const body = { node_ids: nodeIds, parent_id: session.root_id };
 
     if (abortRef.current) {
@@ -838,7 +959,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
     abortRef.current = abort;
 
     try {
-      const res = await fetch(url, {
+      const res = await libFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(body),
@@ -963,6 +1084,43 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
           <Icon name="warning" size={14} className="icon-inline" /> {error}
         </div>
       )}
+      {notice && !error && (
+        <div className="library-notice-banner" onClick={() => setNotice(null)} title="Dismiss">
+          <Icon name="check" size={14} className="icon-inline" /> {notice}
+        </div>
+      )}
+      {spikeForm && (
+        <div className="library-spike-form">
+          <div className="library-spike-form-title">
+            <Icon name="play" size={13} className="icon-inline" /> Spike: a delegate agent in a git worktree (30 min timebox); its summary and diff come back as evidence.
+          </div>
+          <textarea
+            className="library-spike-form-input"
+            rows={3}
+            autoFocus
+            value={spikeForm.prompt}
+            placeholder="What should the spike try?"
+            onChange={(e) => setSpikeForm({ ...spikeForm, prompt: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void submitSpike();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setSpikeForm(null);
+              }
+            }}
+          />
+          <div className="library-spike-form-actions">
+            <button className="library-tree-selection-btn" disabled={spikeForm.busy || !spikeForm.prompt.trim()} onClick={() => void submitSpike()}>
+              Start spike
+            </button>
+            <button className="library-tree-selection-btn cancel" onClick={() => setSpikeForm(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {/* Top: Tree + Chat side by side */}
       <div className="library-top">
         <div className="library-top-left">
@@ -978,9 +1136,11 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
             onExitSelectionMode={handleExitSelectionMode}
             onCreateSession={handleCreateSession}
             onSwitchSession={handleSwitchSession}
-            onDeleteSession={handleDeleteSession}
+            onArchiveSession={handleArchiveSession}
             onSaveAsIdea={handleSaveAsIdea}
-            onPromoteToWorkstream={handlePromoteToWorkstream}
+            onPrune={handlePrune}
+            onSpikeFrom={handleSpikeFrom}
+            onPromote={handlePromote}
             onRenameNode={handleRenameNode}
             onSynthesize={handleSynthesize}
             onCopyToMarkdown={handleCopyToMarkdown}
@@ -1009,6 +1169,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
             onSynthesize={handleSynthesize}
             onCopyToMarkdown={handleCopyToMarkdown}
             onVisualize={handleVisualize}
+            onOpenDiff={handleOpenDiff}
           />
         </div>
       </div>
@@ -1022,7 +1183,7 @@ export const LibraryPane: React.FC<LibraryPaneProps> = ({
           isStreaming={isStreaming}
           onModeChange={setMode}
           onSend={handleSend}
-          disabled={isStreaming}
+          disabled={isStreaming || isReadOnlyNode(activeNode)}
         />
       </div>
     </div>
