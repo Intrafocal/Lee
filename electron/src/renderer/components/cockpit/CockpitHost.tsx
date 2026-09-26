@@ -20,6 +20,7 @@ import { focusManager } from '../../hooks/useFocusManager';
 import type { AttentionItem, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 import type { CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from '../../../shared/cockpit';
 import {
+  copilotBadge,
   feedNeedsCount,
   keyAction,
   mergeFeed,
@@ -39,9 +40,9 @@ import { AgentTiles } from './AgentTiles';
 import { TabDrawer } from './TabDrawer';
 import { Launcher, type LauncherPrefill } from './Launcher';
 import { RunMenu } from './RunMenu';
-import { CockpitRail } from './CockpitRail';
 import { KeyHelp } from './KeyHelp';
 import { ReplyPopover, CheckinPopover } from './AgentTile';
+import { CopilotSection } from './sections/CopilotSection';
 import { FeedSection } from './sections/FeedSection';
 import { TasksSection } from './sections/TasksSection';
 import { OperationsSection } from './sections/OperationsSection';
@@ -433,6 +434,18 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const selectedTile = state.selected?.kind === 'tile' ? tiles.find((t) => String(t.ptyId) === state.selected?.id) ?? null : null;
   const selectedRow = state.selected?.kind === 'row' ? rowsRef.current.find((r) => r.id === state.selected?.id) ?? null : null;
   const aboutTitle = selectedTile?.title ?? selectedRow?.title ?? null;
+  // "about:" for Ask Hester survives switching to the Copilot section (which
+  // clears the selection): the last tile or non-Copilot row you selected.
+  const [lastAbout, setLastAbout] = useState<string | null>(null);
+  const selectedIsCopilotRow = state.selected?.kind === 'row' && state.selected.id.startsWith('copilot:');
+  useEffect(() => {
+    if (aboutTitle && !selectedIsCopilotRow) setLastAbout(aboutTitle);
+  }, [aboutTitle, selectedIsCopilotRow]);
+  // A fresh brief after an absence: a neutral dot on Copilot until you look.
+  const [seenNonce, setSeenNonce] = useState(0);
+  useEffect(() => {
+    if (shown && state.section === 'copilot') setSeenNonce(returnNonce);
+  }, [shown, state.section, returnNonce]);
 
   const copilotApi = copilot.api;
   const approve = (item: AttentionItem | null | undefined, action: 'approve' | 'deny') => {
@@ -587,6 +600,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   if (!state.enabled || !available || state.mode !== 'cockpit') return null;
 
   const badges: NavBadges = {
+    copilot: copilotBadge({ returnNonce, seenNonce }),
     feed: { count: needsCount, ember: needsCount > 0 },
     tasks: tasksBadge(hester.snapshot?.tasks.open ?? []),
     ops: opsBadge({
@@ -625,6 +639,15 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         <div className="cockpit-center">
           <AgentTiles ctx={ctx} />
           <div className="cockpit-section">
+            {section === 'copilot' && (
+              <CopilotSection
+                ctx={ctx}
+                about={lastAbout}
+                onClearAbout={() => setLastAbout(null)}
+                onAsk={onAskHester}
+                returnNonce={returnNonce}
+              />
+            )}
             {section === 'feed' && <FeedSection ctx={ctx} />}
             {section === 'tasks' && <TasksSection ctx={ctx} />}
             {section === 'ops' && <OperationsSection ctx={ctx} />}
@@ -633,12 +656,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
             {section === 'history' && <HistorySection ctx={ctx} />}
           </div>
         </div>
-        <CockpitRail
-          workspace={workspace}
-          about={aboutTitle}
-          returnNonce={returnNonce}
-          onAsk={() => onAskHester(aboutTitle ? `About ${aboutTitle}: ` : '')}
-        />
       </div>
       <TabDrawer
         tabs={ownTabs}

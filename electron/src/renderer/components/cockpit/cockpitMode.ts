@@ -11,6 +11,7 @@ import {
   agentPtysFromSnapshot,
   isAgentTab as isAgentTabPure,
   nextMode,
+  DEFAULT_SECTION,
   SECTIONS,
   stripTabs as stripTabsPure,
   wallRepair,
@@ -54,7 +55,7 @@ let state: CockpitModeState = {
   mode: 'workbench',
   reason: 'default',
   since: Date.now(),
-  section: 'feed',
+  section: DEFAULT_SECTION,
   enteredPtys: new Set(),
   selected: null,
   runtimeAgents: new Set(),
@@ -125,7 +126,7 @@ function readSection(workspace: string): SectionId {
   } catch {
     /* storage unavailable */
   }
-  return 'feed';
+  return DEFAULT_SECTION;
 }
 
 function blurActive(): void {

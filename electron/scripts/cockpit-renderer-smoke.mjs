@@ -57,6 +57,10 @@ const {
   taskNeedsYou,
   tasksBadge,
   opsBadge,
+  copilotBadge,
+  SECTIONS,
+  SECTION_LABELS,
+  DEFAULT_SECTION,
 } = mod;
 
 let passed = 0;
@@ -295,6 +299,9 @@ test('tileModel: agent/auto task titles are made plain; user titles kept', () =>
 
 test('badges: suggestions and unconfirmed tasks are ambient; failures, proposals, waiting agents are ember', () => {
   assert.deepEqual(opsBadge({ failing: 0, proposals: 0, suggestions: 30 }), { count: 30, ember: false });
+  assert.deepEqual(copilotBadge({ returnNonce: 0, seenNonce: 0 }), { count: 0, ember: false, dot: false });
+  assert.deepEqual(copilotBadge({ returnNonce: 2, seenNonce: 1 }), { count: 0, ember: false, dot: true }, 'fresh brief: neutral dot, never ember');
+  assert.deepEqual(copilotBadge({ returnNonce: 2, seenNonce: 2 }), { count: 0, ember: false, dot: false });
   assert.deepEqual(opsBadge({ failing: 1, proposals: 1, suggestions: 30 }), { count: 2, ember: true });
   assert.deepEqual(opsBadge({ failing: 0, proposals: 0, suggestions: 0 }), { count: 0, ember: false });
   const t = (status, confirmed) => ({ status, confirmed });
@@ -506,11 +513,21 @@ test('§3.2 nothing moves while the Cockpit is disabled', () => {
 // keyAction
 // ---------------------------------------------------------------------------
 
+test('nav: Copilot first, every section labelled, at most 9 (number keys), landing stays Feed', () => {
+  assert.equal(SECTIONS[0], 'copilot');
+  assert.ok(SECTIONS.length <= 9);
+  assert.equal(new Set(SECTIONS).size, SECTIONS.length);
+  for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
+  assert.equal(DEFAULT_SECTION, 'feed');
+});
+
 test('keyAction: map of §3.7', () => {
   const k = (key, ctx = {}) => keyAction(key, { inInput: false, ...ctx });
-  assert.deepEqual(k('1'), { kind: 'section', section: 'feed' });
-  assert.deepEqual(k('6'), { kind: 'section', section: 'history' });
-  assert.equal(k('7'), null);
+  assert.deepEqual(k('1'), { kind: 'section', section: 'copilot' });
+  assert.deepEqual(k('2'), { kind: 'section', section: 'feed' });
+  assert.deepEqual(k(String(SECTIONS.length)), { kind: 'section', section: 'history' });
+  if (SECTIONS.length < 9) assert.equal(k(String(SECTIONS.length + 1)), null, 'no section past the end');
+  assert.equal(k('0'), null);
   assert.deepEqual(k('j'), { kind: 'row', delta: 1 });
   assert.deepEqual(k('ArrowUp'), { kind: 'row', delta: -1 });
   assert.deepEqual(k('h'), { kind: 'tile', delta: -1 });

@@ -1,6 +1,7 @@
 /**
  * CockpitNav - section list with badges (contracts §3.4). Ember when the
- * section has something that needs you.
+ * section has something that needs you; a neutral dot when there is only
+ * something new to read (Copilot's fresh brief).
  */
 
 import React from 'react';
@@ -27,6 +28,7 @@ export const CockpitNav: React.FC<CockpitNavProps> = ({ section, badges, onSelec
         >
           <span className="cockpit-nav-label">{SECTION_LABELS[id]}</span>
           {b.count > 0 && <span className={`cockpit-badge${b.ember ? ' is-ember' : ''}`}>{b.count}</span>}
+          {b.count === 0 && b.dot && <span className="cockpit-badge-dot" aria-label="new" />}
           <kbd className="cockpit-nav-key">{i + 1}</kbd>
         </button>
       );

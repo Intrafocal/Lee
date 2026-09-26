@@ -18,11 +18,16 @@ import type {
   TabRuntimeInfo,
 } from '../../shared/cockpit';
 
-export type SectionId = 'feed' | 'tasks' | 'ops' | 'someday' | 'tabs' | 'history';
+export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'someday' | 'tabs' | 'history';
 
-export const SECTIONS: readonly SectionId[] = ['feed', 'tasks', 'ops', 'someday', 'tabs', 'history'];
+/** Nav order; number keys 1..n follow it. Copilot (Hester) is always first. */
+export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'someday', 'tabs', 'history'];
+
+/** Where the Cockpit lands when nothing is remembered for the workspace. */
+export const DEFAULT_SECTION: SectionId = 'feed';
 
 export const SECTION_LABELS: Record<SectionId, string> = {
+  copilot: 'Copilot',
   feed: 'Feed',
   tasks: 'Tasks',
   ops: 'Ops',
@@ -552,7 +557,7 @@ export interface KeyContext {
 export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null {
   if (ctx.inInput || ctx.meta || ctx.ctrl || ctx.alt) return null;
   if (ctx.onControl && (key === 'Enter' || key === ' ')) return null;
-  if (key >= '1' && key <= '6' && key.length === 1) return { kind: 'section', section: SECTIONS[Number(key) - 1] };
+  if (key.length === 1 && key >= '1' && key <= '9' && Number(key) <= SECTIONS.length) return { kind: 'section', section: SECTIONS[Number(key) - 1] };
   if (ctx.drawer) {
     if (key === 'ArrowLeft' || key === 'h') return { kind: 'drawer-move', delta: -1 };
     if (key === 'ArrowRight' || key === 'l') return { kind: 'drawer-move', delta: 1 };
@@ -604,6 +609,17 @@ export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null
 export interface SectionBadge {
   count: number;
   ember: boolean;
+  /** A quiet neutral dot (something new to read, nothing needs you). */
+  dot?: boolean;
+}
+
+/**
+ * Nav badge for Copilot: a neutral dot while a fresh brief (the digest after
+ * an absence) hasn't been looked at. Never ember: the brief needs nothing
+ * from you (C2 quiet).
+ */
+export function copilotBadge(input: { returnNonce: number; seenNonce: number }): SectionBadge {
+  return { count: 0, ember: false, dot: input.returnNonce > input.seenNonce };
 }
 
 /**

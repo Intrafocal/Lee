@@ -3,10 +3,11 @@
  */
 
 import React from 'react';
+import { SECTIONS, SECTION_LABELS } from '../../lib/cockpitModel';
 
 const KEYS: Array<[string, string]> = [
   ['⌘0', 'Cockpit ↔ Workbench (⇧⌘0 resets zoom)'],
-  ['1–6', 'Feed, Tasks, Ops, Someday, Tabs, History'],
+  [`1–${SECTIONS.length}`, SECTIONS.map((s) => SECTION_LABELS[s]).join(', ')],
   ['j / k, ↓ / ↑', 'Next / previous row'],
   ['h / l, ← / →', 'Previous / next agent tile'],
   ['Enter', 'Peek at the selected agent, or open the row'],

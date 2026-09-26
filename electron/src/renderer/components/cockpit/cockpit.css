@@ -334,7 +334,7 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Body: nav · center · rail                                               */
+/* Body: nav · center                                                      */
 /* ---------------------------------------------------------------------- */
 
 .cockpit-body {
@@ -401,33 +401,48 @@
   padding: var(--space-2) var(--space-3) var(--space-4);
 }
 
-.cockpit-rail {
-  width: 260px;
+.cockpit-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
   flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--border);
-  background: var(--bg-secondary);
-  padding: var(--space-3);
-  overflow-y: auto;
-  gap: var(--space-2);
 }
 
-.cockpit-rail-title {
+/* Copilot section (Hester's home; replaced the right rail) */
+
+.cockpit-brief-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-secondary);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  max-width: 860px;
+}
+
+.cockpit-brief-card.is-selected {
+  border-color: var(--accent);
+}
+
+.cockpit-brief-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-weight: 600;
   color: var(--text-primary);
+  margin-bottom: var(--space-1);
 }
 
-.cockpit-rail-topline {
+.cockpit-brief-topline {
   color: var(--text-secondary);
   margin-bottom: var(--space-2);
 }
 
-.cockpit-rail-group {
-  margin-bottom: var(--space-3);
+.cockpit-brief-group {
+  margin-bottom: var(--space-2);
 }
 
-.cockpit-rail-head {
+.cockpit-brief-label {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -435,25 +450,19 @@
   margin-bottom: var(--space-1);
 }
 
-.cockpit-rail-line {
+.cockpit-brief-line {
   color: var(--text-secondary);
   margin-bottom: 3px;
   line-height: 1.4;
 }
 
-.cockpit-rail-ask {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.cockpit-rail-about {
+.cockpit-brief-about {
   color: var(--text-muted);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-bottom: var(--space-1);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -954,11 +963,6 @@
 /* ---------------------------------------------------------------------- */
 
 @media (max-width: 1000px) {
-  .cockpit-rail {
-    width: 180px;
-    padding: var(--space-2);
-  }
-
   .cockpit-nav {
     width: 110px;
   }
