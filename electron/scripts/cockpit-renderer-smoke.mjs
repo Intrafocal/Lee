@@ -4,7 +4,10 @@
  * (src/renderer/lib/cockpitModel.ts): mergeFeed order, tileModel with and
  * without snapshot.agents, stripTabs, every row of contracts §3.2 through
  * nextMode, and keyAction ignoring keys while an input is focused. Compiles
- * the real source with esbuild, no React, no DOM.
+ * the real source with esbuild, no React, no DOM. Also: Hester chat / DevOps
+ * outside the wall, side-dock strips, close fallbacks, strip navigation,
+ * wallRepair, and the cockpitMode store's quiet()/hold-end (bundled with
+ * react external).
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -31,7 +34,21 @@ try {
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
-const { mergeFeed, tileModel, stripTabs, isAgentTab, nextMode, keyAction, feedNeedsCount, formatDuration } = mod;
+const {
+  mergeFeed,
+  tileModel,
+  stripTabs,
+  isAgentTab,
+  isWallExempt,
+  runtimeAgentPtys,
+  fallbackTab,
+  stripNeighbor,
+  wallRepair,
+  nextMode,
+  keyAction,
+  feedNeedsCount,
+  formatDuration,
+} = mod;
 
 let passed = 0;
 function test(name, fn) {
@@ -256,6 +273,86 @@ test('stripTabs: hides agents you did not go into; identity when disabled or not
   assert.equal(stripTabs(own, { enabled: true, enteredPtys: new Set(), sets: noSets }), own);
 });
 
+test('Hester chat and DevOps tabs stay outside the wall (user decision): never agents, never tiles', () => {
+  const hester = { id: 7, type: 'agent', label: 'Hester', ptyId: 70, dockPosition: 'center', provider: 'hester' };
+  const legacyHester = { id: 8, type: 'hester', label: 'Hester', ptyId: 80, dockPosition: 'center' };
+  const devops = { id: 9, type: 'devops', label: 'DevOps', ptyId: 90, dockPosition: 'center' };
+  const all = new Set([70, 80, 90]);
+  const loud = { snapshotAgents: all, runtimeAgents: all };
+  for (const t of [hester, legacyHester, devops]) {
+    assert.equal(isWallExempt(t), true, t.type);
+    assert.equal(isAgentTab(t, loud), false, `${t.type} is never an agent`);
+  }
+  assert.equal(isWallExempt(agentTab), false);
+  const tabs = [agentTab, hester, legacyHester, devops];
+  assert.deepEqual(stripTabs(tabs, { enabled: true, enteredPtys: new Set(), sets: loud }).map((t) => t.id), [7, 8, 9]);
+  assert.deepEqual(
+    [...runtimeAgentPtys([runtime({ pty_id: 70, provider: 'hester' }), runtime({ pty_id: 30 })])],
+    [30],
+    'A-reported Hester chats are not runtime agents',
+  );
+  const tiles = tileModel({
+    workspace: WS,
+    tabs,
+    sets: loud,
+    snapshot: snapshot({
+      agents: [
+        { pty_id: 70, window_id: 1, tab_id: 7, label: 'Hester', provider: 'hester', workspace: WS, state: 'idle', busy_since: null, idle_since: null, last_tool: null, last_summary: null, files_touched_count: 0 },
+        { pty_id: 90, window_id: 1, tab_id: 9, label: 'DevOps', provider: 'claude', workspace: WS, state: 'idle', busy_since: null, idle_since: null, last_tool: null, last_summary: null, files_touched_count: 0 },
+      ],
+    }),
+    runtime: [runtime({ pty_id: 80, provider: null }), runtime({ pty_id: 71, provider: 'hester' })],
+    tasks: [],
+    now: NOW,
+  });
+  assert.deepEqual(tiles.map((t) => t.ptyId), [12], 'only the real agent is a tile');
+});
+
+test('stripTabs works per dock: side-panel agents are walled too', () => {
+  const right = [
+    { id: 20, type: 'agent', label: 'Claude', ptyId: 200, dockPosition: 'right', provider: 'claude' },
+    { id: 21, type: 'files', label: 'Files', ptyId: null, dockPosition: 'right' },
+  ];
+  assert.deepEqual(stripTabs(right, { enabled: true, enteredPtys: new Set(), sets: noSets }).map((t) => t.id), [21]);
+  assert.deepEqual(stripTabs(right, { enabled: true, enteredPtys: new Set([200]), sets: noSets }).map((t) => t.id), [20, 21]);
+});
+
+test('fallbackTab: a closing tab falls back to a visible tab, never a hidden agent', () => {
+  const file = { id: 1, type: 'file', label: 'main.py', ptyId: null, dockPosition: 'center' };
+  const center = [file, shellTab, agentTab]; // agent created last
+  const strip = stripTabs(center, { enabled: true, enteredPtys: new Set(), sets: noSets });
+  assert.equal(fallbackTab(strip, 1, 'last').id, 4, 'not the hidden agent 3');
+  assert.equal(fallbackTab(strip, 4, 'first').id, 1);
+  assert.equal(fallbackTab([file], 1), null, 'nothing visible left: no active tab');
+});
+
+test('stripNeighbor: next/prev cycle the visible strip only', () => {
+  const file = { id: 1, type: 'file', label: 'main.py', ptyId: null, dockPosition: 'center' };
+  const center = [file, agentTab, shellTab];
+  const strip = stripTabs(center, { enabled: true, enteredPtys: new Set(), sets: noSets });
+  assert.deepEqual(strip.map((t) => t.id), [1, 4], 'strip badges: main.py ⌘1, Terminal ⌘2');
+  assert.equal(strip[1].id, 4, '⌘2 opens Terminal, not the hidden Claude');
+  assert.equal(stripNeighbor(strip, 1, 1).id, 4);
+  assert.equal(stripNeighbor(strip, 4, 1).id, 1);
+  assert.equal(stripNeighbor(strip, 1, -1).id, 4);
+  assert.equal(stripNeighbor(strip, 3, 1).id, 1, 'from a hidden active tab, start of the strip');
+  assert.equal(stripNeighbor([file], 1, 1), null);
+  assert.equal(stripNeighbor(strip, null, 1), null);
+});
+
+test('wallRepair: enter a terminal that became an agent; redirect off a restored hidden agent', () => {
+  const base = { enabled: true, mode: 'workbench', isAgent: true, entered: false, ptyId: 13, becameAgent: false, holdEnded: false };
+  assert.equal(wallRepair({ ...base, becameAgent: true }), 'enter', 'you ran claude where you work');
+  assert.equal(wallRepair({ ...base, becameAgent: true, mode: 'cockpit' }), 'enter');
+  assert.equal(wallRepair({ ...base, holdEnded: true }), 'redirect', 'restore left a hidden agent active');
+  assert.equal(wallRepair({ ...base, holdEnded: true, mode: 'cockpit' }), null, 'the cockpit→workbench repair handles that');
+  assert.equal(wallRepair({ ...base, holdEnded: true, entered: true }), null);
+  assert.equal(wallRepair({ ...base, holdEnded: true, isAgent: false }), null);
+  assert.equal(wallRepair({ ...base, holdEnded: true, enabled: false }), null);
+  assert.equal(wallRepair({ ...base, becameAgent: true, ptyId: null }), null);
+  assert.equal(wallRepair(base), null, 'nothing changed');
+});
+
 // ---------------------------------------------------------------------------
 // nextMode: every row of §3.2
 // ---------------------------------------------------------------------------
@@ -357,11 +454,59 @@ test('keyAction: ignored while typing in an input, and for modifier chords', () 
   assert.equal(keyAction('r', { inInput: false, alt: true }), null);
 });
 
+test('keyAction: Enter and Space on a focused button belong to the button', () => {
+  assert.equal(keyAction('Enter', { inInput: false, onControl: true }), null);
+  assert.equal(keyAction(' ', { inInput: false, onControl: true }), null);
+  assert.deepEqual(keyAction('j', { inInput: false, onControl: true }), { kind: 'row', delta: 1 }, 'j/k still move from a button');
+  assert.deepEqual(keyAction('Enter', { inInput: false, onControl: false }), { kind: 'enter' });
+});
+
 test('formatDuration', () => {
   assert.equal(formatDuration(30000), '<1m');
   assert.equal(formatDuration(12 * 60000), '12m');
   assert.equal(formatDuration(90 * 60000), '1h 30m');
   assert.equal(formatDuration(3 * 86400000), '3d');
 });
+
+// ---------------------------------------------------------------------------
+// cockpitMode store: quiet() fallbacks and hold-end re-checks
+// ---------------------------------------------------------------------------
+
+{
+  const storePath = join(__dirname, '../src/renderer/components/cockpit/cockpitMode.ts');
+  const built = await esbuild.build({
+    entryPoints: [storePath],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    write: false,
+    external: ['react'],
+  });
+  const dir = mkdtempSync(join(__dirname, '.cockpit-store-smoke-'));
+  const file = join(dir, 'cockpitMode.mjs');
+  writeFileSync(file, built.outputFiles[0].text);
+  let store;
+  try {
+    ({ cockpitModeStore: store } = await import(pathToFileURL(file).href));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  test('store: quiet() marks one activation of one tab as not yours', () => {
+    store.quiet(5);
+    assert.equal(store.takeQuiet(6), false);
+    assert.equal(store.takeQuiet(5), true);
+    assert.equal(store.takeQuiet(5), false, 'consumed');
+  });
+
+  const before = store.getWall().holdEpoch;
+  store.hold(30);
+  assert.equal(store.holding(), true);
+  await new Promise((r) => setTimeout(r, 120));
+  test('store: a hold that ends bumps holdEpoch so the wall re-checks active tabs', () => {
+    assert.equal(store.holding(), false);
+    assert.equal(store.getWall().holdEpoch, before + 1);
+  });
+}
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

@@ -47,6 +47,7 @@ import { OperationsSection } from './sections/OperationsSection';
 import { SomedaySection } from './sections/SomedaySection';
 import { TabsSection } from './sections/TabsSection';
 import { HistorySection } from './sections/HistorySection';
+import { isControlTarget, isTypingTarget } from './dom';
 import './cockpit.css';
 
 export type CockpitTab = Tab & { ptyId: number | null; dockPosition: DockPosition };
@@ -115,10 +116,14 @@ type Popover =
   | { kind: 'checkin'; ptyId: number; label: string }
   | null;
 
-function isTypingTarget(el: Element | null): boolean {
-  if (!el) return false;
-  const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (el as HTMLElement).isContentEditable;
+/** The parts of a keydown the Cockpit keymap reads (React's synthetic event or a native one). */
+interface KeyLike {
+  key: string;
+  target: EventTarget | null;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  preventDefault: () => void;
 }
 
 function useNow(intervalMs: number, active: boolean): number {
@@ -416,6 +421,14 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     if (!shown) setPopover(null);
   }, [shown]);
 
+  // A popover that closes (Send, Launch, a click) unmounts the focused element and
+  // focus falls to <body>, where the overlay's keymap never sees keys. Take it back.
+  useEffect(() => {
+    if (!shown || popover) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true });
+  }, [popover, shown]);
+
   const selectedTile = state.selected?.kind === 'tile' ? tiles.find((t) => String(t.ptyId) === state.selected?.id) ?? null : null;
   const selectedRow = state.selected?.kind === 'row' ? rowsRef.current.find((r) => r.id === state.selected?.id) ?? null : null;
   const aboutTitle = selectedTile?.title ?? selectedRow?.title ?? null;
@@ -431,7 +444,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       .catch(() => notify('failed', 'error'));
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+  const onKey = (e: KeyLike) => {
     if (popover) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -440,8 +453,12 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       }
       return;
     }
+    // A dialog a section opened itself (RunOpDialog from Ops) owns its keys:
+    // nothing typed in it may approve, deny or switch sections behind it.
+    if (e.target instanceof Element && e.target !== rootRef.current && e.target.closest('[role="dialog"]')) return;
     const act = keyAction(e.key, {
-      inInput: isTypingTarget(e.target as Element),
+      inInput: isTypingTarget(e.target),
+      onControl: e.target !== rootRef.current && isControlTarget(e.target),
       meta: e.metaKey,
       ctrl: e.ctrlKey,
       alt: e.altKey,
@@ -523,6 +540,22 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         break;
     }
   };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => onKey(e);
+  const onKeyRef = useRef(onKey);
+  onKeyRef.current = onKey;
+
+  // Keys that arrive while focus sits on <body> (after something focused was
+  // removed) still belong to the Cockpit: refocus the overlay and handle them.
+  useEffect(() => {
+    if (!shown) return;
+    const onBodyKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.target !== document.body) return;
+      rootRef.current?.focus({ preventScroll: true });
+      onKeyRef.current(e);
+    };
+    window.addEventListener('keydown', onBodyKey);
+    return () => window.removeEventListener('keydown', onBodyKey);
+  }, [shown]);
 
   const ctx: CockpitCtx = {
     workspace,

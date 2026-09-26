@@ -36,6 +36,7 @@ import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
 import { CockpitHost } from './components/cockpit/CockpitHost';
 import { useCockpitMode, cockpitModeStore } from './components/cockpit/cockpitMode';
+import { fallbackTab, stripNeighbor } from './lib/cockpitModel';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -225,11 +226,58 @@ const App: React.FC = () => {
   );
 
   const centerTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'center'), [tabsWithAttention]);
-  const cockpitMode = useCockpitMode({ workspace, snapshot: copilot.snapshot, activeTabId, tabs: tabsWithAttention });
+  const sideActiveTabIds = useMemo(
+    () => ({ left: activeLeftTabId, right: activeRightTabId, bottom: activeBottomTabId }),
+    [activeLeftTabId, activeRightTabId, activeBottomTabId],
+  );
+  const cockpitMode = useCockpitMode({
+    workspace,
+    snapshot: copilot.snapshot,
+    activeTabId,
+    sideActiveTabIds,
+    tabs: tabsWithAttention,
+    // Move a dock off a hidden agent (after session restore); setters are stable.
+    activate: (tabId: number) => {
+      const t = tabsRef.current.find((x) => x.id === tabId);
+      if (!t) return;
+      if (t.dockPosition === 'left') setActiveLeftTabId(tabId);
+      else if (t.dockPosition === 'right') setActiveRightTabId(tabId);
+      else if (t.dockPosition === 'bottom') setActiveBottomTabId(tabId);
+      else setActiveTabId(tabId);
+    },
+  });
+  // The wall (contracts §3.1): each dock shows own tabs plus agents you went into.
+  // Identity when the Cockpit is disabled.
   const stripTabs = useMemo(() => cockpitMode.stripTabs(centerTabs), [cockpitMode, centerTabs]);
   const leftTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'left'), [tabsWithAttention]);
   const rightTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'right'), [tabsWithAttention]);
   const bottomTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'bottom'), [tabsWithAttention]);
+  const leftStrip = useMemo(() => cockpitMode.stripTabs(leftTabs), [cockpitMode, leftTabs]);
+  const rightStrip = useMemo(() => cockpitMode.stripTabs(rightTabs), [cockpitMode, rightTabs]);
+  const bottomStrip = useMemo(() => cockpitMode.stripTabs(bottomTabs), [cockpitMode, bottomTabs]);
+  // Side-docked agents you did not go into stay mounted (PTY sizes) but are not shown.
+  const hiddenSideTabIds = useMemo(() => {
+    const hidden = new Set<number>();
+    const add = (all: TabData[], strip: TabData[]) => {
+      if (all === strip) return;
+      const shown = new Set(strip.map((t) => t.id));
+      for (const t of all) if (!shown.has(t.id)) hidden.add(t.id);
+    };
+    add(leftTabs, leftStrip);
+    add(rightTabs, rightStrip);
+    add(bottomTabs, bottomStrip);
+    return hidden;
+  }, [leftTabs, rightTabs, bottomTabs, leftStrip, rightStrip, bottomStrip]);
+  // The tab a dock falls back to when its active tab closes or moves: a visible
+  // one, marked quiet so the Cockpit does not read it as your activation.
+  const quietFallback = useCallback(
+    (visible: TabData[], leavingId: number, pick: 'first' | 'last'): number | null => {
+      const t = fallbackTab(visible, leavingId, pick);
+      if (t) cockpitModeStore.quiet(t.id);
+      return t ? t.id : null;
+    },
+    [],
+  );
 
   // Get localStorage key for workspace session
   const getSessionStorageKey = useCallback((ws: string) => `lee:session:${ws}`, []);
@@ -428,28 +476,16 @@ const App: React.FC = () => {
     // Clear active state from old position
     switch (oldPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) {
-          const remaining = leftTabs.filter((t) => t.id !== tabId);
-          setActiveLeftTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeLeftTabId === tabId) setActiveLeftTabId(quietFallback(leftStrip, tabId, 'first'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) {
-          const remaining = rightTabs.filter((t) => t.id !== tabId);
-          setActiveRightTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeRightTabId === tabId) setActiveRightTabId(quietFallback(rightStrip, tabId, 'first'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) {
-          const remaining = bottomTabs.filter((t) => t.id !== tabId);
-          setActiveBottomTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeBottomTabId === tabId) setActiveBottomTabId(quietFallback(bottomStrip, tabId, 'first'));
         break;
       default:
-        if (activeTabId === tabId) {
-          const remaining = centerTabs.filter((t) => t.id !== tabId);
-          setActiveTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeTabId === tabId) setActiveTabId(quietFallback(stripTabs, tabId, 'first'));
     }
 
     // Set active state for new position
@@ -470,7 +506,7 @@ const App: React.FC = () => {
     // Save session to localStorage
     const updatedTabs = tabs.map((t) => (t.id === tabId ? { ...t, dockPosition: newPosition } : t));
     saveSession(updatedTabs, workspace);
-  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
+  }, [tabs, stripTabs, leftStrip, rightStrip, bottomStrip, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
 
   // ---------------------------------------------------------------------
   // C4: external-change detection
@@ -674,34 +710,25 @@ const App: React.FC = () => {
     // Clear active tab for the appropriate panel
     switch (tab.dockPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) {
-          const remaining = leftTabs.filter((t) => t.id !== tabId);
-          setActiveLeftTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeLeftTabId === tabId) setActiveLeftTabId(quietFallback(leftStrip, tabId, 'last'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) {
-          const remaining = rightTabs.filter((t) => t.id !== tabId);
-          setActiveRightTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeRightTabId === tabId) setActiveRightTabId(quietFallback(rightStrip, tabId, 'last'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) {
-          const remaining = bottomTabs.filter((t) => t.id !== tabId);
-          setActiveBottomTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeBottomTabId === tabId) setActiveBottomTabId(quietFallback(bottomStrip, tabId, 'last'));
         break;
       default:
-        if (activeTabId === tabId) {
-          const remaining = centerTabs.filter((t) => t.id !== tabId);
-          setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        // Never fall back onto a hidden agent, and never treat the fallback as
+        // your activation: a background close while you are in the Cockpit must
+        // not pull you into a terminal (C3).
+        if (activeTabId === tabId) setActiveTabId(quietFallback(stripTabs, tabId, 'last'));
     }
 
     // Save session to localStorage (without the closed tab)
     const remainingTabs = tabs.filter((t) => t.id !== tabId);
     saveSession(remainingTabs, workspace);
-  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
+  }, [tabs, stripTabs, leftStrip, rightStrip, bottomStrip, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
 
   // Keep closeTabRef in sync for use in event handlers (avoids stale closures)
   useEffect(() => {
@@ -2365,30 +2392,30 @@ const App: React.FC = () => {
     handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
     // Tab switching (Cmd+1-9)
-    handlers['tab_1'] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
-    handlers['tab_2'] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
-    handlers['tab_3'] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
-    handlers['tab_4'] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
-    handlers['tab_5'] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
-    handlers['tab_6'] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
-    handlers['tab_7'] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
-    handlers['tab_8'] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
-    handlers['tab_9'] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
+    handlers['tab_1'] = () => { activateTab(stripTabs[0]); setFocusedPanel('center'); };
+    handlers['tab_2'] = () => { activateTab(stripTabs[1]); setFocusedPanel('center'); };
+    handlers['tab_3'] = () => { activateTab(stripTabs[2]); setFocusedPanel('center'); };
+    handlers['tab_4'] = () => { activateTab(stripTabs[3]); setFocusedPanel('center'); };
+    handlers['tab_5'] = () => { activateTab(stripTabs[4]); setFocusedPanel('center'); };
+    handlers['tab_6'] = () => { activateTab(stripTabs[5]); setFocusedPanel('center'); };
+    handlers['tab_7'] = () => { activateTab(stripTabs[6]); setFocusedPanel('center'); };
+    handlers['tab_8'] = () => { activateTab(stripTabs[7]); setFocusedPanel('center'); };
+    handlers['tab_9'] = () => { activateTab(stripTabs[8]); setFocusedPanel('center'); };
 
     // Tab navigation
+    // ⌘1-9 and next/prev walk the strip you see (hidden agents excluded), so the
+    // ⌘N badges in TabBar match and cycling never counts as going into an agent.
     handlers['next_tab'] = () => {
-      if (centerTabs.length > 1 && activeTabId) {
-        const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
-        const nextIndex = (currentIndex + 1) % centerTabs.length;
-        setActiveTabId(centerTabs[nextIndex].id);
+      const next = stripNeighbor(stripTabs, activeTabId, 1);
+      if (next) {
+        setActiveTabId(next.id);
         setFocusedPanel('center');
       }
     };
     handlers['prev_tab'] = () => {
-      if (centerTabs.length > 1 && activeTabId) {
-        const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
-        const prevIndex = currentIndex === 0 ? centerTabs.length - 1 : currentIndex - 1;
-        setActiveTabId(centerTabs[prevIndex].id);
+      const prev = stripNeighbor(stripTabs, activeTabId, -1);
+      if (prev) {
+        setActiveTabId(prev.id);
         setFocusedPanel('center');
       }
     };
@@ -2472,7 +2499,7 @@ const App: React.FC = () => {
     }
 
     return map;
-  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
+  }, [config, getKeybinding, statusMessages, workspace, centerTabs, stripTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
   // Setup hotkeys
   useHotkeys(hotkeyMap);
@@ -2564,6 +2591,7 @@ const App: React.FC = () => {
           leftTabs={leftTabs as DockableTab[]}
           rightTabs={rightTabs as DockableTab[]}
           bottomTabs={bottomTabs as DockableTab[]}
+          hiddenTabIds={hiddenSideTabIds}
           activeLeftTabId={activeLeftTabId}
           activeRightTabId={activeRightTabId}
           activeBottomTabId={activeBottomTabId}
@@ -2582,7 +2610,7 @@ const App: React.FC = () => {
               onSendToAgent for file/editor-panel, onCheckpointReadyChange for
               browser, and the missing-machineConfig guard for spyglass). */}
           {centerTabs.map((tab) => renderTab(tab as DockableTab, tab.id === activeTabId))}
-          {centerTabs.length === 0 && (
+          {(centerTabs.length === 0 || (stripTabs.length === 0 && !centerTabs.some((t) => t.id === activeTabId))) && (
             <div className="empty-state">
               {/* Content at top */}
               <div className="welcome-content">
