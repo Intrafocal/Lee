@@ -172,6 +172,18 @@ export const FeedSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   useEffect(() => {
     ctx.registerRows(handles);
   });
+  // Lint entries shown here count as shown on the 'feed' surface (D's nudge_acceptance denominator).
+  const lintIds = rows
+    .flatMap((r) => (r.source === 'lee' && r.entry.producer === 'lint' && r.entry.ref.diag_id ? [r.entry.ref.diag_id] : []))
+    .join('\n');
+  useEffect(() => {
+    if (!lintIds) return;
+    try {
+      ctx.api?.lint.shown(lintIds.split('\n'), 'feed');
+    } catch {
+      // older preload without lint
+    }
+  }, [lintIds, ctx.api]);
   const sel = ctx.mode.selected;
   const needs = rows.filter((r) => r.severity !== 'ambient').length;
 
