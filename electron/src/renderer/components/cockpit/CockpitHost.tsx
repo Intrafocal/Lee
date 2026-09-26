@@ -44,6 +44,7 @@ import { KeyHelp } from './KeyHelp';
 import { ReplyPopover, CheckinPopover } from './AgentTile';
 import { CopilotSection } from './sections/CopilotSection';
 import { FeedSection } from './sections/FeedSection';
+import { FilesSection } from './sections/FilesSection';
 import { TasksSection } from './sections/TasksSection';
 import { OperationsSection } from './sections/OperationsSection';
 import { SomedaySection } from './sections/SomedaySection';
@@ -88,6 +89,8 @@ export interface CockpitCtx {
   now: number;
   goInto: (ptyId: number, from: GoIntoFrom) => void;
   openOwnTab: (tabId: number) => void;
+  /** Open a file the way the Workbench does, then switch to the Workbench. */
+  openFile: (path: string) => void;
   focusPty: (ptyId: number) => void;
   notify: (message: string, level?: 'info' | 'error') => void;
   openLauncher: (prefill?: LauncherPrefill) => void;
@@ -107,6 +110,8 @@ interface CockpitHostProps {
   copilot: UseCopilotResult;
   onCreateTab: CreateTabFn;
   onOpenTab: (tabId: number) => void;
+  /** The Workbench's open-file path (App.handleFileOpen). */
+  onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
   onAskHester: (prompt: string) => void;
 }
 
@@ -148,6 +153,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   copilot,
   onCreateTab,
   onOpenTab,
+  onOpenFile,
   onAskHester,
 }) => {
   const state = useCockpitModeState();
@@ -192,6 +198,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   createRef.current = onCreateTab;
   const openRef = useRef(onOpenTab);
   openRef.current = onOpenTab;
+  const openFileRef = useRef(onOpenFile);
+  openFileRef.current = onOpenFile;
 
   const hesterTasks = useMemo(
     () => [...(hester.snapshot?.tasks.open ?? []), ...(hester.snapshot?.tasks.recent_closed ?? [])],
@@ -290,6 +298,22 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
     openRef.current(tabId);
   }, []);
+
+  const openFile = useCallback(
+    (path: string) => {
+      const open = openFileRef.current;
+      if (!open) {
+        notify('Opening files is not available here', 'error');
+        return;
+      }
+      // Open first, then leave: the tab is active before the mode switch
+      // checks what the Workbench lands on.
+      Promise.resolve(open(path))
+        .then(() => cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' })))
+        .catch(() => notify('Could not open that file', 'error'));
+    },
+    [notify],
+  );
 
   const focusPty = useCallback(
     (ptyId: number) => {
@@ -587,6 +611,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     now,
     goInto,
     openOwnTab,
+    openFile,
     focusPty,
     notify,
     openLauncher,
@@ -608,6 +633,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       proposals: ops?.proposals.length ?? 0,
       suggestions: ops?.suggestions.length ?? 0,
     }),
+    files: { count: 0, ember: false },
     someday: { count: hester.snapshot?.someday.open ?? 0, ember: (hester.snapshot?.someday.untriaged_over_7d ?? 0) > 0 },
     tabs: { count: tabs.length, ember: false },
     history: { count: 0, ember: false },
@@ -651,6 +677,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
             {section === 'feed' && <FeedSection ctx={ctx} />}
             {section === 'tasks' && <TasksSection ctx={ctx} />}
             {section === 'ops' && <OperationsSection ctx={ctx} />}
+            {section === 'files' && <FilesSection ctx={ctx} />}
             {section === 'someday' && <SomedaySection ctx={ctx} />}
             {section === 'tabs' && <TabsSection ctx={ctx} />}
             {section === 'history' && <HistorySection ctx={ctx} />}

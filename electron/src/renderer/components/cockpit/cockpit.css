@@ -409,6 +409,50 @@
   flex-shrink: 0;
 }
 
+/* Files section */
+
+.cockpit-files {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.cockpit-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cockpit-file-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cockpit-file-row.is-selected {
+  background: var(--bg-tertiary);
+  color: var(--accent-light);
+}
+
+.cockpit-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cockpit-file-open {
+  margin-left: auto;
+  opacity: 0;
+}
+
+.cockpit-file-row:hover .cockpit-file-open,
+.cockpit-file-row.is-selected .cockpit-file-open {
+  opacity: 1;
+}
+
 /* Copilot section (Hester's home; replaced the right rail) */
 
 .cockpit-brief-card {

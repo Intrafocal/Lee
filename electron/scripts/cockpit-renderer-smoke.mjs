@@ -61,6 +61,7 @@ const {
   SECTIONS,
   SECTION_LABELS,
   DEFAULT_SECTION,
+  flattenFileTree,
 } = mod;
 
 let passed = 0;
@@ -519,6 +520,26 @@ test('nav: Copilot first, every section labelled, at most 9 (number keys), landi
   assert.equal(new Set(SECTIONS).size, SECTIONS.length);
   for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
   assert.equal(DEFAULT_SECTION, 'feed');
+});
+
+test('nav: Files sits between Ops and Someday', () => {
+  assert.equal(SECTIONS.indexOf('files'), SECTIONS.indexOf('ops') + 1);
+  assert.equal(SECTIONS.indexOf('someday'), SECTIONS.indexOf('files') + 1);
+});
+
+test('flattenFileTree: expanded dirs inline their children; a filter keeps matches and their folders', () => {
+  const d = (path) => ({ name: path.split('/').pop(), path, type: 'directory' });
+  const f = (path) => ({ name: path.split('/').pop(), path, type: 'file' });
+  const root = [d('/w/src'), d('/w/docs'), f('/w/README.md')];
+  const kids = new Map([
+    ['/w/src', [d('/w/src/lib'), f('/w/src/main.ts')]],
+    ['/w/src/lib', [f('/w/src/lib/util.ts')]],
+  ]);
+  const names = (rows) => rows.map((r) => `${'  '.repeat(r.depth)}${r.entry.name}`);
+  assert.deepEqual(names(flattenFileTree(root, kids, new Set())), ['src', 'docs', 'README.md']);
+  assert.deepEqual(names(flattenFileTree(root, kids, new Set(['/w/src']))), ['src', '  lib', '  main.ts', 'docs', 'README.md']);
+  assert.deepEqual(names(flattenFileTree(root, kids, new Set(), 'util')), ['src', '  lib', '    util.ts'], 'filter opens folders holding a loaded match');
+  assert.deepEqual(flattenFileTree(root, kids, new Set(), 'zzz'), []);
 });
 
 test('keyAction: map of §3.7', () => {

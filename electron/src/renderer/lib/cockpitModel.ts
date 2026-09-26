@@ -18,10 +18,10 @@ import type {
   TabRuntimeInfo,
 } from '../../shared/cockpit';
 
-export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'someday' | 'tabs' | 'history';
+export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'files' | 'someday' | 'tabs' | 'history';
 
 /** Nav order; number keys 1..n follow it. Copilot (Hester) is always first. */
-export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'someday', 'tabs', 'history'];
+export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'tabs', 'history'];
 
 /** Where the Cockpit lands when nothing is remembered for the workspace. */
 export const DEFAULT_SECTION: SectionId = 'feed';
@@ -31,6 +31,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   feed: 'Feed',
   tasks: 'Tasks',
   ops: 'Ops',
+  files: 'Files',
   someday: 'Someday',
   tabs: 'Tabs',
   history: 'History',
@@ -772,4 +773,52 @@ export function taskTitle(task: Pick<CockpitTask, 'title' | 'title_source'> | nu
   if (!task || !task.title || task.title === '(untitled)') return '';
   if (task.title_source === 'user') return task.title;
   return plainTitle(task.title);
+}
+
+// ---------------------------------------------------------------------------
+// Files section: the workspace tree as flat, keyboard-navigable rows
+// ---------------------------------------------------------------------------
+
+export interface FileEntryLite {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+}
+
+export interface FileRow {
+  entry: FileEntryLite;
+  depth: number;
+  expanded: boolean;
+}
+
+function fileMatches(entry: FileEntryLite, filter: string, children: ReadonlyMap<string, readonly FileEntryLite[]>): boolean {
+  if (entry.name.toLowerCase().includes(filter)) return true;
+  if (entry.type !== 'directory') return false;
+  return (children.get(entry.path) ?? []).some((c) => fileMatches(c, filter, children));
+}
+
+/**
+ * Flatten the loaded tree into rows, depth first, directories as listed
+ * (readdir already puts them first). A filter keeps entries whose name
+ * matches or that hold a loaded match, and shows a matching directory's
+ * loaded children as if expanded (same rule as FileTreePane).
+ */
+export function flattenFileTree(
+  root: readonly FileEntryLite[],
+  children: ReadonlyMap<string, readonly FileEntryLite[]>,
+  expanded: ReadonlySet<string>,
+  filter = '',
+): FileRow[] {
+  const f = filter.trim().toLowerCase();
+  const out: FileRow[] = [];
+  const walk = (items: readonly FileEntryLite[], depth: number) => {
+    for (const e of items) {
+      if (f && !fileMatches(e, f, children)) continue;
+      const open = e.type === 'directory' && (expanded.has(e.path) || (!!f && (children.get(e.path) ?? []).some((c) => fileMatches(c, f, children))));
+      out.push({ entry: e, depth, expanded: open });
+      if (open) walk(children.get(e.path) ?? [], depth + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
 }

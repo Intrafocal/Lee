@@ -2733,6 +2733,7 @@ const App: React.FC = () => {
           if (t.dockPosition === 'center') { setActiveTabId(tabId); setFocusedPanel('center'); }
           else handlePanelTabSelect(tabId, t.dockPosition);
         }}
+        onOpenFile={(path: string) => handleFileOpenRef.current(path)}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
       />
       <StatusBar
