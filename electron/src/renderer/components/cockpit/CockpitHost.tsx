@@ -22,6 +22,7 @@ import type { CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from 
 import {
   copilotBadge,
   feedNeedsCount,
+  somedayBadge,
   keyAction,
   mergeFeed,
   runtimeAgentPtys,
@@ -674,7 +675,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     }),
     files: { count: 0, ember: false },
     explore: { count: 0, ember: false },
-    someday: { count: hester.snapshot?.someday.open ?? 0, ember: (hester.snapshot?.someday.untriaged_over_7d ?? 0) > 0 },
+    someday: somedayBadge({ open: hester.snapshot?.someday.open ?? 0, untriagedOver7d: hester.snapshot?.someday.untriaged_over_7d ?? 0 }),
     tabs: { count: tabs.length, ember: false },
     history: { count: 0, ember: false },
   };

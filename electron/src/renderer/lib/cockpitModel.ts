@@ -652,6 +652,15 @@ export function opsBadge(input: { failing: number; proposals: number; suggestion
   return needs > 0 ? { count: needs, ember: true } : { count: input.suggestions, ember: false };
 }
 
+/**
+ * Nav badge for Someday: a neutral count of open ideas. Old untriaged ideas
+ * are not "needs you" (the Someday section itself notes the older-than-a-week
+ * count), so this is never ember.
+ */
+export function somedayBadge(input: { open: number; untriagedOver7d: number }): SectionBadge {
+  return { count: input.open, ember: false };
+}
+
 // ---------------------------------------------------------------------------
 // Plain text from agent words (titles and previews)
 // ---------------------------------------------------------------------------

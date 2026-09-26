@@ -58,6 +58,7 @@ const {
   tasksBadge,
   opsBadge,
   copilotBadge,
+  somedayBadge,
   SECTIONS,
   SECTION_LABELS,
   DEFAULT_SECTION,
@@ -303,6 +304,8 @@ test('badges: suggestions and unconfirmed tasks are ambient; failures, proposals
   assert.deepEqual(copilotBadge({ returnNonce: 0, seenNonce: 0 }), { count: 0, ember: false, dot: false });
   assert.deepEqual(copilotBadge({ returnNonce: 2, seenNonce: 1 }), { count: 0, ember: false, dot: true }, 'fresh brief: neutral dot, never ember');
   assert.deepEqual(copilotBadge({ returnNonce: 2, seenNonce: 2 }), { count: 0, ember: false, dot: false });
+  assert.deepEqual(somedayBadge({ open: 5, untriagedOver7d: 3 }), { count: 5, ember: false }, 'old ideas are not needs-you');
+  assert.deepEqual(somedayBadge({ open: 0, untriagedOver7d: 0 }), { count: 0, ember: false });
   assert.deepEqual(opsBadge({ failing: 1, proposals: 1, suggestions: 30 }), { count: 2, ember: true });
   assert.deepEqual(opsBadge({ failing: 0, proposals: 0, suggestions: 0 }), { count: 0, ember: false });
   const t = (status, confirmed) => ({ status, confirmed });
