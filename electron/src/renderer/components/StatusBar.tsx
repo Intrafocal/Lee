@@ -18,6 +18,7 @@ import { HandoffDialog } from './copilot/HandoffDialog';
 import type { UseCopilotResult } from '../hooks/useCopilot';
 import { offscreenNeeds } from '../lib/copilotAttention';
 import './copilot/copilot.css';
+import { CockpitModeChip } from './cockpit/CockpitModeChip';
 
 
 export interface StatusMessage {
@@ -261,6 +262,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
+        <CockpitModeChip />
         <div className="status-workspace-container" ref={workspaceMenuRef}>
           <button
             className="status-item status-workspace"

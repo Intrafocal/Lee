@@ -635,7 +635,7 @@ function setupApplicationMenu(): void {
         },
         { role: 'toggleDevTools' as const },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const },
+        { role: 'resetZoom' as const, accelerator: 'CmdOrCtrl+Shift+0' },
         { role: 'zoomIn' as const },
         { role: 'zoomOut' as const },
         { type: 'separator' as const },
