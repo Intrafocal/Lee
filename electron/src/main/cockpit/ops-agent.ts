@@ -12,6 +12,7 @@ import type { LaunchRequest, LaunchResult, OpAgentRequest, OperationAgentConfig,
 import { copilotBus } from '../copilot/bus';
 import { cockpitBus, logCockpitEvent } from './cockpit-bus';
 import { getCockpitConfig } from './cockpit-config';
+import { bashPrefixRule } from './bash-rule';
 import { OP_NAME_RE, validateOperation } from './ops-config';
 import type { OpsRuntime } from './ops-runtime';
 import { actorFor } from './ops-runtime';
@@ -22,13 +23,13 @@ const EXCERPT_LINES = 80;
 const TITLE_REQUEST_CHARS = 40;
 const SUMMARY_MAX = 2000;
 
-/** `Bash(<first word> <second word unless it starts with ->:*)` for an operation's command. */
-export function bashRuleFor(command: string): string {
-  const segs = command.split(/\s*&&\s*/);
-  const words = segs[segs.length - 1].trim().split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
-  const first = words[0] ?? '';
-  const second = words[1] && !words[1].startsWith('-') && !/[{}'"$]/.test(words[1]) ? ` ${words[1]}` : '';
-  return `Bash(${first}${second}:*)`;
+/**
+ * The auto-allowed Bash rule for an operation's command, or null when there is
+ * no safe prefix (the agent's Bash calls then prompt through the v0 queue).
+ * Never an interpreter-wide rule such as `Bash(python:*)` (see bash-rule.ts).
+ */
+export function bashRuleFor(command: string): string | null {
+  return bashPrefixRule(command);
 }
 
 export function fixPrompt(o: { name: string; command: string; cwd: string; exitCode: number | null; excerpt: string }): string {
@@ -72,6 +73,7 @@ export function buildOpAgentLaunch(o: {
   const { req, agent } = o;
   if (req.purpose === 'fix') {
     const def = o.def!;
+    const rule = bashRuleFor(def.command);
     return {
       workspace: req.workspace,
       title: `Fix: ${def.name}`,
@@ -81,7 +83,7 @@ export function buildOpAgentLaunch(o: {
       model: agent.model,
       permission_mode: 'manual',
       tools: [...OP_AGENT_TOOLS],
-      allowed_tools: ['Read', 'Grep', 'Glob', bashRuleFor(def.command), ...(def.allowed_tools ?? [])],
+      allowed_tools: ['Read', 'Grep', 'Glob', ...(rule ? [rule] : []), ...(def.allowed_tools ?? [])],
       worktree: false,
       origin: { kind: 'operation', ref: def.name },
     };
@@ -90,6 +92,8 @@ export function buildOpAgentLaunch(o: {
   return {
     workspace: req.workspace,
     title: `Op: ${request.slice(0, TITLE_REQUEST_CHARS)}`,
+    // The request is prompt text: keep it out of the tab label (lee.log, saved sessions).
+    label: 'Op agent',
     prompt: adhocPrompt(req.workspace, request),
     kind: 'chore',
     lead: 'delegate',

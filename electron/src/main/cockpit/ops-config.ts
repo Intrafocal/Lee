@@ -234,17 +234,69 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Replace `{param}` with single-quoted values. */
+/** Characters a param value may not carry inside "..." or from callers other than the local user. */
+const PARAM_META_RE = /[$`\\"'\r\n\x00-\x1f\x7f;&|<>()!]/;
+/** Inside '...' the substituted value ends up bare: only plain words pass. */
+const PARAM_BARE_RE = /^[A-Za-z0-9_@%+=:,./-]*$/;
+
+/**
+ * `{param}` placeholders written inside a quoted region of the command
+ * (`"{msg}"`, `'{x}'`), with the quote kind (a `'` occurrence wins). Single-
+ * quoting the value there does not quote it: inside "..." the quotes are
+ * literal, and inside '...' they close and reopen, leaving the value bare.
+ */
+export function quotedPlaceholders(command: string): Map<string, '"' | "'"> {
+  const out = new Map<string, '"' | "'">();
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote !== "'" && ch === '\\') {
+      i++;
+      continue;
+    }
+    if (quote === null && (ch === '"' || ch === "'")) {
+      quote = ch;
+      continue;
+    }
+    if (quote !== null && ch === quote) {
+      quote = null;
+      continue;
+    }
+    if (quote !== null && ch === '{') {
+      const m = /^\{([A-Za-z_][A-Za-z0-9_]*)\}/.exec(command.slice(i));
+      if (m && out.get(m[1]) !== "'") out.set(m[1], quote);
+    }
+  }
+  return out;
+}
+
+/**
+ * Replace `{param}` with single-quoted values.
+ *
+ * `invalid` lists params whose value is refused because it could run as
+ * shell code: inside '...' anything but a plain word, inside "..." any shell
+ * metacharacter, and with `strict` (callers other than the local user:
+ * Hester, devices) any shell metacharacter wherever the placeholder is.
+ */
 export function substituteParams(
   command: string,
   params: string[] | undefined,
   values: Record<string, string> | undefined,
-): { line: string; missing: string[] } {
+  opts: { strict?: boolean } = {},
+): { line: string; missing: string[]; invalid: string[] } {
   const wanted = new Set([...(params ?? []), ...commandParams(command)]);
   const missing = [...wanted].filter((p) => values?.[p] == null || String(values[p]) === '');
-  if (missing.length) return { line: command, missing };
+  if (missing.length) return { line: command, missing, invalid: [] };
+  const quoted = quotedPlaceholders(command);
+  const invalid = [...wanted].filter((p) => {
+    const v = String(values![p]);
+    const q = quoted.get(p);
+    if (q === "'") return !PARAM_BARE_RE.test(v);
+    return (opts.strict || q === '"') && PARAM_META_RE.test(v);
+  });
+  if (invalid.length) return { line: command, missing: [], invalid };
   const line = command.replace(PLACEHOLDER_RE, (whole, p: string) => (wanted.has(p) ? shellQuote(String(values![p])) : whole));
-  return { line, missing: [] };
+  return { line, missing: [], invalid: [] };
 }
 
 /** Trimmed, whitespace runs collapsed (same normalisation as the command signature). */

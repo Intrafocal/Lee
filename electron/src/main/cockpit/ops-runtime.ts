@@ -97,12 +97,17 @@ interface ActiveRun {
   startCursor: number;
   handTyped: boolean;
   timer: NodeJS.Timeout | null;
+  /** A hand-typed run's inputs signature while git still computes it (operation.result waits for it). */
+  sigPending: Promise<unknown> | null;
 }
 
 interface StoredProposal extends OperationProposal {
   params: Record<string, string>;
   /** The adhoc/defined command as resolved when proposed. */
   line: string;
+  /** Who proposed it (for a fresh proposal when the definition changed). */
+  proposer: Principal;
+  proposedBy: 'hester' | 'lint';
 }
 
 interface WsState {
@@ -585,7 +590,7 @@ export class OpsRuntime {
     const s = this.state(workspace);
     const now = this.now();
     for (const [id, p] of s.proposals) if (Date.parse(p.expires_at) <= now) s.proposals.delete(id);
-    return [...s.proposals.values()].map(({ params: _params, line: _line, ...p }) => p);
+    return [...s.proposals.values()].map(({ params: _params, line: _line, proposer: _proposer, proposedBy: _proposedBy, ...p }) => p);
   }
 
   snapshot(workspace: string): OperationsSnapshot {
@@ -672,15 +677,17 @@ export class OpsRuntime {
   // Running
   // -------------------------------------------------------------------------
 
-  private resolve(req: OpRunRequest): Resolved {
+  /** `strict`: param values from a caller other than the local user carry no shell metacharacters. */
+  private resolve(req: OpRunRequest, opts: { strict?: boolean } = {}): Resolved {
     if (!this.isOpenWorkspace(req.workspace)) return { ok: false, status: 400, result: { success: false, error: 'unknown_workspace' } };
     const s = this.state(req.workspace);
     if (req.name) {
       const m = this.find(s, req.name);
       if (!m) return { ok: false, status: 404, result: { success: false, error: 'not_found' } };
       if (!m.runnable) return { ok: false, status: 400, result: { success: false, error: 'not_runnable' } };
-      const sub = substituteParams(m.def.command, m.def.params, req.params);
+      const sub = substituteParams(m.def.command, m.def.params, req.params, { strict: opts.strict });
       if (sub.missing.length) return { ok: false, status: 400, result: { success: false, error: 'missing_params', missing_params: sub.missing } };
+      if (sub.invalid.length) return { ok: false, status: 400, result: { success: false, error: 'invalid_params' } };
       return { ok: true, def: m.def, command: sub.line, cwd: this.absCwd(req.workspace, m.def.cwd), adhoc: false, merged: m };
     }
     const command = typeof req.command === 'string' ? req.command.trim() : '';
@@ -699,8 +706,11 @@ export class OpsRuntime {
    */
   async run(req: OpRunRequest, principal: Principal | undefined): Promise<{ status: number; result: OpRunResult }> {
     if (!principal || (principal.kind === 'shared' && !principal.loopback)) return { status: 403, result: { success: false, error: 'forbidden' } };
-    const r = this.resolve(req);
+    const r = this.resolve(req, { strict: principal.kind === 'device' });
     if (!r.ok) return { status: r.status, result: r.result };
+    // Hester's params are model output: a run with substituted values goes
+    // through a proposal that shows the exact line (C3).
+    if (!r.adhoc && principal.kind === 'shared' && r.command !== r.def.command) return this.proposeResolved(req, r, principal, null);
     if (r.adhoc) {
       if (principal.kind !== 'local-user') return this.proposeResolved(req, r, principal, null);
       if (req.confirmed !== true) return { status: 409, result: { success: false, error: 'needs_confirm', needs_confirm: true } };
@@ -749,6 +759,8 @@ export class OpsRuntime {
       expires_at: new Date(now + PROPOSAL_TTL_MS).toISOString(),
       params: { ...(req.params ?? {}) },
       line,
+      proposer: principal,
+      proposedBy: by,
     };
     s.proposals.set(id, proposal);
     cockpitBus.feed.post({
@@ -792,6 +804,31 @@ export class OpsRuntime {
       cockpitBus.feed.closeByKey(`ops:proposal:${id}`, 'expired');
       return { success: false, error: 'expired' };
     }
+    let fresh: Extract<Resolved, { ok: true }> | null = null;
+    let freshReq: OpRunRequest | null = null;
+    if (approved) {
+      // Run exactly what the human confirmed: re-resolve and compare with the
+      // line shown. If the definition changed since (a hand edit, a git pull,
+      // an agent), the old proposal can't be approved; a fresh one is posted.
+      freshReq = p.op
+        ? { workspace: s.workspace, name: p.op, params: p.params, confirmed: true }
+        : { workspace: s.workspace, command: p.command, cwd: p.cwd, confirmed: true };
+      const r = this.resolve(freshReq);
+      if (!r.ok) {
+        s.proposals.delete(id);
+        cockpitBus.feed.closeByKey(`ops:proposal:${id}`, 'expired');
+        this.changed(s.workspace);
+        return r.result;
+      }
+      const line = buildRunLine({ command: r.command, cwd: r.cwd, tabCwd: null, env: r.def.env, shellIntegration: true });
+      if (line !== p.line) {
+        s.proposals.delete(id);
+        cockpitBus.feed.closeByKey(`ops:proposal:${id}`, 'expired');
+        const again = this.proposeResolved(freshReq, r, p.proposer, p.reason ?? null, p.proposedBy);
+        return { success: false, error: 'changed', ...(again.result.proposal_id ? { proposal_id: again.result.proposal_id } : {}) };
+      }
+      fresh = r;
+    }
     s.proposals.delete(id);
     logCockpitEvent('operation.proposal_resolved', {
       workspace: s.workspace,
@@ -804,12 +841,7 @@ export class OpsRuntime {
       this.changed(s.workspace);
       return { success: true };
     }
-    const req: OpRunRequest = p.op
-      ? { workspace: s.workspace, name: p.op, params: p.params, confirmed: true }
-      : { workspace: s.workspace, command: p.command, cwd: p.cwd, confirmed: true };
-    const r = this.resolve(req);
-    if (!r.ok) return r.result;
-    return this.execute(req, r, principal.kind === 'device' ? principal : { kind: 'local-user' });
+    return this.execute(freshReq!, fresh!, principal.kind === 'device' ? principal : { kind: 'local-user' });
   }
 
   private async pickTab(
@@ -833,7 +865,8 @@ export class OpsRuntime {
         if (info && info.kind === 'shell' && rt.state(linked).state === 'idle-at-prompt') return { pty: linked, reused: true };
       }
     }
-    const label = `▶ ${r.adhoc ? r.command.slice(0, 40) : r.def.name}`;
+    // Never the command text: labels reach lee.log (PTY name) and saved sessions.
+    const label = `▶ ${r.def.name}`;
     const opened = await rt.openTab({ workspace: req.workspace, type: 'terminal', label, activate: false });
     if (opened.pty_id == null) return { error: opened.error ?? 'open_tab_failed' };
     const deadline = this.now() + OPEN_TAB_WAIT_MS;
@@ -878,17 +911,31 @@ export class OpsRuntime {
       readings: [],
       inputs_sig: null,
     };
-    const act: ActiveRun = { run, def: r.def, workspace: req.workspace, pty: tab.pty, startCursor: rt.cursor(tab.pty), handTyped: false, timer: null };
+    // The inputs signature is computed before typing: once the line is sent
+    // the run can end at any moment (exit 127 in a few ms), and everything
+    // below must be in place before its end signal can arrive.
+    run.inputs_sig = await (this.deps.inputsSig ?? gitInputsSig)(r.cwd).catch(() => null);
+    if (!r.adhoc && this.activeFor(req.workspace, r.def.name)) return { success: false, error: 'already_running' };
+    if (this.active.has(tab.pty)) return { success: false, error: 'busy' };
+    const act: ActiveRun = {
+      run,
+      def: r.def,
+      workspace: req.workspace,
+      pty: tab.pty,
+      startCursor: rt.cursor(tab.pty),
+      handTyped: false,
+      timer: null,
+      sigPending: null,
+    };
     this.active.set(tab.pty, act);
-    const sigP = (this.deps.inputsSig ?? gitInputsSig)(r.cwd).catch(() => null);
     // Hester's runs are typed by Lee: C3 forbids the shared token from typing, so Lee sends as itself.
     const sender: Principal = principal.kind === 'device' ? principal : { kind: 'local-user' };
-    const sent = await rt.send(tab.pty, { text: line, submit: true, purpose: 'operation' }, sender);
+    // rt.send writes synchronously for a shell tab, so nothing below races the run's end signal.
+    const sent = await rt.send(tab.pty, { text: line, submit: true, purpose: 'operation' }, sender, { askedBy: principal });
     if (!sent.success) {
       this.active.delete(tab.pty);
       return { success: false, error: sent.error ?? 'send_failed' };
     }
-    run.inputs_sig = await sigP;
     const s = this.state(req.workspace);
     if (!r.adhoc) {
       for (const [op, pty] of s.links) if (pty === tab.pty) s.links.delete(op);
@@ -896,7 +943,7 @@ export class OpsRuntime {
       s.lrEnd.delete(r.def.name);
       s.health.delete(r.def.name);
     }
-    if (r.def.timeout_min) {
+    if (r.def.timeout_min && this.active.get(tab.pty) === act) {
       act.timer = setTimeout(() => this.finish(act, null, true), r.def.timeout_min * 60_000);
       act.timer.unref?.();
     }
@@ -994,12 +1041,24 @@ export class OpsRuntime {
       readings: [],
       inputs_sig: null,
     };
-    const act: ActiveRun = { run, def, workspace: s.workspace, pty: sig.pty_id, startCursor: rt ? rt.cursor(sig.pty_id) : 0, handTyped: true, timer: null };
+    const act: ActiveRun = {
+      run,
+      def,
+      workspace: s.workspace,
+      pty: sig.pty_id,
+      startCursor: rt ? rt.cursor(sig.pty_id) : 0,
+      handTyped: true,
+      timer: null,
+      sigPending: null,
+    };
     this.active.set(sig.pty_id, act);
     const cwd = this.absCwd(s.workspace, def.cwd);
-    void (this.deps.inputsSig ?? gitInputsSig)(cwd)
+    // The command is already running: operation.run is logged once git
+    // answers, and finish() holds operation.result until then (order + inputs_sig).
+    act.sigPending = (this.deps.inputsSig ?? gitInputsSig)(cwd)
       .catch(() => null)
       .then((sigHex) => {
+        act.sigPending = null;
         run.inputs_sig = sigHex;
         logCockpitEvent('operation.run', {
           workspace: s.workspace,
@@ -1036,15 +1095,21 @@ export class OpsRuntime {
     run.status = timedOut ? 'unknown' : runStatusFor(exitCode);
     run.duration_ms = durationMs ?? Math.max(0, now - Date.parse(run.started_at));
     let output = '';
+    let truncated = false;
     try {
-      output = cockpitBus.tabRuntime?.read(act.pty, { since: act.startCursor, max_chars: LOG_MAX }).text ?? '';
+      const got = cockpitBus.tabRuntime?.read(act.pty, { since: act.startCursor, max_chars: LOG_MAX });
+      output = got?.text ?? '';
+      truncated = !!got?.truncated;
     } catch {
       output = '';
     }
     const previous = new Map<string, number>();
     for (const r of s.runs[run.op] ?? []) for (const rd of r.readings) previous.set(rd.metric, rd.value);
+    // A truncated read starts after the echo already.
+    if (!act.handTyped && !truncated) output = dropEchoedLine(output);
     run.readings = parseReadings(output, act.def.produces);
-    this.saveLog(act.workspace, run.op, output);
+    // An ad-hoc command's output isn't kept on disk: it has no operation to show it under.
+    if (!run.op.startsWith('adhoc:')) this.saveLog(act.workspace, run.op, output);
     s.runs[run.op] = [...(s.runs[run.op] ?? []), run].slice(-RUNS_KEPT);
     if (act.def.kind === 'long-running') {
       if (exitCode == null || exitCode === 0 || exitCode === 130 || exitCode === 143) s.lrEnd.set(run.op, 'stopped');
@@ -1052,19 +1117,22 @@ export class OpsRuntime {
       s.health.delete(run.op);
     }
     this.persist(act.workspace);
-    logCockpitEvent('operation.result', {
-      workspace: act.workspace,
-      data: {
-        run_id: run.run_id,
-        op: run.op,
-        status: run.status,
-        exit_code: run.exit_code,
-        duration_ms: run.duration_ms,
-        inputs_sig: run.inputs_sig,
-        by: run.by,
-        readings: run.readings,
-      },
-    });
+    const logResult = () =>
+      logCockpitEvent('operation.result', {
+        workspace: act.workspace,
+        data: {
+          run_id: run.run_id,
+          op: run.op,
+          status: run.status,
+          exit_code: run.exit_code,
+          duration_ms: run.duration_ms,
+          inputs_sig: run.inputs_sig,
+          by: run.by,
+          readings: run.readings,
+        },
+      });
+    if (act.sigPending) void act.sigPending.then(logResult, logResult);
+    else logResult();
     this.postResult(act, previous);
     this.changed(act.workspace);
   }
@@ -1139,6 +1207,15 @@ export class OpsRuntime {
   knownWorkspaces(): string[] {
     return [...this.states.keys()];
   }
+}
+
+/**
+ * Drop the shell's echo of the line Lee typed (the first output line of a
+ * Lee-typed run): run logs never hold command text (contract §0).
+ */
+export function dropEchoedLine(output: string): string {
+  const nl = output.indexOf('\n');
+  return nl < 0 ? '' : output.slice(nl + 1);
 }
 
 function stateError(state: string): string {

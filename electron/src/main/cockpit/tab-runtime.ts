@@ -53,7 +53,12 @@ export interface PtyHost {
 }
 
 export const AGENT_TEXT_MAX = 4000;
-const CREATE_TAB_TIMEOUT_MS = 3000;
+/**
+ * Whole create-tab round trip (IPC, PTY spawn, render, reply). Kept well above
+ * the renderer's own 3 s ptyId wait: falling back after the renderer accepted
+ * the request would open a second tab (a second agent with the same prompt).
+ */
+const CREATE_TAB_TIMEOUT_MS = 8000;
 const FALLBACK_TIMEOUT_MS = 10_000;
 const EXITED_KEEP_MS = 60_000;
 const PASTE_ENTER_DELAY_MS = 30;
@@ -77,9 +82,16 @@ interface PtyEntry {
   pendingLine: string | null;
   command: RunningCommand | null;
   leeNext: boolean;
+  /** When Lee typed the pending operation line, and the line itself (memory only). */
+  leeSentAt: number | null;
+  leeText: string | null;
+  /** A prompt (133;A/B) or command-start (133;C) mark was seen: real shell integration. */
+  sawMarks: boolean;
   lastCommand: TabLastCommand | null;
   hook: HookPhase | null;
   hookSeen: boolean;
+  /** Approval/question items the agent is waiting on (from agent.waiting). */
+  waitItems: Set<string>;
   sessionId: string | null;
   provider: string | null;
   taskId: string | null;
@@ -134,6 +146,8 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
   private entries = new Map<number, PtyEntry>();
   private patterns = new Map<string, RegExp | null>();
   private pendingCreates = new Map<string, (res: CreateTabResult) => void>();
+  /** Attention item id -> PTY, for the prompts an agent is waiting on. */
+  private waitItemPty = new Map<string, number>();
   readonly history = new CommandHistory();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly host: PtyHost;
@@ -181,9 +195,13 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         pendingLine: null,
         command: null,
         leeNext: false,
+        leeSentAt: null,
+        leeText: null,
+        sawMarks: false,
         lastCommand: null,
         hook: null,
         hookSeen: false,
+        waitItems: new Set(),
         sessionId: null,
         provider: null,
         taskId: null,
@@ -218,23 +236,37 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         e.pendingLine = ev.text;
         break;
       case 'command-start': {
+        // Lee's hooks always print 633;E before 133;C. A bare 133;C is some
+        // other integration (the user's iTerm2/VS Code script, a remote host
+        // over ssh): it must not start or overwrite a command.
+        if (e.pendingLine == null) break;
         e.integration = true;
+        e.sawMarks = true;
         e.inCommand = true;
-        const text = e.pendingLine ?? '';
+        const text = e.pendingLine;
         e.pendingLine = null;
         e.command = { text, started_at: now, cwd: e.cwd, by: e.leeNext ? 'lee' : 'user' };
-        e.leeNext = false;
+        this.clearLee(e);
         this.signal(e, 'start', null);
         this.refresh(e, now);
         break;
       }
       case 'command-end':
-        e.integration = true;
+        // A lone 133;D is the end marker Lee appends to an operation line in
+        // a shell without integration (ops-runtime buildRunLine). It ends
+        // Lee's run but doesn't turn integration on: the tab state keeps
+        // following the foreground process.
+        if (e.sawMarks) e.integration = true;
+        if (!e.command && e.leeNext) {
+          e.command = { text: e.leeText ?? '', started_at: e.leeSentAt ?? now, cwd: e.cwd, by: 'lee' };
+          this.clearLee(e);
+        }
         this.endCommand(e, ev.exit_code, now);
         break;
       case 'prompt-start':
       case 'prompt-end':
         e.integration = true;
+        e.sawMarks = true;
         if (e.command) this.endCommand(e, null, now);
         e.inCommand = false;
         this.refresh(e, now);
@@ -243,6 +275,12 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         e.cwd = ev.path;
         break;
     }
+  }
+
+  private clearLee(e: PtyEntry): void {
+    e.leeNext = false;
+    e.leeSentAt = null;
+    e.leeText = null;
   }
 
   /** The operation (package B) whose run is active in this PTY, for terminal.command `op`. */
@@ -328,6 +366,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       if (e.command) this.endCommand(e, null, now);
       e.exitedAt = now;
       e.hook = null;
+      this.clearWaits(e);
       this.refresh(e, now);
     }
     forgetSpawn(id);
@@ -339,7 +378,44 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     t.unref?.();
   }
 
+  private clearWaits(e: PtyEntry): void {
+    for (const id of e.waitItems) this.waitItemPty.delete(id);
+    e.waitItems.clear();
+  }
+
+  /**
+   * A prompt the agent waited on was answered (queue reply, in the tab, or
+   * superseded): once none is left the agent is working again, not waiting
+   * on you. A deny (Esc) interrupts the turn, so the agent is back at input.
+   */
+  private onAttentionEvent(ev: LeeEvent): void {
+    const data = (ev.data ?? {}) as Record<string, unknown>;
+    const itemId = typeof data.item_id === 'string' ? data.item_id : null;
+    if (!itemId) return;
+    const ptyId = this.waitItemPty.get(itemId);
+    if (ptyId == null) return;
+    this.waitItemPty.delete(itemId);
+    const e = this.entries.get(ptyId);
+    if (!e) return;
+    e.waitItems.delete(itemId);
+    if (e.hook !== 'waiting') return;
+    if (ev.type === 'attention.reply' && data.action === 'deny') {
+      this.clearWaits(e);
+      e.hook = 'turn_end';
+    } else if (e.waitItems.size === 0) {
+      e.hook = 'tool';
+    } else {
+      return;
+    }
+    this.refresh(e, this.now());
+  }
+
   private onCopilotEvent(ev: LeeEvent): void {
+    const t = ev.type as string;
+    if (t === 'attention.reply' || t === 'attention.resolve' || t === 'attention.dismiss') {
+      this.onAttentionEvent(ev);
+      return;
+    }
     if (!ev.type.startsWith('agent.')) return;
     const data = (ev.data ?? {}) as Record<string, unknown>;
     const ptyId = typeof data.pty_id === 'number' ? data.pty_id : null;
@@ -365,14 +441,20 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         if (data.kind === 'waiting' && (prev === 'turn_end' || prev === 'session_start')) break;
         e.hook = 'waiting';
         e.hookSeen = true;
+        if ((data.kind === 'approval' || data.kind === 'question') && typeof data.item_id === 'string') {
+          e.waitItems.add(data.item_id);
+          this.waitItemPty.set(data.item_id, ptyId);
+        }
         break;
       case 'agent.turn_end':
         e.hook = 'turn_end';
         e.hookSeen = true;
+        this.clearWaits(e);
         break;
       case 'agent.session_end':
       case 'agent.exit':
         e.hook = null;
+        this.clearWaits(e);
         break;
       default:
         return;
@@ -535,6 +617,10 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
 
   state(ptyId: number): TabStateInfo {
     const now = this.now();
+    // Never create an entry (and its ring) for an id no PTY ever had.
+    if (!this.entries.has(ptyId) && !this.host.get(ptyId)) {
+      return { pty_id: ptyId, state: 'exited', source: 'none', since: isoNow(now), quiet_ms: 0, foreground: null };
+    }
     const e = this.entry(ptyId);
     this.refresh(e, now);
     let foreground: string | null = null;
@@ -618,9 +704,12 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     return this.entries.get(ptyId)?.ring.cursor ?? 0;
   }
 
-  /** Mark the PTY's next command as typed by Lee (an operation run). */
-  markLeeCommand(ptyId: number): void {
-    this.entry(ptyId).leeNext = true;
+  /** Mark the PTY's next command as typed by Lee (an operation run). The text stays in memory only. */
+  markLeeCommand(ptyId: number, text: string | null = null): void {
+    const e = this.entry(ptyId);
+    e.leeNext = true;
+    e.leeSentAt = this.now();
+    e.leeText = text;
   }
 
   commandText(workspace: string, sig: string): string | null {
@@ -631,7 +720,12 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
   // Input (C3, contract §5.3)
   // -------------------------------------------------------------------------
 
-  async send(ptyId: number, req: TabSendRequest, by: Principal): Promise<TabSendResult> {
+  /**
+   * `opts.askedBy`: who asked Lee to type, when that differs from the
+   * principal whose rights gate the input (Hester's operation runs are typed
+   * by Lee as the local user, but the Feed must say Hester asked).
+   */
+  async send(ptyId: number, req: TabSendRequest, by: Principal, opts: { askedBy?: Principal } = {}): Promise<TabSendResult> {
     const purpose: TabInputPurpose = req?.purpose ?? 'manual';
     if (!this.host.get(ptyId)) return { success: false, error: 'not_found' };
     if (by.kind === 'shared') {
@@ -675,7 +769,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       }
       payload = raw + (req.submit ? '\r' : '');
       chars = raw.length;
-      if (purpose === 'operation') this.markLeeCommand(ptyId);
+      if (purpose === 'operation') this.markLeeCommand(ptyId, raw);
     }
 
     this.host.write(ptyId, payload);
@@ -700,7 +794,8 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       },
     });
     if (purpose === 'checkin' || purpose === 'operation') {
-      const who = by.kind === 'device' ? `your ${by.device_kind} (${by.name})` : by.kind === 'shared' ? 'Hester' : 'you';
+      const asker = opts.askedBy ?? by;
+      const who = asker.kind === 'device' ? `your ${asker.device_kind} (${asker.name})` : asker.kind === 'shared' ? 'Hester' : 'you';
       cockpitBus.feed.post({
         workspace: ws,
         kind: 'event',
@@ -788,6 +883,11 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     if (res && (res.pty_id != null || res.error)) {
       return { pty_id: res.pty_id ?? null, tab_id: res.tab_id ?? null, ...(res.error ? { error: res.error } : {}) };
     }
+    const sessionId = extra.session_id ?? null;
+    // The renderer may have opened the tab without answering in time: never
+    // open a second one (a second agent with the same prompt and session id).
+    const already = this.findFresh(maxBefore, windowId, opts, sessionId);
+    if (already != null) return { pty_id: already, tab_id: this.locate(already)?.tab.id ?? null };
 
     // Fallback: the v0 create-tab channel, then find the PTY it spawned.
     try {
@@ -801,21 +901,26 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       return { pty_id: null, tab_id: null, error: 'window_unavailable' };
     }
     const deadline = this.now() + (extra.timeouts?.fallback ?? FALLBACK_TIMEOUT_MS);
-    const sessionId = extra.session_id ?? null;
     while (this.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200));
-      let found: number | null = null;
-      if (sessionId) {
-        for (const [id, e] of this.entries) if (e.sessionId === sessionId && id > maxBefore) found = id;
-      }
-      if (found == null) {
-        const fresh = this.host.getAll().filter((p) => p.id > maxBefore && (p.windowId == null || p.windowId === windowId));
-        const byName = fresh.find((p) => p.name === opts.label);
-        const byAgent = opts.type === 'agent' ? fresh.find((p) => this.host.isClaudePty(p.id)) : undefined;
-        found = byName?.id ?? byAgent?.id ?? null;
-      }
+      const found = this.findFresh(maxBefore, windowId, opts, sessionId);
       if (found != null) return { pty_id: found, tab_id: this.locate(found)?.tab.id ?? null };
     }
     return { pty_id: null, tab_id: null, error: 'timeout' };
+  }
+
+  /** A PTY spawned after `maxBefore` that matches this create request, else null. */
+  private findFresh(maxBefore: number, windowId: number, opts: { label: string; type: 'terminal' | 'agent' }, sessionId: string | null): number | null {
+    let found: number | null = null;
+    if (sessionId) {
+      for (const [id, e] of this.entries) if (e.sessionId === sessionId && id > maxBefore) found = id;
+    }
+    if (found == null) {
+      const fresh = this.host.getAll().filter((p) => p.id > maxBefore && (p.windowId == null || p.windowId === windowId));
+      const byName = fresh.find((p) => p.name === opts.label);
+      const byAgent = opts.type === 'agent' ? fresh.find((p) => this.host.isClaudePty(p.id)) : undefined;
+      found = byName?.id ?? byAgent?.id ?? null;
+    }
+    return found;
   }
 }

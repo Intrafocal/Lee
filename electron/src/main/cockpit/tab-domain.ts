@@ -79,7 +79,10 @@ export function createTabDomain(rt: TabRuntimeImpl, checkins: CheckinManager): C
     switch (action) {
       case 'list': {
         const ws = typeof p.workspace === 'string' && p.workspace ? p.workspace : null;
-        return ok(rt.list(ws, { withText: false }));
+        const list = rt.list(ws, { withText: false });
+        // Screen text reaches the shared token only through read_output, which
+        // posts a "Hester read" notice; the list carries no tail for it.
+        return ok(by.kind === 'shared' ? list.map((t) => ({ ...t, tail: [] })) : list);
       }
       case 'state': {
         const r = resolvePty(rt, p);

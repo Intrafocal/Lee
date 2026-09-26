@@ -208,7 +208,11 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
         return;
       }
       const ws = typeof req.query.workspace === 'string' && req.query.workspace ? req.query.workspace : null;
-      res.json({ success: true, data: rt.list(ws, { withText: false }) });
+      const list = rt.list(ws, { withText: false });
+      // Screen text reaches the shared token only through tab.read_output,
+      // which posts a "Hester read" notice; the list carries no tail for it.
+      const shared = principalOf(res)?.kind === 'shared';
+      res.json({ success: true, data: shared ? list.map((t) => ({ ...t, tail: [] })) : list });
     });
     app.get('/cockpit/feed', (req: Request, res: Response) => {
       if (sharedLan(principalOf(res))) {

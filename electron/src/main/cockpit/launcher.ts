@@ -42,6 +42,8 @@ export interface LaunchPlan {
   permission_mode: ClaudePermissionMode;
   worktree: boolean;
   title: string;
+  /** The title was given (not derived from the prompt's first line). */
+  titled: boolean;
 }
 
 /** Defaults from contract §5.6 step 4 (pure). */
@@ -55,8 +57,9 @@ export function launchPlan(req: LaunchRequest, opts: { worktree_for_delegate: bo
       : 'acceptEdits';
   const worktree = typeof req.worktree === 'boolean' ? req.worktree : lead === 'delegate' && opts.worktree_for_delegate;
   const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
-  const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : prompt.split('\n')[0].slice(0, TITLE_MAX).trim()) || 'Task';
-  return { lead, kind, permission_mode, worktree, title };
+  const titled = typeof req.title === 'string' && !!req.title.trim();
+  const title = (titled ? (req.title as string).trim() : prompt.split('\n')[0].slice(0, TITLE_MAX).trim()) || 'Task';
+  return { lead, kind, permission_mode, worktree, title, titled };
 }
 
 /** Claude argv for a launch (pure). The prompt follows `--`, so a leading '-' stays positional. */
@@ -65,7 +68,8 @@ export function buildClaudeArgs(
   ids: { session_id: string; slug?: string | null; worktree_for_delegate?: boolean },
 ): string[] {
   const plan = launchPlan(req, { worktree_for_delegate: ids.worktree_for_delegate ?? true });
-  const slug = plan.worktree ? ids.slug ?? slugify(plan.title, crypto.randomBytes(2).toString('hex')) : null;
+  // The worktree dir and branch are on disk: named after a given title, never the prompt.
+  const slug = plan.worktree ? ids.slug ?? slugify(plan.titled ? plan.title : 'task', crypto.randomBytes(2).toString('hex')) : null;
   const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : []);
   const tools = list(req.tools);
@@ -83,6 +87,10 @@ export function buildClaudeArgs(
     ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
     ...(prompt ? ['--', prompt] : []),
   ];
+}
+
+function providerLabel(provider: string): string {
+  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Agent';
 }
 
 function samePath(a: string, b: string): boolean {
@@ -135,8 +143,11 @@ export class TaskLauncherImpl implements TaskLauncher {
     const record = (status: TaskRecord['status'], agent: TaskRecord['agent']): TaskRecord => ({
       id: taskId,
       workspace,
-      title: plan.title,
-      title_source: 'user',
+      // A title derived from the prompt would put prompt text in the spool and
+      // Hester's task file: such a task starts untitled and Hester names it
+      // from the agent's own summary (title_source 'auto', contract §6.4).
+      title: plan.titled ? plan.title : '(untitled)',
+      title_source: plan.titled ? 'user' : 'auto',
       kind: plan.kind,
       lead: plan.lead,
       play: !!req.play,
@@ -153,7 +164,10 @@ export class TaskLauncherImpl implements TaskLauncher {
     }
 
     const provider = typeof req.provider === 'string' && req.provider ? req.provider : cfg.launch.provider;
-    const label = (typeof req.label === 'string' && req.label.trim()) || plan.title;
+    // The tab label reaches lee.log (PTY name) and the saved session, so it is
+    // never derived from the prompt: an explicit label or title, else generic.
+    const explicitTitle = typeof req.title === 'string' && req.title.trim() ? req.title.trim().slice(0, TITLE_MAX) : null;
+    const label = (typeof req.label === 'string' && req.label.trim()) || explicitTitle || `${providerLabel(provider)} task`;
     const model = typeof req.model === 'string' && req.model ? req.model : null;
     let sessionId: string | null = null;
     let opened: { pty_id: number | null; tab_id: number | null; error?: string };
