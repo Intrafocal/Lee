@@ -226,6 +226,15 @@ export class RepeatedSequenceRule implements LintRule {
       const c = this.latest(ws, sig);
       return { sig, argv0: c?.argv0 ?? '', cwd: c?.cwd ?? null, text: ctx.commandText(ws, sig) };
     });
+    // Command text lives in memory only: after a restart the finding is rebuilt
+    // from signatures, and a suggestion made of bare program names would be wrong.
+    if (cmds.some((c) => !c.text)) {
+      return {
+        success: false,
+        error: 'text_unavailable',
+        message: 'Lee no longer has this command text (it is never stored). Run it once more, or add the operation by hand.',
+      };
+    }
     let taken = new Set<string>();
     try {
       const snap = ctx.ops.snapshot(ws);
@@ -241,7 +250,7 @@ export class RepeatedSequenceRule implements LintRule {
       {
         name: opName(firstNamed.text, firstNamed.argv0 || 'command', taken),
         kind: 'oneshot',
-        command: cmds.map((c) => c.text ?? c.argv0).join(' && '),
+        command: cmds.map((c) => c.text as string).join(' && '),
         cwd,
       },
       `lint:${RULE_ID}`,

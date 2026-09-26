@@ -190,6 +190,9 @@ async function main() {
     assert.deepStrictEqual(d({ hook: 'session_start' }), { state: 'idle-at-prompt', source: 'hooks' });
     assert.deepStrictEqual(d({ kind: 'shell', integration: true, inCommand: true, quietMs: 0 }), { state: 'busy', source: 'shell-integration' });
     assert.deepStrictEqual(d({ kind: 'shell', integration: true }), { state: 'idle-at-prompt', source: 'shell-integration' });
+    // OSC 133 from ssh/a nested shell: at-prompt only while the shell itself is in the foreground.
+    assert.deepStrictEqual(d({ kind: 'shell', integration: true, shellName: 'zsh', foreground: 'ssh' }), { state: 'busy', source: 'foreground' });
+    assert.deepStrictEqual(d({ kind: 'shell', integration: true, shellName: 'zsh', foreground: '-zsh' }), { state: 'idle-at-prompt', source: 'shell-integration' });
     const pat = { promptPattern: /^> $/m, awaitingPattern: /Allow\?/m };
     assert.deepStrictEqual(d({ ...pat, lastLines: ['Allow? (y/n)'] }), { state: 'awaiting-input', source: 'pattern' });
     assert.deepStrictEqual(d({ ...pat, lastLines: ['> '] }), { state: 'idle-at-prompt', source: 'pattern' });
@@ -403,6 +406,10 @@ async function main() {
     assert.strictEqual((await domain('list', {}, LAN)).status, 403);
     const list = await domain('list', { workspace: WS }, HESTER);
     assert.strictEqual(list.body.data.find((t) => t.pty_id === 2).last_command.text, null);
+    // Screen text reaches Hester only through read_output (with its Feed notice), never the list.
+    assert.ok(list.body.data.every((t) => Array.isArray(t.tail) && t.tail.length === 0));
+    const local = await domain('list', { workspace: WS }, LOCAL);
+    assert.strictEqual(local.body.data.length, list.body.data.length);
     host.writes.length = 0;
     const ci = await domain('checkin', { pty_id: 1 }, HESTER);
     assert.strictEqual(ci.status, 202);
@@ -417,6 +424,148 @@ async function main() {
     assert.strictEqual((await domain('send_input', { pty_id: 2, text: 'ls' }, DEVICE)).status, 200);
     const proposed = events.filter((e) => e.type === 'checkin.proposed').pop();
     assert.deepStrictEqual(proposed.data, { pty_id: 1, reason: 'hester', entry_id: prop.id });
+  });
+
+  // -------------------------------------------------------------------------
+  await check('shell: foreign OSC 133 (ssh, nested shells) never makes a busy tab idle; bare 133;C is ignored', async () => {
+    host.add(20, { name: 'Terminal', fg: 'ssh' });
+    withShellIntegration('/bin/zsh', ['-l'], { LEE_PTY_ID: '20' }, true);
+    tabs.push({ id: 120, type: 'terminal', label: 'Remote', ptyId: 20, dockPosition: 'center', state: 'active' });
+    const signals = [];
+    const off = cockpitBus.onTerminal((s) => signals.push(s));
+    // The remote host's own integration prints prompt marks while ssh holds the foreground.
+    host.emit('data', 20, '\x1b]133;D;0\x07\x1b]133;A\x07prod$ \x1b]133;B\x07');
+    assert.deepStrictEqual([rt.state(20).state, rt.state(20).source], ['busy', 'foreground']);
+    host.writes.length = 0;
+    assert.strictEqual((await rt.send(20, { text: 'npm test', submit: true, purpose: 'operation' }, LOCAL)).error, 'busy');
+    assert.strictEqual(host.writes.length, 0, 'nothing typed into the remote shell');
+    // Back at the local shell.
+    host.get(20).pty.process = 'zsh';
+    assert.strictEqual(rt.state(20).state, 'idle-at-prompt');
+    // A bare 133;C (another integration) neither starts nor overwrites a command.
+    host.emit('data', 20, '\x1b]133;C\x07');
+    assert.strictEqual(rt.state(20).state, 'idle-at-prompt');
+    assert.strictEqual(signals.length, 0);
+    host.emit('data', 20, `\x1b]633;E;${escapeCommandLine('make lint')}\x07\x1b]133;C\x07\x1b]133;C\x07linting\n\x1b]133;D;0\x07`);
+    off();
+    assert.deepStrictEqual(signals.map((s) => [s.phase, s.text]), [['start', 'make lint'], ['end', 'make lint']]);
+  });
+
+  await check('shell without integration: the lone 133;D Lee appends ends Lee\'s run and keeps foreground state', async () => {
+    host.add(21, { name: 'Terminal', fg: 'fish' });
+    withShellIntegration('/opt/homebrew/bin/fish', ['-l'], { LEE_PTY_ID: '21' }, true);
+    tabs.push({ id: 121, type: 'terminal', label: 'Fish', ptyId: 21, dockPosition: 'center', state: 'active' });
+    rt.tick();
+    clock += 5000;
+    assert.deepStrictEqual([rt.state(21).state, rt.state(21).source], ['idle-at-prompt', 'foreground']);
+    const signals = [];
+    const off = cockpitBus.onTerminal((s) => signals.push(s));
+    const line = `npm test; printf '\\033]133;D;%s\\007' "$?"`;
+    const sentAt = clock;
+    assert.strictEqual((await rt.send(21, { text: line, submit: true, purpose: 'operation' }, LOCAL)).success, true);
+    host.get(21).pty.process = 'node';
+    host.emit('data', 21, `${line}\r\nrunning tests\r\n`);
+    assert.strictEqual(rt.state(21).state, 'busy');
+    clock += 3000;
+    host.emit('data', 21, '\x1b]133;D;1\x07');
+    off();
+    assert.strictEqual(signals.length, 1);
+    assert.deepStrictEqual([signals[0].phase, signals[0].by, signals[0].exit_code, signals[0].duration_ms], ['end', 'lee', 1, clock - sentAt]);
+    assert.strictEqual(rt.get(21).shell_integration, false, 'a lone 133;D is not integration');
+    clock += 5000;
+    assert.deepStrictEqual([rt.state(21).state, rt.state(21).source], ['busy', 'foreground'], 'node still in the foreground');
+    host.get(21).pty.process = 'fish';
+    assert.strictEqual(rt.state(21).state, 'idle-at-prompt');
+  });
+
+  await check('Hester chat and DevOps tabs are not agents (no wall, no check-in)', async () => {
+    host.add(22, { name: 'Hester' });
+    tabs.push({ id: 122, type: 'agent', provider: 'hester', label: 'Hester', ptyId: 22, dockPosition: 'right', state: 'active' });
+    host.add(23, { name: 'DevOps' });
+    tabs.push({ id: 123, type: 'agent', provider: 'devops', label: 'DevOps', ptyId: 23, dockPosition: 'center', state: 'active' });
+    assert.strictEqual(rt.get(22).kind, 'tui');
+    assert.strictEqual(rt.get(23).kind, 'tui');
+    assert.strictEqual((await checkins.checkin(22, { by: LOCAL, force: true })).error, 'not_agent');
+    assert.ok(!rt.list(WS).some((t) => t.kind === 'agent' && (t.pty_id === 22 || t.pty_id === 23)));
+  });
+
+  await check('hooked agent: approving (queue or tab) ends awaiting-input; deny returns it to its prompt', () => {
+    hook('agent.session_start', 1, { provider: 'claude' });
+    hook('agent.prompt', 1);
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-a' });
+    assert.strictEqual(rt.state(1).state, 'awaiting-input');
+    host.emit('data', 1, 'x');
+    logEvent({ type: 'attention.reply', source: 'lee-main', workspace: WS, data: { item_id: 'item-a', kind: 'approval', action: 'approve' } });
+    assert.strictEqual(rt.state(1).state, 'busy', 'working on the approved tool');
+    // Two parallel prompts: still waiting until both are answered.
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-b' });
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-c' });
+    logEvent({ type: 'attention.resolve', source: 'lee-main', workspace: WS, data: { item_id: 'item-b', kind: 'approval', resolution: 'answered_in_tab' } });
+    assert.strictEqual(rt.state(1).state, 'awaiting-input');
+    logEvent({ type: 'attention.resolve', source: 'lee-main', workspace: WS, data: { item_id: 'item-c', kind: 'approval', resolution: 'answered_in_tab' } });
+    assert.strictEqual(rt.state(1).state, 'busy');
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-d' });
+    logEvent({ type: 'attention.reply', source: 'lee-main', workspace: WS, data: { item_id: 'item-d', kind: 'approval', action: 'deny' } });
+    assert.strictEqual(rt.state(1).state, 'idle-at-prompt');
+    // An unrelated item changes nothing.
+    hook('agent.waiting', 1, { kind: 'approval', item_id: 'item-e' });
+    logEvent({ type: 'attention.reply', source: 'lee-main', workspace: WS, data: { item_id: 'other', action: 'approve' } });
+    assert.strictEqual(rt.state(1).state, 'awaiting-input');
+    hook('agent.turn_end', 1, { busy_ms: 1 });
+  });
+
+  await check('state() of an unknown PTY id creates nothing', () => {
+    assert.strictEqual(rt.state(4242).state, 'exited');
+    assert.strictEqual(rt.exists(4242), false);
+    assert.strictEqual(rt.get(4242), null);
+  });
+
+  await check('operation typing on Hester\'s behalf: the Feed says Hester asked', async () => {
+    host.get(20).pty.process = 'zsh';
+    host.emit('data', 20, '\x1b]133;A\x07$ ');
+    const r = await rt.send(20, { text: 'make lint', submit: true, purpose: 'operation' }, LOCAL, { askedBy: HESTER });
+    assert.strictEqual(r.success, true);
+    const typed = cockpitBus.feed.list(WS).filter((e) => e.title.startsWith('Lee typed into Remote')).pop();
+    assert.strictEqual(typed.title, 'Lee typed into Remote (asked by Hester)');
+    host.emit('data', 20, `\x1b]633;E;${escapeCommandLine('make lint')}\x07\x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;A\x07`);
+  });
+
+  await check('check-in on a hook-less agent: forced from unknown finishes; the screen tail never reaches the event log', async () => {
+    host.add(24, { name: 'Plain' });
+    tabs.push({ id: 124, type: 'agent', provider: 'plainbot', label: 'Plainbot', ptyId: 24, dockPosition: 'center', state: 'active' });
+    rt.tick();
+    clock += 10_000;
+    assert.strictEqual(rt.state(24).state, 'unknown');
+    assert.strictEqual((await checkins.checkin(24, { by: LOCAL })).error, 'state_unknown');
+    const timers = [
+      setTimeout(() => host.emit('data', 24, 'reading files\r\n$ export TOKEN=hunter2-SCREEN\r\nno status block here\r\n'), 30),
+      setTimeout(() => (clock += 10_000), 120),
+    ];
+    const res = await checkins.checkin(24, { by: LOCAL, force: true });
+    timers.forEach(clearTimeout);
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    assert.strictEqual(res.source, 'screen');
+    assert.strictEqual(res.summary, null);
+    const result = events.filter((e) => e.type === 'checkin.result').pop();
+    assert.strictEqual(result.data.ok, true);
+    assert.strictEqual(result.data.summary, undefined);
+    assert.ok(!JSON.stringify(events).includes('hunter2-SCREEN'), 'screen text never logged');
+    const feed = cockpitBus.feed.list(WS).find((e) => e.producer === 'checkin' && e.title.startsWith('Checked in on Plainbot'));
+    assert.ok(feed.text.includes('no status block here'));
+    assert.strictEqual(feed.text_is_agent, false);
+  });
+
+  await check('create-tab: a late renderer answer never opens a second tab', async () => {
+    const origSend = bw.webContents.send;
+    const channels = [];
+    bw.webContents.send = (channel, payload) => {
+      channels.push(channel);
+      if (channel === 'cockpit:create-tab') host.add(30, { name: payload.label });
+    };
+    const res = await rt.openTab({ workspace: WS, type: 'terminal', label: 'Slow tab', command: 'claude', args: [] }, { timeouts: { result: 50, fallback: 500 } });
+    bw.webContents.send = origSend;
+    assert.strictEqual(res.pty_id, 30);
+    assert.deepStrictEqual(channels, ['cockpit:create-tab'], 'no v0 fallback create-tab');
   });
 
   await check('renderer events: valid shapes only', () => {
@@ -470,9 +619,13 @@ async function main() {
     assert.strictEqual(rec.id, res.task_id);
     assert.strictEqual(rec.status, 'running');
     assert.strictEqual(rec.confirmed, true);
-    assert.deepStrictEqual(rec.agent, { provider: 'claude', pty_id: 7, session_id: res.session_id, tab_label: rec.title, model: null });
-    assert.strictEqual(rec.title, LONG_PROMPT.slice(0, 60).trim(), 'title defaults to the first 60 characters');
-    assert.ok(!fs.readFileSync(spool, 'utf8').includes('SECRET-TAIL'), 'prompt never spooled');
+    // The tab label reaches lee.log and saved sessions: never prompt-derived.
+    assert.deepStrictEqual(rec.agent, { provider: 'claude', pty_id: 7, session_id: res.session_id, tab_label: 'Claude task', model: null });
+    assert.strictEqual(req.label, 'Claude task');
+    // No title given: the record is untitled (Hester names it from the agent's summary).
+    assert.strictEqual(rec.title, '(untitled)');
+    assert.strictEqual(rec.title_source, 'auto');
+    assert.ok(!fs.readFileSync(spool, 'utf8').includes('Fix the login'), 'prompt never spooled');
     assert.strictEqual(fs.statSync(spool).mode & 0o777, 0o600);
     const ev = events.filter((e) => e.type === 'task.launch').pop();
     assert.strictEqual(ev.data.task_id, res.task_id);
@@ -511,12 +664,35 @@ async function main() {
     relay.stop();
   });
 
+  await check('relay: a non-ASCII workspace path is percent-encoded in X-Lee-Workspace (a raw header would throw and block the spool)', async () => {
+    const got = [];
+    const server = http.createServer((req, res2) => {
+      got.push({ url: req.url, ws: req.headers['x-lee-workspace'] });
+      req.resume();
+      req.on('end', () => {
+        res2.writeHead(201, { 'Content-Type': 'application/json' });
+        res2.end('{}');
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
+    const r2 = new TaskRelay({ getHesterPort: () => port, getSharedToken: () => 'tok' });
+    const uni = '/tmp/项目/app';
+    const out = await r2.post({ id: 'task-0000beef', workspace: uni, title: 't', status: 'queued' });
+    server.close();
+    r2.stop();
+    assert.strictEqual(out.ok, true, JSON.stringify(out));
+    assert.strictEqual(got.length, 1, JSON.stringify(out));
+    assert.strictEqual(got[0].ws, encodeURI(uni));
+    assert.strictEqual(got[0].url, '/cockpit/tasks');
+  });
+
   await check('create-tab fallback: v0 system:create-tab when no bridge answers', async () => {
     const origSend = bw.webContents.send;
     const seen = [];
     bw.webContents.send = (channel, payload) => {
       seen.push(channel);
-      if (channel === 'system:create-tab') setTimeout(() => host.add(8, { name: payload.label }), 20);
+      if (channel === 'system:create-tab') setTimeout(() => host.add(31, { name: payload.label }), 20);
     };
     const r = await rt.openTab(
       { workspace: WS, type: 'terminal', label: '▶ build', command: 'npm', args: ['run', 'build'] },
@@ -524,7 +700,7 @@ async function main() {
     );
     bw.webContents.send = origSend;
     assert.deepStrictEqual(seen, ['cockpit:create-tab', 'system:create-tab']);
-    assert.strictEqual(r.pty_id, 8);
+    assert.strictEqual(r.pty_id, 31);
   });
 
   await check('Pi: extension file written; --extension prepended for pi only', () => {

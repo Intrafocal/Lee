@@ -6,6 +6,7 @@
 
 import type { LeeEvent } from '../../../../shared/copilot';
 import type { LintFixResult } from '../../../../shared/cockpit';
+import { bashPrefixRule } from '../../bash-rule';
 import { DAY_MS, bucket, num, tsOf } from '../types';
 import type { LintContext, LintFinding, LintFixContext, LintRule } from '../types';
 
@@ -23,14 +24,15 @@ interface Reply {
   latency: number;
 }
 
-/** `Bash(<first word> <second word unless it starts with ->:*)` for Bash; the bare tool name otherwise. */
+/**
+ * `Bash(<prefix>:*)` for Bash (bash-rule.ts: never an interpreter-wide or
+ * flag-dropping rule such as `Bash(python:*)` or `Bash(rm:*)` from
+ * `rm -rf build`); the bare tool name otherwise.
+ */
 export function permissionRule(tool: string, preview: string | null): string | null {
   if (tool !== 'Bash') return tool || null;
   if (!preview) return null;
-  const words = preview.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return null;
-  const head = words[1] && !words[1].startsWith('-') ? `${words[0]} ${words[1]}` : words[0];
-  return `Bash(${head}:*)`;
+  return bashPrefixRule(preview);
 }
 
 export class RepeatApprovalRule implements LintRule {
@@ -39,8 +41,12 @@ export class RepeatApprovalRule implements LintRule {
   readonly consumes = ['attention.reply', 'agent.tool'];
   private replies: Reply[] = [];
   private tools = new Map<string, string>();
-  /** Rules proposed by the latest streak finding, per workspace. */
-  private streakRulesByWs = new Map<string, string[]>();
+  /**
+   * The exact rules each current finding's confirm_text shows, by
+   * workspace + state_key: the fix writes these and nothing else (C3), even
+   * if a later evaluation would propose different ones.
+   */
+  private shownRules = new Map<string, string[]>();
 
   ingest(ev: LeeEvent): void {
     const d = ev.data as Record<string, unknown>;
@@ -76,9 +82,14 @@ export class RepeatApprovalRule implements LintRule {
     return rule ? { rule, tool: info.tool, preview: info.preview } : null;
   }
 
+  private shownKey(ws: string | null, subject: string, stateKey: string): string {
+    return `${ws ?? ''}\u0000${subject}\u0000${stateKey}`;
+  }
+
   evaluate(ctx: LintContext): LintFinding[] {
     this.replies = this.replies.filter((r) => ctx.now - r.ts < KEEP_MS).sort((a, b) => a.ts - b.ts);
     const out: LintFinding[] = [];
+    const shown = new Map<string, string[]>();
     const byWs = new Map<string, Reply[]>();
     for (const r of this.replies) {
       if (!r.ws) continue;
@@ -102,6 +113,8 @@ export class RepeatApprovalRule implements LintRule {
         if (n < minRepeats) continue;
         const known = this.ruleFor(ctx, sig);
         if (!known) continue;
+        const stateKey = `${RULE_ID}:a:${bucket(n, minRepeats)}`;
+        shown.set(this.shownKey(ws, sig, stateKey), [known.rule]);
         out.push({
           rule: RULE_ID,
           workspace: ws,
@@ -110,7 +123,7 @@ export class RepeatApprovalRule implements LintRule {
           evidence: [`Approved \`${known.tool}: ${known.preview}\` ${n} times this week`],
           fixes: [{ id: 'allow-in-project', label: 'Allow it in this project', confirm_text: `Add ${known.rule} to permissions.allow in ${ws}/.claude/settings.local.json` }],
           item_ref: `approval:${ws}:${sig}`,
-          state_key: `${RULE_ID}:a:${bucket(n, minRepeats)}`,
+          state_key: stateKey,
         });
       }
 
@@ -127,8 +140,8 @@ export class RepeatApprovalRule implements LintRule {
       }
       if (best.length >= fastStreak) {
         const rules = this.streakRules(ctx, best);
-        this.streakRulesByWs.set(ws, rules);
         if (rules.length > 0) {
+          shown.set(this.shownKey(ws, 'streak', `${RULE_ID}:b:${best[0].id}`), rules);
           out.push({
             rule: RULE_ID,
             workspace: ws,
@@ -142,6 +155,7 @@ export class RepeatApprovalRule implements LintRule {
         }
       }
     }
+    this.shownRules = shown;
     return out;
   }
 
@@ -166,19 +180,18 @@ export class RepeatApprovalRule implements LintRule {
     return permissionRule(info.tool, null);
   }
 
-  private rulesFor(f: LintFinding, ctx: LintContext): string[] {
-    if (f.subject !== 'streak') {
-      const known = this.ruleFor(ctx, f.subject);
-      return known ? [known.rule] : [];
-    }
-    return f.workspace ? this.streakRulesByWs.get(f.workspace) ?? [] : [];
+  /** The rules this finding's confirm_text showed, if it is still the current finding. */
+  private rulesFor(f: LintFinding): string[] {
+    return this.shownRules.get(this.shownKey(f.workspace, f.subject, f.state_key)) ?? [];
   }
 
   async fix(f: LintFinding, fixId: string, ctx: LintFixContext): Promise<LintFixResult> {
     if (fixId !== 'allow-in-project') return { success: false, error: 'unknown_fix' };
     if (!f.workspace) return { success: false, error: 'no_workspace' };
-    const rules = this.rulesFor(f, ctx);
-    if (rules.length === 0) return { success: false, error: 'unavailable' };
+    const rules = this.rulesFor(f);
+    const shownText = f.fixes.find((x) => x.id === fixId)?.confirm_text ?? '';
+    // Write only what the confirm text in front of the user named.
+    if (rules.length === 0 || !shownText.startsWith(`Add ${rules.join(', ')} to `)) return { success: false, error: 'unavailable' };
     await ctx.writeClaudeAllow(f.workspace, rules);
     return { success: true, message: `Allowed ${rules.join(', ')} in .claude/settings.local.json` };
   }

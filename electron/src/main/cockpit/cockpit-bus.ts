@@ -224,6 +224,8 @@ export class FeedStore extends EventEmitter {
       if (this.entries.size <= MAX_ENTRIES) break;
       this.entries.delete(e.id);
     }
+    // Keys like ops:metric:...:<run id> are unique per run: drop those whose entry is gone.
+    for (const [key, id] of this.dedupe) if (!this.entries.has(id)) this.dedupe.delete(key);
   }
 }
 
@@ -303,8 +305,12 @@ export interface TabRuntime {
   read(ptyId: number, req: TabReadRequest): TabReadResult;
   /** Total bytes seen so far on this PTY (a read cursor for "from now on"). */
   cursor(ptyId: number): number;
-  /** Enforces the C3 rules of the contract's section 5.3. */
-  send(ptyId: number, req: TabSendRequest, by: Principal): Promise<TabSendResult>;
+  /**
+   * Enforces the C3 rules of the contract's section 5.3 for `by`.
+   * `opts.askedBy` names who asked, for the Feed notice, when Lee types on
+   * someone else's behalf (Hester's operation runs).
+   */
+  send(ptyId: number, req: TabSendRequest, by: Principal, opts?: { askedBy?: Principal }): Promise<TabSendResult>;
   /** Ask a window (default: the focused window of `workspace`) to open a tab. */
   openTab(opts: {
     workspace: string;

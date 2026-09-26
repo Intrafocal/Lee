@@ -120,9 +120,22 @@ export class CheckinManager {
     };
     if (source === 'hook') copilotBus.on('event', onEvent);
 
-    const finish = (res: { ok: boolean; error?: CheckinResult['error']; lee?: LeeStatusBlock | null; summary?: string | null }): CheckinResult => {
+    /**
+     * `summary` is the agent's own words (lee-status or turn summary) and is
+     * logged. `screenTail` is raw screen text for a hook-less agent that
+     * printed no lee-status block: it can hold typed input, prompts and
+     * commands, so it only goes to the in-memory Feed entry, never the event log.
+     */
+    const finish = (res: {
+      ok: boolean;
+      error?: CheckinResult['error'];
+      lee?: LeeStatusBlock | null;
+      summary?: string | null;
+      screenTail?: string | null;
+    }): CheckinResult => {
       const taskId = this.rt.taskOf(ptyId);
       const summary = res.summary ? clip(res.summary, SUMMARY_MAX) : null;
+      const screenTail = !summary && res.screenTail ? clip(res.screenTail, SUMMARY_MAX) : null;
       logCockpitEvent('checkin.result', {
         workspace: ws,
         window_id: windowId,
@@ -149,7 +162,7 @@ export class CheckinManager {
           severity: 'ambient',
           producer: 'checkin',
           title: `Checked in on ${this.rt.labelOf(ptyId)}: ${res.lee?.status ?? 'no status'}`,
-          text: summary,
+          text: summary ?? screenTail,
           text_is_agent: !!summary,
           ref: { pty_id: ptyId, checkin_id: checkinId, ...(taskId ? { task_id: taskId } : {}) },
         });
@@ -182,18 +195,27 @@ export class CheckinManager {
         return finish({ ok: true, lee: got.lee_status ?? parseLeeStatus(got.summary), summary: got.lee_status?.summary ?? got.summary });
       }
       // Screen: wait for the agent to leave idle and come back to it, quiet for 2 x quiet_ms.
+      // A forced check-in on an agent with no prompt_pattern never reads
+      // idle-at-prompt (only busy or unknown): there, "worked, then went
+      // quiet" is the end of its turn.
+      const fromUnknown = force && state === 'unknown';
       let left = false;
+      let sawBusy = false;
       while (Date.now() < deadline) {
         await this.sleep(this.timings.screenPollMs);
         const s = this.rt.state(ptyId);
         if (s.state === 'exited') break;
         if (s.state !== 'idle-at-prompt') left = true;
+        if (s.state === 'busy') sawBusy = true;
         const moved = this.rt.cursor(ptyId) > startCursor;
-        if ((left || moved) && s.state === 'idle-at-prompt' && s.quiet_ms >= 2 * cfg.tab.quiet_ms) {
+        const quiet = s.quiet_ms >= 2 * cfg.tab.quiet_ms;
+        const atPrompt = (left || moved) && s.state === 'idle-at-prompt';
+        const settled = fromUnknown && moved && sawBusy && s.state === 'unknown';
+        if ((atPrompt || settled) && quiet) {
           const text = this.rt.read(ptyId, { since: startCursor, max_chars: 262_144 }).text;
           const lee = parseLeeStatus(text);
           const tail = text.split('\n').filter((l) => l.trim()).slice(-20).join('\n');
-          return finish({ ok: true, lee, summary: lee?.summary ?? (tail || null) });
+          return finish({ ok: true, lee, summary: lee?.summary ?? null, screenTail: tail || null });
         }
       }
       return finish({ ok: false, error: 'timeout' });

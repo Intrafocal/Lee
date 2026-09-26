@@ -868,12 +868,14 @@ export class PTYManager extends EventEmitter {
     const claude = isClaude(cmd);
     const pi = isPi(cmd) && finalArgs.includes('--extension');
 
+    // An agent tab's label can be a task title; keep labels of agent spawns out of lee.log.
+    const logName = claude || isPi(cmd) ? '[label]' : name || cmd;
     this.log('INFO', `Spawning PTY ${id}`, {
       command: cmd,
       // Claude argv can carry the user's prompt text (handoff launches); keep it out of lee.log.
       args: claude || isPi(cmd) ? `[${finalArgs.length} args]` : finalArgs,
       cwd: cwd || process.cwd(),
-      name: name || cmd,
+      name: logName,
       loginShell: loginShell && !command,
       configuredShell: wsConfig?.terminal?.shell || null,
       windowId: windowId ?? null,
@@ -949,7 +951,7 @@ export class PTYManager extends EventEmitter {
     // Handle exit
     ptyProcess.onExit(({ exitCode }) => {
       this.log(exitCode === 0 ? 'INFO' : 'WARN', `PTY ${id} exited`, {
-        name: name || cmd,
+        name: logName,
         exitCode,
       });
       this.processes.delete(id);

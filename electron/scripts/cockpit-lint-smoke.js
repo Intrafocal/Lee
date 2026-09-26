@@ -214,9 +214,11 @@ async function main() {
     assert.strictEqual(suggested.length, 1);
     assert.deepStrictEqual(suggested[0].def, { name: 'npm-run-2', kind: 'oneshot', command: 'npm run build && npm run test:unit', cwd: 'electron' });
     assert.strictEqual(suggested[0].from, 'lint:toil/repeated-sequence');
-    // after a restart: argv0 fallback
-    await r.fix(f, 'make-operation', { ...baseCtx({ ops }), launcher: null });
-    assert.strictEqual(suggested[1].def.command, 'npm && npm');
+    // after a restart the command text is gone (memory only): no bare-argv0 suggestion
+    const gone = await r.fix(f, 'make-operation', { ...baseCtx({ ops }), launcher: null });
+    assert.strictEqual(gone.success, false);
+    assert.strictEqual(gone.error, 'text_unavailable');
+    assert.strictEqual(suggested.length, 1);
     const un = await r.fix(f, 'make-operation', { ...textCtx(), launcher: null });
     assert.deepStrictEqual(un, { success: false, error: 'unavailable' });
   });
@@ -327,15 +329,24 @@ async function main() {
   // -------------------------------------------------------------------------
 
   function approve(rule, sig, i, opts = {}) {
-    rule.ingest(ev('agent.tool', { session_id: 's', phase: 'pre', tool: opts.tool ?? 'Bash', files: [], writes: false, signature: sig }, { ts: NOW - (100 - i) * MIN }));
-    rule.ingest(ev('attention.reply', { item_id: `i${i}`, kind: 'approval', action: opts.action ?? 'approve', text_chars: 0, tool_signature: sig, latency_ms: opts.latency ?? 30_000 }, { ts: NOW - (100 - i) * MIN + 1000 }));
+    const where = opts.ws ? { workspace: opts.ws } : {};
+    rule.ingest(ev('agent.tool', { session_id: 's', phase: 'pre', tool: opts.tool ?? 'Bash', files: [], writes: false, signature: sig }, { ts: NOW - (100 - i) * MIN, ...where }));
+    rule.ingest(ev('attention.reply', { item_id: `i${i}`, kind: 'approval', action: opts.action ?? 'approve', text_chars: 0, tool_signature: sig, latency_ms: opts.latency ?? 30_000 }, { ts: NOW - (100 - i) * MIN + 1000, ...where }));
   }
   const learned = new Map([['sigA', { tool: 'Bash', preview: 'npm run build --watch' }], ['sigL', { tool: 'Bash', preview: 'ls -la /tmp' }]]);
   const learnedCtx = (extra = {}) => baseCtx({ toolInfo: (s) => learned.get(s) ?? null, ...extra });
 
-  await test('permission rules: Bash uses two words unless the second is a flag; others the bare name', () => {
+  await test('permission rules: two words, the whole command after a flag, never interpreter- or rm-wide; others the bare name', () => {
     assert.strictEqual(permissionRule('Bash', 'npm run build --watch'), 'Bash(npm run:*)');
-    assert.strictEqual(permissionRule('Bash', 'ls -la /tmp'), 'Bash(ls:*)');
+    assert.strictEqual(permissionRule('Bash', 'ls -la /tmp'), 'Bash(ls -la /tmp:*)');
+    assert.strictEqual(permissionRule('Bash', 'rm -rf build'), 'Bash(rm -rf build:*)');
+    assert.strictEqual(permissionRule('Bash', 'rm build'), 'Bash(rm build:*)');
+    assert.strictEqual(permissionRule('Bash', 'python -m pytest'), 'Bash(python -m pytest:*)');
+    assert.strictEqual(permissionRule('Bash', 'python -c "import os"'), null);
+    assert.strictEqual(permissionRule('Bash', 'bash -c make'), null);
+    assert.strictEqual(permissionRule('Bash', 'sh'), null);
+    assert.strictEqual(permissionRule('Bash', 'uv run pytest'), 'Bash(uv run pytest:*)');
+    assert.strictEqual(permissionRule('Bash', 'npx vitest'), 'Bash(npx vitest:*)');
     assert.strictEqual(permissionRule('Bash', null), null);
     assert.strictEqual(permissionRule('Edit', null), 'Edit');
   });
@@ -371,14 +382,20 @@ async function main() {
     assert.strictEqual(f.length, 1);
     assert.strictEqual(f[0].subject, 'streak');
     assert.strictEqual(f[0].evidence[0], '10 approvals in a row, each in under 2 s');
-    assert.strictEqual(f[0].fixes[0].confirm_text, `Add Bash(npm run:*), Bash(ls:*), Edit to permissions.allow in ${WS}/.claude/settings.local.json`);
+    assert.strictEqual(f[0].fixes[0].confirm_text, `Add Bash(npm run:*), Bash(ls -la /tmp:*), Edit to permissions.allow in ${WS}/.claude/settings.local.json`);
   });
 
   await test('repeat-approval fix writes the exact rules to settings.local.json', async () => {
     const ws = mkWorkspace('allow');
     const r = new RepeatApprovalRule();
-    for (let i = 0; i < 10; i++) approve(r, 'sigA', i, { latency: 30_000 });
-    const [f] = r.evaluate(learnedCtx()).map((x) => ({ ...x, workspace: ws }));
+    for (let i = 0; i < 10; i++) approve(r, 'sigA', i, { latency: 30_000, ws });
+    const [f] = r.evaluate(learnedCtx());
+    assert.strictEqual(f.workspace, ws);
+    // A finding whose confirm_text no longer matches what would be written is refused (C3).
+    const edited = { ...f, fixes: f.fixes.map((x) => ({ ...x, confirm_text: `Add Bash(rm:*) to permissions.allow in ${ws}/.claude/settings.local.json` })) };
+    assert.strictEqual((await r.fix(edited, 'allow-in-project', { ...learnedCtx(), launcher: null, writeClaudeAllow })).error, 'unavailable');
+    // So is a finding from an earlier evaluation (another state_key).
+    assert.strictEqual((await r.fix({ ...f, state_key: 'old' }, 'allow-in-project', { ...learnedCtx(), launcher: null, writeClaudeAllow })).error, 'unavailable');
     const res = await r.fix(f, 'allow-in-project', { ...learnedCtx(), launcher: null, writeClaudeAllow });
     assert.strictEqual(res.success, true, JSON.stringify(res));
     const doc = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
@@ -721,7 +738,7 @@ async function main() {
     const snap = engine.snapshot(WS);
     assert.strictEqual(snap.diagnostics.length, 1);
     assert.strictEqual(snap.diagnostics[0].rule, 'toil/repeat-approval');
-    assert.strictEqual(snap.diagnostics[0].fixes[0].confirm_text, `Add Bash(pytest:*) to permissions.allow in ${WS}/.claude/settings.local.json`);
+    assert.strictEqual(snap.diagnostics[0].fixes[0].confirm_text, `Add Bash(pytest -q tests:*) to permissions.allow in ${WS}/.claude/settings.local.json`);
     assert.deepStrictEqual(snap.rules.map((r) => r.rule), ['toil/repeated-sequence', 'toil/flaky-operation', 'toil/long-wait', 'toil/repeat-approval']);
   });
 

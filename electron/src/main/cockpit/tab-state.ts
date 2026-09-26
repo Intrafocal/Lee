@@ -17,7 +17,7 @@ export interface TabStateInputs {
   kind: TabKind;
   /** Last hook phase while a hook session is live, else null. */
   hook: HookPhase | null;
-  /** Shell integration seen on this PTY. */
+  /** Shell integration seen on this PTY (a prompt or command-start mark, not a lone 133;D). */
   integration: boolean;
   /** Between OSC 133;C and 133;D. */
   inCommand: boolean;
@@ -68,6 +68,13 @@ export function decideTabState(i: TabStateInputs): TabStateDecision {
   }
   // 3
   if (i.kind === 'shell' && i.integration) {
+    // OSC 133 can come from anything printing into the PTY (ssh to a host
+    // with its own integration, a nested shell, `cat` of a crafted file), so
+    // "at the prompt" is only trusted while the shell itself is in the
+    // foreground (C3: Lee never types into another program).
+    if (!i.inCommand && i.foreground && i.shellName && !sameProgram(i.foreground, i.shellName)) {
+      return { state: 'busy', source: 'foreground' };
+    }
     return { state: i.inCommand ? 'busy' : 'idle-at-prompt', source: 'shell-integration' };
   }
   const quiet = i.quietMs >= i.quietThreshold;
