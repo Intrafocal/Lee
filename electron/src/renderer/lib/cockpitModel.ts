@@ -7,6 +7,7 @@
 
 import type { AgentState, AgentSummary, AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 import type {
+  AgentNameSource,
   CockpitTask,
   FeedEntry,
   FeedKind,
@@ -257,6 +258,8 @@ export type TileTone = 'needs' | 'busy' | 'idle' | 'muted';
 
 export interface TileModel {
   ptyId: number;
+  /** Where the shown name came from, when the title is a session name. */
+  nameSource: AgentNameSource | null;
   /** Tab in this window, if any. */
   tabId: number | null;
   windowId: number | null;
@@ -446,11 +449,13 @@ export function tileModel(input: TileInput): TileModel[] {
     if (task?.agent?.model) meta.push(task.agent.model);
     if (screen) meta.push('screen');
 
-    const title = taskTitle(task) || tab?.label || agent?.label || rt?.label || `${providerName(provider)} ${ptyId}`;
+    // The live session name (Lee main, from hooks or your rename) is freshest; then the task's.
+    const title = rt?.name || taskTitle(task) || tab?.label || agent?.label || rt?.label || `${providerName(provider)} ${ptyId}`;
 
     return {
       ptyId,
       tabId: tab ? tab.id : null,
+      nameSource: rt?.name ? rt.name_source ?? null : task?.name ? task.name_source ?? null : null,
       windowId: agent?.window_id ?? rt?.window_id ?? null,
       provider,
       title,
@@ -508,6 +513,8 @@ export interface FeedInput {
   items?: readonly AttentionItem[] | null;
   entries?: readonly FeedEntry[] | null;
   events?: readonly HesterTaskEvent[] | null;
+  /** Session names by pty: an attention item's source label shows the agent's current name. */
+  names?: ReadonlyMap<number, string> | null;
 }
 
 function severityRank(row: FeedRow): number {
@@ -528,6 +535,8 @@ export function mergeFeed(input: FeedInput): FeedRow[] {
   for (const item of input.items ?? []) {
     if (item.state !== 'open') continue;
     if (item.source.workspace && !sameWorkspace(item.source.workspace, ws)) continue;
+    const name = item.source.pty_id != null ? input.names?.get(item.source.pty_id) : undefined;
+    const shown = name && name !== item.source.tab_label ? { ...item, source: { ...item.source, tab_label: name } } : item;
     rows.push({
       source: 'attention',
       id: `att:${item.id}`,
@@ -535,7 +544,7 @@ export function mergeFeed(input: FeedInput): FeedRow[] {
       severity: item.severity,
       at: item.updated_at || item.created_at,
       title: item.title,
-      item,
+      item: shown,
     });
   }
   for (const entry of input.entries ?? []) {
@@ -578,6 +587,7 @@ export type CockpitKeyAction =
   | { kind: 'deny' }
   | { kind: 'reply' }
   | { kind: 'checkin' }
+  | { kind: 'rename' }
   | { kind: 'launcher' }
   | { kind: 'run' }
   | { kind: 'dismiss' }
@@ -629,6 +639,8 @@ export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null
       return { kind: 'reply' };
     case 'c':
       return { kind: 'checkin' };
+    case 'e':
+      return { kind: 'rename' };
     case 'n':
       return { kind: 'launcher' };
     case 'o':
@@ -820,8 +832,13 @@ export function plainPreview(text: string | null | undefined, maxLines = 3, maxC
   return clipWords(lines.slice(0, maxLines).join(' '), maxChars);
 }
 
-/** A task's display title: a user's title as given; an agent/auto title made plain. */
-export function taskTitle(task: Pick<CockpitTask, 'title' | 'title_source'> | null | undefined): string {
+/**
+ * A task's display title: its session name when it has one (yours, a Claude
+ * /rename or Claude's own title; addendum 2026-09-26b), else a user's title as
+ * given, else an agent/auto title made plain.
+ */
+export function taskTitle(task: Pick<CockpitTask, 'title' | 'title_source' | 'name'> | null | undefined): string {
+  if (task?.name) return task.name;
   if (!task || !task.title || task.title === '(untitled)') return '';
   if (task.title_source === 'user') return task.title;
   return plainTitle(task.title);
@@ -873,4 +890,50 @@ export function flattenFileTree(
   };
   walk(root, 0);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Launcher context picker: fuzzy match over workspace files and bundles
+// ---------------------------------------------------------------------------
+
+/**
+ * Subsequence fuzzy score of `query` in `text` (case-insensitive), or
+ * -Infinity when not every query character appears in order. Higher is better: consecutive
+ * runs, matches at word/path boundaries and in the basename score more;
+ * shorter texts win ties.
+ */
+export function fuzzyScore(query: string, text: string): number {
+  const q = query.toLowerCase().replace(/\s+/g, '');
+  if (!q) return 0;
+  const t = text.toLowerCase();
+  const base = t.lastIndexOf('/') + 1;
+  let score = 0;
+  let ti = 0;
+  let run = 0;
+  let prev = -2;
+  for (const ch of q) {
+    const i = t.indexOf(ch, ti);
+    if (i < 0) return Number.NEGATIVE_INFINITY;
+    run = i === prev + 1 ? run + 1 : 0;
+    score += 1 + run * 2;
+    const before = i > 0 ? t[i - 1] : '/';
+    if (before === '/' || before === '_' || before === '-' || before === '.' || before === ' ') score += 3;
+    if (i >= base) score += 1;
+    prev = i;
+    ti = i + 1;
+  }
+  if (t.slice(base).includes(q)) score += 10;
+  return score - t.length * 0.01;
+}
+
+/** The best `limit` matches of `query` among `items` (by `key`), best first; stable for equal scores. */
+export function fuzzyFilter<T>(query: string, items: readonly T[], key: (item: T) => string, limit = 20): T[] {
+  if (!query.trim()) return items.slice(0, limit);
+  const scored: Array<{ item: T; score: number; i: number }> = [];
+  items.forEach((item, i) => {
+    const score = fuzzyScore(query, key(item));
+    if (score > Number.NEGATIVE_INFINITY) scored.push({ item, score, i });
+  });
+  scored.sort((a, b) => b.score - a.score || a.i - b.i);
+  return scored.slice(0, limit).map((x) => x.item);
 }

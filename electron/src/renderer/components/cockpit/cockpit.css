@@ -1036,3 +1036,43 @@
   cursor: pointer;
   color: var(--text-secondary);
 }
+
+/* Launcher context picker (addendum 2026-09-26b) */
+.cockpit-launch-context {
+  margin-top: var(--space-1);
+}
+
+.cockpit-chip-x {
+  margin-left: 4px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cockpit-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+}
+
+.cockpit-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.cockpit-picker-row {
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cockpit-picker-row.is-selected {
+  background: var(--bg-hover);
+}

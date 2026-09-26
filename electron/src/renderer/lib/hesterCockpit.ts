@@ -52,6 +52,23 @@ export interface WorkstreamRef {
   phase?: string;
 }
 
+/** A Hester context bundle (GET /cockpit/context/bundles): references only, never content. */
+export interface ContextBundleRef {
+  id: string;
+  title: string;
+  updated: string;
+  stale: boolean;
+  source_count: number;
+  tags: string[];
+  /** Absolute path of the bundle's content file. */
+  path: string;
+  relative_path: string;
+}
+
+export function fetchBundles(workspace: string): Promise<HesterResult<ContextBundleRef[]>> {
+  return call<ContextBundleRef[]>(workspace, 'GET', '/cockpit/context/bundles');
+}
+
 export interface HistoryResponse {
   wins: DigestWin[];
   tasks: CockpitTask[];
@@ -145,7 +162,12 @@ export function linkTask(
   return call<CockpitTask>(workspace, 'POST', `/cockpit/tasks/${encodeURIComponent(id)}/link`, body);
 }
 
-export function patchTask(workspace: string, id: string, body: Partial<Pick<CockpitTask, 'serves' | 'workstream' | 'title'>>): Promise<HesterResult<CockpitTask>> {
+/** `name` is your session name for the task (null clears it; addendum 2026-09-26b). */
+export function patchTask(
+  workspace: string,
+  id: string,
+  body: Partial<Pick<CockpitTask, 'serves' | 'workstream' | 'title'>> & { name?: string | null },
+): Promise<HesterResult<CockpitTask>> {
   return call<CockpitTask>(workspace, 'PATCH', `/cockpit/tasks/${encodeURIComponent(id)}`, body);
 }
 

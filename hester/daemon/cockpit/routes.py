@@ -151,6 +151,38 @@ def build_snapshot(ctx, now: Optional[datetime] = None) -> Dict[str, Any]:
     }
 
 
+def list_bundles(workspace: Path) -> List[Dict[str, Any]]:
+    """
+    Context bundles in ``<workspace>/.hester/context/bundles/`` for the
+    Launcher's context picker: ids, titles and the content file's path, never
+    the content. Deterministic (no synthesis, no model).
+    """
+    try:
+        from ...context.service import ContextBundleService
+    except Exception:  # pragma: no cover - optional dependency missing
+        return []
+    try:
+        statuses = ContextBundleService(working_dir=str(workspace)).list_all()
+    except Exception:
+        return []
+    root = Path(workspace).resolve()
+    out: List[Dict[str, Any]] = []
+    for st in statuses:
+        path = root / ".hester" / "context" / "bundles" / f"{st.id}.md"
+        updated = st.updated if st.updated.tzinfo else st.updated.replace(tzinfo=timezone.utc)
+        out.append({
+            "id": st.id,
+            "title": st.title,
+            "updated": iso_s(updated),
+            "stale": bool(st.is_stale),
+            "source_count": st.source_count,
+            "tags": list(st.tags or []),
+            "path": str(path),
+            "relative_path": str(path.relative_to(root)),
+        })
+    return out
+
+
 def create_cockpit_router() -> APIRouter:
     router = APIRouter(tags=["cockpit"])
 
@@ -204,6 +236,22 @@ def create_cockpit_router() -> APIRouter:
             return _err(str(e))
         return _ok(ctx, to_api(task), 201 if created else 200)
 
+    @router.post("/cockpit/tasks/name")
+    async def cockpit_task_name(request: Request):
+        """A session name from Lee (you, /rename or Claude's AI title), by task id or session id."""
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                task, changed = ctx.tasks().set_name(body)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except TaskError as e:
+            return _err(str(e))
+        except TaskNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, {"task": to_api(task), "changed": changed})
+
     async def _mutate(request: Request, task_id: str, op: str):
         try:
             body = await _body(request)
@@ -249,6 +297,16 @@ def create_cockpit_router() -> APIRouter:
     @router.post("/cockpit/tasks/{task_id}/promote")
     async def cockpit_task_promote(task_id: str, request: Request):
         return await _mutate(request, task_id, "promote")
+
+    @router.get("/cockpit/context/bundles")
+    async def cockpit_context_bundles():
+        """Hester context bundles for the Launcher's context picker (references only)."""
+        try:
+            ctx = context_for()
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        data = await asyncio.to_thread(list_bundles, Path(ctx.path))
+        return _ok(ctx, data)
 
     @router.get("/cockpit/goals")
     async def cockpit_goals():

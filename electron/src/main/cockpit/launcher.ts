@@ -15,6 +15,8 @@ import { logCockpitEvent, type TaskCreateInput, type TaskLauncher } from './cock
 import { getCockpitConfig } from './cockpit-config';
 import type { TaskRelay, TaskRecord } from './task-relay';
 import { actorFor, type TabRuntimeImpl } from './tab-runtime';
+import { cleanName } from './session-name';
+import { contextRefs, withContext } from './workspace-files';
 
 const KINDS: TaskKind[] = ['bug', 'question', 'prototype', 'chore', 'unknown'];
 const LEADS: TaskLead[] = ['delegate', 'human', 'plan'];
@@ -62,15 +64,28 @@ export function launchPlan(req: LaunchRequest, opts: { worktree_for_delegate: bo
   return { lead, kind, permission_mode, worktree, title, titled };
 }
 
-/** Claude argv for a launch (pure). The prompt follows `--`, so a leading '-' stays positional. */
+/**
+ * The session name for a launch: the Name you typed, else a title you typed.
+ * Never derived from the prompt (Claude writes it to the transcript as a
+ * custom-title, which Lee reads back and stores on the task).
+ */
+export function launchName(req: LaunchRequest): string | null {
+  return cleanName(req.name) ?? (typeof req.title === 'string' ? cleanName(req.title) : null);
+}
+
+/**
+ * Claude argv for a launch (pure). The prompt follows `--`, so a leading '-'
+ * stays positional. `refs` are context references (`@path`) appended to it.
+ */
 export function buildClaudeArgs(
   req: LaunchRequest,
-  ids: { session_id: string; slug?: string | null; worktree_for_delegate?: boolean },
+  ids: { session_id: string; slug?: string | null; worktree_for_delegate?: boolean; refs?: readonly string[] },
 ): string[] {
   const plan = launchPlan(req, { worktree_for_delegate: ids.worktree_for_delegate ?? true });
   // The worktree dir and branch are on disk: named after a given title, never the prompt.
   const slug = plan.worktree ? ids.slug ?? slugify(plan.titled ? plan.title : 'task', crypto.randomBytes(2).toString('hex')) : null;
-  const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
+  const prompt = withContext(typeof req.prompt === 'string' ? req.prompt.trim() : '', ids.refs ?? []);
+  const name = launchName(req);
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : []);
   const tools = list(req.tools);
   const allowed = list(req.allowed_tools);
@@ -80,13 +95,24 @@ export function buildClaudeArgs(
     ...(slug ? ['--worktree', slug] : []),
     '--session-id',
     ids.session_id,
-    '-n',
-    plan.title,
+    ...(name ? ['--name', name] : []),
     ...(req.model ? ['--model', req.model] : []),
     ...(tools.length ? ['--tools', tools.join(',')] : []),
     ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
     ...(prompt ? ['--', prompt] : []),
   ];
+}
+
+/**
+ * Pi argv for a launch (pure): `pi [--name n] -- [@files...] [prompt]`. Pi
+ * takes an initial message and `@file` arguments itself, so the context refs
+ * are passed as its own file arguments.
+ */
+export function buildPiArgs(req: LaunchRequest, refs: readonly string[] = []): string[] {
+  const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
+  const name = launchName(req);
+  const tail = [...refs, ...(prompt ? [prompt] : [])];
+  return [...(name ? ['--name', name] : []), ...(tail.length ? ['--', ...tail] : [])];
 }
 
 function providerLabel(provider: string): string {
@@ -140,6 +166,9 @@ export class TaskLauncherImpl implements TaskLauncher {
     const taskId = req.task_id ?? newTaskId();
     const origin = validOrigin(req.origin) ?? { kind: 'launcher', ref: null };
     const serves = Array.isArray(req.serves) ? req.serves.filter((s): s is string => typeof s === 'string') : [];
+    const name = launchName(req);
+    // Context: paths and bundle ids only; the references go into the argv.
+    const ctx = contextRefs(workspace, req.context);
     const record = (status: TaskRecord['status'], agent: TaskRecord['agent']): TaskRecord => ({
       id: taskId,
       workspace,
@@ -156,6 +185,8 @@ export class TaskLauncherImpl implements TaskLauncher {
       serves,
       confirmed: true,
       origin,
+      ...(name ? { name, name_source: 'user' as const } : {}),
+      ...(ctx.files.length || ctx.bundles.length ? { context: { files: ctx.files, bundles: ctx.bundles } } : {}),
     });
 
     if (plan.lead === 'human') {
@@ -167,13 +198,13 @@ export class TaskLauncherImpl implements TaskLauncher {
     // The tab label reaches lee.log (PTY name) and the saved session, so it is
     // never derived from the prompt: an explicit label or title, else generic.
     const explicitTitle = typeof req.title === 'string' && req.title.trim() ? req.title.trim().slice(0, TITLE_MAX) : null;
-    const label = (typeof req.label === 'string' && req.label.trim()) || explicitTitle || `${providerLabel(provider)} task`;
+    const label = (typeof req.label === 'string' && req.label.trim()) || name || explicitTitle || `${providerLabel(provider)} task`;
     const model = typeof req.model === 'string' && req.model ? req.model : null;
     let sessionId: string | null = null;
     let opened: { pty_id: number | null; tab_id: number | null; error?: string };
     if (provider === 'claude') {
       sessionId = crypto.randomUUID();
-      const args = buildClaudeArgs(req, { session_id: sessionId, worktree_for_delegate: cfg.launch.worktree_for_delegate });
+      const args = buildClaudeArgs(req, { session_id: sessionId, worktree_for_delegate: cfg.launch.worktree_for_delegate, refs: ctx.refs });
       // An agent tab (type 'agent', provider 'claude'), so it is typed, walled,
       // iconed and restored like ⇧⌘C Claude tabs; the argv carries the
       // pre-assigned session id and prompt, and hooks are added at spawn.
@@ -181,14 +212,23 @@ export class TaskLauncherImpl implements TaskLauncher {
         { workspace, window_id: win, type: 'agent', provider: 'claude', label, command: 'claude', args, activate: !!req.go_into },
         { session_id: sessionId },
       );
+    } else if (provider === 'pi') {
+      // Pi takes a name, an initial message and @file arguments on its command line.
+      const args = buildPiArgs(req, ctx.refs);
+      opened = await this.rt.openTab({ workspace, window_id: win, type: 'agent', label, provider, command: 'pi', args, activate: !!req.go_into });
     } else {
-      if (typeof req.prompt === 'string' && req.prompt.trim()) return { success: false, error: 'prompt_unsupported' };
+      const hasPrompt = typeof req.prompt === 'string' && !!req.prompt.trim();
+      if (hasPrompt || ctx.refs.length) return { success: false, error: 'prompt_unsupported' };
       opened = await this.rt.openTab({ workspace, window_id: win, type: 'agent', label, provider, activate: !!req.go_into });
     }
     if (opened.pty_id == null && opened.error && opened.error !== 'timeout') {
       return { success: false, error: opened.error, task_id: taskId };
     }
-    if (opened.pty_id != null) this.rt.setTask(opened.pty_id, taskId, sessionId);
+    if (opened.pty_id != null) {
+      this.rt.setTask(opened.pty_id, taskId, sessionId);
+      // Your name, as yours; the record below carries it to Hester.
+      if (name) this.rt.setName(opened.pty_id, name, 'user', { relay: false });
+    }
 
     const relayed = await this.relayer.relay(
       record('running', { provider, pty_id: opened.pty_id, session_id: sessionId, tab_label: label, model }),
@@ -211,6 +251,9 @@ export class TaskLauncherImpl implements TaskLauncher {
         ...(provider === 'claude' ? { permission_mode: plan.permission_mode } : {}),
         ...(model ? { model } : {}),
         origin_kind: origin.kind,
+        named: !!name,
+        ...(ctx.files.length ? { context_files: ctx.files.length } : {}),
+        ...(ctx.bundles.length ? { context_bundles: ctx.bundles.length } : {}),
       },
     });
 

@@ -38,14 +38,22 @@ MAX_RECENT_EVENTS = 50
 DEFAULT_TIMEBOX_MIN = 30
 RECENT_CLOSED_DAYS = 7
 
+NAME_SOURCES = ("user", "custom-title", "ai-title")
+MAX_NAME = 120
+MAX_CONTEXT_FILES = 50
+MAX_CONTEXT_BUNDLES = 10
+
 FIELDS = (
-    "id", "workspace", "title", "title_source", "kind", "status", "lead", "play", "agent",
+    "id", "workspace", "title", "title_source", "name", "name_source", "context",
+    "kind", "status", "lead", "play", "agent",
     "sessions", "serves", "workstream", "confirmed", "confirmed_at", "urgency", "quadrant",
     "timebox_min", "due", "origin", "busy_ms", "turns", "files", "files_count", "summary",
     "lee_status", "last_checkin_at", "commits", "outcome", "accepted", "created_at",
     "updated_at", "closed_at", "version",
 )
 FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions")
+# Persisted in the frontmatter but not part of the API shape.
+EXTRA_KEYS = ("applied_through", "name_custom_seen")
 MAX_PARSE_CACHE = 5000
 
 # libyaml when present: task files are re-read on every snapshot and reindex.
@@ -140,6 +148,10 @@ def default_task(task_id: str, workspace: str, now: Optional[datetime] = None) -
         "workspace": workspace,
         "title": "(untitled)",
         "title_source": "auto",
+        "name": None,
+        "name_source": None,
+        "name_custom_seen": None,
+        "context": None,
         "kind": "unknown",
         "status": "queued",
         "lead": "delegate",
@@ -251,6 +263,63 @@ def _agent(value: Any, base: Optional[Dict[str, Any]] = None) -> Optional[Dict[s
     return out
 
 
+def clean_name(value: Any) -> Optional[str]:
+    """Trim, collapse whitespace, drop control characters, clip; '' -> None (same as Lee's cleanName)."""
+    if not isinstance(value, str):
+        return None
+    s = " ".join("".join(" " if (ord(c) < 32 or ord(c) == 127) else c for c in value).split())
+    if not s:
+        return None
+    return s if len(s) <= MAX_NAME else s[: MAX_NAME - 1] + "…"
+
+
+def apply_name(task: Dict[str, Any], name: Any, source: str) -> bool:
+    """
+    Record a name observation with the precedence rule (addendum 2026-09-26b):
+    user > custom-title (/rename, --name) > ai-title > the derived title. A
+    name you typed is replaced only by a later, different custom-title; an
+    ai-title never replaces a user or custom name. ``name=None`` from the user
+    clears it. Returns whether the stored name or its source changed.
+    """
+    if source not in NAME_SOURCES:
+        raise TaskError(f"name source must be one of {', '.join(NAME_SOURCES)}")
+    if name is not None and not isinstance(name, str):
+        raise TaskError("name must be a string or null")
+    n = clean_name(name)
+    cur, cur_src, seen = task.get("name"), task.get("name_source"), task.get("name_custom_seen")
+    if source == "user":
+        if n == cur and (n is None or cur_src == "user"):
+            return False
+        task["name"], task["name_source"] = n, ("user" if n else None)
+        return True
+    if source == "custom-title":
+        if not n or n == seen:
+            return False
+        task["name_custom_seen"] = n
+        if n == cur:
+            return False
+        task["name"], task["name_source"] = n, "custom-title"
+        return True
+    if not n or n == cur or cur_src in ("user", "custom-title"):
+        return False
+    task["name"], task["name_source"] = n, "ai-title"
+    return True
+
+
+def _context(value: Any) -> Optional[Dict[str, Any]]:
+    """Files (workspace-relative paths) and bundle ids attached at launch; references only."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TaskError("context must be an object or null")
+    files = _str_list("context.files", value.get("files") or [])
+    bundles = _str_list("context.bundles", value.get("bundles") or [])
+    for f in files:
+        if f.startswith("/") or ".." in f.split("/"):
+            raise TaskError("context.files must be workspace-relative paths")
+    return {"files": files[:MAX_CONTEXT_FILES], "bundles": bundles[:MAX_CONTEXT_BUNDLES]}
+
+
 def _origin(value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
@@ -340,7 +409,7 @@ class CockpitTaskStore:
         except (OSError, TaskError, yaml.YAMLError):
             return None
         task = default_task(str(meta.get("id") or path.stem), str(meta.get("workspace") or self.workspace))
-        task.update({k: v for k, v in meta.items() if k in FIELDS or k == "applied_through"})
+        task.update({k: v for k, v in meta.items() if k in FIELDS or k in EXTRA_KEYS})
         return task, body
 
     def get(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -401,7 +470,8 @@ class CockpitTaskStore:
         task["version"] = int(task.get("version") or 0) + 1
         task["files_count"] = len(task.get("files") or [])
         meta = {k: task.get(k) for k in FIELDS}
-        meta["applied_through"] = task.get("applied_through")
+        for k in EXTRA_KEYS:
+            meta[k] = task.get(k)
         head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=False)
         self.dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -488,6 +558,10 @@ class CockpitTaskStore:
             task["timebox_min"] = _opt_int("timebox_min", payload["timebox_min"])
         if "due" in payload:
             task["due"] = _opt_str("due", payload["due"])
+        if payload.get("name") is not None:
+            apply_name(task, payload["name"], payload.get("name_source") or "user")
+        if "context" in payload and payload["context"] is not None:
+            task["context"] = _context(payload["context"])
         if "confirmed" in payload and payload["confirmed"] is not None:
             if _bool("confirmed", payload["confirmed"]) and not task.get("confirmed"):
                 task["confirmed"] = True
@@ -506,7 +580,7 @@ class CockpitTaskStore:
 
     def patch(self, task_id: str, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         task = self.require(task_id)
-        allowed = {"title", "kind", "lead", "play", "serves", "workstream", "timebox_min", "due", "status"}
+        allowed = {"title", "name", "kind", "lead", "play", "serves", "workstream", "timebox_min", "due", "status"}
         unknown = set(payload) - allowed
         if unknown:
             raise TaskError(f"cannot patch: {', '.join(sorted(unknown))}")
@@ -515,6 +589,9 @@ class CockpitTaskStore:
             if title != task.get("title"):
                 task["title"] = title
                 task["title_source"] = "user"
+        if "name" in payload:
+            # Rename in the Cockpit: your name (null or "" clears it).
+            apply_name(task, payload["name"], "user")
         if "kind" in payload:
             task["kind"] = _choice("kind", payload["kind"], KINDS)
         if "lead" in payload:
@@ -533,6 +610,30 @@ class CockpitTaskStore:
             task["status"] = _choice("status", payload["status"], PATCH_STATUSES)
             task["closed_at"] = None
         return self.save(task, now=now)
+
+    def find_by_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """The newest task (open first) that has this agent session."""
+        hits = [t for t in self.load_all() if session_id in task_sessions(t)]
+        if not hits:
+            return None
+        hits.sort(key=lambda t: (is_open(t), str(t.get("updated_at") or "")), reverse=True)
+        return hits[0]
+
+    def set_name(self, payload: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[Dict[str, Any], bool]:
+        """POST /cockpit/tasks/name: {task_id? | session_id?, name, source} with the precedence rule."""
+        task_id, session_id = payload.get("task_id"), payload.get("session_id")
+        task = None
+        if isinstance(task_id, str) and task_id:
+            task = self.get(task_id)
+        if task is None and isinstance(session_id, str) and session_id:
+            task = self.find_by_session(session_id)
+        if task is None:
+            raise TaskNotFound(task_id or session_id or "")
+        before = task.get("name_custom_seen")
+        changed = apply_name(task, payload.get("name"), payload.get("source") or "user")
+        if changed or task.get("name_custom_seen") != before:
+            self.save(task, now=now)
+        return task, changed
 
     def confirm(self, task_id: str, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()

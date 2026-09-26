@@ -239,11 +239,26 @@ export interface TaskAgentRef {
   model?: string | null;
 }
 
+/**
+ * Context attached at launch (addendum 2026-09-26b): workspace-relative file
+ * paths and Hester context bundle ids. Only these references are stored,
+ * never file or bundle content.
+ */
+export interface TaskContextRef {
+  files: string[];
+  bundles: string[];
+}
+
 export interface CockpitTask {
   id: string;
   workspace: string;
   title: string;
   title_source: 'user' | 'agent' | 'auto';
+  /** Session name (see AgentNameSource); shown instead of the title when set. Older daemons omit it. */
+  name?: string | null;
+  name_source?: AgentNameSource | null;
+  /** Files and bundles attached at launch (references only). */
+  context?: TaskContextRef | null;
   kind: TaskKind;
   status: TaskStatus;
   lead: TaskLead;
@@ -283,6 +298,18 @@ export type ClaudePermissionMode = 'acceptEdits' | 'plan' | 'manual' | 'auto' | 
 export interface LaunchRequest {
   workspace: string;
   title?: string;
+  /**
+   * Optional session name you typed: Claude gets `--name <name>`, Pi
+   * `--name <name>`; stored on the task (name_source 'user') and used as the
+   * tab label. Never derived from the prompt.
+   */
+  name?: string;
+  /**
+   * Context to attach (deterministic, offline): each file becomes an
+   * `@relative/path` reference and each bundle an `@.hester/context/bundles/<id>.md`
+   * reference appended to the initial prompt. Paths must be inside the workspace.
+   */
+  context?: { files?: string[]; bundles?: string[] };
   /** Initial prompt. Never written to the event log or lee.log. */
   prompt?: string;
   kind?: TaskKind;
@@ -669,6 +696,8 @@ export const COCKPIT_IPC = {
   tabState: 'cockpit:tabs:state',
   tabSend: 'cockpit:tabs:send',
   tabFocus: 'cockpit:tabs:focus',
+  tabRename: 'cockpit:tabs:rename',
+  filesList: 'cockpit:files:list',
   checkin: 'cockpit:checkin',
   checkinCancel: 'cockpit:checkin:cancel',
   launch: 'cockpit:launch',
@@ -721,7 +750,11 @@ export interface CockpitAPI {
     send: (ptyId: number, req: TabSendRequest) => Promise<TabSendResult>;
     /** Focus the window showing ptyId and open that tab there. */
     focus: (ptyId: number) => Promise<{ success: boolean; error?: string }>;
+    /** Set (or with null/'' clear) the agent's name as yours (name_source 'user'); relayed to its task. */
+    rename: (ptyId: number, name: string | null) => Promise<{ success: boolean; error?: string }>;
   };
+  /** Workspace files for the Launcher's context picker (relative paths, gitignored files excluded, capped). */
+  files: (workspace: string) => Promise<{ files: string[]; truncated: boolean }>;
   /** Returns at once ({state: 'queued' | 'sent'}); the result arrives via the Feed and tabs.onChange. */
   checkin: (ptyId: number, opts?: { force?: boolean }) => Promise<CheckinResult>;
   /** Cancel the PTY's pending check-in (nothing is typed after this). */

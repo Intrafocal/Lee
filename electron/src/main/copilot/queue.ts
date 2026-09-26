@@ -480,6 +480,12 @@ export class CopilotQueue {
 
     if (this.queue.touchKey(key, now)) this.changed();
 
+    // Session names (Cockpit): an in-memory signal, never logged. The Cockpit
+    // reads only the transcript's title lines, after checking the path.
+    if (h.transcript_path && s.provider !== 'pi' && (h.event === 'SessionStart' || h.event === 'UserPromptSubmit' || h.event === 'Stop')) {
+      copilotBus.emit('agent-transcript', { pty_id: ptyId, session_id: s.session_id, transcript_path: h.transcript_path, event: h.event });
+    }
+
     switch (h.event) {
       case 'SessionStart': {
         ev('agent.session_start', { provider: s.provider, ...(h.cwd ? { cwd: h.cwd } : {}), ...(h.source ? { source: h.source } : {}) });
@@ -1233,7 +1239,10 @@ export class CopilotQueue {
       const slug = worktree ? slugify(title, Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0')) : null;
       // '--' ends the options, so a prompt starting with '-' (a markdown
       // bullet, say) stays the positional prompt instead of a CLI flag.
-      const args = ['--permission-mode', mode, ...(slug ? ['--worktree', slug] : []), '-n', title, ...(prompt ? ['--', prompt] : [])];
+      // A session name only when you gave a title: Claude writes it to the
+      // transcript as a custom-title, which Lee reads back as the task's name.
+      const named = typeof l.title === 'string' && l.title.trim() ? ['--name', l.title.trim()] : [];
+      const args = ['--permission-mode', mode, ...(slug ? ['--worktree', slug] : []), ...named, ...(prompt ? ['--', prompt] : [])];
       target.browserWindow.webContents.send('system:create-tab', { type: 'terminal', label: title, command: 'claude', args });
       this.log({
         type: 'handoff.launch',

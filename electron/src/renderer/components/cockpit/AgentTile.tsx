@@ -164,6 +164,14 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
             </button>
           </>
         )}
+        <button
+          className="cockpit-btn"
+          disabled={busy}
+          title="Rename (e)"
+          onClick={() => ctx.openRename({ ptyId: tile.ptyId, taskId: task?.id ?? null, current: tile.title, provider: tile.provider })}
+        >
+          Rename
+        </button>
         <button className="cockpit-btn is-go" disabled={busy} onClick={() => ctx.goInto(tile.ptyId, 'tile')} title="Peek at this agent's terminal (Enter)">
           <Icon name="arrow-right" size={11} /> Peek <kbd>⏎</kbd>
         </button>
@@ -326,6 +334,84 @@ export const CheckinPopover: React.FC<CheckinPopoverProps> = ({ api, ptyId, labe
         <div className="cockpit-popover-actions">
           <button className="cockpit-btn is-primary" disabled={busy} onClick={() => send(unknown)}>
             <Icon name="send" size={11} /> {unknown ? 'Send anyway' : 'Check in'} <kbd>⏎</kbd>
+          </button>
+          <button className="cockpit-btn" onClick={onClose}>
+            Cancel <kbd>Esc</kbd>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Rename popover (e): your name for an agent / task. Nothing is typed into the agent.
+// ---------------------------------------------------------------------------
+
+export interface RenameTarget {
+  ptyId?: number | null;
+  taskId?: string | null;
+  current: string;
+  provider?: string | null;
+}
+
+interface RenamePopoverProps {
+  target: RenameTarget;
+  onSave: (target: RenameTarget, name: string | null) => Promise<string | null>;
+  onClose: () => void;
+  notify: (message: string, level?: 'info' | 'error') => void;
+}
+
+export const RenamePopover: React.FC<RenamePopoverProps> = ({ target, onSave, onClose, notify }) => {
+  const [text, setText] = useState(target.current);
+  const [busy, setBusy] = useState(false);
+
+  const save = () => {
+    if (busy) return;
+    const name = text.trim() || null;
+    setBusy(true);
+    onSave(target, name)
+      .then((err) => {
+        if (err) notify(err, 'error');
+        else {
+          notify(name ? `Renamed to ${name}` : 'Name cleared');
+          onClose();
+        }
+      })
+      .catch(() => notify('Rename failed', 'error'))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="cockpit-popover-backdrop" onClick={onClose}>
+      <div className="cockpit-popover" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Rename">
+        <div className="cockpit-popover-title">Rename {target.current}</div>
+        <input
+          autoFocus
+          className="cockpit-input"
+          value={text}
+          maxLength={120}
+          placeholder="Name (empty clears it)"
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              save();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              onClose();
+            }
+          }}
+        />
+        <div className="cockpit-muted">
+          Your name wins over Claude&apos;s own title.
+          {target.provider === 'claude' && ' /rename inside the session also works (and a later /rename replaces this).'}
+        </div>
+        <div className="cockpit-popover-actions">
+          <button className="cockpit-btn is-primary" disabled={busy} onClick={save}>
+            Save <kbd>⏎</kbd>
           </button>
           <button className="cockpit-btn" onClick={onClose}>
             Cancel <kbd>Esc</kbd>

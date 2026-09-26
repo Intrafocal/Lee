@@ -601,6 +601,24 @@ test('Claude sessions keep Claude titles; unknown providers say Agent', () => {
   assert.strictEqual(providerLabel(''), 'Agent');
 });
 
+test('session names: title-bearing hooks signal the transcript path in memory only (never logged)', () => {
+  const { hook } = setup();
+  const signals = [];
+  const logged = [];
+  const onSig = (sig) => signals.push(sig);
+  const onEv = (e) => logged.push(e);
+  copilotBus.on('agent-transcript', onSig);
+  copilotBus.on('event', onEv);
+  hook('SessionStart', { transcript_path: '/home/me/.claude/projects/p/s1.jsonl' });
+  hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/x' }, transcript_path: '/home/me/.claude/projects/p/s1.jsonl' });
+  hook('Stop', { last_assistant_message: 'ok', transcript_path: '/home/me/.claude/projects/p/s1.jsonl' });
+  copilotBus.off('agent-transcript', onSig);
+  copilotBus.off('event', onEv);
+  assert.deepStrictEqual(signals.map((x) => x.event), ['SessionStart', 'Stop']);
+  assert.strictEqual(signals[0].session_id, 's1');
+  assert.ok(!JSON.stringify(logged).includes('s1.jsonl'), 'transcript path never in the event log');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

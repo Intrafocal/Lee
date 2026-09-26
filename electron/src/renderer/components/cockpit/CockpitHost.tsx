@@ -44,7 +44,8 @@ import { TabDrawer } from './TabDrawer';
 import { Launcher, type LauncherPrefill } from './Launcher';
 import { RunMenu } from './RunMenu';
 import { KeyHelp } from './KeyHelp';
-import { ReplyPopover, CheckinPopover } from './AgentTile';
+import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './AgentTile';
+import { patchTask } from '../../lib/hesterCockpit';
 import { CopilotSection } from './sections/CopilotSection';
 import { FeedSection } from './sections/FeedSection';
 import { FilesSection } from './sections/FilesSection';
@@ -76,6 +77,8 @@ export interface RowHandle {
   replyItem?: AttentionItem | null;
   dismiss?: () => void;
   ptyId?: number | null;
+  /** Rename this row's task or agent (e). */
+  rename?: () => void;
 }
 
 export interface CockpitCtx {
@@ -103,6 +106,8 @@ export interface CockpitCtx {
   openLauncher: (prefill?: LauncherPrefill) => void;
   openReply: (item: AttentionItem, label: string) => void;
   openCheckin: (ptyId: number, label: string) => void;
+  /** Rename an agent (by pty) and/or its task: your name wins over Claude's titles. */
+  openRename: (target: RenameTarget) => void;
   registerRows: (rows: RowHandle[]) => void;
   selectRow: (id: string) => void;
   setSection: (section: SectionId) => void;
@@ -132,6 +137,7 @@ type Popover =
   | { kind: 'help' }
   | { kind: 'reply'; item: AttentionItem; label: string }
   | { kind: 'checkin'; ptyId: number; label: string }
+  | { kind: 'rename'; target: RenameTarget }
   | null;
 
 /** The parts of a keydown the Cockpit keymap reads (React's synthetic event or a native one). */
@@ -224,6 +230,13 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const onNotifyRef = useRef(onNotify);
   onNotifyRef.current = onNotify;
 
+  // Session names by pty, for attention item sources in the Feed.
+  const runtimeNames = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of runtime) if (r.name) m.set(r.pty_id, r.name);
+    return m;
+  }, [runtime]);
+
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const activeRef = useRef(activeTabId);
@@ -283,12 +296,13 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const feedRows = useMemo(
     () =>
       mergeFeed({
+        names: runtimeNames,
         workspace,
         items: snapshot?.items,
         entries: cockpit.feed,
         events: hester.snapshot?.tasks.recent_events,
       }),
-    [workspace, snapshot, cockpit.feed, hester.snapshot],
+    [workspace, snapshot, cockpit.feed, hester.snapshot, runtimeNames],
   );
 
   const needsCount = feedNeedsCount(feedRows);
@@ -511,6 +525,26 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const setSection = useCallback((section: SectionId) => cockpitModeStore.setSection(section), []);
   const openLauncher = useCallback((prefill?: LauncherPrefill) => setPopover({ kind: 'launcher', prefill }), []);
   const openReply = useCallback((item: AttentionItem, label: string) => setPopover({ kind: 'reply', item, label }), []);
+  const openRename = useCallback((target: RenameTarget) => setPopover({ kind: 'rename', target }), []);
+  const saveName = useCallback(
+    async (target: RenameTarget, name: string | null): Promise<string | null> => {
+      // A live agent: Lee main records it as yours and relays it to its task
+      // (by task id or session). A task with no agent: straight to Hester.
+      if (target.ptyId != null && api) {
+        const r = await api.tabs.rename(target.ptyId, name);
+        if (!r.success) return r.error || 'Rename failed';
+        if (target.taskId) void patchTask(workspace, target.taskId, { name });
+      } else if (target.taskId) {
+        const r = await patchTask(workspace, target.taskId, { name });
+        if (!r.ok) return r.error || 'Rename failed';
+      } else {
+        return 'Nothing to rename';
+      }
+      hester.refresh();
+      return null;
+    },
+    [api, workspace, hester],
+  );
   const openCheckin = useCallback((ptyId: number, label: string) => setPopover({ kind: 'checkin', ptyId, label }), []);
 
   useEffect(() => {
@@ -619,6 +653,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       case 'checkin':
         if (tile?.canCheckin) openCheckin(tile.ptyId, tile.title);
         break;
+      case 'rename':
+        if (tile) openRename({ ptyId: tile.ptyId, taskId: tile.task?.id ?? null, current: tile.title, provider: tile.provider });
+        else row?.rename?.();
+        break;
       case 'launcher':
         openLauncher();
         break;
@@ -688,6 +726,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     openLauncher,
     openReply,
     openCheckin,
+    openRename,
     registerRows,
     selectRow,
     setSection,
@@ -776,6 +815,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       )}
       {popover?.kind === 'checkin' && api && (
         <CheckinPopover api={api} ptyId={popover.ptyId} label={popover.label} onClose={() => setPopover(null)} notify={notify} />
+      )}
+      {popover?.kind === 'rename' && (
+        <RenamePopover target={popover.target} onSave={saveName} onClose={() => setPopover(null)} notify={notify} />
       )}
     </div>,
     document.body,

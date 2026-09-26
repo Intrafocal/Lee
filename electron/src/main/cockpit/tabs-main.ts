@@ -16,6 +16,7 @@ import {
   type LaunchRequest,
   type TabReadRequest,
   type TabSendRequest,
+  type AgentNameSource,
 } from '../../shared/cockpit';
 import { getHesterPort } from '../copilot/capture';
 import type { PTYManager } from '../pty-manager';
@@ -28,6 +29,18 @@ import { installShellIntegration, setShellIntegrationWorkspaceResolver } from '.
 import { createTabDomain } from './tab-domain';
 import { TabRuntimeImpl, type PtyHost } from './tab-runtime';
 import { TaskRelay } from './task-relay';
+import { safeTranscriptPath, TranscriptTitleReader } from './session-name';
+import { listWorkspaceFiles } from './workspace-files';
+import { copilotBus } from '../copilot/bus';
+import * as path from 'path';
+
+/** The open window workspace equal to `p`, else null (the file list is only served for open workspaces). */
+function openWorkspacePath(p: string): string | null {
+  for (const [, w] of windowRegistry.getAll()) {
+    if (w.workspace && path.resolve(w.workspace) === path.resolve(p)) return w.workspace;
+  }
+  return null;
+}
 
 const LOCAL_USER: Principal = { kind: 'local-user' };
 const TABS_PUSH_MS = 500;
@@ -127,6 +140,31 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
   const relay = new TaskRelay({ getHesterPort, log });
   const launcher = new TaskLauncherImpl(rt, relay);
   const checkins = new CheckinManager(rt);
+
+  // Session names (addendum 2026-09-26b): Claude's transcript title lines on
+  // SessionStart / UserPromptSubmit / Stop, and names you type.
+  const titles = new TranscriptTitleReader();
+  copilotBus.on('agent-transcript', (sig: { pty_id: number | null; transcript_path: string }) => {
+    if (sig?.pty_id == null || !rt.exists(sig.pty_id)) return;
+    const file = safeTranscriptPath(sig.transcript_path);
+    if (!file) return;
+    const got = titles.read(file);
+    if (!got) return;
+    if (got.customTitle) rt.setName(sig.pty_id, got.customTitle, 'custom-title');
+    if (got.aiTitle) rt.setName(sig.pty_id, got.aiTitle, 'ai-title');
+  });
+  rt.on('name', (ptyId: number, name: string | null, source: AgentNameSource | null, relayIt: boolean) => {
+    if (!relayIt) return;
+    const workspace = rt.workspaceOf(ptyId);
+    if (!workspace) return;
+    void relay.relayName({
+      workspace,
+      task_id: rt.taskOf(ptyId),
+      session_id: rt.sessionOf(ptyId),
+      name,
+      source: source ?? 'user',
+    });
+  });
   cockpitBus.setTabRuntime(rt);
   cockpitBus.setLauncher(launcher);
   cockpitBus.registerCommandDomain('tab', createTabDomain(rt, checkins));
@@ -172,6 +210,18 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
   ipcMain.handle(COCKPIT_IPC.tabState, (_e: IpcMainInvokeEvent, ptyId: number) => rt.state(ptyArg(ptyId)));
   ipcMain.handle(COCKPIT_IPC.tabSend, (_e: IpcMainInvokeEvent, ptyId: number, req: TabSendRequest) => rt.send(ptyArg(ptyId), req ?? { text: '' }, LOCAL_USER));
   ipcMain.handle(COCKPIT_IPC.tabFocus, (_e: IpcMainInvokeEvent, ptyId: number) => focusPty(ptyArg(ptyId)));
+  ipcMain.handle(COCKPIT_IPC.tabRename, (_e: IpcMainInvokeEvent, ptyId: number, name: unknown) => {
+    const id = ptyArg(ptyId);
+    if (!rt.exists(id)) return { success: false, error: 'not_found' };
+    if (name != null && typeof name !== 'string') return { success: false, error: 'invalid' };
+    rt.setName(id, (name as string | null) ?? null, 'user');
+    return { success: true };
+  });
+  ipcMain.handle(COCKPIT_IPC.filesList, async (_e: IpcMainInvokeEvent, workspace: unknown) => {
+    const ws = typeof workspace === 'string' ? openWorkspacePath(workspace) : null;
+    if (!ws) return { files: [], truncated: false };
+    return listWorkspaceFiles(ws);
+  });
   ipcMain.handle(COCKPIT_IPC.checkin, (_e: IpcMainInvokeEvent, ptyId: number, opts?: { force?: boolean }) =>
     checkins.checkin(ptyArg(ptyId), { by: LOCAL_USER, force: !!opts?.force }),
   );

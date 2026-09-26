@@ -186,7 +186,11 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
                 </button>
               </>
             )}
-            <button className="cockpit-btn" disabled={busy || !!task.workstream} onClick={() => run(() => promoteTask(ctx.workspace, task.id), 'Promoted to a workstream')}>
+            <button
+              className="cockpit-btn"
+              disabled={busy || !!task.workstream}
+              onClick={() => run(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream')}
+            >
               Promote…
             </button>
             {tile && (
@@ -199,6 +203,9 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
                 Check in
               </button>
             )}
+            <button className="cockpit-btn" title="Rename (e)" onClick={() => handle.rename?.()}>
+              Rename
+            </button>
           </div>
         )
       )}
@@ -221,6 +228,13 @@ export const TasksSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       open: tile ? () => ctx.goInto(tile.ptyId, 'tabs') : undefined,
       approval: tile?.approval ?? null,
       replyItem: tile?.replyItem ?? null,
+      rename: () =>
+        ctx.openRename({
+          ptyId: tile?.ptyId ?? null,
+          taskId: t.id,
+          current: tile?.title || taskTitle(t) || t.title,
+          provider: t.agent?.provider ?? null,
+        }),
     };
   });
   useEffect(() => {

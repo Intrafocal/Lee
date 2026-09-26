@@ -8,7 +8,16 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { encodeWorkspaceHeader, type TaskAgentRef, type TaskKind, type TaskLead, type TaskOrigin, type TaskStatus } from '../../shared/cockpit';
+import {
+  encodeWorkspaceHeader,
+  type AgentNameSource,
+  type TaskAgentRef,
+  type TaskContextRef,
+  type TaskKind,
+  type TaskLead,
+  type TaskOrigin,
+  type TaskStatus,
+} from '../../shared/cockpit';
 
 const RETRY_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 5000;
@@ -27,6 +36,20 @@ export interface TaskRecord {
   confirmed: boolean;
   origin: TaskOrigin;
   note?: string | null;
+  /** Session name you typed (Launcher Name field); never derived from the prompt. */
+  name?: string | null;
+  name_source?: AgentNameSource | null;
+  /** Context attached at launch: workspace-relative paths and bundle ids only. */
+  context?: TaskContextRef | null;
+}
+
+/** A name change for a task (by id) or an agent session (by session id). */
+export interface NameRecord {
+  workspace: string;
+  task_id?: string | null;
+  session_id?: string | null;
+  name: string | null;
+  source: AgentNameSource;
 }
 
 type PostOutcome = { ok: true } | { ok: false; retry: boolean; error: string };
@@ -80,6 +103,17 @@ export class TaskRelay {
     }
     this.ensureRetry();
     return false;
+  }
+
+  /**
+   * Best effort: tell Hester a task's name changed (POST /cockpit/tasks/name).
+   * Not spooled: detected names repeat on every turn end, and a name you
+   * typed is also in the launch record or retried by the renderer.
+   */
+  async relayName(rec: NameRecord): Promise<boolean> {
+    if (!rec.task_id && !rec.session_id) return false;
+    const out = await this.postTo('/cockpit/tasks/name', rec.workspace, rec);
+    return out.ok;
   }
 
   /** Retry spooled records in order; stops at the first Hester still can't take. */
@@ -138,8 +172,12 @@ export class TaskRelay {
     }
   }
 
-  private async post(rec: TaskRecord): Promise<PostOutcome> {
-    const url = `http://127.0.0.1:${this.opts.getHesterPort()}/cockpit/tasks`;
+  private post(rec: TaskRecord): Promise<PostOutcome> {
+    return this.postTo('/cockpit/tasks', rec.workspace, rec);
+  }
+
+  private async postTo(route: string, workspace: string, body: unknown): Promise<PostOutcome> {
+    const url = `http://127.0.0.1:${this.opts.getHesterPort()}${route}`;
     const token = (this.opts.getSharedToken ?? readSharedToken)();
     try {
       const res = await fetch(url, {
@@ -147,9 +185,9 @@ export class TaskRelay {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
-          'X-Lee-Workspace': encodeWorkspaceHeader(rec.workspace),
+          'X-Lee-Workspace': encodeWorkspaceHeader(workspace),
         },
-        body: JSON.stringify(rec),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       try {

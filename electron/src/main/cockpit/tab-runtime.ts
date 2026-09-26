@@ -39,6 +39,7 @@ import { OutputRing } from './output-ring';
 import { ShellOscParser, type ShellOscEvent } from './shell-osc';
 import { forgetSpawn, spawnInfo } from './shell-integration';
 import { compilePattern, decideTabState, type HookPhase } from './tab-state';
+import { applyName } from './session-name';
 
 /** The slice of PTYManager the runtime uses (a fake in the smoke test). */
 export interface PtyHost {
@@ -537,6 +538,32 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     this.emit('change');
   }
 
+  /**
+   * Record a session name observation (you, /rename, Claude's AI title) with
+   * the precedence rule in session-name.ts. Emits 'name' (ptyId, name,
+   * source) and a change when the name moves; returns whether it did.
+   */
+  setName(ptyId: number, name: string | null, source: AgentNameSource, opts: { relay?: boolean } = {}): boolean {
+    if (!this.entries.has(ptyId) && !this.host.get(ptyId)) return false;
+    const e = this.entry(ptyId);
+    const next = applyName({ name: e.name, source: e.nameSource, seenCustom: e.seenCustomTitle }, { name, source });
+    if (!next) return false;
+    const moved = next.name !== e.name || next.source !== e.nameSource;
+    e.name = next.name;
+    e.nameSource = next.source;
+    e.seenCustomTitle = next.seenCustom;
+    if (moved) {
+      this.emit('name', ptyId, e.name, e.nameSource, opts.relay !== false);
+      this.emit('change');
+    }
+    return moved;
+  }
+
+  nameOf(ptyId: number): { name: string | null; source: AgentNameSource | null } {
+    const e = this.entries.get(ptyId);
+    return { name: e?.name ?? null, source: e?.nameSource ?? null };
+  }
+
   /** The agent's name if it has one, else the tab label (Feed titles, proposals). */
   displayNameOf(ptyId: number): string {
     return this.entries.get(ptyId)?.name || this.labelOf(ptyId);
@@ -663,7 +690,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     e.source = d.source;
     // Kind and provider are in the signature so a shell that starts (or
     // quits) a hand-run Claude/Pi is pushed to the renderer as an agent.
-    const sig = `${e.state}|${d.kind}|${this.runningAgent(e.id) ?? ''}|${this.labelOf(e.id)}|${e.lastCommand?.at ?? ''}|${e.cwd ?? ''}|${e.taskId ?? ''}`;
+    const sig = `${e.state}|${d.kind}|${e.name ?? ''}|${this.runningAgent(e.id) ?? ''}|${this.labelOf(e.id)}|${e.lastCommand?.at ?? ''}|${e.cwd ?? ''}|${e.taskId ?? ''}`;
     if (sig !== e.sig) {
       e.sig = sig;
       this.emit('change');

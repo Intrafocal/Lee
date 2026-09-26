@@ -375,14 +375,89 @@ async function main() {
       { session_id: 'uuid-1', slug: 'fix-abcd' },
     );
     assert.deepStrictEqual(a, [
-      '--permission-mode', 'acceptEdits', '--worktree', 'fix-abcd', '--session-id', 'uuid-1', '-n', 'Fix',
+      '--permission-mode', 'acceptEdits', '--worktree', 'fix-abcd', '--session-id', 'uuid-1', '--name', 'Fix',
       '--model', 'haiku', '--tools', 'Bash,Read', '--allowedTools', 'Read,Bash(ls:*)', '--', '- fix it',
     ]);
     const plan = buildClaudeArgs({ workspace: WS, lead: 'plan', prompt: 'think about x' }, { session_id: 's' });
-    assert.deepStrictEqual(plan, ['--permission-mode', 'plan', '--session-id', 's', '-n', 'think about x', '--', 'think about x']);
+    // No name from the prompt: Claude would write it to the transcript as a custom-title.
+    assert.deepStrictEqual(plan, ['--permission-mode', 'plan', '--session-id', 's', '--', 'think about x']);
     const manual = buildClaudeArgs({ workspace: WS, permission_mode: 'manual', worktree: false }, { session_id: 's' });
-    assert.deepStrictEqual(manual, ['--permission-mode', 'manual', '--session-id', 's', '-n', 'Task']);
+    assert.deepStrictEqual(manual, ['--permission-mode', 'manual', '--session-id', 's']);
+    const named = buildClaudeArgs(
+      { workspace: WS, name: '  Login  fix ', title: 'T', prompt: 'go', worktree: false },
+      { session_id: 's', refs: ['@src/a.ts', '@/abs/.hester/context/bundles/auth.md'] },
+    );
+    assert.deepStrictEqual(named, ['--permission-mode', 'acceptEdits', '--session-id', 's', '--name', 'Login fix', '--', 'go\n\nContext: @src/a.ts @/abs/.hester/context/bundles/auth.md']);
+    const { buildPiArgs } = cockpit('launcher.js');
+    assert.deepStrictEqual(buildPiArgs({ workspace: WS, name: 'Pi job', prompt: 'do it' }, ['@a.md']), ['--name', 'Pi job', '--', '@a.md', 'do it']);
+    assert.deepStrictEqual(buildPiArgs({ workspace: WS }), []);
     assert.strictEqual(launchPlan({ workspace: WS }, { worktree_for_delegate: false }).worktree, false);
+  });
+
+  // -------------------------------------------------------------------------
+  await check('names: precedence (user > /rename > AI title), transcript title lines only, path under ~/.claude/projects', () => {
+    const { applyName, cleanName, safeTranscriptPath, TranscriptTitleReader } = cockpit('session-name.js');
+    let st = { name: null, source: null, seenCustom: null };
+    st = applyName(st, { name: 'AI one', source: 'ai-title' });
+    assert.deepStrictEqual([st.name, st.source], ['AI one', 'ai-title']);
+    st = applyName(st, { name: 'Mine', source: 'user' });
+    assert.strictEqual(applyName(st, { name: 'AI two', source: 'ai-title' }), null, 'AI never beats yours');
+    st = applyName(st, { name: 'Renamed', source: 'custom-title' });
+    assert.deepStrictEqual([st.name, st.source], ['Renamed', 'custom-title']);
+    st = applyName(st, { name: 'Mine again', source: 'user' });
+    assert.strictEqual(applyName(st, { name: 'Renamed', source: 'custom-title' }), null, 'the same /rename seen again does not beat yours');
+    assert.strictEqual(cleanName(' a\n  b\x07 '), 'a b');
+    assert.strictEqual(cleanName('   '), null);
+
+    const projects = path.join(tmpHome, '.claude', 'projects', '-work');
+    fs.mkdirSync(projects, { recursive: true });
+    const file = path.join(projects, 'sess.jsonl');
+    const secret = 'PROMPT-SECRET-CONTENT';
+    fs.writeFileSync(file, [
+      JSON.stringify({ type: 'user', message: { content: secret } }),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'Fix login loop', sessionId: 's' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'mentions "type":"custom-title" in text ' + secret }] } }),
+      '',
+    ].join('\n'));
+    assert.strictEqual(safeTranscriptPath(file), fs.realpathSync(file));
+    assert.strictEqual(safeTranscriptPath(path.join(tmpHome, 'elsewhere.jsonl')), null);
+    assert.strictEqual(safeTranscriptPath(path.join(projects, '..', '..', 'x.jsonl')), null);
+    assert.strictEqual(safeTranscriptPath('relative.jsonl'), null);
+    const reader = new TranscriptTitleReader();
+    assert.deepStrictEqual(reader.read(file), { customTitle: null, aiTitle: 'Fix login loop' });
+    // Appended later (read incrementally): a /rename, then a line still being written.
+    fs.appendFileSync(file, JSON.stringify({ type: 'custom-title', customTitle: 'Login \u2728 fix', sessionId: 's' }) + '\n{"type":"custom-ti');
+    assert.deepStrictEqual(reader.read(file), { customTitle: 'Login \u2728 fix', aiTitle: 'Fix login loop' });
+    fs.appendFileSync(file, 'tle","customTitle":"Final"}\n');
+    assert.strictEqual(reader.read(file).customTitle, 'Final');
+
+    // The runtime applies the rule and emits a 'name' change; your launch name is not relayed twice.
+    const seen = [];
+    rt.on('name', (id, n, src, relayIt) => seen.push([id, n, src, relayIt]));
+    assert.strictEqual(rt.setName(1, 'Fix login loop', 'ai-title'), true);
+    assert.strictEqual(rt.get(1).name, 'Fix login loop');
+    assert.strictEqual(rt.setName(1, 'My name', 'user', { relay: false }), true);
+    assert.strictEqual(rt.setName(1, 'Other AI', 'ai-title'), false);
+    assert.strictEqual(rt.displayNameOf(1), 'My name');
+    assert.deepStrictEqual(seen.map((x) => [x[2], x[3]]), [['ai-title', true], ['user', false]]);
+    assert.strictEqual(rt.get(1).name_source, 'user');
+    rt.setName(1, null, 'user');
+    rt.removeAllListeners('name');
+  });
+
+  await check('context: files inside the workspace and existing bundles become @references (deterministic)', () => {
+    const { contextRefs, withContext, workspaceRelative } = cockpit('workspace-files.js');
+    fs.mkdirSync(path.join(WS, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(WS, 'src', 'a.ts'), 'x');
+    fs.mkdirSync(path.join(WS, '.hester', 'context', 'bundles'), { recursive: true });
+    fs.writeFileSync(path.join(WS, '.hester', 'context', 'bundles', 'auth.md'), '---\nid: auth\n---\n');
+    const r = contextRefs(WS, { files: ['src/a.ts', path.join(WS, 'src', 'a.ts'), '../outside.txt', 'missing.ts'], bundles: ['auth', 'nope', '../x'] });
+    assert.deepStrictEqual(r.files, ['src/a.ts']);
+    assert.deepStrictEqual(r.bundles, ['auth']);
+    assert.deepStrictEqual(r.refs, ['@src/a.ts', `@${path.join(path.resolve(WS), '.hester', 'context', 'bundles', 'auth.md')}`]);
+    assert.strictEqual(workspaceRelative(WS, '/etc/passwd'), null);
+    assert.strictEqual(withContext('', ['@a']), 'Context: @a');
+    assert.strictEqual(withContext('p', []), 'p');
   });
 
   // -------------------------------------------------------------------------
@@ -748,11 +823,56 @@ async function main() {
     assert.strictEqual((await launcher.launch({ workspace: '/not/open', prompt: 'x' }, LOCAL, 1)).success, false);
   });
 
+  await check('launch: a name and context reach argv and the task record (paths only), a Pi launch takes its prompt', async () => {
+    sentToWindow.length = 0;
+    const origSend = bw.webContents.send;
+    let nextPty = 70;
+    bw.webContents.send = (channel, payload) => {
+      sentToWindow.push([channel, payload]);
+      if (channel === 'cockpit:create-tab') {
+        const id = nextPty++;
+        setTimeout(() => {
+          host.add(id, { claude: payload.provider === 'claude', name: payload.label });
+          tabs.push({ id: 100 + id, type: 'agent', provider: payload.provider, label: payload.label, ptyId: id, dockPosition: 'center', state: 'idle' });
+          rt.resolveCreateTab({ request_id: payload.request_id, tab_id: 100 + id, pty_id: id });
+        }, 10);
+      }
+    };
+    const before = relay.pending();
+    const res = await launcher.launch(
+      { workspace: WS, prompt: 'Look at auth', name: 'Auth review', worktree: false, context: { files: ['src/a.ts', '../etc'], bundles: ['auth'] } },
+      LOCAL,
+      1,
+    );
+    const pi = await launcher.launch({ workspace: WS, provider: 'pi', prompt: 'Summarise', name: 'Pi sum', context: { files: ['src/a.ts'] } }, LOCAL, 1);
+    const bot = await launcher.launch({ workspace: WS, provider: 'screenbot', prompt: 'x' }, LOCAL, 1);
+    bw.webContents.send = origSend;
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    const [req, piReq] = sentToWindow.filter(([c]) => c === 'cockpit:create-tab').map(([, p]) => p);
+    assert.strictEqual(req.label, 'Auth review', 'the name is the tab label');
+    assert.deepStrictEqual(req.args.slice(-4), ['--name', 'Auth review', '--', `Look at auth\n\nContext: @src/a.ts @${path.join(path.resolve(WS), '.hester', 'context', 'bundles', 'auth.md')}`]);
+    assert.strictEqual(rt.get(res.pty_id).name, 'Auth review');
+    assert.strictEqual(rt.get(res.pty_id).name_source, 'user');
+    assert.deepStrictEqual([piReq.type, piReq.provider], ['agent', 'pi']);
+    assert.deepStrictEqual(piReq.args, ['--name', 'Pi sum', '--', '@src/a.ts', 'Summarise']);
+    assert.strictEqual(pi.success, true);
+    assert.strictEqual(bot.error, 'prompt_unsupported');
+    const recs = fs.readFileSync(spool, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const rec = recs.find((r) => r.id === res.task_id);
+    assert.deepStrictEqual([rec.name, rec.name_source], ['Auth review', 'user']);
+    assert.deepStrictEqual(rec.context, { files: ['src/a.ts'], bundles: ['auth'] });
+    assert.ok(!fs.readFileSync(spool, 'utf8').includes('Look at auth'), 'prompt never spooled');
+    const ev = events.filter((e) => e.type === 'task.launch').find((e) => e.data.task_id === res.task_id);
+    assert.deepStrictEqual([ev.data.named, ev.data.context_files, ev.data.context_bundles], [true, 1, 1]);
+    assert.ok(!JSON.stringify(ev).includes('src/a.ts') && !JSON.stringify(ev).includes('Auth review'), 'no paths or names in the event log');
+    assert.strictEqual(relay.pending(), before + 2);
+  });
+
   await check('launch: human lead relays a queued task; spool drains when Hester is up', async () => {
     const res = await launcher.launch({ workspace: WS, title: 'Write the doc', lead: 'human' }, LOCAL, 1);
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.pty_id, null);
-    assert.strictEqual(relay.pending(), 2);
+    assert.strictEqual(relay.pending(), 4);
     const got = [];
     const server = http.createServer((req, res2) => {
       let body = '';
@@ -765,15 +885,16 @@ async function main() {
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     hesterPort = server.address().port;
-    assert.strictEqual(await relay.drain(), 2);
+    assert.strictEqual(await relay.drain(), 4);
     server.close();
     assert.strictEqual(relay.pending(), 0);
     assert.ok(!fs.existsSync(spool));
     assert.strictEqual(got[0].url, '/cockpit/tasks');
     assert.strictEqual(got[0].auth, 'Bearer tok');
     assert.strictEqual(got[0].ws, WS);
-    assert.strictEqual(got[1].body.status, 'queued');
-    assert.strictEqual(got[1].body.agent, null);
+    assert.strictEqual(got[3].body.status, 'queued');
+    assert.strictEqual(got[3].body.agent, null);
+    assert.strictEqual(got[1].body.name, 'Auth review');
     relay.stop();
   });
 
@@ -805,7 +926,7 @@ async function main() {
     const seen = [];
     bw.webContents.send = (channel, payload) => {
       seen.push(channel);
-      if (channel === 'system:create-tab') setTimeout(() => host.add(31, { name: payload.label }), 20);
+      if (channel === 'system:create-tab') setTimeout(() => host.add(131, { name: payload.label }), 20);
     };
     const r = await rt.openTab(
       { workspace: WS, type: 'terminal', label: '▶ build', command: 'npm', args: ['run', 'build'] },
@@ -813,7 +934,7 @@ async function main() {
     );
     bw.webContents.send = origSend;
     assert.deepStrictEqual(seen, ['cockpit:create-tab', 'system:create-tab']);
-    assert.strictEqual(r.pty_id, 31);
+    assert.strictEqual(r.pty_id, 131);
   });
 
   await check('create-tab fallback: an agent launch with argv falls back to a terminal running its command', async () => {
@@ -821,7 +942,7 @@ async function main() {
     const seen = [];
     bw.webContents.send = (channel, payload) => {
       seen.push([channel, payload]);
-      if (channel === 'system:create-tab') setTimeout(() => host.add(32, { name: payload.label, claude: true }), 20);
+      if (channel === 'system:create-tab') setTimeout(() => host.add(132, { name: payload.label, claude: true }), 20);
     };
     const r = await rt.openTab(
       { workspace: WS, type: 'agent', provider: 'claude', label: 'Named task', command: 'claude', args: ['--session-id', 'sx'] },
@@ -831,7 +952,7 @@ async function main() {
     assert.deepStrictEqual(seen[0][1].args, ['--session-id', 'sx']);
     assert.strictEqual(seen[0][1].type, 'agent');
     assert.deepStrictEqual(seen[1], ['system:create-tab', { type: 'terminal', label: 'Named task', command: 'claude', args: ['--session-id', 'sx'] }]);
-    assert.strictEqual(r.pty_id, 32);
+    assert.strictEqual(r.pty_id, 132);
   });
 
   await check('Pi: extension file written; --extension prepended for pi only', () => {

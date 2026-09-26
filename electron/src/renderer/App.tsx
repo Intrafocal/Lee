@@ -223,9 +223,8 @@ const App: React.FC = () => {
       const attention = t.ptyId != null ? tabAttention.get(t.ptyId) : undefined;
       const shown = t.ptyId != null ? tabDisplay.get(t.ptyId) : undefined;
       const runProvider = shown && t.type !== 'agent' ? shown.provider ?? undefined : undefined;
-      const label = shown?.name || t.label;
-      if (attention === t.attention && runProvider === t.runProvider && label === t.label) return t;
-      return { ...t, attention, runProvider, label };
+      if (attention === t.attention && runProvider === t.runProvider) return t;
+      return { ...t, attention, runProvider };
     }),
     [tabs, tabAttention, tabDisplay],
   );
@@ -826,12 +825,35 @@ const App: React.FC = () => {
     setTimeout(() => { isSwitchingRef.current = false; }, 0);
   }, [workspace, saveSession, closeAllTabs]);
 
-  // Rename a tab
+  // Rename a tab. Renaming an agent's tab names its session (yours: the
+  // Cockpit relays it to the agent's task, and it wins over Claude's titles).
   const renameTab = useCallback((tabId: number, newLabel: string) => {
+    const tab = tabsRef.current.find((t) => t.id === tabId);
     setTabs(prev => prev.map(tab =>
       tab.id === tabId ? { ...tab, label: newLabel } : tab
     ));
+    if (tab?.ptyId != null && tabDisplayRef.current.has(tab.ptyId)) {
+      void window.lee?.cockpit?.tabs.rename(tab.ptyId, newLabel).catch(() => {});
+    }
   }, []);
+
+  // An agent's session name (yours, a Claude /rename, or Claude's own title)
+  // is its tab label, so the tab strip, saved context and attention items say it.
+  const tabDisplayRef = useRef(tabDisplay);
+  tabDisplayRef.current = tabDisplay;
+  useEffect(() => {
+    if (tabDisplay.size === 0) return;
+    setTabs(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        const name = t.ptyId != null ? tabDisplay.get(t.ptyId)?.name : null;
+        if (!name || name === t.label) return t;
+        changed = true;
+        return { ...t, label: name };
+      });
+      return changed ? next : prev;
+    });
+  }, [tabDisplay]);
 
   // Toggle watch state for agent tabs only
   const toggleWatch = useCallback((tabId: number) => {

@@ -301,7 +301,9 @@ export function createFakeCockpitApi(): CockpitAPI {
       state: (ptyId) => Promise.resolve(state(ptyId, 'idle-at-prompt', 1)),
       send: () => Promise.resolve({ success: false, error: 'forbidden' }),
       focus: () => Promise.resolve({ success: false, error: 'fake' }),
+      rename: () => Promise.resolve({ success: false, error: 'fake' }),
     },
+    files: () => Promise.resolve({ files: ['README.md', 'electron/src/main/main.ts'], truncated: false }),
     checkin: (ptyId): Promise<CheckinResult> => {
       addEvent(`Checked in on ${ptyId} (fake)`, `Would type: ${CHECKIN_PROMPT}`);
       return Promise.resolve({ success: true, checkin_id: 'chk_fake', state: 'sent', source: 'screen' });

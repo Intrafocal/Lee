@@ -66,6 +66,8 @@ const {
   tabDisplayFromRuntime,
   checkinToasts,
   checkinChipLabel,
+  fuzzyScore,
+  fuzzyFilter,
 } = mod;
 
 let passed = 0;
@@ -385,6 +387,31 @@ test('async check-ins: tile chip from the runtime; results toasted once, only fo
   const out = checkinToasts(entries, new Set(['chk_1', 'chk_2']), new Set());
   assert.deepEqual(out.map((t) => [t.checkin_id, t.level]), [['chk_1', 'info'], ['chk_2', 'error']]);
   assert.deepEqual(checkinToasts(entries, new Set(['chk_1']), new Set(['chk_1'])), []);
+});
+
+test('names: the session name wins on tiles, task rows and attention sources', () => {
+  assert.equal(taskTitle({ title: 'Fix it', title_source: 'user', name: 'Login fix' }), 'Login fix');
+  assert.equal(taskTitle({ title: 'Fix it', title_source: 'user', name: null }), 'Fix it');
+  const rt = runtime({ pty_id: 30, name: 'Live name', name_source: 'ai-title' });
+  const task = { id: 't1', title: 'Old', title_source: 'agent', name: 'Task name', name_source: 'user', agent: { provider: 'pi', pty_id: 30 }, lead: 'delegate', confirmed: true, busy_ms: 0 };
+  const [tile] = tileModel({ workspace: WS, tabs: [], sets: noSets, snapshot: null, runtime: [rt], tasks: [task], now: NOW });
+  assert.equal(tile.title, 'Live name');
+  assert.equal(tile.nameSource, 'ai-title');
+  const [tile2] = tileModel({ workspace: WS, tabs: [], sets: noSets, snapshot: null, runtime: [runtime({ pty_id: 30 })], tasks: [task], now: NOW });
+  assert.equal(tile2.title, 'Task name');
+  const rows = mergeFeed({ workspace: WS, items: [item({ source: { ...item().source, pty_id: 12, tab_label: 'Claude' } })], names: new Map([[12, 'Auth review']]) });
+  assert.equal(rows[0].item.source.tab_label, 'Auth review');
+});
+
+test('fuzzy: subsequence match, basename and boundary matches first, non-matches dropped', () => {
+  const files = ['electron/src/main/cockpit/launcher.ts', 'docs/13-Copilot.md', 'electron/src/renderer/components/cockpit/Launcher.tsx', 'README.md'];
+  assert.equal(fuzzyScore('zzz', 'README.md'), Number.NEGATIVE_INFINITY);
+  const top = fuzzyFilter('launcher', files, (f) => f, 5);
+  assert.equal(top.length, 2);
+  assert.ok(top.every((f) => /launcher/i.test(f)));
+  assert.equal(fuzzyFilter('rdme', files, (f) => f)[0], 'README.md');
+  assert.deepEqual(fuzzyFilter('', files, (f) => f, 2), files.slice(0, 2));
+  assert.ok(fuzzyScore('cop', 'docs/13-Copilot.md') > fuzzyScore('cop', 'electron/src/main/cockpit/launcher.ts'));
 });
 
 test('stripTabs: hides agents you did not go into; identity when disabled or nothing hidden', () => {
