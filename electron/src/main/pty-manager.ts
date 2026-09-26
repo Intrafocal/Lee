@@ -17,6 +17,8 @@ import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
 import { isClaude, withClaudeHooks } from './copilot/hook-install';
+import { withShellIntegration } from './cockpit/shell-integration';
+import { isPi, withPiExtension } from './cockpit/pi-extension';
 
 /**
  * Check if a port is available (not in use).
@@ -244,6 +246,8 @@ export interface PTYProcess {
   windowId: number | null;  // null = daemon/background
   /** Spawned as Claude Code (so with Lee's hook settings when they exist). */
   claude?: boolean;
+  /** Spawned as Pi (with Lee's hook extension when it exists). */
+  pi?: boolean;
 }
 
 /**
@@ -860,12 +864,14 @@ export class PTYManager extends EventEmitter {
       }
     }
     finalArgs = withClaudeHooks(cmd, finalArgs);
+    finalArgs = withPiExtension(cmd, finalArgs);
     const claude = isClaude(cmd);
+    const pi = isPi(cmd) && finalArgs.includes('--extension');
 
     this.log('INFO', `Spawning PTY ${id}`, {
       command: cmd,
       // Claude argv can carry the user's prompt text (handoff launches); keep it out of lee.log.
-      args: claude ? `[${finalArgs.length} args]` : finalArgs,
+      args: claude || isPi(cmd) ? `[${finalArgs.length} args]` : finalArgs,
       cwd: cwd || process.cwd(),
       name: name || cmd,
       loginShell: loginShell && !command,
@@ -885,6 +891,7 @@ export class PTYManager extends EventEmitter {
     // Always Lee's own loopback API: an inherited or workspace-sourced value
     // would send hook payloads and the shared token elsewhere.
     env.LEE_API_URL = `http://127.0.0.1:${this.apiPort}`;
+    finalArgs = withShellIntegration(cmd, finalArgs, env, !command);
 
     const ptyProcess = pty.spawn(cmd, finalArgs, {
       name: 'xterm-256color',
@@ -901,6 +908,7 @@ export class PTYManager extends EventEmitter {
       state: {},
       windowId: windowId ?? null,
       claude,
+      pi,
     };
 
     this.processes.set(id, proc);
@@ -2010,9 +2018,10 @@ export class PTYManager extends EventEmitter {
     if (this.processes.has(id)) this.emit('user-input', id, data);
   }
 
-  /** True when the PTY was spawned as Claude Code. */
+  /** True when the PTY was spawned as a hooked agent: Claude Code, or Pi with Lee's extension. */
   isClaudePty(id: number): boolean {
-    return this.processes.get(id)?.claude === true;
+    const proc = this.processes.get(id);
+    return proc?.claude === true || proc?.pi === true;
   }
 
   /** True while the PTY is a hidden prewarmed process no tab has adopted. */
