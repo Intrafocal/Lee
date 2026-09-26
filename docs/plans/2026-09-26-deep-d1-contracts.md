@@ -603,8 +603,9 @@ S then runs `npm run typecheck` and the existing smokes, and commits with the me
 | Files | Owner |
 |---|---|
 | `cockpitMode.ts`, `lib/cockpitModel.ts`, `CockpitHost.tsx`, `CockpitHeader.tsx`, `CockpitModeChip.tsx`, `TabDrawer.tsx`, `App.tsx`, `PanelLayout.tsx`, `TabBar.tsx`, `StatusBar.tsx`, `hooks/useHotkeys.ts`, `sections/*` except `CopilotSection.tsx`, a new `components/cockpit/ModeSwitcher.tsx`, `cockpit.css`, `scripts/cockpit-renderer-smoke.mjs` | R1 |
-| `components/deep/**`, `lib/deepModel.ts`, `lib/hesterDeep.ts`, `sections/CopilotSection.tsx`, `CommandPalette.tsx`, `copilot/*` components if needed, a new `scripts/deep-renderer-smoke.mjs`, `scripts/cockpit-explore-smoke.mjs` | R2 |
+| `components/deep/**`, `lib/deepModel.ts`, `lib/hesterDeep.ts`, `sections/CopilotSection.tsx`, `CommandPalette.tsx`, a new `scripts/deep-renderer-smoke.mjs`, `scripts/cockpit-explore-smoke.mjs` | R2 |
 
+- **Retiring manual Focus is R1's** (`components/copilot/*` included): the Cockpit header's Focus button, the status bar's "Start focus", `FocusControl.tsx` and `CopilotStatus.tsx` become **Go deep**. Go deep calls `deepStart` with the open exploration from `getDeep()` if there is one; otherwise it calls `cockpitModeStore.focusOpener()`. While a Deep session is active, the status bar shows "Deep · N waiting" in a neutral colour (§3.3 of 14), and the chip's menu has End session (`requestEndSession`).
 - R1 mounts `<DeepHost>` in `App.tsx` next to `<CockpitHost>` when the Cockpit is enabled, and passes `CommandPalette` its `exploration` prop while in Deep with an exploration open.
 - R2 opens explorations through `window.lee.copilot.deepStart` followed by `cockpitModeStore.openDeep`, and ends sessions through `deepEnd` followed by `cockpitModeStore.set('cockpit', 'deep_end')`.
 - R1's Explore section **Dive in** uses the same two calls.
