@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .semantic import SemanticRouter
     from .semantic.embeddings import EmbeddingService
 
+from .cockpit.explorations import record_session_turn as record_explore_turn
 from .models import (
     ContextRequest,
     ContextResponse,
@@ -1135,6 +1136,10 @@ You are operating in: {working_dir}
                 session.add_message("assistant", response_text)
                 session.trace_ids.append(trace_id)
                 await self.sessions.save(session)
+
+                # An Explore deep dive (session explore-<id>) writes each turn
+                # back to its exploration file (.hester/explore/<id>.md).
+                record_explore_turn(request.session_id, working_dir, cleaned_message, response_text)
 
                 # Extract any editor commands from response
                 commands = self._extract_commands(response_text, result.get("tool_calls", []))

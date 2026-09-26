@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from ...shared.workspace import request_workspace
 from ..workspaces.registry import WorkspaceError, get_registry, validate_workspace
+from .explorations import ExplorationError, ExplorationNotFound, open_session
+from .explorations import to_api as exploration_to_api
 from .goals import load_goals
 from .history import MAX_DAYS, build_history
 from .tasks import (
@@ -274,5 +276,80 @@ def create_cockpit_router() -> APIRouter:
         except BadRequest as e:
             return _err(str(e), e.status)
         return _ok(ctx, ctx.readings().list(metric or None, n))
+
+    # ------------------------------------------------------------ explorations
+
+    @router.get("/cockpit/explorations")
+    async def cockpit_explorations(status: str = "active", limit: Optional[str] = None):
+        try:
+            ctx = context_for()
+            n = _int(limit, 100, 0, 1000, "limit")
+            items = await asyncio.to_thread(ctx.explorations().list, status, n)
+            return _ok(ctx, [exploration_to_api(e) for e in items])
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+
+    @router.post("/cockpit/explorations")
+    async def cockpit_exploration_create(request: Request):
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                exp = ctx.explorations().create(body)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        return _ok(ctx, exploration_to_api(exp), 201)
+
+    @router.get("/cockpit/explorations/{exp_id}")
+    async def cockpit_exploration(exp_id: str):
+        try:
+            ctx = context_for()
+            store = ctx.explorations()
+            data = exploration_to_api(store.require(exp_id))
+            data["body"] = store.body(exp_id)
+            return _ok(ctx, data)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+
+    @router.patch("/cockpit/explorations/{exp_id}")
+    async def cockpit_exploration_patch(exp_id: str, request: Request):
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                exp = ctx.explorations().patch(exp_id, body)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, exploration_to_api(exp))
+
+    @router.post("/cockpit/explorations/{exp_id}/open")
+    async def cockpit_exploration_open(exp_id: str, request: Request):
+        """Seed (if needed) the Hester chat session for the deep dive; Lee then spawns `hester chat --session`."""
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            store = ctx.explorations()
+            async with ctx.lock:
+                exp = store.touch(exp_id)
+            opened = await open_session(store, exp_id)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, {"exploration": exploration_to_api(exp), **opened})
 
     return router

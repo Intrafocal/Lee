@@ -21,6 +21,8 @@ from fastapi.responses import JSONResponse
 
 from ...shared.auth import auth_headers
 from ...shared.workspace import get_current_workspace
+from ..cockpit.explorations import ExplorationError, new_exploration_id
+from ..cockpit.explorations import to_api as exploration_to_api
 from ..cockpit.tasks import first_line, new_task_id
 from ..cockpit.tasks import to_api as task_to_api
 from ..workspaces.registry import get_registry
@@ -184,15 +186,26 @@ def create_copilot_router() -> APIRouter:
                 raise BadRequest("note must be a string")
             action = str(body.get("action") or "")
             to = body.get("to")
+            exp_id = None
             if to is not None:
-                if to != "task":
-                    raise BadRequest("to must be 'task'")
-                if action != "promote":
-                    raise BadRequest("to is only valid with action promote")
-                task_id = new_task_id()
-                if not note:
-                    note = f"task:{task_id}"
-            item = SomedayStore(ws).triage(item_id, action, note=note)
+                if to == "task":
+                    if action != "promote":
+                        raise BadRequest("to task is only valid with action promote")
+                    task_id = new_task_id()
+                    if not note:
+                        note = f"task:{task_id}"
+                elif to == "explore":
+                    if action != "explore":
+                        raise BadRequest("to explore is only valid with action explore")
+                    exp_id = new_exploration_id()
+                    if not note:
+                        note = f"explore:{exp_id}"
+                else:
+                    raise BadRequest("to must be 'task' or 'explore'")
+            store = SomedayStore(ws)
+            if exp_id is not None and store.get(item_id) is None:
+                raise KeyError(item_id)
+            item = store.triage(item_id, action, note=note)
         except BadRequest as e:
             return _err(str(e), e.status)
         except SomedayError as e:
@@ -205,6 +218,18 @@ def create_copilot_router() -> APIRouter:
             workspace=str(ws),
             actor=caller_actor(request),
         )
+        if exp_id is not None:
+            ctx = get_registry().get(ws, source="request")
+            async with ctx.lock:
+                try:
+                    exp = ctx.explorations().create({
+                        "id": exp_id,
+                        "seed": item.text,
+                        "origin": {"kind": "someday", "ref": item.id},
+                    })
+                except ExplorationError as e:
+                    return _err(str(e))
+            return _ok({"item": item.to_dict(), "exploration": exploration_to_api(exp)})
         if task_id is None:
             return _ok(item.to_dict())
         ctx = get_registry().get(ws, source="request")

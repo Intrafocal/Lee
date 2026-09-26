@@ -47,6 +47,7 @@ from ..shared.workspace import (
     workspace_id,
 )
 from .cockpit.follower import EventFollower
+from .cockpit.explorations import configure_sessions as configure_explore_sessions
 from .cockpit.routes import create_cockpit_router
 from .copilot import lee_events, presence as copilot_presence
 from .copilot.model_log import install_model_call_logging, reset_trigger, set_trigger
@@ -820,6 +821,8 @@ async def require_bearer_token(request: Request, call_next):
 
 app.include_router(create_copilot_router())
 app.include_router(create_cockpit_router())
+# Explore deep dives seed and write back through the daemon's chat sessions.
+configure_explore_sessions(lambda: getattr(app_state, "session_manager", None))
 app.include_router(create_workspaces_router())
 
 
@@ -2747,7 +2750,9 @@ async def promote_to_workstream(session_id: str, request: Request):
         raise HTTPException(status_code=400, detail="node_ids required")
 
     manager: ExplorationSessionManager = app_state.exploration_sessions
-    session = manager.get_session(session_id)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Exploration sessions not available")
+    session = await manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 

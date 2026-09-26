@@ -73,6 +73,7 @@ class WorkspaceContext:
     _tasks: Any = field(default=None, repr=False)
     _readings: Any = field(default=None, repr=False)
     _someday: Any = field(default=None, repr=False)
+    _explorations: Any = field(default=None, repr=False)
     _config: Optional[dict] = field(default=None, repr=False)
     _config_key: Optional[tuple] = field(default=None, repr=False)
 
@@ -99,6 +100,12 @@ class WorkspaceContext:
             from ..copilot.someday import SomedayStore
             self._someday = SomedayStore(self.path)
         return self._someday
+
+    def explorations(self):
+        if self._explorations is None:
+            from ..cockpit.explorations import ExplorationStore
+            self._explorations = ExplorationStore(self.path)
+        return self._explorations
 
     def config(self) -> dict:
         key = _mtimes(_config_candidates(self.path))
