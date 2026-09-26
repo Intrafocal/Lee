@@ -6,6 +6,8 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
+import type { Quadrant } from './cockpit';
+
 // ---------------------------------------------------------------------------
 // Actors and principals
 // ---------------------------------------------------------------------------
@@ -70,7 +72,13 @@ export type LeeEventType =
   | 'someday.triage'
   | 'digest.shown'
   | 'retro.shown'
-  | 'retro.answered';
+  | 'retro.answered'
+  // v4 (Hester -> Lee via POST /events): task.override {task_id, important, urgent}; steward.request {surface, about_kind?, goal_id?};
+  // steward.quiet {not_today, until}; proposal.outcome {proposal_id, outcome, action, surface, request_id}
+  | 'task.override'
+  | 'steward.request'
+  | 'steward.quiet'
+  | 'proposal.outcome';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 
@@ -263,12 +271,16 @@ export interface AttentionItem {
    */
   actions: AttentionActionName[];
   snoozed_until?: string | null;
+  /** The source task's quadrant (v4 §7.2), for display; absent when unknown. */
+  quadrant?: Quadrant | null;
 }
 
 export type FocusItem =
   | { kind: 'agent'; pty_id: number; window_id: number | null; label: string }
   | { kind: 'files'; workspace: string | null; paths: string[] }
-  | { kind: 'workspace'; workspace: string };
+  | { kind: 'workspace'; workspace: string }
+  /** v4 §7.4: focus on a Cockpit task; related to attention items from its agent pty. */
+  | { kind: 'task'; workspace: string; task_id: string; label: string };
 
 export interface FocusState {
   active: boolean;

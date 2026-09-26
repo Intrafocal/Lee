@@ -190,6 +190,7 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const handles: RowHandle[] = ops.map((op) => ({
     id: `op:${op.def.name}`,
     title: op.def.name,
+    about: { kind: 'operation', id: op.def.name, label: op.def.name },
     open: () => {
       const pty = op.running?.pty_id ?? op.linked_pty_id ?? null;
       if (pty != null) ctx.focusPty(pty);

@@ -3,9 +3,30 @@
  */
 
 import type { LeeEvent } from '../../../shared/copilot';
-import type { LintFix, LintFixResult } from '../../../shared/cockpit';
+import type { CockpitTask, GitSnapshot, LintFamily, LintFix, LintFixResult, LintSeverity } from '../../../shared/cockpit';
 import type { OpsProvider, TaskLauncher } from '../cockpit-bus';
 import type { LintRuleConfig } from '../cockpit-config';
+import type { HumanBalance } from '../hester-cache';
+
+/** An added line from the working-tree diff against HEAD, or a line of an untracked file (v4 project rules). */
+export interface AddedLine {
+  path: string;
+  line: number;
+  text: string;
+}
+
+/** A `.lee/lint/*.yaml` rule (v4 §7.3), already validated. */
+export interface ProjectRuleDef {
+  /** Without the `project/` prefix. */
+  id: string;
+  message: string;
+  severity: LintSeverity;
+  /** JS regex source, compiled with the `m` flag. */
+  pattern: string;
+  /** Workspace-relative globs; empty = every file. */
+  paths: string[];
+  file: string;
+}
 
 export interface LintFinding {
   rule: string;
@@ -32,18 +53,50 @@ export interface LintContext {
   ops: OpsProvider | null;
   /** Command signatures the user chose to ignore in this workspace (the `ignore-command` fix). */
   ignoredCommands(workspace: string): ReadonlySet<string>;
+  // v4 §7.3 providers. All return cached values (null = not known yet) and never block.
+  /** Workspaces with an open window. */
+  workspaces(): string[];
+  git(workspace: string): GitSnapshot | null;
+  /** Lower-cased text of the Markdown under docs/ and the root README (new-files-undocumented). */
+  docText(workspace: string): string | null;
+  /** Added diff lines and untracked-file lines; only computed while the workspace has project rules. */
+  addedLines(workspace: string): AddedLine[] | null;
+  tasks(workspace: string): CockpitTask[] | null;
+  /** The task whose agent runs in this PTY. */
+  taskByPty(ptyId: number): CockpitTask | null;
+  stewardActive(workspace: string | null): boolean;
+  humanBalance(workspace: string): HumanBalance | null;
+  projectRules(workspace: string): ProjectRuleDef[];
+}
+
+/** Side effects a v4 fix may take. Each is optional: missing means 'unavailable'. */
+export interface LintEffects {
+  /** Spawn the git TUI tab in the workspace's window. */
+  openGit?(workspace: string): Promise<boolean>;
+  /** Open a file (absolute path) at a line in the workspace's window. */
+  openFile?(workspace: string, file: string, line: number | null): Promise<boolean>;
+  /** Type into an agent tab as you (the tab domain's send_input with submit). */
+  sendInput?(ptyId: number, text: string): Promise<{ success: boolean; error?: string }>;
+  checkin?(ptyId: number): Promise<{ success: boolean; error?: string }>;
+  focusTab?(ptyId: number): Promise<{ success: boolean; error?: string }>;
+  /** Someday capture (source lee). */
+  capture?(workspace: string, text: string): Promise<{ success: boolean; error?: string }>;
+  /** A Hester request (shared token, X-Lee-Workspace). Throws on failure. */
+  hester?(workspace: string, method: 'GET' | 'POST' | 'PATCH', route: string, body?: unknown): Promise<unknown>;
+  endFocus?(): Promise<boolean>;
 }
 
 export interface LintFixContext extends LintContext {
   launcher: TaskLauncher | null;
   writeClaudeAllow(workspace: string, rules: string[]): Promise<void>;
   ignoreCommands(workspace: string, sigs: string[]): Promise<void>;
+  effects: LintEffects;
 }
 
 export interface LintRule {
-  /** e.g. 'toil/repeated-sequence'. */
+  /** e.g. 'toil/repeated-sequence'. Project rules use 'project/*'; their findings carry 'project/<id>'. */
   id: string;
-  family: 'toil';
+  family: LintFamily;
   /** Event types (v0 and v2). */
   consumes: string[];
   /** History at startup, then live. */

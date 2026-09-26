@@ -52,6 +52,12 @@ export interface FocusDeps {
   /** True when the PTY runs a tracked agent session. */
   isAgentPty: (ptyId: number) => boolean;
   log: (input: LeeEventInput) => void;
+  /**
+   * v4 §7.4: the task an agent PTY works on ({workspace, task_id}), for
+   * relating attention items to a task focus. Optional; set later with
+   * setTaskResolver() once the cockpit is up.
+   */
+  taskOfPty?: (ptyId: number) => { workspace: string | null; task_id: string } | null;
 }
 
 export interface PresenceLike {
@@ -71,6 +77,7 @@ export function focusItemKey(item: FocusItem | null): string | null {
   if (!item) return null;
   if (item.kind === 'agent') return `agent:${item.pty_id}`;
   if (item.kind === 'files') return `files:${item.workspace ?? ''}`;
+  if (item.kind === 'task') return `task:${item.workspace}:${item.task_id}`;
   return null;
 }
 
@@ -93,6 +100,14 @@ export function parseFocusItem(v: unknown): FocusItem | null {
   if (o.kind === 'workspace' && typeof o.workspace === 'string' && o.workspace) {
     return { kind: 'workspace', workspace: o.workspace };
   }
+  if (o.kind === 'task' && typeof o.workspace === 'string' && o.workspace && typeof o.task_id === 'string' && o.task_id) {
+    return {
+      kind: 'task',
+      workspace: o.workspace,
+      task_id: o.task_id.slice(0, 128),
+      label: typeof o.label === 'string' && o.label ? o.label.slice(0, 200) : 'Task',
+    };
+  }
   return null;
 }
 
@@ -103,6 +118,11 @@ export class FocusTracker {
   private lastEndMinute = -Infinity;
 
   constructor(private deps: FocusDeps) {}
+
+  /** v4 §7.4: how to find the task an agent PTY works on. */
+  setTaskResolver(fn: FocusDeps['taskOfPty'] | null): void {
+    this.deps.taskOfPty = fn ?? undefined;
+  }
 
   get active(): boolean {
     return this.session !== null;
@@ -139,6 +159,16 @@ export class FocusTracker {
     if (item.kind === 'agent') return ptyId != null && ptyId === item.pty_id;
     if (item.kind === 'files') {
       return filesWritten.some((f) => item.paths.some((p) => samePath(f, p)));
+    }
+    if (item.kind === 'task') {
+      if (ptyId == null || !this.deps.taskOfPty) return false;
+      let t: { workspace: string | null; task_id: string } | null = null;
+      try {
+        t = this.deps.taskOfPty(ptyId);
+      } catch {
+        t = null;
+      }
+      return !!t && t.task_id === item.task_id && (t.workspace == null || samePath(t.workspace, item.workspace));
     }
     return false;
   }

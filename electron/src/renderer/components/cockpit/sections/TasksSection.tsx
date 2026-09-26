@@ -3,31 +3,57 @@
  * §6.3): running, waiting, idle, review, queued, then closed in the last 7
  * days. Confirm, Link…, Accept/Discard, Promote…, Escalate → Explore, Peek,
  * Check in.
+ *
+ * v4 §8.5: open tasks order by status, then quadrant (Q1, Q2, Q3,
+ * unclassified, Q4), then importance. Each row has a quadrant chip (click:
+ * Important / Urgent on/off/auto overrides), Hester's view (/suggest, shown
+ * inline with proposals) and Focus on this (a task focus item).
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../Icon';
-import type { CockpitTask, TaskStatus } from '../../../../shared/cockpit';
-import { formatAge, formatDuration, plainPreview, taskNeedsYou, taskTitle } from '../../../lib/cockpitModel';
+import type { CockpitTask, StewardAnswer, TaskStatus } from '../../../../shared/cockpit';
+import {
+  formatAge,
+  formatDuration,
+  overrideChoice,
+  overridePatch,
+  plainPreview,
+  quadrantChip,
+  quadrantRank,
+  taskNeedsYou,
+  taskTitle,
+  type OverrideChoice,
+} from '../../../lib/cockpitModel';
 import { AgentMarkdown } from '../AgentMarkdown';
+import { StewardAnswerView } from '../StewardAnswerView';
 import {
   closeTask,
   confirmTask,
   escalateTask,
   fetchGoals,
   fetchWorkstreams,
+  patchTask,
   promoteTask,
+  suggestTask,
   type GoalRef,
   type HesterResult,
   type WorkstreamRef,
 } from '../../../lib/hesterCockpit';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
+/** link-goal requests already handled (per window), so a remount never replays one. */
+let handledLinkNonce = 0;
+
 const ORDER: TaskStatus[] = ['running', 'waiting', 'idle', 'review', 'queued', 'done', 'discarded'];
 
 function sortTasks(tasks: CockpitTask[]): CockpitTask[] {
   return [...tasks].sort(
-    (a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || Date.parse(b.updated_at) - Date.parse(a.updated_at),
+    (a, b) =>
+      ORDER.indexOf(a.status) - ORDER.indexOf(b.status) ||
+      quadrantRank(a.quadrant) - quadrantRank(b.quadrant) ||
+      (a.importance_rank ?? 99) - (b.importance_rank ?? 99) ||
+      Date.parse(b.updated_at) - Date.parse(a.updated_at),
   );
 }
 
@@ -100,9 +126,100 @@ const LinkPicker: React.FC<{ ctx: CockpitCtx; task: CockpitTask; onDone: () => v
   );
 };
 
+const OVERRIDE_CHOICES: OverrideChoice[] = ['on', 'off', 'auto'];
+
+/** The quadrant chip's menu: Important and Urgent, each on/off/auto (auto clears the override). */
+const QuadrantMenu: React.FC<{ ctx: CockpitCtx; task: CockpitTask; onDone: () => void }> = ({ ctx, task, onDone }) => {
+  const [busy, setBusy] = useState(false);
+  const pick = (axis: 'important' | 'urgent', choice: OverrideChoice) => {
+    if (busy || overrideChoice(task.overrides, axis) === choice) return;
+    setBusy(true);
+    patchTask(ctx.workspace, task.id, overridePatch(axis, choice)).then((r) => {
+      setBusy(false);
+      if (r.ok) {
+        ctx.hester.refresh();
+        onDone();
+      } else ctx.notify(r.error, 'error');
+    });
+  };
+  const derived = [
+    task.serves.length ? `serves ${task.serves.join(', ')}` : 'serves no goal',
+    task.urgency ? `urgent: ${task.urgency.signal}${task.urgency.ref ? ` (${task.urgency.ref})` : ''}` : 'no urgency signal',
+  ].join(' · ');
+  return (
+    <div className="cockpit-quadrant-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+      <div className="cockpit-muted">{derived}</div>
+      {(['important', 'urgent'] as const).map((axis) => {
+        const cur = overrideChoice(task.overrides, axis);
+        return (
+          <div key={axis} className="cockpit-quadrant-axis">
+            <span className="cockpit-quadrant-axis-label">{axis === 'important' ? 'Important' : 'Urgent'}</span>
+            {OVERRIDE_CHOICES.map((c) => (
+              <button
+                key={c}
+                role="menuitemradio"
+                aria-checked={cur === c}
+                className={`cockpit-chip-btn${cur === c ? ' is-on' : ''}`}
+                disabled={busy}
+                title={c === 'auto' ? 'Derived from goals and urgency signals' : undefined}
+                onClick={() => pick(axis, c)}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+type ViewState = { phase: 'idle' } | { phase: 'loading' } | { phase: 'done'; answer: StewardAnswer } | { phase: 'error'; error: string };
+
 const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean; handle: RowHandle }> = ({ ctx, task, selected, handle }) => {
   const [linking, setLinking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [quadMenu, setQuadMenu] = useState(false);
+  const [view, setView] = useState<ViewState>({ phase: 'idle' });
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
+  // A lint fix's renderer_action 'link-goal' opens this task's goal picker.
+  const pending = ctx.pendingSteward;
+  useEffect(() => {
+    if (!pending || pending.nonce <= handledLinkNonce) return;
+    if (pending.req.kind !== 'link-goal' || pending.req.taskId !== task.id) return;
+    handledLinkNonce = pending.nonce;
+    setLinking(true);
+    ctx.selectRow(handle.id);
+    document.querySelector(`[data-cockpit-row="${CSS.escape(handle.id)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [pending, task.id, handle.id, ctx]);
+
+  const hesterView = () => {
+    setView({ phase: 'loading' });
+    suggestTask(ctx.workspace, task.id).then((r) => {
+      if (!alive.current) return;
+      setView(r.ok ? { phase: 'done', answer: r.data } : { phase: 'error', error: r.error });
+    });
+  };
+
+  const focusOn = () => {
+    const api = ctx.copilotApi;
+    if (!api) {
+      ctx.notify('Focus is not available here', 'error');
+      return;
+    }
+    const label = taskTitle(task) || task.title;
+    api
+      .focusStart({ kind: 'task', workspace: ctx.workspace, task_id: task.id, label })
+      .then(() => ctx.notify(`Focusing on ${label}`))
+      .catch(() => ctx.notify('Could not start focus', 'error'));
+  };
+  const chip = quadrantChip(task);
   const tile = task.agent?.pty_id != null ? ctx.tiles.find((t) => t.ptyId === task.agent?.pty_id) ?? null : null;
   const closed = task.status === 'done' || task.status === 'discarded';
 
@@ -139,12 +256,29 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
     >
       <div className="cockpit-row-head">
         <span className={`cockpit-status st-${task.status}`}>{task.status}</span>
+        {closed ? (
+          <span className={`cockpit-quadrant q-${chip.tone}`}>{chip.label}</span>
+        ) : (
+          <button
+            className={`cockpit-quadrant q-${chip.tone}${task.overrides && (task.overrides.important != null || task.overrides.urgent != null) ? ' is-overridden' : ''}`}
+            title="Important / urgent (click to override)"
+            aria-haspopup="menu"
+            aria-expanded={quadMenu}
+            onClick={(e) => {
+              e.stopPropagation();
+              setQuadMenu((m) => !m);
+            }}
+          >
+            {chip.label}
+          </button>
+        )}
         <span className="cockpit-row-title" title={task.title}>
           {taskTitle(task) || task.title}
         </span>
         {!task.confirmed && <span className="cockpit-tag">unconfirmed</span>}
         {task.accepted === true && <span className="cockpit-tag is-ok">accepted</span>}
       </div>
+      {quadMenu && !closed && <QuadrantMenu ctx={ctx} task={task} onDone={() => setQuadMenu(false)} />}
       <div className="cockpit-row-meta">{meta.join(' · ')}</div>
       {task.summary && !closed &&
         (selected ? (
@@ -230,8 +364,25 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
             <button className="cockpit-btn" title="Rename (⌘E)" onClick={() => handle.rename?.()}>
               Rename
             </button>
+            <button
+              className="cockpit-btn"
+              disabled={view.phase === 'loading'}
+              title="Which goals this might serve, a better lead, where to start"
+              onClick={hesterView}
+            >
+              {view.phase === 'loading' ? 'Asking…' : "Hester's view"}
+            </button>
+            <button className="cockpit-btn" title="Start focus on this task: its agent's items count as related" onClick={focusOn}>
+              Focus on this
+            </button>
           </div>
         )
+      )}
+      {view.phase === 'error' && <div className="cockpit-error">{view.error}</div>}
+      {view.phase === 'done' && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <StewardAnswerView key={view.answer.request_id} ctx={ctx} answer={view.answer} onClose={() => setView({ phase: 'idle' })} />
+        </div>
       )}
     </div>
   );
@@ -252,6 +403,7 @@ export const TasksSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       open: tile ? () => ctx.goInto(tile.ptyId, 'tabs') : undefined,
       approval: tile?.approval ?? null,
       replyItem: tile?.replyItem ?? null,
+      about: { kind: 'task', id: t.id, label: taskTitle(t) || t.title },
       rename: () =>
         ctx.openRename({
           ptyId: tile?.ptyId ?? null,

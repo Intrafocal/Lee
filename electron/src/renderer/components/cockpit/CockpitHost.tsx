@@ -18,10 +18,11 @@ import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { useCockpit, type HesterCockpitState } from '../../hooks/useCockpit';
 import { focusManager } from '../../hooks/useFocusManager';
 import type { AttentionItem, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
-import type { CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from '../../../shared/cockpit';
+import type { AboutRef, CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from '../../../shared/cockpit';
 import {
   copilotBadge,
   feedNeedsCount,
+  goalsBadge,
   somedayBadge,
   keyAction,
   mergeFeed,
@@ -36,7 +37,7 @@ import {
   type SectionId,
   type TileModel,
 } from '../../lib/cockpitModel';
-import { cockpitModeStore, useCockpitModeState, type CockpitModeHandle, type CockpitModeState } from './cockpitMode';
+import { cockpitModeStore, useCockpitModeState, type CockpitModeHandle, type CockpitModeState, type StewardRequest } from './cockpitMode';
 import { CockpitHeader } from './CockpitHeader';
 import { CockpitNav, type NavBadges } from './CockpitNav';
 import { AgentTiles } from './AgentTiles';
@@ -45,9 +46,10 @@ import { Launcher, type LauncherPrefill } from './Launcher';
 import { RunMenu } from './RunMenu';
 import { KeyHelp } from './KeyHelp';
 import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './AgentTile';
-import { patchTask } from '../../lib/hesterCockpit';
+import { fetchGoalsStatus, patchTask, type GoalsStatusResponse } from '../../lib/hesterCockpit';
 import { CopilotSection } from './sections/CopilotSection';
 import { FeedSection } from './sections/FeedSection';
+import { GoalsSection } from './sections/GoalsSection';
 import { FilesSection } from './sections/FilesSection';
 import { TasksSection } from './sections/TasksSection';
 import { OperationsSection } from './sections/OperationsSection';
@@ -79,6 +81,22 @@ export interface RowHandle {
   ptyId?: number | null;
   /** Rename this row's task or agent (e). */
   rename?: () => void;
+  /** What Ask Hester is "about" when this row was the last one selected (v4 §8.2). */
+  about?: AboutRef | null;
+}
+
+/** Goal status for the Goals section and its nav badge (GET /cockpit/goals/status). */
+export interface GoalsState {
+  data: GoalsStatusResponse | null;
+  error: string | null;
+  loading: boolean;
+  refresh: () => void;
+}
+
+/** A steward request handed to a section, with a nonce so the same request can repeat. */
+export interface PendingSteward {
+  req: StewardRequest;
+  nonce: number;
 }
 
 export interface CockpitCtx {
@@ -117,6 +135,12 @@ export interface CockpitCtx {
   registerRows: (rows: RowHandle[]) => void;
   selectRow: (id: string) => void;
   setSection: (section: SectionId) => void;
+  /** v4 goal status (Goals section, badge). */
+  goals: GoalsState;
+  /** Ask Hester about an item / run What next? / open a task's goal picker (switches section). */
+  requestSteward: (req: StewardRequest) => void;
+  /** The latest steward request for a section to pick up (Copilot: ask, what-next; Tasks: link-goal). */
+  pendingSteward: PendingSteward | null;
 }
 
 interface CockpitHostProps {
@@ -622,14 +646,71 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   const selectedTile = state.selected?.kind === 'tile' ? tiles.find((t) => String(t.ptyId) === state.selected?.id) ?? null : null;
   const selectedRow = state.selected?.kind === 'row' ? rowsRef.current.find((r) => r.id === state.selected?.id) ?? null : null;
-  const aboutTitle = selectedTile?.title ?? selectedRow?.title ?? null;
+  // An item ref, not a title (v4 §8.2): a tile with a task is about that task.
+  const aboutRef: AboutRef | null = selectedTile
+    ? selectedTile.task
+      ? { kind: 'task', id: selectedTile.task.id, label: selectedTile.title }
+      : { kind: 'tile', id: String(selectedTile.ptyId), label: selectedTile.title, record: { pty_id: selectedTile.ptyId, title: selectedTile.title, provider: selectedTile.provider } }
+    : selectedRow?.about ?? null;
+  const aboutKey = aboutRef ? `${aboutRef.kind}:${aboutRef.id}:${aboutRef.label}` : '';
+  const aboutRefLatest = useRef(aboutRef);
+  aboutRefLatest.current = aboutRef;
   // "about:" for Ask Hester survives switching to the Copilot section (which
   // clears the selection): the last tile or non-Copilot row you selected.
-  const [lastAbout, setLastAbout] = useState<string | null>(null);
+  const [lastAbout, setLastAbout] = useState<AboutRef | null>(null);
   const selectedIsCopilotRow = state.selected?.kind === 'row' && state.selected.id.startsWith('copilot:');
   useEffect(() => {
-    if (aboutTitle && !selectedIsCopilotRow) setLastAbout(aboutTitle);
-  }, [aboutTitle, selectedIsCopilotRow]);
+    if (aboutKey && !selectedIsCopilotRow) setLastAbout(aboutRefLatest.current);
+  }, [aboutKey, selectedIsCopilotRow]);
+
+  // ---- v4: goal status (badge + Goals section), steward requests ----
+  const [goalsData, setGoalsData] = useState<GoalsStatusResponse | null>(null);
+  const [goalsError, setGoalsError] = useState<string | null>(null);
+  const [goalsLoading, setGoalsLoading] = useState(false);
+  const goalsSeq = useRef(0);
+  const refreshGoals = useCallback(() => {
+    if (!workspace) return;
+    const seq = ++goalsSeq.current;
+    setGoalsLoading(true);
+    fetchGoalsStatus(workspace).then((r) => {
+      if (seq !== goalsSeq.current) return;
+      setGoalsLoading(false);
+      if (r.ok) {
+        setGoalsData(r.data);
+        setGoalsError(null);
+      } else setGoalsError(r.error);
+    });
+  }, [workspace]);
+  useEffect(() => {
+    setGoalsData(null);
+    setGoalsError(null);
+  }, [workspace]);
+  useEffect(() => {
+    if (!shown || !workspace) return;
+    refreshGoals();
+    const id = window.setInterval(refreshGoals, 5 * 60000);
+    return () => window.clearInterval(id);
+  }, [shown, workspace, refreshGoals]);
+  const goals = useMemo<GoalsState>(
+    () => ({ data: goalsData, error: goalsError, loading: goalsLoading, refresh: refreshGoals }),
+    [goalsData, goalsError, goalsLoading, refreshGoals],
+  );
+
+  const [pendingSteward, setPendingSteward] = useState<PendingSteward | null>(null);
+  useEffect(
+    () =>
+      cockpitModeStore.onStewardRequest((req) => {
+        if (req.kind === 'ask') setLastAbout(req.about);
+        setPendingSteward((p) => ({ req, nonce: (p?.nonce ?? 0) + 1 }));
+      }),
+    [],
+  );
+  const requestSteward = useCallback(
+    (req: StewardRequest) => {
+      if (!cockpitModeStore.requestSteward(req)) notify('The Cockpit is not available here', 'error');
+    },
+    [notify],
+  );
   // A fresh brief after an absence: a neutral dot on Copilot until you look.
   const [seenNonce, setSeenNonce] = useState(0);
   useEffect(() => {
@@ -786,6 +867,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     registerRows,
     selectRow,
     setSection,
+    goals,
+    requestSteward,
+    pendingSteward,
   };
 
   if (!state.enabled || !available || state.mode !== 'cockpit') return null;
@@ -793,6 +877,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const badges: NavBadges = {
     copilot: copilotBadge({ returnNonce, seenNonce }),
     feed: { count: needsCount, ember: needsCount > 0 },
+    goals: goalsBadge(goalsData?.goals),
     tasks: tasksBadge(hester.snapshot?.tasks.open ?? []),
     ops: opsBadge({
       failing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
@@ -842,6 +927,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
               />
             )}
             {section === 'feed' && <FeedSection ctx={ctx} />}
+            {section === 'goals' && <GoalsSection ctx={ctx} />}
             {section === 'tasks' && <TasksSection ctx={ctx} />}
             {section === 'ops' && <OperationsSection ctx={ctx} />}
             {section === 'files' && <FilesSection ctx={ctx} />}

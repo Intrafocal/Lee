@@ -154,6 +154,7 @@ export const WorkstreamPane: React.FC<WorkstreamPaneProps> = ({
         title={workstream.title}
         phase={workstream.phase}
         tasks={resolvedTasks}
+        serves={workstream.serves}
         onPhaseChanged={handleRefreshAll}
       />
       <div className="ws-body">

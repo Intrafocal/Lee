@@ -45,6 +45,14 @@ export interface DigestResponse {
   waiting: AttentionItem[];
   someday: { open: number; untriaged_over_7d: number };
   retro: { due: boolean; week: string };
+  /** v4 §6: deterministic Q2 candidates (at most 5, goal priority order). Older daemons omit it. */
+  q2_candidates?: Array<{
+    kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+    goal_id?: string | null;
+    ref: string;
+    title: string;
+    detail: string;
+  }>;
 }
 
 export interface RetroQuestion {

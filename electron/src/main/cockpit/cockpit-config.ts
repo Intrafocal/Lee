@@ -69,6 +69,12 @@ export interface CockpitConfig {
   lint: {
     rules: Record<string, LintRuleConfig>;
     demotion: { min_outcomes: number; dismiss_ratio: number; window_days: number };
+    /**
+     * v4 `lint: scope/areas: [...]`: path prefixes scope/mixed-changes groups
+     * changes by (empty = top-level directories). Also copied into that
+     * rule's `areas` parameter.
+     */
+    areas: string[];
   };
 }
 
@@ -124,7 +130,21 @@ export const COCKPIT_DEFAULTS: CockpitConfig = {
       'toil/flaky-operation': { severity: 'warn', window_runs: 10, min_flips: 2 },
       'toil/long-wait': { severity: 'info', min_minutes: 3, min_occurrences: 3, window_days: 7 },
       'toil/repeat-approval': { severity: 'warn', min_repeats: 10, window_days: 7, fast_ms: 2000, fast_streak: 10 },
+      // v4 (contract 2026-09-26 v4 §7.3)
+      'commit/large-diff': { severity: 'info', min_changes: 5 },
+      'commit/new-files-undocumented': { severity: 'info' },
+      'branch/stale': { severity: 'info', days: 30 },
+      'stash/forgotten': { severity: 'info', days: 7 },
+      'scope/mixed-changes': { severity: 'warn', areas: [] },
+      'scope/task-growth': { severity: 'warn', factor: 3, min_files: 6 },
+      'time/timebox-exceeded': { severity: 'info' },
+      'time/polish-loop': { severity: 'info', turns: 6, max_files: 2 },
+      'time/q4-drift': { severity: 'info' },
+      'focus/thrash': { severity: 'info', items_per_hour: 4 },
+      'balance/q2-starved': { severity: 'info', min_share: 0.1, min_focus_h: 5 },
+      'agent/fix-loop': { severity: 'warn', turns: 3 },
     },
+    areas: [],
     demotion: { min_outcomes: 10, dismiss_ratio: 0.8, window_days: 30 },
   },
 };
@@ -156,9 +176,18 @@ function mergeLint(base: CockpitConfig['lint'], overlay: unknown): CockpitConfig
   if (!isPlainObject(overlay)) return base;
   const rules: Record<string, LintRuleConfig> = { ...base.rules };
   let demotion = base.demotion;
+  let areas = base.areas;
   for (const [rule, v] of Object.entries(overlay)) {
     if (rule === 'demotion') {
       demotion = merge(demotion, v);
+      continue;
+    }
+    if (rule === 'scope/areas') {
+      if (Array.isArray(v)) {
+        areas = v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        const cur = rules['scope/mixed-changes'] ?? { severity: 'warn' };
+        rules['scope/mixed-changes'] = { ...cur, areas };
+      }
       continue;
     }
     const cur: LintRuleConfig = rules[rule] ?? { severity: 'warn' };
@@ -168,9 +197,9 @@ function mergeLint(base: CockpitConfig['lint'], overlay: unknown): CockpitConfig
       const sev = typeof v.severity === 'string' && (SEVERITIES as string[]).includes(v.severity) ? (v.severity as LintSeverity) : cur.severity;
       rules[rule] = { ...cur, ...v, severity: sev };
     }
-    // Other shapes (e.g. `scope/areas: [...]`, v4) are ignored in v2.
+    // Other shapes are ignored.
   }
-  return { rules, demotion };
+  return { rules, demotion, areas };
 }
 
 function readDoc(file: string): Record<string, unknown> | undefined {

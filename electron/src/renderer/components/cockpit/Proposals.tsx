@@ -1,0 +1,165 @@
+/**
+ * Proposals - the steward's one-click proposals (v4 contract §8.3): at most
+ * five buttons. A click executes the action with the existing client calls
+ * (proposalPlan maps it), then records `accepted`; ✕ records `dismissed`
+ * and, when the proposal is about a task, a nudge override on Lee so the
+ * steward stays quiet on it. Nothing ever asks for a reason.
+ */
+
+import React, { useState } from 'react';
+import { Icon } from '../Icon';
+import type { OperationInfo, Proposal } from '../../../shared/cockpit';
+import { proposalPlan, proposalTaskId, type ProposalPlan } from '../../lib/cockpitModel';
+import {
+  createExploration,
+  createTask,
+  fetchWorkstreams,
+  overrideNudge,
+  patchTask,
+  proposalOutcome,
+} from '../../lib/hesterCockpit';
+import { RunOpDialog } from './RunMenu';
+import type { CockpitCtx } from './CockpitHost';
+
+/** Select or open what an `open` proposal (or a Goals row) points at. */
+export async function openItem(ctx: CockpitCtx, target: 'task' | 'exploration' | 'goal' | 'workstream', id: string): Promise<void> {
+  if (target === 'task') {
+    ctx.setSection('tasks');
+    ctx.selectRow(`task:${id}`);
+  } else if (target === 'exploration') {
+    ctx.setSection('explore');
+    ctx.selectRow(`explore:${id}`);
+  } else if (target === 'goal') {
+    ctx.setSection('goals');
+    ctx.selectRow(`goal:${id}`);
+  } else {
+    const r = await fetchWorkstreams(ctx.workspace);
+    const title = r.ok ? r.data.find((w) => w.id === id)?.title ?? id : id;
+    ctx.openWorkstream(id, title);
+  }
+}
+
+type ExecResult = { ok: true; message?: string } | { ok: false; error: string } | { ok: 'dialog'; op: OperationInfo };
+
+async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult> {
+  const ws = ctx.workspace;
+  switch (plan.kind) {
+    case 'create_task': {
+      const r = await createTask(ws, plan.body);
+      if (!r.ok) return { ok: false, error: r.error };
+      ctx.hester.refresh();
+      return { ok: true, message: 'Task added' };
+    }
+    case 'launch': {
+      if (!ctx.api) return { ok: false, error: 'Launching needs the Cockpit runtime' };
+      const r = await ctx.api.launch(plan.req);
+      if (!r.success) return { ok: false, error: r.error || 'Launch failed' };
+      ctx.hester.refresh();
+      if (r.task_id) ctx.selectRow(`task:${r.task_id}`);
+      return { ok: true, message: plan.req.lead === 'human' ? 'Task added' : 'Launched' };
+    }
+    case 'patch_task': {
+      const r = await patchTask(ws, plan.taskId, plan.body);
+      if (!r.ok) return { ok: false, error: r.error };
+      ctx.hester.refresh();
+      return { ok: true, message: 'serves' in plan.body ? `Linked to ${plan.body.serves.join(', ')}` : `Lead: ${plan.body.lead}` };
+    }
+    case 'park': {
+      if (!ctx.copilotApi) return { ok: false, error: 'Someday is not available here' };
+      const r = await ctx.copilotApi.capture({ text: plan.text, workspace: ws, as: 'someday' });
+      if (!r.success) return { ok: false, error: 'Could not park it' };
+      ctx.hester.refresh();
+      return { ok: true, message: r.spooled ? 'Parked (queued for Hester)' : 'Parked in Someday' };
+    }
+    case 'open':
+      await openItem(ctx, plan.target, plan.id);
+      return { ok: true };
+    case 'run_op': {
+      if (!ctx.api) return { ok: false, error: 'Operations need the Cockpit runtime' };
+      const op = ctx.ops?.operations.find((o) => o.def.name === plan.name) ?? null;
+      // Params or an outward-facing op: show the exact command first (the Ops dialog).
+      if (op && (op.def.confirm || (op.def.params ?? []).length)) return { ok: 'dialog', op };
+      const r = await ctx.api.ops.run({ workspace: ws, name: plan.name });
+      if (r.success) return { ok: true, message: `Running ${plan.name}` };
+      if (r.needs_confirm || r.missing_params?.length) {
+        ctx.setSection('ops');
+        return { ok: false, error: `${plan.name} needs confirming in Ops` };
+      }
+      return { ok: false, error: r.error || 'Run failed' };
+    }
+    case 'explore': {
+      const r = await createExploration(ws, { seed: plan.seed, origin: { kind: 'hester' } });
+      if (!r.ok) return { ok: false, error: r.error };
+      ctx.setSection('explore');
+      ctx.selectRow(`explore:${r.data.id}`);
+      return { ok: true, message: `Exploration started: ${r.data.title}` };
+    }
+  }
+}
+
+export const Proposals: React.FC<{ ctx: CockpitCtx; proposals: readonly Proposal[] | null | undefined }> = ({ ctx, proposals }) => {
+  const [state, setState] = useState<Record<string, 'busy' | 'accepted' | 'dismissed'>>({});
+  const [dialog, setDialog] = useState<OperationInfo | null>(null);
+  const items = (proposals ?? [])
+    .map((p) => ({ p, plan: proposalPlan(p, ctx.workspace) }))
+    .filter((x): x is { p: Proposal; plan: ProposalPlan } => !!x.plan)
+    .slice(0, 5);
+  if (!items.length) return null;
+
+  const accept = async (p: Proposal, plan: ProposalPlan) => {
+    if (state[p.id]) return;
+    setState((s) => ({ ...s, [p.id]: 'busy' }));
+    let res: ExecResult;
+    try {
+      res = await execute(ctx, plan);
+    } catch {
+      res = { ok: false, error: 'Failed' };
+    }
+    if (res.ok === false) {
+      ctx.notify(res.error, 'error');
+      setState((s) => {
+        const n = { ...s };
+        delete n[p.id];
+        return n;
+      });
+      return;
+    }
+    if (res.ok === 'dialog') setDialog(res.op);
+    else if (res.message) ctx.notify(res.message);
+    ctx.copilotApi?.logCeremony('confirm', 'proposal');
+    setState((s) => ({ ...s, [p.id]: 'accepted' }));
+    void proposalOutcome(ctx.workspace, p.id, 'accepted');
+  };
+
+  const dismiss = (p: Proposal) => {
+    if (state[p.id]) return;
+    setState((s) => ({ ...s, [p.id]: 'dismissed' }));
+    void proposalOutcome(ctx.workspace, p.id, 'dismissed');
+    const taskId = proposalTaskId(p);
+    if (taskId) void overrideNudge(`task:${ctx.workspace}:${taskId}`, `steward:${p.id}`);
+  };
+
+  return (
+    <div className="cockpit-proposals" onClick={(e) => e.stopPropagation()}>
+      {items.map(({ p, plan }) => {
+        const st = state[p.id];
+        if (st === 'dismissed') return null;
+        return (
+          <span key={p.id} className={`cockpit-proposal${st === 'accepted' ? ' is-done' : ''}`}>
+            <button className="cockpit-btn" disabled={!!st} title={p.action.replace('_', ' ')} onClick={() => void accept(p, plan)}>
+              {st === 'accepted' && <Icon name="check" size={11} />} {p.label}
+            </button>
+            {!st && (
+              <button className="cockpit-chip-x" aria-label={`Dismiss: ${p.label}`} title="Not this" onClick={() => dismiss(p)}>
+                ×
+              </button>
+            )}
+          </span>
+        );
+      })}
+      {dialog && <RunOpDialog ctx={ctx} op={dialog} onClose={() => setDialog(null)} />}
+    </div>
+  );
+};
+
+export default Proposals;

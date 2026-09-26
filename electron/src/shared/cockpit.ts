@@ -146,8 +146,19 @@ export interface TabSendRequest {
   /** Append Enter. Agent PTYs get bracketed paste, then Enter after 30 ms. */
   submit?: boolean;
   purpose?: TabInputPurpose;
-  /** Local user only: send even though the state is 'unknown'. Never overrides 'busy' or 'awaiting-input'. */
+  /**
+   * Local user only: send even though the state is 'unknown'. On an agent tab
+   * it also types while the agent is busy (v4 §8.4, "Send now (agent is
+   * busy)"). Never overrides 'awaiting-input'.
+   */
   force?: boolean;
+  /**
+   * v4: local user only, agent tabs only: type even while the agent is busy
+   * (the agent queues it). For an explicit click on text shown first (the
+   * steer card's "Send now (agent is busy)", the wrap-up lint fix). Never
+   * overrides 'awaiting-input'.
+   */
+  while_busy?: boolean;
 }
 
 export type TabSendError = 'not_found' | 'forbidden' | 'busy' | 'awaiting_input' | 'state_unknown' | 'invalid';
@@ -224,7 +235,28 @@ export type TaskKind = 'bug' | 'question' | 'prototype' | 'chore' | 'unknown';
 export type TaskLead = 'delegate' | 'human' | 'plan';
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'review' | 'done' | 'discarded';
 
-export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore';
+export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval';
+
+// ---------------------------------------------------------------------------
+// Copilot v4: goals and steward (contract 2026-09-26 v4 §9)
+// ---------------------------------------------------------------------------
+
+export type Quadrant = 'Q1' | 'Q2' | 'Q3' | 'Q4';
+export type LintFamily = 'toil' | 'hygiene' | 'scope' | 'attention' | 'agent' | 'project';
+export interface TaskOverrides { important: boolean | null; urgent: boolean | null; at: string | null }
+export interface GitSnapshot {
+  workspace: string; at: number; branch: string | null; default_branch: string | null;
+  changed: Array<{ path: string; status: string }>; untracked: string[];
+  branches: Array<{ name: string; last_commit_ms: number; merged: boolean }>;
+  stashes: Array<{ ref: string; ms: number; message: string }>;
+}
+export type StewardSurface = 'launch-suggest' | 'what-next' | 'evaluate' | 'lint-ask' | 'rail-steer' | 'rail-ask' | 'goal-edit' | 'palette' | 'tui';
+export type ProposalAction = 'create_task' | 'launch' | 'link_goal' | 'set_lead' | 'park' | 'open' | 'run_op' | 'explore';
+export interface Proposal { id: string; label: string; action: ProposalAction; params: Record<string, unknown> }
+export interface StewardSteer { task_id: string; pty_id: number | null; text: string }
+export interface StewardAnswer { text: string; proposals: Proposal[]; steer?: StewardSteer | null; surface: StewardSurface; request_id: string; packet?: unknown; stale_measure?: string | null }
+export type AboutKind = 'task' | 'exploration' | 'goal' | 'lint' | 'feed' | 'tile' | 'operation';
+export interface AboutRef { kind: AboutKind; id: string; label: string; record?: unknown }
 
 /** A launch's git worktree (claude `--worktree <slug>`), contract v3 §4. */
 export interface TaskWorktree {
@@ -278,8 +310,16 @@ export interface CockpitTask {
   confirmed: boolean;
   confirmed_at: string | null;
   urgency: { signal: string; ref: string | null } | null;
-  /** Always null in v2 (quadrants are v4). */
-  quadrant: null;
+  /** Derived by Hester (v4 §4); null = unclassified. */
+  quadrant: Quadrant | null;
+  /** Minimum priority of the served goals (ordering inside a quadrant). */
+  importance_rank: number | null;
+  /** Your important/urgent overrides. */
+  overrides: TaskOverrides | null;
+  /** Set when derived urgency went from non-null to null. */
+  urgency_cleared_at: string | null;
+  /** files_count at the first turn_end / check-in report (scope/task-growth). */
+  files_at_first_report: number | null;
   timebox_min: number | null;
   due: string | null;
   origin: TaskOrigin | null;
@@ -588,7 +628,7 @@ export interface LintFix {
 export interface LintDiagnostic {
   id: string;
   rule: string;
-  family: 'toil';
+  family: LintFamily;
   /** Effective severity after demotion. */
   severity: LintSeverity;
   base_severity: LintSeverity;
@@ -627,6 +667,20 @@ export interface LintFixResult {
   error?: string;
   /** What the fix did, for a toast. */
   message?: string;
+  /**
+   * v4 §7.3: renderer-side fixes. When `renderer_action` is set, main did
+   * nothing else and the renderer performs it ('link-goal' opens the task's
+   * goal picker; 'what-next' switches to Copilot and runs What next?).
+   */
+  data?: LintFixData;
+}
+
+export type LintRendererAction = 'link-goal' | 'what-next';
+
+export interface LintFixData {
+  renderer_action?: LintRendererAction;
+  task_id?: string | null;
+  workspace?: string | null;
 }
 
 // ---------------------------------------------------------------------------

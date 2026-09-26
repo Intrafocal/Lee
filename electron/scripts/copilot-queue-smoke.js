@@ -619,6 +619,71 @@ test('session names: title-bearing hooks signal the transcript path in memory on
   assert.ok(!JSON.stringify(logged).includes('s1.jsonl'), 'transcript path never in the event log');
 });
 
+test('v4 ranker: same severity orders by quadrant (Q1 before unclassified before Q4), then wait; quadrant shown', () => {
+  const { pty, q } = setup();
+  pty.add(2);
+  pty.add(3);
+  const stop = (ptyId, sid) => {
+    q.handleHook({ event: 'UserPromptSubmit', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'UserPromptSubmit', prompt: 'x' });
+    q.handleHook({ event: 'Stop', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'Stop', last_assistant_message: `done ${sid}` });
+  };
+  stop(1, 'sa');
+  stop(2, 'sb');
+  stop(3, 'sc');
+  const order = () => q.snapshot({ all: false }).items.filter((i) => i.kind === 'review').map((i) => i.source.pty_id);
+  const before = q.snapshot({ all: false }).items;
+  assert.strictEqual(before.length, 3);
+  assert.ok(before.every((i) => i.quadrant === undefined), 'no quadrant without a ranker');
+  const { quadrantRank } = require(path.join(dist, 'copilot', 'attention-queue.js'));
+  assert.deepStrictEqual(['Q1', 'Q2', 'Q3', null, 'Q4'].map(quadrantRank), [0, 1, 2, 3, 4]);
+  const quad = { 1: 'Q4', 2: 'Q1', 3: null };
+  q.queue.setRanker((item) => ({ quadrant: quad[item.source.pty_id], rank: quadrantRank(quad[item.source.pty_id]) }));
+  assert.deepStrictEqual(order(), [2, 3, 1]);
+  const items = q.snapshot({ all: false }).items;
+  assert.deepStrictEqual(items.map((i) => i.quadrant), ['Q1', null, 'Q4']);
+  // Severity still wins over quadrant: an approval on the Q4 agent comes first.
+  q.handleHook({ event: 'UserPromptSubmit', ptyId: '1', windowId: null }, { session_id: 'sa', hook_event_name: 'UserPromptSubmit', prompt: 'y' });
+  q.handleHook({ event: 'PermissionRequest', ptyId: '1', windowId: null }, { session_id: 'sa', hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'z' });
+  const first = q.snapshot({ all: false }).items[0];
+  assert.strictEqual(first.kind, 'approval');
+  assert.strictEqual(first.quadrant, 'Q4');
+  // A throwing ranker degrades to unclassified instead of breaking snapshots.
+  q.queue.setRanker(() => {
+    throw new Error('boom');
+  });
+  assert.ok(q.snapshot({ all: false }).items.every((i) => i.quadrant === null));
+  q.queue.setRanker(null);
+});
+
+test('v4 focus on a task: parsed, logged, and related to items from its agent pty only', () => {
+  const { pty, q } = setup();
+  pty.add(2);
+  const logged = [];
+  const onEv = (e) => logged.push(e);
+  copilotBus.on('event', onEv);
+  const { parseFocusItem, focusItemKey } = require(path.join(dist, 'copilot', 'focus.js'));
+  const item = { kind: 'task', workspace: '/work/api', task_id: 't1', label: 'Fix login' };
+  assert.deepStrictEqual(parseFocusItem(item), item);
+  assert.strictEqual(parseFocusItem({ kind: 'task', workspace: '/work/api' }), null);
+  assert.strictEqual(focusItemKey(item), 'task:/work/api:t1');
+  q.focus.setTaskResolver((ptyId) => (ptyId === 1 ? { workspace: '/work/api', task_id: 't1' } : { workspace: '/work/api', task_id: 't2' }));
+  const r = q.focusStart(item, { kind: 'user', surface: 'lee' }, 'lee');
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual(r.body.item, item);
+  for (const [ptyId, sid] of [[1, 'sa'], [2, 'sb']]) {
+    q.handleHook({ event: 'UserPromptSubmit', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'UserPromptSubmit', prompt: 'x' });
+    q.handleHook({ event: 'Stop', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'Stop', last_assistant_message: 'done?' });
+  }
+  const items = q.snapshot({ all: false }).items;
+  const rel = Object.fromEntries(items.map((i) => [i.source.pty_id, i.related_to_focus]));
+  assert.deepStrictEqual(rel, { 1: true, 2: false });
+  copilotBus.off('event', onEv);
+  const start = logged.find((e) => e.type === 'focus.start');
+  assert.ok(start, 'focus.start logged');
+  assert.deepStrictEqual(start.data.item, item);
+  q.focusStop({ kind: 'user', surface: 'lee' });
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

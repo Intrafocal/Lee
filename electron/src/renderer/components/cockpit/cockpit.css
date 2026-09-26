@@ -1191,3 +1191,349 @@
 .cockpit-picker-row.is-selected {
   background: var(--bg-hover);
 }
+
+/* ---------------------------------------------------------------------------
+ * Copilot v4: goals, quadrants, steward (contract §8)
+ * ------------------------------------------------------------------------- */
+
+.cockpit-tag.is-ember {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.cockpit-tag.is-goal {
+  border-color: var(--phosphor-deep);
+  color: var(--accent-light);
+  background: none;
+  font: inherit;
+  font-size: 10px;
+}
+
+button.cockpit-tag.is-goal {
+  cursor: pointer;
+}
+
+button.cockpit-tag.is-goal:hover {
+  background: rgba(var(--phosphor-rgb), 0.12);
+}
+
+.cockpit-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cockpit-spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes cockpit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cockpit-spinner {
+    animation: none;
+    background: var(--accent);
+  }
+}
+
+.cockpit-spinner-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+}
+
+/* Steward answers, proposals, steer card */
+
+.cockpit-steward-answer {
+  position: relative;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--bg-primary);
+}
+
+.cockpit-steward-close {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-2);
+}
+
+.cockpit-proposals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.cockpit-proposal {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cockpit-proposal.is-done .cockpit-btn {
+  border-color: var(--phosphor-deep);
+  color: var(--accent-light);
+}
+
+.cockpit-steer {
+  margin-top: var(--space-2);
+}
+
+.cockpit-steward-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Goals section */
+
+.cockpit-goal.is-flagged {
+  border-left: 2px solid var(--ember);
+}
+
+.cockpit-goal-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-light);
+  min-width: 22px;
+}
+
+.cockpit-metrics {
+  margin: var(--space-1) 0 0;
+}
+
+.cockpit-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+.cockpit-metric-name {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.cockpit-metric.is-ok {
+  border-color: var(--phosphor-deep);
+}
+
+.cockpit-metric.is-ok .cockpit-metric-trend {
+  color: var(--accent-light);
+}
+
+.cockpit-metric.is-bad {
+  border-color: rgba(var(--ember-rgb), 0.6);
+}
+
+.cockpit-metric.is-bad .cockpit-metric-trend {
+  color: var(--ember);
+}
+
+.cockpit-goal-serving {
+  display: flex;
+  flex-direction: column;
+  margin: var(--space-1) 0;
+}
+
+.cockpit-goal-serving .cockpit-menu-item {
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.cockpit-diff {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  white-space: pre;
+}
+
+.cockpit-diff .is-add {
+  color: var(--lit);
+  background: rgba(var(--phosphor-rgb), 0.1);
+}
+
+.cockpit-diff .is-del {
+  color: var(--ember);
+  background: rgba(var(--ember-rgb), 0.08);
+}
+
+.cockpit-diff .is-hunk,
+.cockpit-diff .is-file {
+  color: var(--text-muted);
+}
+
+/* human_balance strip. Play has its own positive colour. */
+
+.cockpit-balance {
+  margin-top: var(--space-3);
+}
+
+.cockpit-balance-bar {
+  display: flex;
+  height: 10px;
+  margin: var(--space-2) 0 var(--space-1);
+  border-radius: var(--radius-tdeck);
+  overflow: hidden;
+  background: var(--bg-tertiary);
+}
+
+.cockpit-balance-seg {
+  height: 100%;
+  min-width: 2px;
+}
+
+.cockpit-balance-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cockpit-balance-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cockpit-balance-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.band-Q1 {
+  background: var(--ember);
+}
+
+.band-Q2 {
+  background: var(--phosphor);
+}
+
+.band-Q3 {
+  background: var(--info);
+}
+
+.band-Q4 {
+  background: var(--text-3);
+}
+
+.band-play {
+  background: var(--lit);
+}
+
+.band-unclassified {
+  background: var(--ground-5);
+}
+
+/* Task quadrant chip and override menu */
+
+.cockpit-quadrant {
+  display: inline-block;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tdeck);
+  background: none;
+  color: var(--text-secondary);
+}
+
+button.cockpit-quadrant {
+  cursor: pointer;
+}
+
+button.cockpit-quadrant:hover {
+  background: var(--bg-hover);
+}
+
+.cockpit-quadrant.q-q1 {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.cockpit-quadrant.q-q2 {
+  border-color: var(--phosphor-deep);
+  color: var(--accent-light);
+}
+
+.cockpit-quadrant.q-q3 {
+  border-color: rgba(var(--info-rgb), 0.6);
+  color: var(--info);
+}
+
+.cockpit-quadrant.q-q4 {
+  color: var(--text-muted);
+}
+
+.cockpit-quadrant.q-play {
+  border-color: var(--lit);
+  color: var(--lit);
+}
+
+.cockpit-quadrant.q-none {
+  color: var(--text-muted);
+  border-style: dashed;
+  opacity: 0.8;
+}
+
+.cockpit-quadrant.is-overridden {
+  box-shadow: inset 0 -1px 0 currentColor;
+}
+
+.cockpit-quadrant-menu {
+  margin: var(--space-1) 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.cockpit-quadrant-axis {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.cockpit-quadrant-axis-label {
+  min-width: 70px;
+  color: var(--text-secondary);
+}
+
+/* Launcher Q4 note: one quiet line, never a gate */
+
+.cockpit-q4-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}

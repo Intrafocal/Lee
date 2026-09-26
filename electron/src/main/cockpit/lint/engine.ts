@@ -12,7 +12,10 @@ import * as crypto from 'crypto';
 import type { LeeEvent } from '../../../shared/copilot';
 import type {
   CockpitEventType,
+  CockpitTask,
+  GitSnapshot,
   LintDiagnostic,
+  LintFamily,
   LintFixResult,
   LintOutcome,
   LintRuleStatus,
@@ -26,7 +29,11 @@ import type { OpsProvider, TaskLauncher } from '../cockpit-bus';
 import type { LintRuleConfig } from '../cockpit-config';
 import type { LintStore, RuleState } from './store';
 import { DAY_MS } from './types';
-import type { LintContext, LintFinding, LintFixContext, LintRule } from './types';
+import type { AddedLine, LintContext, LintEffects, LintFinding, LintFixContext, LintRule, ProjectRuleDef } from './types';
+import type { HumanBalance } from '../hester-cache';
+
+/** v4 §7.3: these families evaluate only while the workspace's steward is active. */
+export const STEWARD_GATED: ReadonlySet<LintFamily> = new Set<LintFamily>(['attention', 'agent']);
 
 export interface DemotionConfig {
   min_outcomes: number;
@@ -41,6 +48,17 @@ export interface LintProviders {
   ops(): OpsProvider | null;
   launcher(): TaskLauncher | null;
   writeClaudeAllow(workspace: string, rules: string[]): Promise<void>;
+  // v4 (optional so v2 callers and fakes keep working; missing = nothing known).
+  workspaces?(): string[];
+  git?(workspace: string): GitSnapshot | null;
+  docText?(workspace: string): string | null;
+  addedLines?(workspace: string): AddedLine[] | null;
+  tasks?(workspace: string): CockpitTask[] | null;
+  taskByPty?(ptyId: number): CockpitTask | null;
+  stewardActive?(workspace: string | null): boolean;
+  humanBalance?(workspace: string): HumanBalance | null;
+  projectRules?(workspace: string): ProjectRuleDef[];
+  effects?(): LintEffects;
 }
 
 export interface LintEngineDeps {
@@ -61,6 +79,7 @@ export interface LintEngineDeps {
 }
 
 interface OpenDiag {
+  rule: LintRule;
   diag: LintDiagnostic;
   finding: LintFinding;
   itemRef: string;
@@ -138,7 +157,22 @@ export class LintEngine extends EventEmitter {
       toolInfo: (sig) => p.toolInfo(sig),
       ops: p.ops(),
       ignoredCommands: (ws) => new Set(this.deps.store.suppressions(ws).commands),
+      workspaces: () => p.workspaces?.() ?? [],
+      git: (ws) => p.git?.(ws) ?? null,
+      docText: (ws) => p.docText?.(ws) ?? null,
+      addedLines: (ws) => p.addedLines?.(ws) ?? null,
+      tasks: (ws) => p.tasks?.(ws) ?? null,
+      taskByPty: (pty) => p.taskByPty?.(pty) ?? null,
+      stewardActive: (ws) => p.stewardActive?.(ws) ?? false,
+      humanBalance: (ws) => p.humanBalance?.(ws) ?? null,
+      projectRules: (ws) => p.projectRules?.(ws) ?? [],
     };
+  }
+
+  /** Whether a family may evaluate for a workspace right now (steward gating). */
+  private gatedOut(family: LintFamily, ws: string | null): boolean {
+    if (!STEWARD_GATED.has(family)) return false;
+    return !(this.deps.providers.stewardActive?.(ws) ?? false);
   }
 
   private fixContext(): LintFixContext {
@@ -147,6 +181,7 @@ export class LintEngine extends EventEmitter {
       ...this.context(),
       launcher: p.launcher(),
       writeClaudeAllow: (ws, rules) => p.writeClaudeAllow(ws, rules),
+      effects: p.effects?.() ?? {},
       ignoreCommands: async (ws, sigs) => {
         const file = this.deps.store.suppressions(ws);
         const next = { ...file, commands: [...new Set([...file.commands, ...sigs])] };
@@ -188,13 +223,13 @@ export class LintEngine extends EventEmitter {
     return null;
   }
 
-  private makeDiag(f: LintFinding, id: string, prev: LintDiagnostic | null): LintDiagnostic {
+  private makeDiag(f: LintFinding, id: string, prev: LintDiagnostic | null, family: LintFamily): LintDiagnostic {
     const sev = this.effective(f.rule, f.workspace);
     const at = new Date(this.now()).toISOString();
     return {
       id,
       rule: f.rule,
-      family: 'toil',
+      family,
       severity: sev.severity,
       base_severity: sev.base,
       workspace: f.workspace,
@@ -213,10 +248,14 @@ export class LintEngine extends EventEmitter {
   /** Run every rule and reconcile open diagnostics. */
   evaluate(): void {
     const ctx = this.context();
-    const findings: LintFinding[] = [];
+    const findings: Array<{ f: LintFinding; rule: LintRule }> = [];
     for (const r of this.deps.rules) {
       try {
-        findings.push(...r.evaluate(ctx));
+        for (const f of r.evaluate(ctx)) {
+          // Steward gating: attention/agent findings only while the steward is active.
+          if (this.gatedOut(r.family, f.workspace)) continue;
+          findings.push({ f, rule: r });
+        }
       } catch (err) {
         console.error(`[lint] ${r.id} evaluate failed:`, err);
       }
@@ -227,7 +266,7 @@ export class LintEngine extends EventEmitter {
     const workspaces = new Set<string | null>();
     let changed = false;
 
-    for (const f of findings) {
+    for (const { f, rule } of findings) {
       if (f.fixes.length === 0) continue;
       if (this.deps.config(f.rule, f.workspace).severity === 'off') continue;
       workspaces.add(f.workspace);
@@ -236,14 +275,15 @@ export class LintEngine extends EventEmitter {
       if (this.closed.get(id) === f.state_key) continue;
       const scope = this.suppressedBy(f, id);
       if (scope) {
-        if (scope === 'workspace') mutedNow.set(id, { ...this.makeDiag(f, id, this.muted.get(id) ?? null), severity: 'off' });
+        if (scope === 'workspace') mutedNow.set(id, { ...this.makeDiag(f, id, this.muted.get(id) ?? null, rule.family), severity: 'off' });
         continue;
       }
       seen.add(id);
       const cur = this.open.get(id);
       if (!cur) {
-        const diag = this.makeDiag(f, id, null);
+        const diag = this.makeDiag(f, id, null, rule.family);
         this.open.set(id, {
+          rule,
           diag,
           finding: f,
           itemRef: f.item_ref ?? `lint:${f.workspace ?? ''}:${f.rule}:${f.subject}`,
@@ -262,8 +302,9 @@ export class LintEngine extends EventEmitter {
       const stateChanged = cur.stateKey !== f.state_key;
       const before = JSON.stringify([cur.diag.message, cur.diag.evidence, cur.diag.fixes, cur.diag.severity]);
       const prevUpdated = cur.diag.updated_at;
-      cur.diag = this.makeDiag(f, id, cur.diag);
+      cur.diag = this.makeDiag(f, id, cur.diag, rule.family);
       cur.finding = f;
+      cur.rule = rule;
       if (stateChanged) {
         cur.stateKey = f.state_key;
         cur.shownState = null;
@@ -282,7 +323,9 @@ export class LintEngine extends EventEmitter {
 
     for (const [id, o] of [...this.open]) {
       if (seen.has(id)) continue;
-      if (o.diag.shown && o.outcome === null) this.recordOutcome(o, 'ignored');
+      // Withdrawn by steward gating: no outcome, so it doesn't count as ignored.
+      const gated = this.gatedOut(o.diag.family, o.diag.workspace);
+      if (!gated && o.diag.shown && o.outcome === null) this.recordOutcome(o, 'ignored');
       this.open.delete(id);
       if (o.visible) this.deps.feedClose(id, 'done');
       changed = true;
@@ -335,8 +378,14 @@ export class LintEngine extends EventEmitter {
   async fix(diagId: string, fixId: string): Promise<LintFixResult> {
     const o = this.open.get(diagId);
     if (!o) return { success: false, error: 'not_found' };
-    const rule = this.deps.rules.find((r) => r.id === o.diag.rule);
-    if (!rule || !o.finding.fixes.some((f) => f.id === fixId)) return { success: false, error: 'unknown_fix' };
+    if (!o.finding.fixes.some((f) => f.id === fixId)) return { success: false, error: 'unknown_fix' };
+    // Generic ignore fixes (suppress-item / suppress-branch / suppress-workspace) are the engine's.
+    const scope = fixId.startsWith('suppress-') ? (fixId.slice('suppress-'.length) as LintSuppressScope) : null;
+    if (scope === 'item' || scope === 'branch' || scope === 'workspace') {
+      const r = this.suppress(diagId, scope);
+      return r.success ? { success: true, message: scope === 'branch' ? 'Ignored on this branch' : 'Ignored' } : { success: false, error: 'not_found' };
+    }
+    const rule = o.rule;
     o.touched = true;
     let res: LintFixResult;
     try {

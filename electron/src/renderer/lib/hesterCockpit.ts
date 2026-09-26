@@ -9,6 +9,9 @@
 import { getApiToken } from './hesterAuth';
 import {
   encodeWorkspaceHeader,
+  type AboutRef,
+  type Quadrant,
+  type StewardAnswer,
   type CockpitTask,
   type LaunchRequest,
   type LaunchResult,
@@ -81,8 +84,10 @@ export function fetchBundles(workspace: string): Promise<HesterResult<ContextBun
 
 export interface HistoryResponse {
   wins: DigestWin[];
-  tasks: CockpitTask[];
-  readings: Reading[];
+  /** v4 §6: closed tasks carry `goal_impact` (the goals they served). */
+  tasks: Array<CockpitTask & { goal_impact?: string[] | null }>;
+  /** v4 §6: readings of a GOALS metric carry `goal_id` and `delta` (value − previous). */
+  readings: Array<Reading & { goal_id?: string | null; delta?: number | null }>;
 }
 
 export interface SomedayItem {
@@ -183,11 +188,19 @@ export function linkTask(
   return call<CockpitTask>(workspace, 'POST', `/cockpit/tasks/${encodeURIComponent(id)}/link`, body);
 }
 
-/** `name` is your session name for the task (null clears it; addendum 2026-09-26b). */
+/**
+ * `name` is your session name for the task (null clears it; addendum 2026-09-26b).
+ * `important` / `urgent` set (bool) or clear (null) the quadrant overrides (v4 §4);
+ * `lead` is a steward set_lead proposal (v4 §8.3).
+ */
 export function patchTask(
   workspace: string,
   id: string,
-  body: Partial<Pick<CockpitTask, 'serves' | 'workstream' | 'title'>> & { name?: string | null },
+  body: Partial<Pick<CockpitTask, 'serves' | 'workstream' | 'title' | 'lead'>> & {
+    name?: string | null;
+    important?: boolean | null;
+    urgent?: boolean | null;
+  },
 ): Promise<HesterResult<CockpitTask>> {
   return call<CockpitTask>(workspace, 'PATCH', `/cockpit/tasks/${encodeURIComponent(id)}`, body);
 }
@@ -240,6 +253,159 @@ export function triageSomeday(
   triage: SomedayTriage,
 ): Promise<HesterResult<SomedayItem | { item: SomedayItem; task: CockpitTask } | { item: SomedayItem; exploration: Exploration }>> {
   return call(workspace, 'POST', `/someday/${encodeURIComponent(id)}/triage`, { ...triage, workspace });
+}
+
+// ---------------------------------------------------------------------------
+// Copilot v4: goals and steward (v4 contract §2, §5.2). Every steward call is
+// a user action (C2); each returns a StewardAnswer (§9) and never acts.
+// ---------------------------------------------------------------------------
+
+export interface GoalTarget {
+  direction: 'falling' | 'rising' | null;
+  op: '>=' | '<=' | '>' | '<' | null;
+  value: number | null;
+  unit: '%' | null;
+}
+
+export interface GoalMetricStatus {
+  name: string;
+  kind: string | null;
+  target_text: string | null;
+  target: GoalTarget | null;
+  value: number | null;
+  previous: number | null;
+  trend: 'down' | 'up' | 'flat' | null;
+  ok: boolean | null;
+  source: 'metrics' | 'reading' | 'judged' | null;
+  at: string | null;
+  available: string | null;
+}
+
+export interface GoalServing {
+  tasks: Array<{ id: string; title: string; status: string; quadrant: Quadrant | null }>;
+  workstreams: Array<{ id: string; title: string; phase: string }>;
+  explorations: Array<{ id: string; title: string }>;
+}
+
+export interface GoalStatus {
+  id: string;
+  title: string;
+  priority: number;
+  prose: string;
+  metrics: GoalMetricStatus[];
+  serving: GoalServing;
+  /** Nothing serving and at least one metric failing or trending the wrong way. */
+  flagged: boolean;
+  last_evaluated_at: string | null;
+  focus_ms_7d: number;
+}
+
+export interface HumanBalance {
+  share: number | null;
+  ms: { Q1: number; Q2: number; Q3: number; Q4: number; play: number; unclassified: number };
+  by_goal: Record<string, number>;
+  line: string;
+}
+
+export interface GoalsStatusResponse {
+  generated_at: string;
+  days: number;
+  goals: GoalStatus[];
+  constraints: Array<{ id: string; title: string; violations: number | null }>;
+  tensions: Array<{ a: string; b: string; label: string; default: string; arbiter: string }>;
+  human_balance: HumanBalance;
+}
+
+/** Digest Q2 candidates (v4 §6), deterministic. */
+export interface Q2Candidate {
+  kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+  goal_id?: string | null;
+  ref: string;
+  title: string;
+  detail: string;
+}
+
+export interface StewardState {
+  /** hester.steward in the workspace config. */
+  enabled: boolean;
+  not_today_until: string | null;
+  active: boolean;
+}
+
+export type EvaluateAnswer = StewardAnswer & { stale_measure?: string | null };
+/** `draft_id` and `diff` are null when Hester's reply held no GOALS.md draft. */
+export type GoalDraftAnswer = StewardAnswer & { draft_id: string | null; diff: string | null };
+
+export function fetchGoalsStatus(workspace: string, days = 7): Promise<HesterResult<GoalsStatusResponse>> {
+  return call<GoalsStatusResponse>(workspace, 'GET', `/cockpit/goals/status?days=${days}`);
+}
+
+export function evaluateGoal(workspace: string, goalId: string): Promise<HesterResult<EvaluateAnswer>> {
+  return call<EvaluateAnswer>(workspace, 'POST', `/cockpit/goals/${encodeURIComponent(goalId)}/evaluate`, {});
+}
+
+export function whatNext(workspace: string): Promise<HesterResult<StewardAnswer>> {
+  return call<StewardAnswer>(workspace, 'POST', '/cockpit/what-next', {});
+}
+
+/** Hester's view of a task: goals it might serve, a better lead, starting branches. */
+export function suggestTask(workspace: string, taskId: string): Promise<HesterResult<StewardAnswer>> {
+  return call<StewardAnswer>(workspace, 'POST', `/cockpit/tasks/${encodeURIComponent(taskId)}/suggest`, {});
+}
+
+/** Rail ask/steer. `record` is sent for lint and feed items (they live in Lee main). */
+export function askSteward(workspace: string, question: string, about?: AboutRef | null): Promise<HesterResult<StewardAnswer>> {
+  const body: { question: string; about?: { kind: string; id: string; record?: unknown } } = { question };
+  if (about) body.about = { kind: about.kind, id: about.id, ...(about.record !== undefined ? { record: about.record } : {}) };
+  return call<StewardAnswer>(workspace, 'POST', '/cockpit/ask', body);
+}
+
+export function draftGoals(workspace: string, instruction: string, goalId?: string | null): Promise<HesterResult<GoalDraftAnswer>> {
+  return call<GoalDraftAnswer>(workspace, 'POST', '/cockpit/goals/draft', { instruction, ...(goalId ? { goal_id: goalId } : {}) });
+}
+
+/** Writes GOALS.md from the draft (409 when the file changed since). Never commits. */
+export function applyGoalDraft(workspace: string, draftId: string): Promise<HesterResult<unknown>> {
+  return call(workspace, 'POST', `/cockpit/goals/draft/${encodeURIComponent(draftId)}/apply`, {});
+}
+
+export function buildTowardGoal(
+  workspace: string,
+  goalId: string,
+  title?: string,
+): Promise<HesterResult<{ workstream_id: string; title: string; phase: string }>> {
+  return call(workspace, 'POST', `/cockpit/goals/${encodeURIComponent(goalId)}/workstream`, title ? { title } : {});
+}
+
+export function fetchSteward(workspace: string): Promise<HesterResult<StewardState>> {
+  return call<StewardState>(workspace, 'GET', '/cockpit/steward');
+}
+
+export function setStewardNotToday(workspace: string, notToday: boolean): Promise<HesterResult<StewardState>> {
+  return call<StewardState>(workspace, 'POST', '/cockpit/steward', { not_today: notToday });
+}
+
+export function proposalOutcome(workspace: string, proposalId: string, outcome: 'accepted' | 'dismissed'): Promise<HesterResult<unknown>> {
+  return call(workspace, 'POST', `/cockpit/proposals/${encodeURIComponent(proposalId)}/outcome`, { outcome });
+}
+
+const LEE_API = 'http://127.0.0.1:9001';
+
+/**
+ * Record an override on Lee's nudge budget (POST /nudges/override on the Lee
+ * API, loopback + shared token): the steward stays quiet on that item until
+ * its state changes. Best effort.
+ */
+export async function overrideNudge(itemRef: string, stateKey: string): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const token = await getApiToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${LEE_API}/nudges/override`, { method: 'POST', headers, body: JSON.stringify({ item_ref: itemRef, state_key: stateKey }) });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -3,8 +3,13 @@
  * nav. Replaces the old right rail so the center keeps the width.
  *
  * Holds what exists today, nothing invented:
- * - Ask Hester (steward): opens the command palette pre-filled, never
- *   auto-submitted, optionally "about" the last thing you selected.
+ * - The steward line (v4 §8.2): "Steward on · Not today" (a toggle), or
+ *   "Steward off (config)".
+ * - Ask Hester (v4): POST /cockpit/ask with `about` (the last item you
+ *   selected, as an item ref); the answer renders inline with proposals and,
+ *   for a steer, the steer card. "Open in palette" keeps the old behaviour.
+ * - What next? (POST /cockpit/what-next), and the digest's Q2 candidates
+ *   when nothing needs you.
  * - Since you left… (the v1 digest from /copilot/digest): top line,
  *   Progress, Agents said, Changed. Agent words render as markdown.
  * - While you were away: the away summary the attention queue opened, if any.
@@ -17,23 +22,35 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../../Icon';
 import { fetchDigest, type DigestResponse } from '../../../lib/hesterCopilot';
-import type { LintSnapshot } from '../../../../shared/cockpit';
+import type { AboutRef, LintSnapshot, StewardAnswer } from '../../../../shared/cockpit';
+import { feedNeedsCount } from '../../../lib/cockpitModel';
+import { askSteward, fetchSteward, setStewardNotToday, whatNext, type StewardState } from '../../../lib/hesterCockpit';
 import { AgentMarkdown } from '../AgentMarkdown';
+import { StewardAnswerView } from '../StewardAnswerView';
+import { openItem } from '../Proposals';
 import { RetroCard } from '../../copilot/RetroCard';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 interface CopilotSectionProps {
   ctx: CockpitCtx;
-  /** The last row or tile you selected anywhere in the Cockpit, for "about:". */
-  about: string | null;
+  /** The last row or tile you selected anywhere in the Cockpit, for "about:" (an item ref). */
+  about: AboutRef | null;
   onClearAbout: () => void;
-  /** Opens the palette pre-filled (not submitted). */
+  /** Opens the palette pre-filled (not submitted): the old Ask behaviour, kept as a link. */
   onAsk: (prompt: string) => void;
   returnNonce: number;
 }
 
 const ASK_ROW = 'copilot:ask';
+const NEXT_ROW = 'copilot:next';
 const DIGEST_ROW = 'copilot:digest';
+/** Default question when a lint item's Ask Hester asks without one. */
+const DEFAULT_QUESTION = 'What should I do about this?';
+
+/** Steward requests already handled (per window), so a remount never replays one. */
+let handledNonce = 0;
+
+type AskState = { phase: 'idle' } | { phase: 'loading'; label: string } | { phase: 'done'; answer: StewardAnswer; label: string } | { phase: 'error'; error: string };
 
 export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onClearAbout, onAsk, returnNonce }) => {
   const [digest, setDigest] = useState<DigestResponse | null>(null);
@@ -41,8 +58,75 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
   const [loading, setLoading] = useState(false);
   const [question, setQuestion] = useState('');
   const [lint, setLint] = useState<LintSnapshot | null>(null);
+  const [ask, setAsk] = useState<AskState>({ phase: 'idle' });
+  const [next, setNext] = useState<AskState>({ phase: 'idle' });
+  const [steward, setSteward] = useState<StewardState | null>(null);
+  const [stewardBusy, setStewardBusy] = useState(false);
   const askRef = useRef<HTMLInputElement | null>(null);
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
   const workspace = ctx.workspace;
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSteward(workspace).then((r) => {
+      if (!cancelled) setSteward(r.ok ? r.data : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
+  const toggleNotToday = () => {
+    if (!steward || stewardBusy) return;
+    setStewardBusy(true);
+    const quiet = !steward.not_today_until;
+    setStewardNotToday(workspace, quiet).then((r) => {
+      if (!alive.current) return;
+      setStewardBusy(false);
+      if (r.ok) setSteward(r.data);
+      else ctx.notify(r.error, 'error');
+    });
+  };
+
+  const runAsk = useCallback(
+    (q: string, ref: AboutRef | null) => {
+      const text = q.trim();
+      if (!text) return;
+      setAsk({ phase: 'loading', label: text });
+      askSteward(workspace, text, ref).then((r) => {
+        if (!alive.current) return;
+        setAsk(r.ok ? { phase: 'done', answer: r.data, label: text } : { phase: 'error', error: r.error });
+      });
+    },
+    [workspace],
+  );
+
+  const runNext = useCallback(() => {
+    setNext({ phase: 'loading', label: 'What next?' });
+    whatNext(workspace).then((r) => {
+      if (!alive.current) return;
+      setNext(r.ok ? { phase: 'done', answer: r.data, label: 'What next?' } : { phase: 'error', error: r.error });
+    });
+  }, [workspace]);
+
+  // Requests from outside (lint Ask Hester, a lint fix's what-next).
+  const pending = ctx.pendingSteward;
+  useEffect(() => {
+    if (!pending || pending.nonce <= handledNonce) return;
+    if (pending.req.kind === 'ask') {
+      handledNonce = pending.nonce;
+      runAsk(pending.req.question || DEFAULT_QUESTION, pending.req.about);
+    } else if (pending.req.kind === 'what-next') {
+      handledNonce = pending.nonce;
+      runNext();
+    }
+  }, [pending, runAsk, runNext]);
 
   const load = useCallback(() => {
     if (!workspace) return () => undefined;
@@ -87,14 +171,20 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
     };
   }, [ctx.api, workspace]);
 
-  const ask = () => {
+  const submit = () => {
     const q = question.trim();
-    onAsk(`${about ? `About ${about}: ` : ''}${q}`);
+    if (!q) return;
+    runAsk(q, about);
     setQuestion('');
+  };
+  const openInPalette = () => {
+    const q = question.trim() || (ask.phase === 'done' || ask.phase === 'loading' ? ask.label : '');
+    onAsk(`${about ? `About ${about.label}: ` : ''}${q}`);
   };
 
   const rows: RowHandle[] = [
     { id: ASK_ROW, title: 'Ask Hester', open: () => askRef.current?.focus() },
+    { id: NEXT_ROW, title: 'What next?', open: () => runNext() },
     { id: DIGEST_ROW, title: 'Since you left', open: () => load() },
   ];
   useEffect(() => {
@@ -106,12 +196,29 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
   const awaySummary = (ctx.snapshot?.items ?? []).find((i) => i.kind === 'summary' && i.state === 'open') ?? null;
   const diags = (lint?.diagnostics ?? []).filter((d) => d.severity !== 'off' && (!d.workspace || d.workspace === workspace));
   const lintCount = diags.length;
+  const q2 = (digest?.q2_candidates ?? []).slice(0, 5);
 
   return (
     <section className="cockpit-sec cockpit-copilot">
       <header className="cockpit-sec-head">
         <h2>Copilot</h2>
         <span className="cockpit-muted">Hester, in steward mode: what happened, and what to ask</span>
+        <span className="cockpit-header-spacer" />
+        {steward && !steward.enabled && <span className="cockpit-muted">Steward off (config)</span>}
+        {steward && steward.enabled && (
+          <span className="cockpit-steward-line">
+            {steward.not_today_until ? 'Steward quiet today' : 'Steward on'} ·{' '}
+            <button
+              className={`cockpit-chip-btn${steward.not_today_until ? ' is-on' : ''}`}
+              disabled={stewardBusy}
+              aria-pressed={!!steward.not_today_until}
+              title={steward.not_today_until ? 'Turn the steward back on now' : 'No pushback until midnight; answers stay plain'}
+              onClick={toggleNotToday}
+            >
+              Not today
+            </button>
+          </span>
+        )}
       </header>
 
       <div
@@ -119,10 +226,16 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
         data-cockpit-row={ASK_ROW}
         onClick={() => ctx.selectRow(ASK_ROW)}
       >
-        <div className="cockpit-brief-head">Ask Hester</div>
+        <div className="cockpit-brief-head">
+          Ask Hester
+          <span className="cockpit-header-spacer" />
+          <button className="cockpit-link" onClick={openInPalette} title="The old behaviour: the palette, pre-filled">
+            Open in palette
+          </button>
+        </div>
         {about && (
-          <div className="cockpit-brief-about" title={about}>
-            about: {about}
+          <div className="cockpit-brief-about" title={about.label}>
+            about: <span className="cockpit-tag">{about.kind}</span> {about.label}
             <button className="cockpit-link" onClick={onClearAbout} aria-label="Clear about">
               ×
             </button>
@@ -133,19 +246,83 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
             ref={askRef}
             className="cockpit-input"
             value={question}
-            placeholder="Ask Hester… (Enter opens the palette with it)"
+            placeholder={about ? `Ask about ${about.label}…` : 'Ask Hester…'}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                ask();
+                submit();
               }
             }}
           />
-          <button className="cockpit-btn is-primary" onClick={ask}>
+          <button className="cockpit-btn is-primary" disabled={ask.phase === 'loading' || !question.trim()} onClick={submit}>
             <Icon name="chat" size={12} /> Ask
           </button>
         </div>
+        {ask.phase === 'loading' && (
+          <div className="cockpit-muted cockpit-spinner-line">
+            <span className="cockpit-spinner" /> Asking: {ask.label}
+          </div>
+        )}
+        {ask.phase === 'error' && <div className="cockpit-error">{ask.error}</div>}
+        {ask.phase === 'done' && (
+          <>
+            <div className="cockpit-brief-label">You asked: {ask.label}</div>
+            <StewardAnswerView key={ask.answer.request_id} ctx={ctx} answer={ask.answer} onClose={() => setAsk({ phase: 'idle' })} />
+          </>
+        )}
+      </div>
+
+      <div
+        className={`cockpit-brief-card${selected(NEXT_ROW)}`}
+        data-cockpit-row={NEXT_ROW}
+        onClick={() => ctx.selectRow(NEXT_ROW)}
+      >
+        <div className="cockpit-brief-head">
+          What next?
+          <span className="cockpit-header-spacer" />
+          <button
+            className="cockpit-btn"
+            disabled={next.phase === 'loading'}
+            title="Hester weighs your goals, open tasks and where your time went, and suggests what to do next"
+            onClick={(e) => {
+              e.stopPropagation();
+              runNext();
+            }}
+          >
+            {next.phase === 'loading' ? (
+              <>
+                <span className="cockpit-spinner" /> Thinking…
+              </>
+            ) : (
+              'What next?'
+            )}
+          </button>
+        </div>
+        {next.phase === 'error' && <div className="cockpit-error">{next.error}</div>}
+        {next.phase === 'done' && (
+          <StewardAnswerView key={next.answer.request_id} ctx={ctx} answer={next.answer} onClose={() => setNext({ phase: 'idle' })} />
+        )}
+        {next.phase === 'idle' && q2.length > 0 && feedNeedsCount(ctx.feedRows) === 0 && (
+          <div className="cockpit-brief-group">
+            <div className="cockpit-brief-label">Nothing needs you. Important, not urgent:</div>
+            {q2.map((c) => (
+              <div key={`${c.kind}:${c.ref}`} className="cockpit-brief-line">
+                <button
+                  className="cockpit-link"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (c.kind === 'exploration-quiet') void openItem(ctx, 'exploration', c.ref);
+                    else void openItem(ctx, 'goal', c.goal_id || c.ref);
+                  }}
+                >
+                  {c.goal_id && <span className="cockpit-tag">{c.goal_id}</span>} {c.title}
+                </button>
+                {c.detail && <span className="cockpit-muted"> · {c.detail}</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div

@@ -36,6 +36,17 @@ import { RepeatedSequenceRule } from './lint/rules/repeated-sequence';
 import { FlakyOperationRule } from './lint/rules/flaky-operation';
 import { LongWaitRule } from './lint/rules/long-wait';
 import { RepeatApprovalRule } from './lint/rules/repeat-approval';
+import { ForgottenStashRule, LargeDiffRule, NewFilesUndocumentedRule, StaleBranchRule } from './lint/rules/hygiene';
+import { MixedChangesRule, TaskGrowthRule } from './lint/rules/scope';
+import { FocusThrashRule, PolishLoopRule, Q2StarvedRule, Q4DriftRule, TimeboxExceededRule } from './lint/rules/attention';
+import { FixLoopRule } from './lint/rules/agent-fix-loop';
+import { ProjectRules } from './lint/rules/project';
+import { GitFacts } from './lint/git-snapshot';
+import { ProjectRuleLoader } from './lint/project-rules';
+import type { LintEffects } from './lint/types';
+import { getHesterCache, hesterRequest } from './hester-cache';
+import { getCaptureRelay, getHesterPort } from '../copilot/capture';
+import type { LintRuleConfig } from './cockpit-config';
 
 const HISTORY_DAYS = 8;
 const EVALUATE_DEBOUNCE_MS = 2000;
@@ -60,6 +71,118 @@ interface LintState {
 }
 
 let state: LintState | null = null;
+/** Fix side effects registered by other cockpit modules (tabs-main: checkin, focusTab, endFocus). */
+const registeredEffects: Partial<LintEffects> = {};
+let projectRuleLoader: ProjectRuleLoader | null = null;
+let gitFacts: GitFacts | null = null;
+let leeLogger: ((level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, unknown>) => void) | null = null;
+
+/** Other cockpit modules hand over the side effects lint fixes may take, and lee.log. */
+export function registerLintEffects(
+  effects: Partial<LintEffects>,
+  log?: (level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, unknown>) => void,
+): void {
+  Object.assign(registeredEffects, effects);
+  if (log) leeLogger = log;
+}
+
+function leeLog(level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, unknown>): void {
+  if (leeLogger) {
+    try {
+      leeLogger(level, message, details);
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  (level === 'ERROR' ? console.error : console.warn)(`[lint] ${message}`, details ?? '');
+}
+
+function openWorkspaces(): string[] {
+  const out = new Set<string>();
+  for (const [, w] of windowRegistry.getAll()) if (w.workspace) out.add(w.workspace);
+  return [...out];
+}
+
+function windowFor(workspace: string): BrowserWindow | null {
+  const focused = windowRegistry.getFocused();
+  if (focused?.workspace === workspace && !focused.browserWindow.isDestroyed()) return focused.browserWindow;
+  for (const [, w] of windowRegistry.getAll()) {
+    if (w.workspace === workspace && !w.browserWindow.isDestroyed()) return w.browserWindow;
+  }
+  return null;
+}
+
+let openFileSeq = 0;
+
+/** Ask the workspace's window to open a file (the editor:open path the /command API uses), then go to the line. */
+function openFileInWindow(workspace: string, file: string, line: number | null): Promise<boolean> {
+  const bw = windowFor(workspace);
+  if (!bw) return Promise.resolve(false);
+  const requestId = `lint-open-${Date.now().toString(36)}-${++openFileSeq}`;
+  return new Promise((resolve) => {
+    const done = (tabId: number | null) => {
+      clearTimeout(timer);
+      ipcMain.removeListener('editor:open-result', onResult);
+      if (tabId != null && !bw.isDestroyed()) {
+        bw.webContents.send('system:focus-tab', String(tabId));
+        if (line != null) bw.webContents.send('editor:goto-line', { tabId, line, column: 1 });
+      }
+      resolve(true);
+    };
+    const onResult = (_e: unknown, payload: { requestId?: string; tabId?: number | null }) => {
+      if (payload?.requestId === requestId) done(payload.tabId ?? null);
+    };
+    const timer = setTimeout(() => done(null), 5000);
+    ipcMain.on('editor:open-result', onResult);
+    if (bw.isMinimized()) bw.restore();
+    bw.focus();
+    bw.webContents.send('editor:open', { file, requestId });
+  });
+}
+
+function lintEffects(): LintEffects {
+  return {
+    openGit: async (ws) => {
+      const bw = windowFor(ws);
+      if (!bw) return false;
+      if (bw.isMinimized()) bw.restore();
+      bw.focus();
+      // Same path as the /command `tui` domain's git spawn.
+      bw.webContents.send('system:create-tab', { type: 'git', cwd: ws });
+      return true;
+    },
+    openFile: (ws, file, line) => openFileInWindow(ws, file, line),
+    sendInput: async (ptyId, text) => {
+      const rt = cockpitBus.tabRuntime;
+      if (!rt) return { success: false, error: 'unavailable' };
+      const r = await rt.send(ptyId, { text, submit: true, purpose: 'manual', while_busy: true }, { kind: 'local-user' });
+      return r.success ? { success: true } : { success: false, error: r.error ?? 'send_failed' };
+    },
+    capture: async (ws, text) => {
+      const relay = getCaptureRelay();
+      if (!relay) return { success: false, error: 'unavailable' };
+      const r = await relay.capture(
+        { text, workspace: ws, as: 'someday' },
+        { actor: { kind: 'user', surface: 'lee' }, source: { surface: 'lee' }, workspace: ws },
+      );
+      return r.success ? { success: true } : { success: false, error: r.error ?? 'capture_failed' };
+    },
+    hester: (ws, method, route, body) => hesterRequest(getHesterPort(), method, route, ws, body),
+    ...registeredEffects,
+  };
+}
+
+/** Rule config; `project/<id>` takes the severity from its .lee/lint file unless the lint: block sets one. */
+function ruleConfig(rule: string, ws: string | null): LintRuleConfig {
+  const configured = getCockpitConfig(ws).lint.rules[rule];
+  if (configured) return configured;
+  if (rule.startsWith('project/') && ws && projectRuleLoader) {
+    const sev = projectRuleLoader.severity(ws, rule.slice('project/'.length));
+    if (sev) return { severity: sev };
+  }
+  return { severity: 'off' };
+}
 const learnedTools = new Map<string, { tool: string; preview: string }>();
 const branchCache = new Map<string, { at: number; branch: string | null }>();
 /** Who is acting during a synchronous engine call (for the ceremony line). */
@@ -95,6 +218,9 @@ function saveNudges(): void {
 }
 
 function gitBranch(workspace: string): string | null {
+  // v4: the async GitSnapshot has the branch; the sync read is only a fallback before the first snapshot.
+  const snap = gitFacts?.snapshot(workspace);
+  if (snap) return snap.branch;
   const hit = branchCache.get(workspace);
   const now = Date.now();
   if (hit && now - hit.at < BRANCH_CACHE_MS) return hit.branch;
@@ -117,14 +243,33 @@ const FEED_SEVERITY: Record<string, FeedSeverity> = { info: 'ambient', warn: 'ne
 
 function feedActions(d: LintDiagnostic): FeedAction[] {
   return [
-    ...d.fixes.slice(0, 2).map((f, i): FeedAction => ({ id: f.id, label: f.label, style: i === 0 ? 'primary' : 'plain', confirm_text: f.confirm_text ?? null })),
+    ...d.fixes.filter((f) => f.id !== 'suppress-item').slice(0, 2).map((f, i): FeedAction => ({ id: f.id, label: f.label, style: i === 0 ? 'primary' : 'plain', confirm_text: f.confirm_text ?? null })),
     { id: 'suppress-item', label: 'Ignore for this item', style: 'plain' },
   ];
 }
 
 function createEngine(store: LintStore): LintEngine {
   return new LintEngine({
-    rules: [new RepeatedSequenceRule(), new FlakyOperationRule(), new LongWaitRule(), new RepeatApprovalRule()],
+    rules: [
+      new RepeatedSequenceRule(),
+      new FlakyOperationRule(),
+      new LongWaitRule(),
+      new RepeatApprovalRule(),
+      // v4 (contract 2026-09-26 v4 section 7.3)
+      new LargeDiffRule(),
+      new NewFilesUndocumentedRule(),
+      new StaleBranchRule(),
+      new ForgottenStashRule(),
+      new MixedChangesRule(),
+      new TaskGrowthRule(),
+      new TimeboxExceededRule(),
+      new PolishLoopRule(),
+      new Q4DriftRule(),
+      new FocusThrashRule(),
+      new Q2StarvedRule(),
+      new FixLoopRule(),
+      new ProjectRules(),
+    ],
     store,
     providers: {
       commandText: (ws, sig) => cockpitBus.tabRuntime?.commandText(ws, sig) ?? null,
@@ -134,8 +279,18 @@ function createEngine(store: LintStore): LintEngine {
       writeClaudeAllow: async (ws, rules) => {
         await writeClaudeAllow(ws, rules);
       },
+      workspaces: openWorkspaces,
+      git: (ws) => gitFacts?.snapshot(ws) ?? null,
+      docText: (ws) => gitFacts?.docText(ws) ?? null,
+      addedLines: (ws) => gitFacts?.addedLines(ws) ?? null,
+      tasks: (ws) => getHesterCache().tasks(ws),
+      taskByPty: (pty) => getHesterCache().taskByPty(pty),
+      stewardActive: (ws) => getHesterCache().stewardActive(ws),
+      humanBalance: (ws) => getHesterCache().humanBalance(ws),
+      projectRules: (ws) => projectRuleLoader?.load(ws) ?? [],
+      effects: lintEffects,
     },
-    config: (rule, ws) => getCockpitConfig(ws).lint.rules[rule] ?? { severity: 'off' },
+    config: ruleConfig,
     demotion: (ws) => getCockpitConfig(ws).lint.demotion,
     log: (type, workspace, data) => {
       logCockpitEvent(type, { workspace, data });
@@ -333,11 +488,21 @@ export function initCockpitLint(): void {
   cockpitBus.nudges.perHour = getCockpitConfig().cockpit.nudges.max_per_hour;
   loadNudges();
 
+  projectRuleLoader = new ProjectRuleLoader(leeLog);
+  gitFacts = new GitFacts({
+    wantsAddedLines: (ws) => (projectRuleLoader?.load(ws).length ?? 0) > 0,
+    onUpdate: () => scheduleEvaluate(),
+  });
   const engine = createEngine(new LintStore());
   const consumed = new Set(engine.consumedTypes());
   const startedAt = Date.now();
   let backlog: LeeEvent[] | null = [];
   const onEvent = (ev: LeeEvent) => {
+    // v4: an operation result or an agent's turn end may have changed the working tree.
+    if ((ev.type === ('operation.result' as string) || ev.type === 'agent.turn_end') && ev.workspace && gitFacts) {
+      gitFacts.invalidate(ev.workspace);
+      if (!backlog) scheduleEvaluate();
+    }
     if (!consumed.has(ev.type)) return;
     if (backlog) {
       backlog.push(ev);
@@ -359,6 +524,9 @@ export function initCockpitLint(): void {
   cockpitBus.nudges.on('change', onNudges);
 
   engine.on('change', schedulePush);
+  const cache = getHesterCache({ getHesterPort });
+  const onCache = () => scheduleEvaluate();
+  cache.on('change', onCache);
 
   state = {
     engine,
@@ -366,7 +534,10 @@ export function initCockpitLint(): void {
     evalTimer: null,
     pushTimer: null,
     nudgeTimer: null,
-    offEvent: () => copilotBus.off('event', onEvent),
+    offEvent: () => {
+      copilotBus.off('event', onEvent);
+      cache.off('change', onCache);
+    },
     offFeed: registerFeed(engine),
     offNudges: () => cockpitBus.nudges.off('change', onNudges),
   };

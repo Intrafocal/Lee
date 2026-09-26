@@ -59,6 +59,18 @@
   margin-top: 6px;
 }
 
+.lint-family-title {
+  padding: 8px 8px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+}
+
+.lint-family-title:first-child {
+  border-top: none;
+}
+
 .lint-group-title {
   padding: 6px 8px 2px;
   font-size: 10px;

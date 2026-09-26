@@ -280,7 +280,12 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
   };
 
   const list = items ?? [];
-  const handles: RowHandle[] = list.map((e) => ({ id: `explore:${e.id}`, title: e.title, open: () => void dive(e) }));
+  const handles: RowHandle[] = list.map((e) => ({
+    id: `explore:${e.id}`,
+    title: e.title,
+    open: () => void dive(e),
+    about: { kind: 'exploration', id: e.id, label: e.title },
+  }));
   useEffect(() => {
     ctx.registerRows(handles);
   });

@@ -4,7 +4,11 @@
  * (Claude --permission-mode auto; default from cockpit.launch.permission_default;
  * a Plan lead always runs in plan mode), provider.
  * Zero required fields beyond the text; works with Hester down (A spools the
- * task record). No Q4 note, no suggestion chip (v4).
+ * task record). No suggestion chip.
+ *
+ * v4 §8.5: goal chips (serves, zero or more, from GET /cockpit/goals) and
+ * the one-line Q4 note for an unlinked prototype. The note never blocks:
+ * Enter still launches at once.
  *
  * Addendum 2026-09-26b: an optional Name (the session's display name, e.g.
  * `claude --name`) and an optional context picker: workspace files (fuzzy
@@ -15,8 +19,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import type { LaunchRequest, TaskKind, TaskLead, TaskOrigin } from '../../../shared/cockpit';
-import { fuzzyFilter } from '../../lib/cockpitModel';
-import { fetchBundles, type ContextBundleRef } from '../../lib/hesterCockpit';
+import { fuzzyFilter, q4NoteVisible } from '../../lib/cockpitModel';
+import { fetchBundles, fetchGoals, type ContextBundleRef, type GoalRef } from '../../lib/hesterCockpit';
 import type { CockpitCtx } from './CockpitHost';
 
 export interface LauncherPrefill {
@@ -24,6 +28,7 @@ export interface LauncherPrefill {
   kind?: TaskKind;
   lead?: TaskLead;
   origin?: TaskOrigin;
+  serves?: string[];
 }
 
 const KINDS: TaskKind[] = ['bug', 'question', 'prototype', 'chore'];
@@ -64,6 +69,9 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
   const [autoDefault, setAutoDefault] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [serves, setServes] = useState<string[]>(prefill?.serves ?? []);
+  const [goals, setGoals] = useState<GoalRef[] | null>(null);
+  const goalChipsRef = useRef<HTMLDivElement | null>(null);
 
   // Context picker
   const [picked, setPicked] = useState<ContextPick[]>([]);
@@ -94,6 +102,47 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
       alive = false;
     };
   }, [ctx.api, ctx.workspace]);
+
+  useEffect(() => {
+    let alive = true;
+    fetchGoals(ctx.workspace)
+      .then((r) => alive && setGoals(r.ok ? r.data.filter((g) => g.kind !== 'constraint') : []))
+      .catch(() => alive && setGoals([]));
+    return () => {
+      alive = false;
+    };
+  }, [ctx.workspace]);
+
+  const showQ4 = q4NoteVisible({ kind, text, serves, play, lead });
+
+  const park = () => {
+    const body = text.trim();
+    if (!body || busy) return;
+    if (!ctx.copilotApi) {
+      setError('Someday is not available here');
+      return;
+    }
+    setBusy(true);
+    ctx.copilotApi
+      .capture({ text: body, workspace: ctx.workspace, as: 'someday' })
+      .then((r) => {
+        if (!r.success) {
+          setError('Could not park it');
+          return;
+        }
+        ctx.notify(r.spooled ? 'Parked (queued for Hester)' : 'Parked in Someday');
+        ctx.hester.refresh();
+        onClose();
+      })
+      .catch(() => setError('Could not park it'))
+      .finally(() => setBusy(false));
+  };
+
+  const focusGoalChips = () => {
+    const first = goalChipsRef.current?.querySelector('button');
+    if (first instanceof HTMLElement) first.focus();
+    else setError(goals && goals.length === 0 ? 'No goals in GOALS.md' : 'Goals are loading');
+  };
 
   // Load the pick lists the first time the picker opens (no model, no network beyond local Hester).
   useEffect(() => {
@@ -172,6 +221,7 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
       play,
       origin: prefill?.origin ?? { kind: 'launcher' },
       ...(kind ? { kind } : {}),
+      ...(serves.length ? { serves } : {}),
       ...(lead === 'human' ? { title: nm || firstLine } : body ? { prompt: body } : {}),
       ...(nm ? { name: nm } : {}),
       ...(context ? { context } : {}),
@@ -255,6 +305,17 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
             }
           }}
         />
+        {showQ4 && (
+          <div className="cockpit-q4-note">
+            <span>No goal and nothing waiting. Park it, link a goal, or go.</span>
+            <button className="cockpit-link" disabled={busy || !text.trim()} onClick={park}>
+              Park
+            </button>
+            <button className="cockpit-link" onClick={focusGoalChips}>
+              Link goal
+            </button>
+          </div>
+        )}
         {lead !== 'human' && (
           <div className="cockpit-launch-context">
             <div className="cockpit-chips">
@@ -354,6 +415,21 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
             </button>
           ))}
         </div>
+        {goals && goals.length > 0 && (
+          <div className="cockpit-chips" ref={goalChipsRef} aria-label="Serves goals">
+            {goals.map((g) => (
+              <button
+                key={g.id}
+                className={`cockpit-chip-btn${serves.includes(g.id) ? ' is-on' : ''}`}
+                title={`Serves ${g.id}: ${g.title}`}
+                aria-pressed={serves.includes(g.id)}
+                onClick={() => setServes((s) => (s.includes(g.id) ? s.filter((x) => x !== g.id) : [...s, g.id]))}
+              >
+                {g.id}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="cockpit-chips">
           <button className={`cockpit-chip-btn${play ? ' is-on' : ''}`} onClick={() => setPlay((p) => !p)}>
             play

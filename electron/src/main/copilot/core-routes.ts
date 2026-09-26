@@ -23,7 +23,18 @@ export interface CoreRoutesDeps {
 }
 
 const INGEST_MAX = 500;
-const INGEST_TYPES = new Set<LeeEventType>(['model.call', 'someday.triage', 'digest.shown', 'retro.shown', 'retro.answered']);
+const INGEST_TYPES = new Set<LeeEventType>([
+  'model.call',
+  'someday.triage',
+  'digest.shown',
+  'retro.shown',
+  'retro.answered',
+  // v4
+  'task.override',
+  'steward.request',
+  'steward.quiet',
+  'proposal.outcome',
+]);
 
 const REDEEM_LIMIT = 10;
 const REDEEM_WINDOW_MS = 60_000;

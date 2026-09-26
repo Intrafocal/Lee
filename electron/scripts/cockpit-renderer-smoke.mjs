@@ -612,7 +612,8 @@ test('nav: Files sits between Ops and Someday', () => {
 
 test('nav: Explore comes right after Someday; the full order', () => {
   assert.equal(SECTIONS.indexOf('explore'), SECTIONS.indexOf('someday') + 1);
-  assert.deepEqual([...SECTIONS], ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history']);
+  assert.equal(SECTIONS[2], 'goals');
+  assert.deepEqual([...SECTIONS], ['copilot', 'feed', 'goals', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history']);
 });
 
 test('flattenFileTree: expanded dirs inline their children; a filter keeps matches and their folders', () => {
@@ -736,5 +737,56 @@ test('formatDuration', () => {
     assert.equal(store.getWall().holdEpoch, before + 1);
   });
 }
+
+// v4: Goals, quadrants, proposals, the Q4 note (pure helpers in cockpitModel.ts).
+test('v4: goals badge is ember only when a goal is flagged', () => {
+  assert.deepEqual(mod.goalsBadge([{ flagged: true }, { flagged: false }]), { count: 1, ember: true });
+  assert.deepEqual(mod.goalsBadge([]), { count: 0, ember: false });
+});
+test('v4: quadrant chip and rank (play beats Q4; unclassified sorts between Q3 and Q4)', () => {
+  assert.equal(mod.quadrantChip({ quadrant: 'Q4', play: true }).label, 'play');
+  assert.equal(mod.quadrantChip({ quadrant: null }).label, 'unclassified');
+  const order = ['Q4', null, 'Q3', 'Q1', 'Q2'].sort((a, b) => mod.quadrantRank(a) - mod.quadrantRank(b));
+  assert.deepEqual(order, ['Q1', 'Q2', 'Q3', null, 'Q4']);
+});
+test('v4: override auto maps to null', () => {
+  assert.equal(mod.overrideChoice({ important: null, urgent: true, at: null }, 'important'), 'auto');
+  assert.equal(mod.overrideChoice({ important: null, urgent: true, at: null }, 'urgent'), 'on');
+  assert.deepEqual(mod.overridePatch('important', 'auto'), { important: null });
+  assert.deepEqual(mod.overridePatch('urgent', 'off'), { urgent: false });
+});
+test('v4: the Q4 note shows only for unlinked, non-play, delegated prototypes', () => {
+  const base = { kind: 'prototype', text: 'try x', serves: [], play: false, lead: 'delegate' };
+  assert.equal(mod.q4NoteVisible(base), true);
+  assert.equal(mod.q4NoteVisible({ ...base, kind: null, text: 'proto: try x' }), true);
+  assert.equal(mod.q4NoteVisible({ ...base, serves: ['G1'] }), false);
+  assert.equal(mod.q4NoteVisible({ ...base, play: true }), false);
+  assert.equal(mod.q4NoteVisible({ ...base, lead: 'human' }), false);
+  assert.equal(mod.q4NoteVisible({ ...base, kind: 'bug' }), false);
+});
+test('v4: balance strip always has six bands in order', () => {
+  const segs = mod.balanceSegments({ Q2: 1000, play: 3000 });
+  assert.deepEqual(segs.map((s) => s.band), ['Q1', 'Q2', 'Q3', 'Q4', 'play', 'unclassified']);
+  assert.equal(segs[1].share, 0.25);
+  assert.equal(mod.balanceSegments(null).every((s) => s.share === 0), true);
+});
+test('v4: chips and labels', () => {
+  assert.equal(mod.goalDeltaChip('G1', 180, 'ms'), 'G1 +180 ms');
+  assert.equal(mod.formatMetricValue(0.42, '%'), '42%');
+  assert.equal(mod.steerSendLabel('busy'), 'Send now (agent is busy)');
+});
+test('v4: proposals: bad input plans nothing; task ids come from params', () => {
+  assert.equal(mod.proposalPlan({ action: 'nope', params: {} }, '/ws'), null);
+  assert.equal(mod.proposalPlan({ action: 'create_task', params: {} }, '/ws'), null);
+  assert.equal(mod.proposalPlan({ action: 'set_lead', params: { task_id: 't1', lead: 'boss' } }, '/ws'), null);
+  assert.notEqual(mod.proposalPlan({ action: 'create_task', params: { title: 'Spike' } }, '/ws'), null);
+  assert.equal(mod.proposalTaskId({ action: 'set_lead', params: { task_id: 't1', lead: 'plan' } }), 't1');
+  assert.equal(mod.proposalTaskId({ action: 'park', params: { text: 'x' } }), null);
+});
+test('v4: renderer_action is read from lint.fix and from feed.act (nested) results', () => {
+  assert.deepEqual(mod.rendererAction({ success: true, data: { renderer_action: 'link-goal', task_id: 't1' } }), { action: 'link-goal', taskId: 't1' });
+  assert.deepEqual(mod.rendererAction({ success: true, data: { success: true, data: { renderer_action: 'what-next' } } }), { action: 'what-next', taskId: null });
+  assert.equal(mod.rendererAction({ success: true }), null);
+});
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

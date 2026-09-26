@@ -20,6 +20,7 @@ import type {
   LeeEventInput,
   LeeStatusBlock,
 } from '../../shared/copilot';
+import type { Quadrant } from '../../shared/cockpit';
 import type { CopilotConfig } from './config';
 import { AGENT_TEXT_MAX, clip, compactQuestion, isQuestionTool } from './hook-payload';
 
@@ -156,10 +157,36 @@ function copyItem(item: AttentionItem): AttentionItem {
   return JSON.parse(JSON.stringify(item));
 }
 
+/** v4 §7.2: an item's quadrant for ordering; rank Q1 = 0, Q2 = 1, Q3 = 2, null = 3, Q4 = 4. */
+export type AttentionRanker = (item: AttentionItem) => { quadrant: Quadrant | null; rank: number };
+
+export const QUADRANT_RANK: Record<Quadrant, number> = { Q1: 0, Q2: 1, Q3: 2, Q4: 4 };
+export const UNCLASSIFIED_RANK = 3;
+
+export function quadrantRank(q: Quadrant | null | undefined): number {
+  return q ? QUADRANT_RANK[q] : UNCLASSIFIED_RANK;
+}
+
 export class AttentionQueue {
   private entries = new Map<string, Entry>();
+  private ranker: AttentionRanker | null = null;
 
   constructor(private deps: QueueDeps) {}
+
+  /** Install (or with null remove) the quadrant ranker used by snapshot(). */
+  setRanker(fn: AttentionRanker | null): void {
+    this.ranker = fn;
+  }
+
+  private rankOf(item: AttentionItem): { quadrant: Quadrant | null; rank: number } {
+    if (!this.ranker) return { quadrant: null, rank: UNCLASSIFIED_RANK };
+    try {
+      const r = this.ranker(item);
+      return { quadrant: r.quadrant ?? null, rank: Number.isFinite(r.rank) ? r.rank : UNCLASSIFIED_RANK };
+    } catch {
+      return { quadrant: null, rank: UNCLASSIFIED_RANK };
+    }
+  }
 
   private ctx(item: AttentionItem): { workspace: string | null; window_id: number | null } {
     return { workspace: item.source.workspace, window_id: item.source.window_id };
@@ -573,16 +600,22 @@ export class AttentionQueue {
       if (isLive(e)) return !(opts.compact && e.item.state === 'snoozed');
       return !!opts.all && e.closedMs !== null && now - e.closedMs <= CLOSED_KEEP_MS;
     });
+    const ranks = new Map<Entry, { quadrant: Quadrant | null; rank: number }>();
+    for (const e of entries) ranks.set(e, this.rankOf(e.item));
+    // Live before closed, then severity, then quadrant rank, then longest wait (v4 §7.2).
     entries.sort((a, b) => {
       const la = isLive(a) ? 0 : 1;
       const lb = isLive(b) ? 0 : 1;
       if (la !== lb) return la - lb;
       const s = SEVERITY_RANK[a.item.severity] - SEVERITY_RANK[b.item.severity];
-      return s !== 0 ? s : b.item.active_wait_ms - a.item.active_wait_ms;
+      if (s !== 0) return s;
+      const r = ranks.get(a)!.rank - ranks.get(b)!.rank;
+      return r !== 0 ? r : b.item.active_wait_ms - a.item.active_wait_ms;
     });
     if (opts.compact) entries = entries.slice(0, COMPACT_MAX_ITEMS);
     const items = entries.map((e) => {
       const item = copyItem(e.item);
+      if (this.ranker) item.quadrant = ranks.get(e)!.quadrant;
       if (opts.compact) {
         item.text = clip(item.text, COMPACT_TEXT_MAX);
         delete item.files;

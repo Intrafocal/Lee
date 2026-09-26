@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AgentState, AttentionSnapshot } from '../../../shared/copilot';
-import type { GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
+import type { AboutRef, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
 import {
   agentPtysFromSnapshot,
   isAgentTab as isAgentTabPure,
@@ -172,7 +172,36 @@ export function logGoInto(ptyId: number, agentState: AgentState | TabRunState, f
 
 const launcherListeners = new Set<() => void>();
 
+/**
+ * A steward request from outside the Cockpit's own sections (the status-bar
+ * lint flyout, a lint fix's renderer_action): ask about an item, run What
+ * next?, or open a task's goal picker (v4 §8.5).
+ */
+export type StewardRequest =
+  | { kind: 'ask'; about: AboutRef; question?: string }
+  | { kind: 'what-next' }
+  | { kind: 'link-goal'; taskId: string };
+
+const stewardListeners = new Set<(req: StewardRequest) => void>();
+
 export const cockpitModeStore = {
+  /**
+   * Show the Cockpit on the right section and hand the request to it. False
+   * when no Cockpit can take it (disabled, or not mounted).
+   */
+  requestSteward(req: StewardRequest): boolean {
+    if (!state.enabled || !stewardListeners.size) return false;
+    if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'manual');
+    cockpitModeStore.setSection(req.kind === 'link-goal' ? 'tasks' : 'copilot');
+    for (const fn of stewardListeners) fn(req);
+    return true;
+  },
+  onStewardRequest(fn: (req: StewardRequest) => void): () => void {
+    stewardListeners.add(fn);
+    return () => {
+      stewardListeners.delete(fn);
+    };
+  },
   get(): CockpitModeState {
     return state;
   },

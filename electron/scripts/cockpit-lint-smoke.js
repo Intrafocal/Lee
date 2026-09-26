@@ -4,6 +4,9 @@
  * the four toil rules at and just below their thresholds, the engine's diff,
  * outcomes and demotion, the nudge budget, the settings.local.json fix, and
  * lint-main's startup scan and IPC. No Electron, no ports, no real Claude.
+ * v4 (contract 2026-09-26 v4 §7.5): every new rule with fixtures (fake git
+ * snapshot, tasks, events), git parsing, project rules, the Hester cache and
+ * steward gating.
  *
  *   cd electron && npm run build:main && node scripts/cockpit-lint-smoke.js
  *
@@ -750,6 +753,555 @@ async function main() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lee-lint-events-'));
     for (const n of ['2026-09-10.jsonl', '2026-09-20.jsonl', '2026-09-20.1.jsonl', '2026-09-24.jsonl', 'junk.txt']) fs.writeFileSync(path.join(dir, n), '');
     assert.deepStrictEqual(eventFiles(dir, 8, NOW).map((f) => path.basename(f)), ['2026-09-20.jsonl', '2026-09-20.1.jsonl', '2026-09-24.jsonl']);
+  });
+
+  // -------------------------------------------------------------------------
+  // v4 (contract 2026-09-26 v4 section 7.3): hygiene, scope, attention, agent,
+  // project rules, git parsing, the Hester cache and steward gating.
+  // -------------------------------------------------------------------------
+
+  const v4 = {
+    hygiene: require(path.join(dist, 'lint', 'rules', 'hygiene.js')),
+    scope: require(path.join(dist, 'lint', 'rules', 'scope.js')),
+    attention: require(path.join(dist, 'lint', 'rules', 'attention.js')),
+    fixLoop: require(path.join(dist, 'lint', 'rules', 'agent-fix-loop.js')),
+    project: require(path.join(dist, 'lint', 'rules', 'project.js')),
+    common: require(path.join(dist, 'lint', 'rules', 'v4-common.js')),
+    gitSnap: require(path.join(dist, 'lint', 'git-snapshot.js')),
+    projectRules: require(path.join(dist, 'lint', 'project-rules.js')),
+    cache: require(path.join(dist, 'hester-cache.js')),
+  };
+  const V4WS = mkWorkspace('v4');
+
+  function gitSnap(over = {}) {
+    return {
+      workspace: V4WS,
+      at: NOW,
+      branch: 'feature/x',
+      default_branch: 'main',
+      changed: [],
+      untracked: [],
+      branches: [],
+      stashes: [],
+      ...over,
+    };
+  }
+
+  function task(over = {}) {
+    return {
+      id: 't1',
+      workspace: V4WS,
+      title: 'Tidy the login flow',
+      title_source: 'user',
+      name: null,
+      kind: 'chore',
+      status: 'running',
+      lead: 'delegate',
+      play: false,
+      agent: { provider: 'claude', pty_id: 7, session_id: 'sess1', tab_label: 'Claude', model: null },
+      sessions: ['sess1'],
+      serves: [],
+      workstream: null,
+      confirmed: true,
+      confirmed_at: null,
+      urgency: null,
+      quadrant: null,
+      importance_rank: null,
+      overrides: null,
+      urgency_cleared_at: null,
+      files_at_first_report: null,
+      timebox_min: 45,
+      due: null,
+      origin: null,
+      busy_ms: 0,
+      turns: 0,
+      files: [],
+      files_count: 0,
+      summary: null,
+      lee_status: null,
+      last_checkin_at: null,
+      commits: [],
+      outcome: null,
+      accepted: null,
+      created_at: new Date(NOW - DAY).toISOString(),
+      updated_at: new Date(NOW).toISOString(),
+      ...over,
+    };
+  }
+
+  /** A v4 context: one workspace, fixture git/tasks/balance, recorded effects. */
+  function v4Ctx(over = {}) {
+    const rules = JSON.parse(JSON.stringify(COCKPIT_DEFAULTS.lint.rules));
+    Object.assign(rules, over.rules ?? {});
+    const calls = [];
+    const created = [];
+    const ctx = baseCtx({
+      config: (rule) => rules[rule] ?? { severity: 'off' },
+      workspaces: () => [V4WS],
+      git: () => over.git ?? null,
+      docText: () => (over.docText === undefined ? '' : over.docText),
+      addedLines: () => over.addedLines ?? null,
+      tasks: () => over.tasks ?? null,
+      taskByPty: (pty) => (over.tasks ?? []).find((t) => t.agent && t.agent.pty_id === pty) ?? null,
+      stewardActive: () => over.steward ?? true,
+      humanBalance: () => over.balance ?? null,
+      projectRules: () => over.projectRules ?? [],
+    });
+    ctx.launcher = {
+      createTask: async (input) => {
+        created.push(input);
+        return { task_id: `task_${created.length}`, relayed: true };
+      },
+    };
+    ctx.writeClaudeAllow = async () => {};
+    ctx.ignoreCommands = async () => {};
+    ctx.effects = {
+      openGit: async (ws) => (calls.push(['openGit', ws]), true),
+      openFile: async (ws, file, line) => (calls.push(['openFile', file, line]), true),
+      sendInput: async (pty, text) => (calls.push(['sendInput', pty, text]), { success: true }),
+      checkin: async (pty) => (calls.push(['checkin', pty]), { success: true }),
+      focusTab: async (pty) => (calls.push(['focusTab', pty]), { success: true }),
+      capture: async (ws, text) => (calls.push(['capture', ws, text]), { success: true }),
+      hester: async (ws, method, route, body) => (calls.push(['hester', method, route, body]), { success: true, data: { workstream_id: 'ws_1' } }),
+      endFocus: async () => (calls.push(['endFocus']), true),
+    };
+    return { ctx, calls, created, rules };
+  }
+
+  await test('v4 defaults: every new rule has a default; scope/areas is kept by the config merge', () => {
+    const d = COCKPIT_DEFAULTS.lint.rules;
+    assert.deepStrictEqual(
+      Object.fromEntries(
+        ['commit/large-diff', 'commit/new-files-undocumented', 'branch/stale', 'stash/forgotten', 'scope/mixed-changes', 'scope/task-growth',
+          'time/timebox-exceeded', 'time/polish-loop', 'time/q4-drift', 'focus/thrash', 'balance/q2-starved', 'agent/fix-loop'].map((r) => [r, d[r].severity]),
+      ),
+      {
+        'commit/large-diff': 'info', 'commit/new-files-undocumented': 'info', 'branch/stale': 'info', 'stash/forgotten': 'info',
+        'scope/mixed-changes': 'warn', 'scope/task-growth': 'warn', 'time/timebox-exceeded': 'info', 'time/polish-loop': 'info',
+        'time/q4-drift': 'info', 'focus/thrash': 'info', 'balance/q2-starved': 'info', 'agent/fix-loop': 'warn',
+      },
+    );
+    assert.strictEqual(d['commit/large-diff'].min_changes, 5);
+    assert.strictEqual(d['scope/task-growth'].factor, 3);
+    const { getCockpitConfig, invalidateCockpitConfig } = require(path.join(dist, 'cockpit-config.js'));
+    const ws = mkWorkspace('cfg');
+    fs.mkdirSync(path.join(ws, '.lee'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.lee', 'config.yaml'), 'lint:\n  scope/areas: [electron/src/main, hester]\n  branch/stale: { days: 60 }\n');
+    invalidateCockpitConfig();
+    const cfg = getCockpitConfig(ws);
+    assert.deepStrictEqual(cfg.lint.areas, ['electron/src/main', 'hester']);
+    assert.deepStrictEqual(cfg.lint.rules['scope/mixed-changes'].areas, ['electron/src/main', 'hester']);
+    assert.strictEqual(cfg.lint.rules['scope/mixed-changes'].severity, 'warn');
+    assert.strictEqual(cfg.lint.rules['branch/stale'].days, 60);
+    assert.strictEqual(cfg.lint.rules['scope/areas'], undefined, 'scope/areas is not a rule');
+  });
+
+  await test('git parsing: porcelain -z (renames, untracked), stash list, added lines', () => {
+    const z = [' M src/a.ts', 'R  src/new.ts', 'src/old.ts', 'A  src/added.py', '?? docs/x.md', '?? tools/t.ts', ''].join('\0');
+    const p = v4.gitSnap.parsePorcelainZ(z);
+    assert.deepStrictEqual(p.changed, [{ path: 'src/a.ts', status: 'M' }, { path: 'src/new.ts', status: 'R' }, { path: 'src/added.py', status: 'A' }]);
+    assert.deepStrictEqual(p.untracked, ['docs/x.md', 'tools/t.ts']);
+    assert.deepStrictEqual(v4.gitSnap.parseStashes('stash@{0}\t1700000000\tWIP on main: abc\nbad\n'), [{ ref: 'stash@{0}', ms: 1700000000000, message: 'WIP on main: abc' }]);
+    const diff = [
+      'diff --git a/src/a.ts b/src/a.ts',
+      '--- a/src/a.ts',
+      '+++ b/src/a.ts',
+      '@@ -3,0 +4,2 @@',
+      '+console.log(1)',
+      '+ok()',
+      '@@ -10 +12 @@',
+      '-old',
+      '+new line',
+      'diff --git a/gone.ts b/gone.ts',
+      '--- a/gone.ts',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-x',
+    ].join('\n');
+    assert.deepStrictEqual(v4.gitSnap.parseAddedLines(diff), [
+      { path: 'src/a.ts', line: 4, text: 'console.log(1)' },
+      { path: 'src/a.ts', line: 5, text: 'ok()' },
+      { path: 'src/a.ts', line: 12, text: 'new line' },
+    ]);
+  });
+
+  await test('git snapshot: execFile against a real temp repo (branch, changes, stale branch, stash)', async () => {
+    const repo = mkWorkspace('repo');
+    const { execFileSync } = require('child_process');
+    const g = (...args) => execFileSync('git', args, { cwd: repo, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z' } }).toString();
+    try {
+      g('init', '-q', '-b', 'main');
+    } catch {
+      g('init', '-q');
+      g('checkout', '-q', '-b', 'main');
+    }
+    g('config', 'user.email', 'smoke@example.com');
+    g('config', 'user.name', 'Smoke');
+    g('config', 'commit.gpgsign', 'false');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+    g('add', 'a.txt');
+    g('commit', '-q', '-m', 'init');
+    g('checkout', '-q', '-b', 'old-idea');
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+    g('add', 'b.txt');
+    g('commit', '-q', '-m', 'idea');
+    g('checkout', '-q', 'main');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\ntwo\n');
+    g('stash', 'push', '-q', '-m', 'parked');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\nthree\n');
+    fs.writeFileSync(path.join(repo, 'new.ts'), 'export const x = 1;\n');
+    const snap = await v4.gitSnap.readGitSnapshot(repo, NOW);
+    assert.strictEqual(snap.branch, 'main');
+    assert.strictEqual(snap.default_branch, 'main');
+    assert.deepStrictEqual(snap.changed, [{ path: 'a.txt', status: 'M' }]);
+    assert.deepStrictEqual(snap.untracked, ['new.ts']);
+    const old = snap.branches.find((b) => b.name === 'old-idea');
+    assert.strictEqual(old.merged, false);
+    assert.strictEqual(snap.branches.find((b) => b.name === 'main').merged, true);
+    assert.strictEqual(snap.stashes.length, 1);
+    assert.match(snap.stashes[0].message, /parked/);
+    const added = await v4.gitSnap.readAddedLines(repo, snap.untracked);
+    assert.deepStrictEqual(added.map((l) => `${l.path}:${l.line}:${l.text}`), ['a.txt:2:three', 'new.ts:1:export const x = 1;', 'new.ts:2:']);
+    assert.strictEqual(await v4.gitSnap.readGitSnapshot(mkWorkspace('nogit'), NOW), null);
+    // Branch staleness over the fixture.
+    const { ctx } = v4Ctx({ git: { ...snap, workspace: V4WS } });
+    const f = new v4.hygiene.StaleBranchRule().evaluate({ ...ctx, now: Date.parse('2026-03-01T00:00:00Z') });
+    assert.strictEqual(f.length, 1);
+    assert.match(f[0].evidence[0], /^old-idea: last commit 59 days ago/);
+  });
+
+  await test('commit/large-diff fires at 5 changes, not 4; open-git and suppress-branch', async () => {
+    const rule = new v4.hygiene.LargeDiffRule();
+    const four = gitSnap({ changed: [{ path: 'a', status: 'M' }, { path: 'b', status: 'M' }], untracked: ['c', 'd'] });
+    assert.strictEqual(rule.evaluate(v4Ctx({ git: four }).ctx).length, 0);
+    const five = gitSnap({ ...four, untracked: ['c', 'd', 'e'] });
+    const t = v4Ctx({ git: five });
+    const [f] = rule.evaluate(t.ctx);
+    assert.strictEqual(f.message, '5 uncommitted changes on feature/x');
+    assert.deepStrictEqual(f.fixes.map((x) => x.id), ['open-git', 'suppress-branch']);
+    assert.deepStrictEqual(await rule.fix(f, 'open-git', t.ctx), { success: true, message: 'Opened Git' });
+    assert.deepStrictEqual(t.calls, [['openGit', V4WS]]);
+    assert.strictEqual(rule.evaluate(v4Ctx({ git: null }).ctx).length, 0, 'no snapshot, no finding');
+  });
+
+  await test('commit/new-files-undocumented: source files whose basename no doc mentions; create-task as a chore', async () => {
+    const git = gitSnap({
+      changed: [{ path: 'src/added.py', status: 'A' }, { path: 'src/mod.ts', status: 'M' }],
+      untracked: ['src/hester-cache.ts', 'src/known.ts', 'docs/new.md', 'src/foo.test.ts', 'tests/test_x.py', 'img.png'],
+    });
+    assert.deepStrictEqual(v4.hygiene.undocumentedFiles(git, 'we use known.ts here'), ['src/added.py', 'src/hester-cache.ts']);
+    const rule = new v4.hygiene.NewFilesUndocumentedRule();
+    const t = v4Ctx({ git, docText: 'we use known.ts here' });
+    const [f] = rule.evaluate(t.ctx);
+    assert.strictEqual(f.message, '2 new files not mentioned in the docs');
+    assert.match(f.fixes[0].confirm_text, /Document added\.py, hester-cache\.ts/);
+    const r = await rule.fix(f, 'create-task', t.ctx);
+    assert.strictEqual(r.success, true);
+    assert.strictEqual(t.created[0].kind, 'chore');
+    assert.strictEqual(t.created[0].title, 'Document added.py, hester-cache.ts');
+    assert.deepStrictEqual(t.created[0].origin, { kind: 'lint', ref: 'commit/new-files-undocumented' });
+    assert.strictEqual(rule.evaluate(v4Ctx({ git, docText: null }).ctx).length, 0, 'docs not read yet');
+    assert.strictEqual(rule.evaluate(v4Ctx({ git, docText: 'added.py, known.ts and hester-cache.ts' }).ctx).length, 0);
+  });
+
+  await test('branch/stale and stash/forgotten: thresholds, current/default/merged branches excluded', () => {
+    const git = gitSnap({
+      branches: [
+        { name: 'main', last_commit_ms: NOW - 90 * DAY, merged: true },
+        { name: 'feature/x', last_commit_ms: NOW - 90 * DAY, merged: false },
+        { name: 'merged-old', last_commit_ms: NOW - 90 * DAY, merged: true },
+        { name: 'old', last_commit_ms: NOW - 31 * DAY, merged: false },
+        { name: 'young', last_commit_ms: NOW - 29 * DAY, merged: false },
+      ],
+      stashes: [
+        { ref: 'stash@{0}', ms: NOW - 6 * DAY, message: 'recent' },
+        { ref: 'stash@{1}', ms: NOW - 8 * DAY, message: 'WIP on main: parked' },
+      ],
+    });
+    const t = v4Ctx({ git });
+    const [b] = new v4.hygiene.StaleBranchRule().evaluate(t.ctx);
+    assert.strictEqual(b.message, '1 unmerged branch untouched for over 30 days');
+    assert.match(b.evidence[0], /^old: last commit 31 days ago, not merged into main/);
+    const [s] = new v4.hygiene.ForgottenStashRule().evaluate(t.ctx);
+    assert.strictEqual(s.message, '1 stash older than 7 days');
+    assert.match(s.evidence[0], /stash@\{1\} \(8 days\): WIP on main: parked/);
+    assert.deepStrictEqual(s.fixes.map((x) => x.id), ['open-git']);
+  });
+
+  await test('scope/mixed-changes: top-level dirs by default, configured areas (longest prefix); one task per area', async () => {
+    const git = gitSnap({ changed: [{ path: 'electron/src/main/a.ts', status: 'M' }, { path: 'electron/src/renderer/b.tsx', status: 'M' }], untracked: ['hester/x.py'] });
+    const rule = new v4.scope.MixedChangesRule();
+    const t = v4Ctx({ git });
+    const [f] = rule.evaluate(t.ctx);
+    assert.strictEqual(f.message, 'Uncommitted changes span 2 areas: electron, hester');
+    const t2 = v4Ctx({ git, rules: { 'scope/mixed-changes': { severity: 'warn', areas: ['electron/src/main/**', 'electron/src/renderer', 'electron'] } } });
+    const [f2] = rule.evaluate(t2.ctx);
+    assert.strictEqual(f2.message, 'Uncommitted changes span 2 areas: electron/src/main, electron/src/renderer');
+    assert.strictEqual(f2.fixes[0].confirm_text, 'New task (chore): Commit the electron/src/main changes\nNew task (chore): Commit the electron/src/renderer changes');
+    const r = await rule.fix(f2, 'create-task', t2.ctx);
+    assert.deepStrictEqual(r, { success: true, message: 'Created 2 tasks' });
+    assert.deepStrictEqual(t2.created.map((c) => c.title), ['Commit the electron/src/main changes', 'Commit the electron/src/renderer changes']);
+    const one = gitSnap({ changed: [{ path: 'hester/a.py', status: 'M' }], untracked: ['hester/b.py'] });
+    assert.strictEqual(rule.evaluate(v4Ctx({ git: one }).ctx).length, 0);
+  });
+
+  await test('scope/task-growth: files_count >= max(min_files, factor x first report); promote and checkin', async () => {
+    const rule = new v4.scope.TaskGrowthRule();
+    const grown = task({ files_at_first_report: 2, files_count: 6 });
+    assert.strictEqual(v4.scope.taskGrew(grown, 3, 6), true);
+    assert.strictEqual(v4.scope.taskGrew(task({ files_at_first_report: 2, files_count: 5 }), 3, 6), false);
+    assert.strictEqual(v4.scope.taskGrew(task({ files_at_first_report: 3, files_count: 8 }), 3, 6), false);
+    assert.strictEqual(v4.scope.taskGrew(task({ files_at_first_report: null, files_count: 50 }), 3, 6), false);
+    const t = v4Ctx({ tasks: [grown, task({ id: 't2', status: 'done', files_at_first_report: 1, files_count: 30 })] });
+    const fs1 = rule.evaluate(t.ctx);
+    assert.strictEqual(fs1.length, 1, 'closed tasks never fire');
+    assert.strictEqual(fs1[0].item_ref, `task:${V4WS}:t1`);
+    assert.deepStrictEqual(fs1[0].fixes.map((x) => x.id), ['promote-workstream', 'checkin']);
+    assert.deepStrictEqual(await rule.fix(fs1[0], 'promote-workstream', t.ctx), { success: true, message: 'Promoted to workstream ws_1' });
+    await rule.fix(fs1[0], 'checkin', t.ctx);
+    assert.deepStrictEqual(t.calls, [['hester', 'POST', '/cockpit/tasks/t1/promote', {}], ['checkin', 7]]);
+  });
+
+  await test('time/timebox-exceeded: busy past the timebox (not play, not a human lead); wrap-up types the exact text only on fix', async () => {
+    const rule = new v4.attention.TimeboxExceededRule();
+    const over = task({ busy_ms: 46 * MIN });
+    const t = v4Ctx({
+      tasks: [over, task({ id: 'at', busy_ms: 45 * MIN }), task({ id: 'play', play: true, busy_ms: 99 * MIN }), task({ id: 'human', lead: 'human', busy_ms: 99 * MIN }), task({ id: 'nobox', timebox_min: null, busy_ms: 99 * MIN })],
+    });
+    const found = rule.evaluate(t.ctx);
+    assert.deepStrictEqual(found.map((f) => f.subject), ['t1']);
+    const [f] = found;
+    assert.deepStrictEqual(f.fixes.map((x) => x.id), ['wrap-up', 'extend', 'promote-workstream', 'park']);
+    const wrap = f.fixes[0];
+    assert.strictEqual(wrap.confirm_text, 'Please wrap up: finish the current step, summarise what you did in a lee-status block, and stop.');
+    assert.deepStrictEqual(t.calls, [], 'evaluating types nothing (C3)');
+    await rule.fix(f, 'wrap-up', t.ctx);
+    assert.deepStrictEqual(t.calls, [['sendInput', 7, wrap.confirm_text]]);
+    await rule.fix(f, 'extend', t.ctx);
+    assert.deepStrictEqual(t.calls[1], ['hester', 'PATCH', '/cockpit/tasks/t1', { timebox_min: 75 }]);
+    await rule.fix(f, 'park', t.ctx);
+    assert.deepStrictEqual(t.calls[2], ['capture', V4WS, 'Tidy the login flow']);
+    const noAgent = v4Ctx({ tasks: [task({ busy_ms: 46 * MIN, agent: null })] });
+    assert.strictEqual((await rule.fix(rule.evaluate(noAgent.ctx)[0], 'wrap-up', noAgent.ctx)).success, false);
+  });
+
+  const agentEv = (type, data, at, workspace = V4WS) => ev(type, { session_id: 'sess1', pty_id: 7, ...data }, { ts: at, workspace });
+  const turn = (rule, files, at) => {
+    rule.ingest(agentEv('agent.prompt', {}, at));
+    for (const f of files) rule.ingest(agentEv('agent.tool', { phase: 'post', tool: 'Edit', files: [f], writes: true, signature: 'sig' }, at + 1000));
+    rule.ingest(agentEv('agent.turn_end', { busy_ms: 1000 }, at + 2000));
+  };
+
+  await test('time/polish-loop: the last 6 turns each wrote only the same <= 2 files; 5 turns or a third file do not fire', async () => {
+    const mk = () => new v4.attention.PolishLoopRule();
+    const t = v4Ctx({ tasks: [task()] });
+    const r1 = mk();
+    for (let i = 0; i < 5; i++) turn(r1, ['/w/a.css', '/w/b.css'], NOW - (10 - i) * MIN);
+    assert.strictEqual(r1.evaluate(t.ctx).length, 0, '5 turns');
+    turn(r1, ['/w/a.css'], NOW - 4 * MIN);
+    const [f] = r1.evaluate(t.ctx);
+    assert.strictEqual(f.evidence[0], 'The last 6 turns each wrote only /w/a.css, /w/b.css');
+    assert.deepStrictEqual(f.fixes.map((x) => x.id), ['wrap-up', 'park']);
+    const r2 = mk();
+    for (let i = 0; i < 5; i++) turn(r2, ['/w/a.css'], NOW - (10 - i) * MIN);
+    turn(r2, ['/w/c.css', '/w/a.css', '/w/d.css'], NOW - 4 * MIN);
+    assert.strictEqual(r2.evaluate(t.ctx).length, 0, 'other files');
+    const r3 = mk();
+    for (let i = 0; i < 5; i++) turn(r3, ['/w/a.css'], NOW - (10 - i) * MIN);
+    turn(r3, [], NOW - 4 * MIN);
+    assert.strictEqual(r3.evaluate(t.ctx).length, 0, 'a turn with no writes breaks the loop');
+    assert.deepStrictEqual(v4.attention.polishLoop([['a'], ['a', 'b'], ['b']], 3, 2), ['a', 'b']);
+  });
+
+  await test('time/q4-drift: Q4, not play, agent active in the last 10 min; link-goal is a renderer action', async () => {
+    const rule = new v4.attention.Q4DriftRule();
+    rule.ingest(agentEv('agent.tool', { phase: 'post', tool: 'Edit', files: [], writes: false }, NOW - 5 * MIN));
+    const q4 = task({ quadrant: 'Q4', urgency_cleared_at: '2026-09-24T10:00:00Z' });
+    const t = v4Ctx({ tasks: [q4, task({ id: 'p', quadrant: 'Q4', play: true, agent: { ...q4.agent, pty_id: 7, session_id: 'sess1' } }), task({ id: 'q2', quadrant: 'Q2' })] });
+    const found = rule.evaluate(t.ctx);
+    assert.deepStrictEqual(found.map((f) => f.subject), ['t1']);
+    assert.deepStrictEqual(found[0].fixes.map((x) => x.id), ['wrap-up', 'link-goal', 'park']);
+    assert.deepStrictEqual(await rule.fix(found[0], 'link-goal', t.ctx), { success: true, data: { renderer_action: 'link-goal', task_id: 't1', workspace: V4WS } });
+    assert.strictEqual(rule.evaluate({ ...t.ctx, now: NOW + 6 * MIN }).length, 0, 'agent quiet for 11 min');
+  });
+
+  await test('focus/thrash: 4 distinct non-agent items within 60 min in one session; agent items and path additions do not count', async () => {
+    const rule = new v4.attention.FocusThrashRule();
+    const fe = (type, item, at, sid = 'fs1') => rule.ingest(ev(type, { session_id: sid, ...(item ? { item } : {}) }, { ts: at }));
+    fe('focus.start', { kind: 'files', workspace: V4WS, paths: ['/a'] }, NOW - 50 * MIN);
+    fe('focus.item', { kind: 'files', workspace: V4WS, paths: ['/a', '/b'] }, NOW - 45 * MIN);
+    fe('focus.item', { kind: 'agent', pty_id: 3, window_id: 1, label: 'Claude' }, NOW - 40 * MIN);
+    fe('focus.item', { kind: 'task', workspace: V4WS, task_id: 't1', label: 'x' }, NOW - 30 * MIN);
+    fe('focus.item', { kind: 'workspace', workspace: V4WS }, NOW - 20 * MIN);
+    const t = v4Ctx();
+    assert.strictEqual(rule.evaluate(t.ctx).length, 0, '3 distinct');
+    fe('focus.item', { kind: 'files', workspace: V4WS, paths: ['/z'] }, NOW - 10 * MIN);
+    const [f] = rule.evaluate(t.ctx);
+    assert.strictEqual(f.message, 'Your focus moved between 4 things in the last hour');
+    assert.deepStrictEqual(f.fixes.map((x) => x.id), ['end-focus', 'suppress-item']);
+    await rule.fix(f, 'end-focus', t.ctx);
+    assert.deepStrictEqual(t.calls, [['endFocus']]);
+    assert.strictEqual(rule.evaluate({ ...t.ctx, now: NOW + 45 * MIN }).length, 0, 'older than 60 min');
+    fe('focus.end', null, NOW);
+    assert.strictEqual(rule.evaluate(t.ctx).length, 0, 'session ended');
+  });
+
+  await test('balance/q2-starved: Q2 share < 10% with >= 5 h classified focus; what-next is a renderer action', async () => {
+    const rule = new v4.attention.Q2StarvedRule();
+    const bal = (q2, total, unclassified = 0) => ({ share: null, ms: { Q1: 0, Q2: q2 * HOUR, Q3: (total - q2) * HOUR, Q4: 0, play: 0, unclassified: unclassified * HOUR }, by_goal: {}, line: '4% Q2; G1 got none of your time this week.' });
+    assert.strictEqual(rule.evaluate(v4Ctx({ balance: bal(0.4, 6) }).ctx).length, 1);
+    assert.strictEqual(rule.evaluate(v4Ctx({ balance: bal(0.7, 6) }).ctx).length, 0, 'share >= 10%');
+    assert.strictEqual(rule.evaluate(v4Ctx({ balance: bal(0.2, 4, 10) }).ctx).length, 0, 'unclassified time does not count toward 5 h');
+    const t = v4Ctx({ balance: bal(0.4, 6) });
+    const [f] = rule.evaluate(t.ctx);
+    assert.match(f.message, /^Only 7% of your focus/);
+    assert.strictEqual(f.evidence[1], '4% Q2; G1 got none of your time this week.');
+    assert.deepStrictEqual(await rule.fix(f, 'what-next', t.ctx), { success: true, data: { renderer_action: 'what-next', task_id: null, workspace: V4WS } });
+  });
+
+  await test('agent/fix-loop: the same failing call in 3 distinct turns of one session; 2, or across sessions, do not', async () => {
+    const rule = new v4.fixLoop.FixLoopRule();
+    const fail = (sid, at) => rule.ingest(ev('agent.tool', { session_id: sid, pty_id: 7, phase: 'post', tool: 'Bash', signature: 'abc123', failed: true }, { ts: at }));
+    const prompt = (sid, at) => rule.ingest(ev('agent.prompt', { session_id: sid, pty_id: 7 }, { ts: at }));
+    const t = v4Ctx({ tasks: [task()] });
+    prompt('s1', NOW - 10 * MIN);
+    fail('s1', NOW - 9 * MIN);
+    fail('s1', NOW - 9 * MIN);
+    prompt('s1', NOW - 8 * MIN);
+    fail('s1', NOW - 7 * MIN);
+    prompt('s2', NOW - 8 * MIN);
+    fail('s2', NOW - 7 * MIN);
+    assert.strictEqual(rule.evaluate(t.ctx).length, 0, '2 turns');
+    prompt('s1', NOW - 6 * MIN);
+    fail('s1', NOW - 5 * MIN);
+    const [f] = rule.evaluate(t.ctx);
+    assert.strictEqual(f.evidence[0], 'Bash (abc123) failed in 3 separate turns of this session');
+    assert.strictEqual(f.item_ref, `task:${V4WS}:t1`);
+    await rule.fix(f, 'checkin', t.ctx);
+    await rule.fix(f, 'open-tab', t.ctx);
+    assert.deepStrictEqual(t.calls, [['checkin', 7], ['focusTab', 7]]);
+    rule.ingest(ev('agent.session_end', { session_id: 's1' }, { ts: NOW }));
+    assert.strictEqual(rule.evaluate(t.ctx).length, 0, 'session ended');
+  });
+
+  await test('project rules: yaml parsing, ast_grep skipped with a warning, globs, added-line matches, open-file', async () => {
+    const warns = [];
+    const defs = v4.projectRules.parseProjectRuleDoc(
+      { rules: [{ id: 'no-log', message: 'console.log left in', pattern: 'console\\.log\\(', paths: ['src/**/*.ts'] }, { id: 'ag', ast_grep: 'x' }, { id: 'bad', pattern: '(' }] },
+      '/w/.lee/lint/mine.yaml',
+      (m, d) => warns.push([m, d.rule]),
+    );
+    assert.deepStrictEqual(defs.map((d) => [d.id, d.severity, d.paths]), [['no-log', 'warn', ['src/**/*.ts']]]);
+    assert.deepStrictEqual(warns.map((w) => w[1]), ['ag', 'bad']);
+    assert.match(warns[0][0], /ast_grep/);
+    assert.strictEqual(v4.project.pathMatches('src/a/b.ts', ['src/**/*.ts']), true);
+    assert.strictEqual(v4.project.pathMatches('src/b.ts', ['src/**/*.ts']), true);
+    assert.strictEqual(v4.project.pathMatches('lib/b.ts', ['src/**/*.ts']), false);
+    assert.strictEqual(v4.project.pathMatches('deep/x/y.py', ['*.py']), true);
+    const lines = [
+      { path: 'src/a.ts', line: 4, text: '  console.log(x)' },
+      { path: 'src/a.ts', line: 9, text: 'console.log(y)' },
+      { path: 'lib/c.ts', line: 1, text: 'console.log(z)' },
+      { path: 'src/b.ts', line: 2, text: 'ok()' },
+    ];
+    const rule = new v4.project.ProjectRules();
+    const t = v4Ctx({ projectRules: defs, addedLines: lines, rules: { 'project/no-log': { severity: 'warn' } } });
+    const found = rule.evaluate(t.ctx);
+    assert.strictEqual(found.length, 1);
+    assert.strictEqual(found[0].rule, 'project/no-log');
+    assert.deepStrictEqual(found[0].evidence, ['src/a.ts:4: console.log(x)', 'src/a.ts:9: console.log(y)']);
+    assert.deepStrictEqual(found[0].fixes.map((x) => x.id), ['open-file', 'suppress-item']);
+    await rule.fix(found[0], 'open-file', t.ctx);
+    assert.deepStrictEqual(t.calls, [['openFile', path.join(V4WS, 'src/a.ts'), 4]]);
+    assert.strictEqual(rule.evaluate(v4Ctx({ projectRules: defs, addedLines: lines }).ctx).length, 0, 'severity from config: unknown project rule is off in a bare config');
+    // Loader: files on disk, mtime cache, ast_grep warning goes to the log once.
+    const ws = mkWorkspace('proj');
+    fs.mkdirSync(path.join(ws, '.lee', 'lint'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.lee', 'lint', 'no-todo.yaml'), 'message: TODO left in\nseverity: info\nregex: "TODO"\n');
+    fs.writeFileSync(path.join(ws, '.lee', 'lint', 'ast.yml'), 'ast_grep: "console.log($A)"\n');
+    const logs = [];
+    const loader = new v4.projectRules.ProjectRuleLoader((level, msg, d) => logs.push([level, msg, d.rule]));
+    const loaded = loader.load(ws);
+    assert.deepStrictEqual(loaded.map((d) => [d.id, d.severity, d.pattern]), [['no-todo', 'info', 'TODO']]);
+    assert.strictEqual(loader.load(ws), loaded, 'cached');
+    assert.deepStrictEqual(logs.map((l) => [l[0], l[2]]), [['WARN', 'ast']]);
+    assert.strictEqual(loader.severity(ws, 'no-todo'), 'info');
+  });
+
+  await test('steward gating: attention/agent findings only while active; withdrawn without an outcome; family on the diagnostic', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lee-lint-store-'));
+    const ws = mkWorkspace('gate');
+    const store = new LintStore({ home });
+    const env = { steward: true };
+    const logged = [];
+    const mkRule = (id, family) => ({ id, family, consumes: [], ingest() {}, evaluate: () => [{ rule: id, workspace: ws, subject: 's', message: id, evidence: ['e'], fixes: [{ id: 'go', label: 'Go' }], item_ref: null, state_key: 'k' }], fix: async () => ({ success: true }) });
+    const rules = [mkRule('time/x', 'attention'), mkRule('agent/x', 'agent'), mkRule('commit/x', 'hygiene')];
+    const cfg = { 'time/x': { severity: 'info' }, 'agent/x': { severity: 'warn' }, 'commit/x': { severity: 'info' } };
+    const budget = new NudgeBudget({ perHour: 100, now: () => NOW });
+    const engine = new LintEngine({
+      rules,
+      store,
+      providers: { commandText: () => null, toolInfo: () => null, ops: () => null, launcher: () => null, writeClaudeAllow: async () => {}, stewardActive: () => env.steward },
+      config: (rule) => cfg[rule] ?? { severity: 'off' },
+      demotion: () => ({ ...COCKPIT_DEFAULTS.lint.demotion }),
+      log: (type, workspace, data) => logged.push({ type, data }),
+      ceremony: () => {},
+      claimNudge: (req) => budget.claim(req, false),
+      overrideNudge: () => {},
+      feedPost: () => {},
+      feedClose: () => {},
+      branch: () => 'main',
+      now: () => NOW,
+    });
+    engine.evaluate();
+    let snap = engine.snapshot(ws);
+    assert.deepStrictEqual(snap.diagnostics.map((d) => [d.rule, d.family]).sort(), [['agent/x', 'agent'], ['commit/x', 'hygiene'], ['time/x', 'attention']]);
+    engine.shown(snap.diagnostics.map((d) => d.id), 'status');
+    env.steward = false;
+    engine.evaluate();
+    snap = engine.snapshot(ws);
+    assert.deepStrictEqual(snap.diagnostics.map((d) => d.rule), ['commit/x']);
+    assert.ok(!logged.some((l) => l.type === 'lint.outcome'), 'no ignored outcome for gated withdrawals');
+    assert.strictEqual(store.outcomes(ws).length, 0);
+    // Generic suppress fixes are the engine's.
+    const hyg = snap.diagnostics[0];
+    rules[2].evaluate = () => [{ rule: 'commit/x', workspace: ws, subject: 's', message: 'c', evidence: ['e'], fixes: [{ id: 'suppress-branch', label: 'Ignore on this branch' }], item_ref: null, state_key: 'k' }];
+    engine.evaluate();
+    return engine.fix(hyg.id, 'suppress-branch').then((r) => {
+      assert.deepStrictEqual(r, { success: true, message: 'Ignored on this branch' });
+      assert.strictEqual(engine.snapshot(ws).diagnostics.length, 0);
+    });
+  });
+
+  await test('hester cache: snapshot tasks (open + recent closed), steward, human_balance; offline keeps the last good value', async () => {
+    const ws = '/work/api';
+    const env = { offline: false, snapshots: 0 };
+    const cache = new v4.cache.HesterCache({
+      workspaces: () => [ws],
+      get: async (route, w) => {
+        assert.strictEqual(w, ws);
+        if (env.offline) throw new Error('ECONNREFUSED');
+        if (route === '/cockpit/snapshot') {
+          env.snapshots++;
+          return { success: true, data: { tasks: { open: [{ id: 'a', workspace: ws, status: 'running', quadrant: 'Q1', agent: { pty_id: 4 }, files: ['x'] }], recent_closed: [{ id: 'b', workspace: ws, status: 'done', quadrant: 'bogus', agent: { pty_id: 4 } }] } } };
+        }
+        if (route === '/cockpit/steward') return { success: true, data: { enabled: true, not_today_until: null, active: true } };
+        if (route.startsWith('/cockpit/goals/status')) return { success: true, data: { human_balance: { share: 0.4, ms: { Q1: 1, Q2: 2, Q3: 3, Q4: 4, play: 5, unclassified: 6 }, by_goal: { G1: 3 }, line: 'x' } } };
+        throw new Error('unexpected');
+      },
+      now: () => NOW,
+    });
+    assert.strictEqual(cache.stewardActive(ws), false, 'unknown until Hester answers');
+    await cache.refreshAll();
+    assert.deepStrictEqual(cache.tasks(ws).map((t) => [t.id, t.quadrant, t.files_count]), [['a', 'Q1', 1], ['b', null, 0]]);
+    assert.strictEqual(cache.taskByPty(4).id, 'a', 'open task first');
+    assert.strictEqual(cache.stewardActive(ws), true);
+    assert.deepStrictEqual(cache.humanBalance(ws).ms, { Q1: 1, Q2: 2, Q3: 3, Q4: 4, play: 5, unclassified: 6 });
+    env.offline = true;
+    await cache.refreshAll({ force: true });
+    assert.strictEqual(cache.tasks(ws).length, 2, 'kept');
+    assert.strictEqual(cache.stewardActive(ws), true, 'kept');
+    assert.strictEqual(v4.cache.parseSteward({ success: false }), null);
   });
 
   await test('lint-main: scans history, serves IPC, posts to the Feed, persists nudges', async () => {

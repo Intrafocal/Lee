@@ -303,6 +303,12 @@ export class CopilotQueue {
   // Pushes
   // ---------------------------------------------------------------------------
 
+  /** v4: task quadrants or links changed (Hester cache): re-derive focus relations and push a re-ordered snapshot. */
+  rankingChanged(): void {
+    this.queue.recompute(Date.now());
+    this.changed();
+  }
+
   private changed(): void {
     if (!this.started) return;
     if (!this.ipcTimer) {

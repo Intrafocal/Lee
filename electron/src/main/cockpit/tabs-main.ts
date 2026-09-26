@@ -33,6 +33,11 @@ import { TaskRelay } from './task-relay';
 import { safeTranscriptPath, TranscriptTitleReader } from './session-name';
 import { listWorkspaceFiles } from './workspace-files';
 import { copilotBus } from '../copilot/bus';
+import { getCopilotQueue } from '../copilot/queue';
+import { quadrantRank } from '../copilot/attention-queue';
+import type { LeeEvent } from '../../shared/copilot';
+import { getHesterCache } from './hester-cache';
+import { registerLintEffects } from './lint-main';
 import * as path from 'path';
 
 /** The open window workspace equal to `p`, else null (the file list is only served for open workspaces). */
@@ -182,12 +187,62 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
     return { success: true };
   };
 
+  // v4 (contract 2026-09-26 v4 section 7.1, 7.2, 7.4) ----------------------------
+  // Hester cache: tasks with quadrants, the steward state and human_balance.
+  const cache = getHesterCache({ getHesterPort });
+  cache.start();
+  copilotBus.on('event', (e: LeeEvent) => {
+    // Hester changed a task's quadrant or the steward state: re-read now.
+    if ((e.type === 'task.override' || e.type === 'steward.quiet') && e.workspace) void cache.refresh(e.workspace);
+  });
+  /** The cache task for a PTY: Lee's own pty -> task link first, then Hester's record of the agent. */
+  const taskForPty = (ptyId: number) => {
+    const id = rt.taskOf(ptyId);
+    if (id) {
+      const t = cache.task(rt.workspaceOf(ptyId), id) ?? cache.findTask(id);
+      if (t) return t;
+    }
+    return cache.taskByPty(ptyId);
+  };
+  try {
+    const cq = getCopilotQueue(ptyManager);
+    // Quadrant ordering of the attention queue (section 7.2).
+    cq.queue.setRanker((item) => {
+      const t = item.source.pty_id != null ? taskForPty(item.source.pty_id) : null;
+      const q = t?.quadrant ?? null;
+      return { quadrant: q, rank: quadrantRank(q) };
+    });
+    // Focus on a task relates items from its agent (section 7.4).
+    cq.focus.setTaskResolver((ptyId) => {
+      const id = rt.taskOf(ptyId);
+      if (id) return { workspace: rt.workspaceOf(ptyId), task_id: id };
+      const t = cache.taskByPty(ptyId);
+      return t ? { workspace: t.workspace, task_id: t.id } : null;
+    });
+    cache.on('change', () => cq.rankingChanged());
+    registerLintEffects(
+      {
+        endFocus: async () => cq.focusStop({ kind: 'user', surface: 'lee' }).body.active === false,
+      },
+      log,
+    );
+  } catch (err) {
+    log('WARN', 'Cockpit: could not install the quadrant ranker', { error: String(err) });
+  }
+
   // Feed actions --------------------------------------------------------------
   const openTabAction: FeedActionHandler = async (entry, actionId) => {
     if (actionId !== 'open-tab' || entry.ref.pty_id == null) return { success: false, error: 'unknown_action', entry };
     const r = focusPty(entry.ref.pty_id);
     return { ...r, entry };
   };
+  registerLintEffects({
+    checkin: async (ptyId) => {
+      const r = await checkins.checkin(ptyId, { by: LOCAL_USER });
+      return r.success ? { success: true } : { success: false, error: r.error ?? 'checkin_failed' };
+    },
+    focusTab: async (ptyId) => focusPty(ptyId),
+  });
   cockpitBus.registerFeedActionHandler('tabs', openTabAction);
   cockpitBus.registerFeedActionHandler('launch', openTabAction);
   cockpitBus.registerFeedActionHandler('checkin', async (entry, actionId, _payload, by): Promise<FeedActionResult> => {

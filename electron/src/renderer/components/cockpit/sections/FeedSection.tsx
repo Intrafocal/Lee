@@ -9,7 +9,7 @@ import React, { useEffect, useState } from 'react';
 import { Icon } from '../../Icon';
 import { AttentionItemRow } from '../../copilot/AttentionItemRow';
 import type { FeedAction, FeedEntry } from '../../../../shared/cockpit';
-import { formatAge, plainPreview, type FeedRow } from '../../../lib/cockpitModel';
+import { formatAge, plainPreview, rendererAction, type FeedRow } from '../../../lib/cockpitModel';
 import { AgentMarkdown } from '../AgentMarkdown';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
@@ -25,6 +25,10 @@ function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
         if (pty != null) ctx.goInto(pty, 'feed');
         else void ctx.copilotApi?.openItem(item.id);
       },
+      about: (() => {
+        const task = pty != null ? ctx.tiles.find((t) => t.ptyId === pty)?.task ?? null : null;
+        return task ? { kind: 'task' as const, id: task.id, label: row.title } : { kind: 'feed' as const, id: item.id, label: row.title, record: item };
+      })(),
       approval: item.actions.includes('approve') ? item : null,
       replyItem: item.actions.includes('reply') ? item : null,
       dismiss: item.actions.includes('dismiss') ? () => void ctx.copilotApi?.dismiss(item.id) : undefined,
@@ -36,6 +40,10 @@ function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
       id: row.id,
       title: row.title,
       ptyId: e.ref.pty_id ?? null,
+      about:
+        e.producer === 'lint' && e.ref.diag_id
+          ? { kind: 'lint', id: e.ref.diag_id, label: row.title, record: e }
+          : { kind: 'feed', id: e.id, label: row.title, record: e },
       open: () => {
         if (e.ref.pty_id != null) ctx.focusPty(e.ref.pty_id);
         else if (e.ref.task_id) {
@@ -50,6 +58,7 @@ function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
   return {
     id: row.id,
     title: row.title,
+    about: { kind: 'task', id: ev.task_id, label: row.title },
     open: () => {
       ctx.setSection('tasks');
       ctx.selectRow(`task:${ev.task_id}`);
@@ -84,11 +93,34 @@ const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry; selected: bool
     ctx.api.feed
       .act(entry.id, id, payload)
       .then((r) => {
-        if (!r.success) setError(r.error || 'failed');
-        else setPending(null);
+        if (!r.success) {
+          setError(r.error || 'failed');
+          return;
+        }
+        setPending(null);
+        // A lint fix the renderer performs (v4 §7.3): link-goal / what-next.
+        const ra = rendererAction(r);
+        if (ra?.action === 'what-next') ctx.requestSteward({ kind: 'what-next' });
+        else if (ra?.action === 'link-goal') {
+          const taskId = ra.taskId ?? entry.ref.task_id ?? null;
+          if (taskId) ctx.requestSteward({ kind: 'link-goal', taskId });
+        }
       })
       .catch(() => setError('failed'))
       .finally(() => setBusy(false));
+  };
+
+  const askAbout = async () => {
+    const diagId = entry.ref.diag_id;
+    if (!diagId) return;
+    let record: unknown = entry;
+    try {
+      const snap = await ctx.api?.lint.list(ctx.workspace);
+      record = snap?.diagnostics.find((d) => d.id === diagId) ?? entry;
+    } catch {
+      /* the Feed entry is the record */
+    }
+    ctx.requestSteward({ kind: 'ask', about: { kind: 'lint', id: diagId, label: entry.title, record } });
   };
 
   const start = (a: FeedAction) => {
@@ -165,6 +197,11 @@ const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry; selected: bool
               {a.label}
             </button>
           ))}
+          {entry.producer === 'lint' && entry.ref.diag_id && (
+            <button className="cockpit-btn" disabled={busy} title="Ask Hester about this in Copilot" onClick={() => void askAbout()}>
+              <Icon name="chat" size={11} /> Ask Hester
+            </button>
+          )}
           <button className="cockpit-btn" disabled={busy} onClick={() => act('dismiss')} title="Dismiss (⌘⌫)">
             Dismiss
           </button>

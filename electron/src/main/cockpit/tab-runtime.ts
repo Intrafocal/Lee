@@ -834,7 +834,11 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     const gate = (): TabSendResult | null => {
       if (st === 'idle-at-prompt') return null;
       if (st === 'exited') return { success: false, error: 'not_found', state: st };
-      if (st === 'busy') return { success: false, error: 'busy', state: st };
+      if (st === 'busy') {
+        // v4 §8.4: you clicked "Send now (agent is busy)" on text shown first (steer card, wrap-up fix).
+        if ((req.while_busy || req.force) && by.kind === 'local-user' && kind === 'agent') return null;
+        return { success: false, error: 'busy', state: st };
+      }
       if (st === 'awaiting-input') return { success: false, error: 'awaiting_input', state: st };
       if (req.force && by.kind === 'local-user') return null;
       return { success: false, error: 'state_unknown', state: st };

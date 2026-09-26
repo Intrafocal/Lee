@@ -1,12 +1,13 @@
 /**
  * HistorySection - the last 7 days from Hester (contracts §4.6): verified
  * wins, closed tasks with outcome and acceptance, and operation readings.
- * Goal-impact wording is v4.
+ * v4 §6: closed tasks show the goals they served, readings of a GOALS
+ * metric show their change as a chip ("G1 +180 ms").
  */
 
 import React, { useEffect, useState } from 'react';
 import { Icon } from '../../Icon';
-import { formatAge } from '../../../lib/cockpitModel';
+import { formatAge, goalDeltaChip } from '../../../lib/cockpitModel';
 import { fetchHistory, type HistoryResponse } from '../../../lib/hesterCockpit';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
@@ -86,6 +87,20 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                   <span className="cockpit-row-title">{t.title}</span>
                   {t.accepted === true && <span className="cockpit-tag is-ok">accepted</span>}
                   {t.accepted === false && <span className="cockpit-tag">not accepted</span>}
+                  {(t.goal_impact ?? []).map((g) => (
+                    <button
+                      key={g}
+                      className="cockpit-tag is-goal"
+                      title={`Served ${g}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        ctx.setSection('goals');
+                        ctx.selectRow(`goal:${g}`);
+                      }}
+                    >
+                      {g}
+                    </button>
+                  ))}
                   <span className="cockpit-muted">{formatAge(t.closed_at, ctx.now)}</span>
                 </div>
                 {t.outcome && <div className="cockpit-row-text">{t.outcome}</div>}
@@ -109,6 +124,11 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                     {latest.unit ? ` ${latest.unit}` : ''}
                     {prev ? ` (was ${prev.value})` : ''}
                   </span>
+                  {latest.goal_id && (
+                    <span className="cockpit-tag is-goal" title={`${metric} serves ${latest.goal_id}`}>
+                      {goalDeltaChip(latest.goal_id, latest.delta, latest.unit)}
+                    </span>
+                  )}
                   <span className="cockpit-muted">
                     {latest.source.op} · {formatAge(latest.ts, ctx.now)}
                   </span>

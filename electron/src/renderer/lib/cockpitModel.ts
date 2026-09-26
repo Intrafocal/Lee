@@ -12,17 +12,24 @@ import type {
   FeedEntry,
   FeedKind,
   FeedSeverity,
+  LaunchRequest,
   LeeMode,
   ModeReason,
+  Proposal,
+  Quadrant,
+  TaskKind,
+  TaskLead,
+  TaskOrigin,
+  TaskOverrides,
   TabFidelity,
   TabRunState,
   TabRuntimeInfo,
 } from '../../shared/cockpit';
 
-export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'files' | 'someday' | 'explore' | 'tabs' | 'history';
+export type SectionId = 'copilot' | 'feed' | 'goals' | 'tasks' | 'ops' | 'files' | 'someday' | 'explore' | 'tabs' | 'history';
 
-/** Nav order; number keys 1..n follow it. Copilot (Hester) is always first. */
-export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history'];
+/** Nav order (sections have no keys: click only). Copilot (Hester) is always first; Goals third (v4 §8.1). */
+export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'goals', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history'];
 
 /** Where the Cockpit lands when nothing is remembered for the workspace. */
 export const DEFAULT_SECTION: SectionId = 'feed';
@@ -30,6 +37,7 @@ export const DEFAULT_SECTION: SectionId = 'feed';
 export const SECTION_LABELS: Record<SectionId, string> = {
   copilot: 'Copilot',
   feed: 'Feed',
+  goals: 'Goals',
   tasks: 'Tasks',
   ops: 'Ops',
   files: 'Files',
@@ -972,4 +980,273 @@ export function fuzzyFilter<T>(query: string, items: readonly T[], key: (item: T
   });
   scored.sort((a, b) => b.score - a.score || a.i - b.i);
   return scored.slice(0, limit).map((x) => x.item);
+}
+
+// ---------------------------------------------------------------------------
+// Copilot v4: goals, quadrants, steward (v4 contract §8)
+// ---------------------------------------------------------------------------
+
+/** Nav badge for Goals: ember with the flagged count when any goal is flagged, else none. */
+export function goalsBadge(goals: readonly { flagged: boolean }[] | null | undefined): SectionBadge {
+  const n = (goals ?? []).filter((g) => g.flagged).length;
+  return n > 0 ? { count: n, ember: true } : { count: 0, ember: false };
+}
+
+export type QuadrantTone = 'q1' | 'q2' | 'q3' | 'q4' | 'play' | 'none';
+
+/** The task row's quadrant chip: chosen play reads "play"; no quadrant reads "unclassified" (dim). */
+export function quadrantChip(task: { quadrant?: Quadrant | null; play?: boolean }): { label: string; tone: QuadrantTone } {
+  if (task.play) return { label: 'play', tone: 'play' };
+  switch (task.quadrant) {
+    case 'Q1':
+      return { label: 'Q1', tone: 'q1' };
+    case 'Q2':
+      return { label: 'Q2', tone: 'q2' };
+    case 'Q3':
+      return { label: 'Q3', tone: 'q3' };
+    case 'Q4':
+      return { label: 'Q4', tone: 'q4' };
+    default:
+      return { label: 'unclassified', tone: 'none' };
+  }
+}
+
+/** Quadrant order (v4 §4, §7.2): Q1, Q2, Q3, unclassified, Q4. */
+export function quadrantRank(q: Quadrant | null | undefined): number {
+  return q === 'Q1' ? 0 : q === 'Q2' ? 1 : q === 'Q3' ? 2 : q === 'Q4' ? 4 : 3;
+}
+
+export type OverrideChoice = 'on' | 'off' | 'auto';
+
+export function overrideChoice(overrides: TaskOverrides | null | undefined, axis: 'important' | 'urgent'): OverrideChoice {
+  const v = overrides?.[axis];
+  return v === true ? 'on' : v === false ? 'off' : 'auto';
+}
+
+/** PATCH /cockpit/tasks/{id} body for an override pick (auto clears it). */
+export function overridePatch(axis: 'important' | 'urgent', choice: OverrideChoice): { important?: boolean | null; urgent?: boolean | null } {
+  const v = choice === 'on' ? true : choice === 'off' ? false : null;
+  return axis === 'important' ? { important: v } : { urgent: v };
+}
+
+/**
+ * The Launcher's one-line Q4 note (v4 §8.5): a prototype (kind, or a
+ * `proto:` prefix) with no goal, no play and not a human lead. Never blocks.
+ */
+export function q4NoteVisible(input: {
+  kind: TaskKind | null | undefined;
+  text: string;
+  serves: readonly string[];
+  play: boolean;
+  lead: TaskLead;
+}): boolean {
+  const proto = input.kind === 'prototype' || /^\s*proto:/i.test(input.text);
+  return proto && input.serves.length === 0 && !input.play && input.lead !== 'human';
+}
+
+export const BALANCE_BANDS = ['Q1', 'Q2', 'Q3', 'Q4', 'play', 'unclassified'] as const;
+export type BalanceBand = (typeof BALANCE_BANDS)[number];
+
+/** Stacked-bar segments for the human_balance strip: every band in order, as a share of all focus time (0 when none). */
+export function balanceSegments(
+  ms: Partial<Record<BalanceBand, number>> | null | undefined,
+): Array<{ band: BalanceBand; ms: number; share: number }> {
+  const vals = BALANCE_BANDS.map((band) => ({ band, ms: Math.max(0, Number(ms?.[band]) || 0) }));
+  const total = vals.reduce((a, v) => a + v.ms, 0);
+  return vals.map((v) => ({ ...v, share: total > 0 ? v.ms / total : 0 }));
+}
+
+/** Hours for the strip legend: "0h", "0.4h", "12h". */
+export function formatHours(ms: number): string {
+  const h = Math.max(0, ms) / 3_600_000;
+  if (h === 0) return '0h';
+  if (h < 10) return `${Math.round(h * 10) / 10}h`;
+  return `${Math.round(h)}h`;
+}
+
+function trimNum(n: number): string {
+  const abs = Math.abs(n);
+  const r = abs >= 100 ? Math.round(n) : abs >= 10 ? Math.round(n * 10) / 10 : Math.round(n * 100) / 100;
+  return String(r);
+}
+
+/** A goal metric value; a '%' target means the value is a 0-1 share. */
+export function formatMetricValue(value: number | null | undefined, unit: string | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '–';
+  if (unit === '%') return `${trimNum(value * 100)}%`;
+  return trimNum(value);
+}
+
+export function trendArrow(trend: 'down' | 'up' | 'flat' | null | undefined): string {
+  return trend === 'down' ? '↓' : trend === 'up' ? '↑' : trend === 'flat' ? '→' : '';
+}
+
+/** History chip for a reading's goal impact: "G1 +180 ms". */
+export function goalDeltaChip(goalId: string, delta: number | null | undefined, unit: string | null | undefined): string {
+  if (delta == null || !Number.isFinite(delta)) return goalId;
+  const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±';
+  return `${goalId} ${sign}${trimNum(Math.abs(delta))}${unit ? ` ${unit}` : ''}`;
+}
+
+/** The steer card's Send label: the text is typed even when the agent is busy (you clicked). */
+export function steerSendLabel(state: string | null | undefined): string {
+  return state === 'busy' ? 'Send now (agent is busy)' : 'Send';
+}
+
+/** What a proposal click does, through existing client calls (v4 §8.3). null: malformed (not shown). */
+export type ProposalPlan =
+  | {
+      kind: 'create_task';
+      body: { workspace: string; title: string; status: 'queued'; serves?: string[]; lead?: TaskLead; kind?: TaskKind; origin?: TaskOrigin };
+    }
+  | { kind: 'launch'; req: LaunchRequest }
+  | { kind: 'patch_task'; taskId: string; body: { serves: string[] } | { lead: TaskLead } }
+  | { kind: 'park'; text: string }
+  | { kind: 'open'; target: 'task' | 'exploration' | 'goal' | 'workstream'; id: string }
+  | { kind: 'run_op'; name: string }
+  | { kind: 'explore'; seed: string };
+
+const PLAN_LEADS: readonly string[] = ['delegate', 'human', 'plan'];
+const PLAN_KINDS: readonly string[] = ['bug', 'question', 'prototype', 'chore', 'unknown'];
+const OPEN_TARGETS: readonly string[] = ['task', 'exploration', 'goal', 'workstream'];
+
+function pStr(v: unknown, max = 4000): string | null {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const s = String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
+function pList(v: unknown): string[] | null {
+  if (v == null) return null;
+  const arr: unknown[] | null = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : null;
+  if (!arr) return null;
+  return arr.map((x) => pStr(x, 40)).filter((x): x is string => !!x);
+}
+
+function pLead(v: unknown): TaskLead | null {
+  return typeof v === 'string' && PLAN_LEADS.includes(v) ? (v as TaskLead) : null;
+}
+
+function pKind(v: unknown): TaskKind | null {
+  return typeof v === 'string' && PLAN_KINDS.includes(v) ? (v as TaskKind) : null;
+}
+
+function pOrigin(v: unknown): TaskOrigin | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as { kind?: unknown; ref?: unknown };
+  if (typeof o.kind !== 'string' || !o.kind) return null;
+  return { kind: o.kind as TaskOrigin['kind'], ref: typeof o.ref === 'string' ? o.ref : null };
+}
+
+export function proposalPlan(p: Pick<Proposal, 'action' | 'params'>, workspace: string): ProposalPlan | null {
+  const q = (p.params ?? {}) as Record<string, unknown>;
+  switch (p.action) {
+    case 'create_task': {
+      const title = pStr(q.title, 200);
+      if (!title) return null;
+      const serves = pList(q.serves);
+      const lead = pLead(q.lead);
+      const kind = pKind(q.kind);
+      const origin = pOrigin(q.origin);
+      return {
+        kind: 'create_task',
+        body: {
+          workspace,
+          title,
+          status: 'queued',
+          ...(serves && serves.length ? { serves } : {}),
+          ...(lead ? { lead } : {}),
+          ...(kind ? { kind } : {}),
+          ...(origin ? { origin } : {}),
+        },
+      };
+    }
+    case 'launch': {
+      const prompt = pStr(q.prompt);
+      if (!prompt) return null;
+      const serves = pList(q.serves);
+      const lead = pLead(q.lead);
+      const kind = pKind(q.kind);
+      const title = pStr(q.title, 200);
+      const human = lead === 'human';
+      return {
+        kind: 'launch',
+        req: {
+          workspace,
+          origin: { kind: 'hester' },
+          ...(human ? { title: title ?? prompt.split('\n')[0].slice(0, 80) } : { prompt }),
+          ...(title && !human ? { title } : {}),
+          ...(lead ? { lead } : {}),
+          ...(kind ? { kind } : {}),
+          ...(serves && serves.length ? { serves } : {}),
+        },
+      };
+    }
+    case 'link_goal': {
+      const taskId = pStr(q.task_id, 200);
+      const serves = pList(q.serves);
+      if (!taskId || !serves || !serves.length) return null;
+      return { kind: 'patch_task', taskId, body: { serves } };
+    }
+    case 'set_lead': {
+      const taskId = pStr(q.task_id, 200);
+      const lead = pLead(q.lead);
+      if (!taskId || !lead) return null;
+      return { kind: 'patch_task', taskId, body: { lead } };
+    }
+    case 'park': {
+      const text = pStr(q.text);
+      return text ? { kind: 'park', text } : null;
+    }
+    case 'open': {
+      const target = typeof q.kind === 'string' && OPEN_TARGETS.includes(q.kind) ? (q.kind as 'task' | 'exploration' | 'goal' | 'workstream') : null;
+      const id = pStr(q.id, 200);
+      return target && id ? { kind: 'open', target, id } : null;
+    }
+    case 'run_op': {
+      const name = pStr(q.name, 200);
+      return name ? { kind: 'run_op', name } : null;
+    }
+    case 'explore': {
+      const seed = pStr(q.seed);
+      return seed ? { kind: 'explore', seed } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** The task a proposal is about (its ✕ records a nudge override for that task), or null. */
+export function proposalTaskId(p: Pick<Proposal, 'action' | 'params'>): string | null {
+  const q = (p.params ?? {}) as Record<string, unknown>;
+  if (p.action === 'link_goal' || p.action === 'set_lead') return pStr(q.task_id, 200);
+  if (p.action === 'open' && q.kind === 'task') return pStr(q.id, 200);
+  return null;
+}
+
+/** Group label for a lint family in the flyout (v4 adds hygiene, scope, attention, agent, project). */
+export const LINT_FAMILY_LABELS: Record<string, string> = {
+  toil: 'Toil',
+  hygiene: 'Hygiene',
+  scope: 'Scope',
+  attention: 'Attention',
+  agent: 'Agent use',
+  project: 'Project rules',
+};
+
+export function lintFamilyLabel(family: string): string {
+  return LINT_FAMILY_LABELS[family] ?? family;
+}
+
+/** A lint fix result that asks the renderer to act (v4 §7.3: link-goal, what-next). */
+export function rendererAction(res: unknown): { action: 'link-goal' | 'what-next'; taskId: string | null } | null {
+  if (!res || typeof res !== 'object') return null;
+  let data = (res as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return null;
+  // Through the Feed (feed.act) the lint fix result is nested one level: {data: {success, data}}.
+  if (!('renderer_action' in data) && 'data' in data) data = (data as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return null;
+  const d = data as { renderer_action?: unknown; task_id?: unknown };
+  if (d.renderer_action !== 'link-goal' && d.renderer_action !== 'what-next') return null;
+  return { action: d.renderer_action, taskId: typeof d.task_id === 'string' && d.task_id ? d.task_id : null };
 }

@@ -8,6 +8,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type { CockpitAPI, LintDiagnostic, LintSnapshot, LintSuppressScope } from '../../../shared/cockpit';
+import { LINT_FAMILY_LABELS, lintFamilyLabel, rendererAction } from '../../lib/cockpitModel';
+import { cockpitModeStore } from '../cockpit/cockpitMode';
+
+const FAMILY_ORDER = Object.keys(LINT_FAMILY_LABELS);
 
 interface LintFlyoutProps {
   api: CockpitAPI['lint'];
@@ -27,14 +31,28 @@ function groupByRule(diags: LintDiagnostic[]): Array<{ family: string; rule: str
     g.items.push(d);
     groups.set(key, g);
   }
-  return [...groups.values()];
+  const rank = (f: string) => {
+    const i = FAMILY_ORDER.indexOf(f);
+    return i < 0 ? FAMILY_ORDER.length : i;
+  };
+  return [...groups.values()].sort((a, b) => rank(a.family) - rank(b.family));
+}
+
+/** The task a diagnostic is about, from its item ref ("task:<ws>:<id>" or "task:<id>"). */
+function taskIdOf(diag: LintDiagnostic): string | null {
+  const ref = diag.item_ref ?? '';
+  if (!ref.startsWith('task:')) return null;
+  const rest = ref.slice(5);
+  const i = rest.lastIndexOf(':');
+  return (i >= 0 ? rest.slice(i + 1) : rest) || null;
 }
 
 const DiagnosticRow: React.FC<{
   diag: LintDiagnostic;
   api: CockpitAPI['lint'];
   onDone: (message: string | null) => void;
-}> = ({ diag, api, onDone }) => {
+  onClose: () => void;
+}> = ({ diag, api, onDone, onClose }) => {
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +66,16 @@ const DiagnosticRow: React.FC<{
     setBusy(true);
     try {
       const res = await api.fix(diag.id, fixId);
-      if (res.success) onDone(res.message ?? 'Fixed');
+      // v4 §7.3: some fixes are the renderer's to perform (link-goal, what-next).
+      const ra = res.success ? rendererAction(res) : null;
+      if (ra?.action === 'what-next') {
+        if (cockpitModeStore.requestSteward({ kind: 'what-next' })) onClose();
+        else onDone('Open the Cockpit to ask Hester what next');
+      } else if (ra?.action === 'link-goal') {
+        const taskId = ra.taskId ?? taskIdOf(diag);
+        if (taskId && cockpitModeStore.requestSteward({ kind: 'link-goal', taskId })) onClose();
+        else onDone('Open the task in the Cockpit to link a goal');
+      } else if (res.success) onDone(res.message ?? 'Fixed');
       else setError(res.error === 'unavailable' ? 'Not available right now' : res.error ?? 'Failed');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -79,6 +106,11 @@ const DiagnosticRow: React.FC<{
   };
 
   const armedFix = diag.fixes.find((f) => f.id === armed) ?? null;
+
+  const askHester = () => {
+    if (cockpitModeStore.requestSteward({ kind: 'ask', about: { kind: 'lint', id: diag.id, label: diag.message, record: diag } })) onClose();
+    else setError('Ask Hester needs the Cockpit');
+  };
 
   return (
     <div className={`lint-diag lint-sev-${diag.severity}`}>
@@ -113,6 +145,9 @@ const DiagnosticRow: React.FC<{
         ))}
         <button className="lint-btn" disabled={busy} onClick={() => void dismiss()}>
           Dismiss
+        </button>
+        <button className="lint-btn" disabled={busy} title="Ask Hester about this in Copilot" onClick={askHester}>
+          Ask Hester
         </button>
       </div>
       <div className="lint-diag-ignore">
@@ -176,13 +211,16 @@ export const LintFlyout: React.FC<LintFlyoutProps> = ({ api, snapshot, anchorRec
       <div className="lint-flyout-scroll">
         {toast && <div className="lint-toast">{toast}</div>}
         {active.length === 0 && <div className="lint-flyout-empty">No problems.</div>}
-        {groups.map((g) => (
-          <div className="lint-group" key={`${g.family}/${g.rule}`}>
-            <div className="lint-group-title">{g.rule}</div>
-            {g.items.map((d) => (
-              <DiagnosticRow key={d.id} diag={d} api={api} onDone={done} />
-            ))}
-          </div>
+        {groups.map((g, i) => (
+          <React.Fragment key={`${g.family}/${g.rule}`}>
+            {(i === 0 || groups[i - 1].family !== g.family) && <div className="lint-family-title">{lintFamilyLabel(g.family)}</div>}
+            <div className="lint-group">
+              <div className="lint-group-title">{g.rule}</div>
+              {g.items.map((d) => (
+                <DiagnosticRow key={d.id} diag={d} api={api} onDone={done} onClose={onClose} />
+              ))}
+            </div>
+          </React.Fragment>
         ))}
         {muted.length > 0 && (
           <div className="lint-group">

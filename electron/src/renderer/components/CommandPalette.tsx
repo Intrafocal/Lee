@@ -204,6 +204,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
+            // Copilot v4 §5.1: the model-call trigger's surface (never loads steward.md).
+            'X-Lee-Trigger': 'palette',
           },
           body: JSON.stringify(requestBody),
           signal: abortControllerRef.current.signal,
