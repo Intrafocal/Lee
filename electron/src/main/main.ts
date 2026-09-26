@@ -952,12 +952,18 @@ function setupIPC(): void {
     return ptyManager.spawnConfiguredTUI(tuiType, cwd, options, windowId);
   });
 
-  ipcMain.handle('pty:spawn-agent', async (event, provider: string, cwd?: string) => {
+  ipcMain.handle('pty:spawn-agent', async (event, provider: string, cwd?: string, extraArgs?: unknown) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
     const windowId = bw?.id;
     const def = ptyManager.getAgentDefinition(provider, windowId);
     if (!def) {
       throw new Error(`Unknown agent provider: ${provider}`);
+    }
+    // A Cockpit launch passes its own argv (session id, name, prompt): never
+    // hand it a prewarmed process, which was started without them.
+    const args = Array.isArray(extraArgs) ? extraArgs.filter((a): a is string => typeof a === 'string') : [];
+    if (args.length > 0) {
+      return ptyManager.spawnAgent(provider, cwd, windowId, args);
     }
     if (def.prewarm) {
       return ptyManager.getOrSpawnTUI(

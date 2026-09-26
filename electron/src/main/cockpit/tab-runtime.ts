@@ -116,6 +116,16 @@ function isOwnTab(tab: Pick<TabContext, 'type' | 'provider'>): boolean {
   return OWN_TAB_TYPES.has(tab.type) || (!!tab.provider && OWN_PROVIDERS.has(tab.provider));
 }
 
+/** Foreground process names that are coding agents Lee knows (a hand-run `claude` or `pi`). */
+const AGENT_PROCESSES: Record<string, string> = { claude: 'claude', pi: 'pi' };
+
+/** The agent provider for a node-pty foreground process title, else null (pure). */
+export function agentFromProcess(title: string | null | undefined): string | null {
+  if (!title) return null;
+  const base = path.basename(title.trim()).toLowerCase();
+  return AGENT_PROCESSES[base] ?? null;
+}
+
 function isoNow(now: number = Date.now()): string {
   return new Date(now).toISOString();
 }
@@ -516,12 +526,39 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     this.emit('change');
   }
 
+  /**
+   * The coding agent a PTY is running right now, from what Lee knows about
+   * its process rather than its tab type: spawned as Claude Code / Pi
+   * (`claude`/`pi` flags), or a shell whose foreground process is `claude` or
+   * `pi` (started by hand). Null otherwise.
+   */
+  runningAgent(ptyId: number): string | null {
+    const proc = this.host.get(ptyId) as { claude?: boolean; pi?: boolean; pty?: { process?: string } } | undefined;
+    if (!proc) return null;
+    if (proc.claude) return 'claude';
+    if (proc.pi) return 'pi';
+    if (this.host.isClaudePty(ptyId)) return 'claude';
+    let fg: string | null = null;
+    try {
+      fg = proc.pty?.process ?? null;
+    } catch {
+      fg = null;
+    }
+    return agentFromProcess(fg);
+  }
+
   kindOf(ptyId: number, loc: TabLocation | null = this.locate(ptyId)): TabKind {
     const proc = this.host.get(ptyId);
     // Hester chat and DevOps are the user's own tabs (never walled, never
     // agents), matching the renderer's isWallExempt().
     if (loc && isOwnTab(loc.tab)) return proc ? 'tui' : 'other';
-    if (this.host.isClaudePty(ptyId) || loc?.tab.type === 'agent' || !!loc?.tab.provider || this.entries.get(ptyId)?.hookSeen) {
+    if (
+      this.host.isClaudePty(ptyId) ||
+      loc?.tab.type === 'agent' ||
+      !!loc?.tab.provider ||
+      this.entries.get(ptyId)?.hookSeen ||
+      this.runningAgent(ptyId) != null
+    ) {
       return 'agent';
     }
     if (spawnInfo(ptyId)?.default_shell) return 'shell';
@@ -530,8 +567,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
   }
 
   private providerOf(ptyId: number, loc: TabLocation | null): string | null {
-    const proc = this.host.get(ptyId) as { claude?: boolean; pi?: boolean } | undefined;
-    return loc?.tab.provider ?? this.entries.get(ptyId)?.provider ?? (proc?.claude ? 'claude' : proc?.pi ? 'pi' : null);
+    return loc?.tab.provider ?? this.entries.get(ptyId)?.provider ?? this.runningAgent(ptyId);
   }
 
   private pattern(src: unknown): RegExp | null {
@@ -563,7 +599,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
   // State
   // -------------------------------------------------------------------------
 
-  private compute(e: PtyEntry, now: number): { state: TabRunState; source: TabStateSource } {
+  private compute(e: PtyEntry, now: number): { state: TabRunState; source: TabStateSource; kind: TabKind } {
     const proc = this.host.get(e.id);
     const exists = !!proc && e.exitedAt == null;
     const loc = exists ? this.locate(e.id) : null;
@@ -578,7 +614,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     } catch {
       foreground = null;
     }
-    return decideTabState({
+    const decided = decideTabState({
       exists,
       kind,
       hook: e.hook,
@@ -592,6 +628,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       foreground,
       shellName: info?.default_shell ? info.shell : null,
     });
+    return { ...decided, kind };
   }
 
   private refresh(e: PtyEntry, now: number): void {
@@ -601,7 +638,9 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       e.since = now;
     }
     e.source = d.source;
-    const sig = `${e.state}|${this.labelOf(e.id)}|${e.lastCommand?.at ?? ''}|${e.cwd ?? ''}|${e.taskId ?? ''}`;
+    // Kind and provider are in the signature so a shell that starts (or
+    // quits) a hand-run Claude/Pi is pushed to the renderer as an agent.
+    const sig = `${e.state}|${d.kind}|${this.runningAgent(e.id) ?? ''}|${this.labelOf(e.id)}|${e.lastCommand?.at ?? ''}|${e.cwd ?? ''}|${e.taskId ?? ''}`;
     if (sig !== e.sig) {
       e.sig = sig;
       this.emit('change');
@@ -869,7 +908,8 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       request_id: crypto.randomUUID(),
       type: opts.type,
       label: opts.label,
-      ...(opts.command ? { command: opts.command, args: opts.args ?? [] } : {}),
+      ...(opts.type === 'terminal' && opts.command ? { command: opts.command, args: opts.args ?? [] } : {}),
+      ...(opts.type === 'agent' && opts.args?.length ? { args: opts.args } : {}),
       ...(opts.provider ? { provider: opts.provider } : {}),
       activate: !!opts.activate,
     };
@@ -889,13 +929,16 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     const already = this.findFresh(maxBefore, windowId, opts, sessionId);
     if (already != null) return { pty_id: already, tab_id: this.locate(already)?.tab.id ?? null };
 
-    // Fallback: the v0 create-tab channel, then find the PTY it spawned.
+    // Fallback: the v0 create-tab channel, then find the PTY it spawned. The
+    // v0 channel can't pass an agent's argv: an agent launch with args falls
+    // back to a terminal running its command (still an agent by its PTY).
+    const asTerminal = opts.type === 'terminal' || (!!opts.command && !!opts.args?.length);
     try {
       win.browserWindow.webContents.send(
         'system:create-tab',
-        opts.type === 'agent'
-          ? { type: 'agent', label: opts.provider ?? opts.label }
-          : { type: 'terminal', label: opts.label, ...(opts.command ? { command: opts.command, args: opts.args ?? [] } : {}) },
+        asTerminal
+          ? { type: 'terminal', label: opts.label, ...(opts.command ? { command: opts.command, args: opts.args ?? [] } : {}) }
+          : { type: 'agent', label: opts.provider ?? opts.label },
       );
     } catch {
       return { pty_id: null, tab_id: null, error: 'window_unavailable' };

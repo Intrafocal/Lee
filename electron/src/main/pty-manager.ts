@@ -1840,12 +1840,14 @@ export class PTYManager extends EventEmitter {
   /**
    * Spawn an agent tab for the given provider key.
    */
-  spawnAgent(provider: string, cwd?: string, windowId?: number): number {
+  spawnAgent(provider: string, cwd?: string, windowId?: number, extraArgs: string[] = []): number {
     const def = this.getAgentDefinition(provider, windowId);
     if (!def) {
       throw new Error(`Unknown agent provider: ${provider}`);
     }
 
+    // extraArgs: a Cockpit launch's argv (session id, name, prompt). They go
+    // after the definition's own args; the prompt is always last (after `--`).
     const args = [...(def.args || [])];
     let spawnCwd = cwd;
 
@@ -1854,6 +1856,7 @@ export class PTYManager extends EventEmitter {
     } else if (def.path_arg === 'cwd' && cwd) {
       spawnCwd = cwd;
     }
+    args.push(...extraArgs);
 
     return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId, def.shell === true);
   }

@@ -26,6 +26,7 @@ import {
   keyAction,
   mergeFeed,
   runtimeAgentPtys,
+  tabDisplayFromRuntime,
   opsBadge,
   tasksBadge,
   tileModel,
@@ -62,7 +63,7 @@ export type CreateTabFn = (
   type: Tab['type'],
   dockPosition?: DockPosition,
   label?: string,
-  spawnOptions?: { command?: string; args?: string[] },
+  spawnOptions?: { command?: string; args?: string[]; label?: string },
 ) => Promise<number | null>;
 
 /** A section row the keyboard can act on (j/k, Enter, a/d/r/x). */
@@ -191,6 +192,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   useEffect(() => {
     cockpitModeStore.setRuntimeAgents(runtimeAgentPtys(runtime));
+    cockpitModeStore.setTabDisplay(tabDisplayFromRuntime(runtime));
   }, [runtime]);
 
   const returnNonce = copilot.lastReturn?.nonce ?? 0;
@@ -375,7 +377,11 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
             req.type === 'agent' ? 'agent' : 'terminal',
             'center',
             req.type === 'agent' ? req.provider || 'claude' : req.label,
-            req.type === 'terminal' && req.command ? { command: req.command, args: req.args } : undefined,
+            req.type === 'terminal'
+              ? req.command
+                ? { command: req.command, args: req.args }
+                : undefined
+              : { args: req.args ?? [], label: req.label },
           );
         } catch {
           tabId = null;

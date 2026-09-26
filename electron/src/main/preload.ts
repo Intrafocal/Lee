@@ -45,8 +45,8 @@ const api: LeeAPI = {
     spawnTUI: (tuiType: string, cwd?: string, options?: any) =>
       ipcRenderer.invoke('pty:spawn-tui', tuiType, cwd, options),
 
-    spawnAgent: (provider: string, cwd?: string) =>
-      ipcRenderer.invoke('pty:spawn-agent', provider, cwd),
+    spawnAgent: (provider: string, cwd?: string, args?: string[]) =>
+      ipcRenderer.invoke('pty:spawn-agent', provider, cwd, args),
 
     getAvailableTUIs: () =>
       ipcRenderer.invoke('pty:getAvailableTUIs'),

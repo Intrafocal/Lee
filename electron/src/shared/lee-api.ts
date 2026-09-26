@@ -112,7 +112,7 @@ export interface LeeAPI {
   pty: {
     spawn: (command?: string, args?: string[], cwd?: string, name?: string) => Promise<number>;
     spawnTUI: (tuiType: string, cwd?: string, options?: Record<string, unknown>) => Promise<number>;
-    spawnAgent: (provider: string, cwd?: string) => Promise<number>;
+    spawnAgent: (provider: string, cwd?: string, args?: string[]) => Promise<number>;
     getAvailableTUIs: () => Promise<Array<{ key: string; name: string; icon: string; shortcut?: string }>>;
     getAgentProviders: () => Promise<Record<string, AgentDefinition>>;
     prewarm: (workspace: string) => Promise<void>;

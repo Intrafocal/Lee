@@ -19,6 +19,9 @@ export interface Tab {
   attention?: TabAttention; // From Copilot hooks: the agent needs you, or finished a turn
   // Agent-specific metadata (only for type='agent')
   provider?: string; // e.g. 'hester', 'claude', 'pi', 'codex'
+  // A non-agent tab (a terminal) whose PTY is running a coding agent right
+  // now (e.g. `claude` started by hand): drawn with that agent's icon.
+  runProvider?: string;
   // File-specific metadata (only for type='file')
   filePath?: string;
   fileModified?: boolean;
@@ -194,6 +197,9 @@ const TabDisplayIcon: React.FC<{ tab: Tab; size?: number }> = ({ tab, size = 16 
   }
   if (tab.type === 'hester') {
     return <HesterGlyph size={size} />;
+  }
+  if (tab.runProvider) {
+    return <Icon name={AGENT_PROVIDER_ICONS[tab.runProvider] ?? TAB_ICONS.agent} size={size} />;
   }
   return <Icon name={TAB_ICONS[tab.type]} size={size} />;
 };

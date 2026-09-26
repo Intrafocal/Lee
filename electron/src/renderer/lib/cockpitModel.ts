@@ -81,6 +81,22 @@ export function runtimeAgentPtys(tabs: readonly TabRuntimeInfo[] | null | undefi
   return new Set((tabs ?? []).filter((t) => t.kind === 'agent' && !isOwnProvider(t.provider)).map((t) => t.pty_id));
 }
 
+/**
+ * Per agent pty (not Hester/DevOps): the provider it runs and its session
+ * name, for tab icons and labels. A terminal running a hand-started Claude
+ * or Pi is included (A reports it as kind 'agent').
+ */
+export function tabDisplayFromRuntime(
+  tabs: readonly TabRuntimeInfo[] | null | undefined,
+): Map<number, { provider: string | null; name: string | null }> {
+  const out = new Map<number, { provider: string | null; name: string | null }>();
+  for (const t of tabs ?? []) {
+    if (t.kind !== 'agent' || isOwnProvider(t.provider) || t.state.state === 'exited') continue;
+    out.set(t.pty_id, { provider: t.provider ?? null, name: t.name ?? null });
+  }
+  return out;
+}
+
 export function isAgentTab(tab: ModelTab, sets: AgentSets): boolean {
   if (isWallExempt(tab)) return false;
   if (tab.type === 'agent' || tab.type === 'claude') return true;

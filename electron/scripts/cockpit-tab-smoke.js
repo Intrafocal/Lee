@@ -238,6 +238,34 @@ async function main() {
     assert.strictEqual(encodeWorkspaceHeader('/w/\u30d7\ud83d\ude00'), '/w/%E3%83%97%F0%9F%98%80');
   });
 
+  await check('runtime: a shell running a hand-started claude/pi is an agent (tab type terminal)', () => {
+    const { agentFromProcess } = cockpit('tab-runtime.js');
+    assert.strictEqual(agentFromProcess('claude'), 'claude');
+    assert.strictEqual(agentFromProcess('/usr/local/bin/pi'), 'pi');
+    assert.strictEqual(agentFromProcess('zsh'), null);
+    assert.strictEqual(agentFromProcess(null), null);
+    host.add(40, { name: 'Terminal', fg: 'zsh' });
+    withShellIntegration('/bin/zsh', ['-l'], { LEE_PTY_ID: '40' }, true);
+    tabs.push({ id: 140, type: 'terminal', label: 'Terminal 4', ptyId: 40, dockPosition: 'center', state: 'active' });
+    assert.deepStrictEqual([rt.get(40).kind, rt.get(40).provider], ['shell', null]);
+    host.get(40).pty.process = 'claude';
+    assert.deepStrictEqual([rt.get(40).kind, rt.get(40).provider, rt.get(40).tab_type], ['agent', 'claude', 'terminal']);
+    host.get(40).pty.process = 'pi';
+    assert.strictEqual(rt.get(40).provider, 'pi');
+    // Quitting the agent makes it a shell again (the renderer's wall follows A's kind).
+    host.get(40).pty.process = 'zsh';
+    assert.strictEqual(rt.get(40).kind, 'shell');
+    let pushed = 0;
+    const onChange = () => pushed++;
+    rt.on('change', onChange);
+    host.get(40).pty.process = 'claude';
+    rt.tick();
+    rt.off('change', onChange);
+    assert.ok(pushed >= 1, 'a kind change is pushed to the renderer');
+    host.procs.delete(40);
+    tabs.splice(tabs.findIndex((t) => t.id === 140), 1);
+  });
+
   await check('runtime: Hester chat and DevOps tabs are own tabs, not agents', () => {
     const h2 = new FakePty();
     const rt2 = new TabRuntimeImpl(h2, { now: () => clock });
@@ -609,7 +637,10 @@ async function main() {
     assert.strictEqual(res.relayed, false);
     assert.ok(/^task-[0-9a-f]{8}$/.test(res.task_id));
     const req = sentToWindow.find(([c]) => c === 'cockpit:create-tab')[1];
-    assert.strictEqual(req.command, 'claude');
+    // An agent tab (walled, iconed and restored like ⇧⌘C), argv as extra args.
+    assert.strictEqual(req.type, 'agent');
+    assert.strictEqual(req.provider, 'claude');
+    assert.strictEqual(req.command, undefined);
     assert.strictEqual(req.activate, false);
     assert.ok(req.args.includes('--session-id') && req.args.includes(res.session_id));
     assert.deepStrictEqual(req.args.slice(-2), ['--', LONG_PROMPT]);
@@ -701,6 +732,24 @@ async function main() {
     bw.webContents.send = origSend;
     assert.deepStrictEqual(seen, ['cockpit:create-tab', 'system:create-tab']);
     assert.strictEqual(r.pty_id, 31);
+  });
+
+  await check('create-tab fallback: an agent launch with argv falls back to a terminal running its command', async () => {
+    const origSend = bw.webContents.send;
+    const seen = [];
+    bw.webContents.send = (channel, payload) => {
+      seen.push([channel, payload]);
+      if (channel === 'system:create-tab') setTimeout(() => host.add(32, { name: payload.label, claude: true }), 20);
+    };
+    const r = await rt.openTab(
+      { workspace: WS, type: 'agent', provider: 'claude', label: 'Named task', command: 'claude', args: ['--session-id', 'sx'] },
+      { timeouts: { result: 50, fallback: 2000 } },
+    );
+    bw.webContents.send = origSend;
+    assert.deepStrictEqual(seen[0][1].args, ['--session-id', 'sx']);
+    assert.strictEqual(seen[0][1].type, 'agent');
+    assert.deepStrictEqual(seen[1], ['system:create-tab', { type: 'terminal', label: 'Named task', command: 'claude', args: ['--session-id', 'sx'] }]);
+    assert.strictEqual(r.pty_id, 32);
   });
 
   await check('Pi: extension file written; --extension prepended for pi only', () => {

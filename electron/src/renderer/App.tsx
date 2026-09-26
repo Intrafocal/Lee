@@ -35,7 +35,7 @@ import { ptyEventManager } from './hooks/usePtyEvents';
 import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
 import { CockpitHost } from './components/cockpit/CockpitHost';
-import { useCockpitMode, cockpitModeStore } from './components/cockpit/cockpitMode';
+import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
 import { fallbackTab, stripNeighbor } from './lib/cockpitModel';
 
 // Get the Lee API from preload
@@ -215,12 +215,19 @@ const App: React.FC = () => {
   // is shown on its own tab; the status bar mentions only what isn't on a tab here.
   const copilot = useCopilot();
   const tabAttention = useMemo(() => attentionByPty(copilot.snapshot?.items), [copilot.snapshot]);
+  // Agent ptys A knows (TabRuntimeInfo): a terminal running a hand-started
+  // Claude/Pi gets that agent's icon, and an agent's session name is its label.
+  const tabDisplay = useCockpitTabDisplay();
   const tabsWithAttention = useMemo(
     () => tabs.map(t => {
       const attention = t.ptyId != null ? tabAttention.get(t.ptyId) : undefined;
-      return attention === t.attention ? t : { ...t, attention };
+      const shown = t.ptyId != null ? tabDisplay.get(t.ptyId) : undefined;
+      const runProvider = shown && t.type !== 'agent' ? shown.provider ?? undefined : undefined;
+      const label = shown?.name || t.label;
+      if (attention === t.attention && runProvider === t.runProvider && label === t.label) return t;
+      return { ...t, attention, runProvider, label };
     }),
-    [tabs, tabAttention],
+    [tabs, tabAttention, tabDisplay],
   );
   const visiblePtyIds = useMemo(
     () => new Set(tabs.map(t => t.ptyId).filter((id): id is number => id != null)),
@@ -333,7 +340,10 @@ const App: React.FC = () => {
   // spawnOptions: only consulted for type === 'terminal' — lets a caller (the
   // ui_control `tui custom` command) run a specific command/args instead of
   // the default login shell, while still going through normal tab creation.
-  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[] }) => {
+  // For type === 'agent', spawnOptions.args are extra argv for the provider
+  // (a Cockpit launch: session id, name, prompt) and spawnOptions.label the
+  // tab's display label (default: the provider's name).
+  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[]; label?: string }) => {
     // Bridge type opens the picker instead of creating a tab directly
     if (type === 'bridge' as any) {
       setBridgePreselectedMachine(null);
@@ -398,7 +408,9 @@ const App: React.FC = () => {
           case 'agent': {
             // label is used as the provider key when creating agent tabs
             const provider = label || 'hester';
-            ptyId = await lee.pty.spawnAgent(provider, workspace);
+            ptyId = spawnOptions?.args?.length
+              ? await lee.pty.spawnAgent(provider, workspace, spawnOptions.args)
+              : await lee.pty.spawnAgent(provider, workspace);
             break;
           }
         }
@@ -421,7 +433,7 @@ const App: React.FC = () => {
     // For agent tabs, use the provider key as label during creation, then set display label
     const agentProvider = type === 'agent' ? (label || 'hester') : undefined;
     const displayLabel = type === 'agent'
-      ? (agentProviders[agentProvider!]?.name ?? agentProvider!)
+      ? (spawnOptions?.label || agentProviders[agentProvider!]?.name || agentProvider!)
       : tabLabel;
 
     const newTab: TabData = {

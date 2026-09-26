@@ -99,9 +99,23 @@ export interface TabRuntimeInfo {
   /** Linked task id, if Lee launched it for a task. */
   task_id: string | null;
   session_id: string | null;
+  /**
+   * The agent session's name (addendum 2026-09-26b): typed by you (launcher,
+   * Rename) or detected from Claude's transcript title lines (/rename,
+   * --name, the AI title). Null when none is known.
+   */
+  name?: string | null;
+  name_source?: AgentNameSource | null;
   /** Last <= 5 ANSI-stripped lines. Only for fidelity 'screen'; [] otherwise. */
   tail: string[];
 }
+
+/**
+ * Where an agent's name came from, highest precedence first: 'user' (typed in
+ * Lee), 'custom-title' (Claude /rename or --name), 'ai-title' (Claude's own).
+ * A 'user' name is replaced only by a later, different custom-title.
+ */
+export type AgentNameSource = 'user' | 'custom-title' | 'ai-title';
 
 export interface TabReadRequest {
   /** Cursor from a previous read (total bytes seen). Omit for the tail. */
@@ -580,10 +594,15 @@ export interface CreateTabRequest {
   request_id: string;
   type: 'terminal' | 'agent';
   label: string;
-  /** For type 'terminal': command and args (else the login shell). */
+  /** For type 'terminal': the command (else the login shell). */
   command?: string;
+  /**
+   * For type 'terminal': the command's args. For type 'agent': extra argv
+   * after the provider definition's own args (a launch's session id, name,
+   * prompt); an agent spawned with args never adopts a prewarmed process.
+   */
   args?: string[];
-  /** For type 'agent': provider key. */
+  /** For type 'agent': provider key. `label` is the tab's display label. */
   provider?: string;
   /** Make it the active tab (workbench) instead of leaving it as a tile. */
   activate: boolean;

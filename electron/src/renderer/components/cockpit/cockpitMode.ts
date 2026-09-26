@@ -41,10 +41,18 @@ export interface CockpitModeState {
   selected: CockpitSelection | null;
   /** pty ids A reports as agents (TabRuntimeInfo.kind), fed by CockpitHost. */
   runtimeAgents: ReadonlySet<number>;
+  /** Per agent pty: what it runs and its session name (TabRuntimeInfo), for tab icons and labels. */
+  tabDisplay: ReadonlyMap<number, TabDisplayInfo>;
   /** Needs-you Feed count, for the workbench chip. */
   needsCount: number;
   /** Bumped when a hold() ends, so the wall re-checks the active tabs. */
   holdEpoch: number;
+}
+
+/** What the tab strip shows for an agent pty: its provider (icon) and session name (label). */
+export interface TabDisplayInfo {
+  provider: string | null;
+  name: string | null;
 }
 
 type Listener = () => void;
@@ -59,6 +67,7 @@ let state: CockpitModeState = {
   enteredPtys: new Set(),
   selected: null,
   runtimeAgents: new Set(),
+  tabDisplay: new Map(),
   needsCount: 0,
   holdEpoch: 0,
 };
@@ -133,6 +142,15 @@ function blurActive(): void {
   if (typeof document === 'undefined') return;
   const el = document.activeElement as HTMLElement | null;
   if (el && el !== document.body && typeof el.blur === 'function') el.blur();
+}
+
+function displayEqual(a: ReadonlyMap<number, TabDisplayInfo>, b: ReadonlyMap<number, TabDisplayInfo>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const w = b.get(k);
+    if (!w || w.provider !== v.provider || w.name !== v.name) return false;
+  }
+  return true;
 }
 
 function setsEqual(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
@@ -229,6 +247,10 @@ export const cockpitModeStore = {
     if (setsEqual(ptys, state.runtimeAgents)) return;
     emit({ runtimeAgents: ptys });
   },
+  setTabDisplay(next: ReadonlyMap<number, TabDisplayInfo>): void {
+    if (displayEqual(next, state.tabDisplay)) return;
+    emit({ tabDisplay: next });
+  },
   setNeedsCount(n: number): void {
     if (n !== state.needsCount) emit({ needsCount: n });
   },
@@ -274,6 +296,15 @@ export const cockpitModeStore = {
     return nextMode(state, trigger);
   },
 };
+
+function getTabDisplay(): ReadonlyMap<number, TabDisplayInfo> {
+  return state.tabDisplay;
+}
+
+/** Agent ptys' provider and session name (a new Map only when one changes). */
+export function useCockpitTabDisplay(): ReadonlyMap<number, TabDisplayInfo> {
+  return useSyncExternalStore(cockpitModeStore.subscribe, getTabDisplay, getTabDisplay);
+}
 
 export function useCockpitModeState(): CockpitModeState {
   return useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.get, cockpitModeStore.get);

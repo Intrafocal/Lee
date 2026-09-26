@@ -180,6 +180,10 @@ const TabDisplayIcon: React.FC<{ tab: DockableTab }> = ({ tab }) => {
   if (tab.type === 'hester') {
     return <HesterGlyph size={14} />;
   }
+  // A terminal running a hand-started Claude/Pi shows as an agent.
+  if (tab.runProvider) {
+    return <Icon name={getTabIcon('agent')} size={14} />;
+  }
   return <Icon name={getTabIcon(tab.type)} size={14} />;
 };
 

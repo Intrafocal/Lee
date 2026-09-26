@@ -174,8 +174,11 @@ export class TaskLauncherImpl implements TaskLauncher {
     if (provider === 'claude') {
       sessionId = crypto.randomUUID();
       const args = buildClaudeArgs(req, { session_id: sessionId, worktree_for_delegate: cfg.launch.worktree_for_delegate });
+      // An agent tab (type 'agent', provider 'claude'), so it is typed, walled,
+      // iconed and restored like ⇧⌘C Claude tabs; the argv carries the
+      // pre-assigned session id and prompt, and hooks are added at spawn.
       opened = await this.rt.openTab(
-        { workspace, window_id: win, type: 'terminal', label, command: 'claude', args, activate: !!req.go_into },
+        { workspace, window_id: win, type: 'agent', provider: 'claude', label, command: 'claude', args, activate: !!req.go_into },
         { session_id: sessionId },
       );
     } else {

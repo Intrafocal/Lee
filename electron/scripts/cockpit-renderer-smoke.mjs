@@ -63,6 +63,7 @@ const {
   SECTION_LABELS,
   DEFAULT_SECTION,
   flattenFileTree,
+  tabDisplayFromRuntime,
 } = mod;
 
 let passed = 0;
@@ -352,6 +353,20 @@ test('isAgentTab: type agent, snapshot agents, runtime agents; own tabs otherwis
   assert.equal(isAgentTab(shellTab, { snapshotAgents: new Set([13]), runtimeAgents: new Set() }), true);
   assert.equal(isAgentTab(shellTab, { snapshotAgents: new Set(), runtimeAgents: new Set([13]) }), true);
   assert.equal(isAgentTab({ id: 5, type: 'file', label: 'a.py', ptyId: null }, noSets), false);
+});
+
+test('tabDisplayFromRuntime: a terminal running a hand-started claude is an agent with its provider (icon) and name (label)', () => {
+  const rts = [
+    runtime({ pty_id: 13, tab_type: 'terminal', provider: 'claude', fidelity: 'screen', name: 'Fix login', name_source: 'ai-title' }),
+    runtime({ pty_id: 14, tab_type: 'terminal', kind: 'shell', provider: null }),
+    runtime({ pty_id: 15, provider: 'hester', kind: 'agent' }),
+    runtime({ pty_id: 16, state: { pty_id: 16, state: 'exited', source: 'none', since: ago(1), quiet_ms: 0, foreground: null } }),
+  ];
+  const m = tabDisplayFromRuntime(rts);
+  assert.deepEqual([...m.keys()], [13]);
+  assert.deepEqual(m.get(13), { provider: 'claude', name: 'Fix login' });
+  // The same runtime set walls the terminal (A reports kind 'agent').
+  assert.equal(isAgentTab(shellTab, { snapshotAgents: new Set(), runtimeAgents: runtimeAgentPtys(rts) }), true);
 });
 
 test('stripTabs: hides agents you did not go into; identity when disabled or nothing hidden', () => {
