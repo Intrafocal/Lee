@@ -237,6 +237,16 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
     }
   }
 
+  /** The operation (package B) whose run is active in this PTY, for terminal.command `op`. */
+  private runningOp(ws: string | null, ptyId: number): string | null {
+    if (!ws) return null;
+    try {
+      return cockpitBus.ops?.snapshot(ws).operations.find((o) => o.running?.pty_id === ptyId)?.def.name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private endCommand(e: PtyEntry, exitCode: number | null, now: number): void {
     e.inCommand = false;
     const cmd = e.command;
@@ -270,7 +280,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
         sig,
         argv0,
         by: cmd.by,
-        op: null,
+        op: this.runningOp(ws, e.id),
         exit_code: exitCode,
         started_at: isoNow(cmd.started_at),
         duration_ms: duration,
