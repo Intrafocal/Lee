@@ -34,6 +34,8 @@ import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
 import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
+import { CockpitHost } from './components/cockpit/CockpitHost';
+import { useCockpitMode, cockpitModeStore } from './components/cockpit/cockpitMode';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -223,6 +225,8 @@ const App: React.FC = () => {
   );
 
   const centerTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'center'), [tabsWithAttention]);
+  const cockpitMode = useCockpitMode({ workspace, snapshot: copilot.snapshot, activeTabId, tabs: tabsWithAttention });
+  const stripTabs = useMemo(() => cockpitMode.stripTabs(centerTabs), [cockpitMode, centerTabs]);
   const leftTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'left'), [tabsWithAttention]);
   const rightTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'right'), [tabsWithAttention]);
   const bottomTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'bottom'), [tabsWithAttention]);
@@ -2345,6 +2349,7 @@ const App: React.FC = () => {
     // Agent tab launchers
     handlers['hester'] = () => createTab('agent' as Tab['type'], undefined, 'hester');
     handlers['claude'] = () => createTab('agent' as Tab['type'], undefined, 'claude');
+    handlers['cockpit_toggle'] = () => cockpitModeStore.toggle('manual');
     handlers['pi'] = () => createTab('agent' as Tab['type'], undefined, 'pi');
     handlers['devops'] = () => getOrCreateTab('devops');
     // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
@@ -2534,7 +2539,7 @@ const App: React.FC = () => {
       />
       <TitleBar />
       <TabBar
-        tabs={centerTabs}
+        tabs={stripTabs}
         activeTabId={activeTabId}
         tuiOptions={tuiOptions}
         onSelectTab={(tabId) => {
@@ -2686,6 +2691,22 @@ const App: React.FC = () => {
         </div>
         </PanelLayout>
       </div>
+      <CockpitHost
+        mode={cockpitMode}
+        workspace={workspace}
+        config={config?.cockpit ?? null}
+        tabs={tabsWithAttention}
+        activeTabId={activeTabId}
+        copilot={copilot}
+        onCreateTab={createTab}
+        onOpenTab={(tabId: number) => {
+          const t = tabs.find((x) => x.id === tabId);
+          if (!t) return;
+          if (t.dockPosition === 'center') { setActiveTabId(tabId); setFocusedPanel('center'); }
+          else handlePanelTabSelect(tabId, t.dockPosition);
+        }}
+        onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
+      />
       <StatusBar
         workspace={workspace}
         messages={statusMessages}

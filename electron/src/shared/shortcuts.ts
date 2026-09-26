@@ -81,6 +81,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'files', defaultChord: 'meta+shift+e', scope: 'renderer', group: 'Tools', description: 'File tree' },
   { action: 'hester', defaultChord: 'meta+shift+h', scope: 'renderer', group: 'Tools', description: 'Hester agent tab' },
   { action: 'claude', defaultChord: 'meta+shift+c', scope: 'renderer', group: 'Tools', description: 'Claude Code agent tab' },
+  { action: 'cockpit_toggle', defaultChord: 'meta+0', scope: 'renderer', group: 'View', description: 'Switch between the Cockpit and the Workbench' },
   { action: 'pi', defaultChord: 'meta+shift+i', scope: 'renderer', group: 'Tools', description: 'Pi agent tab' },
   // Moved off meta+shift+o, which the File > Open Folder... menu accelerator owns.
   { action: 'devops', defaultChord: 'meta+shift+j', scope: 'renderer', group: 'Tools', description: 'DevOps dashboard' },
