@@ -485,6 +485,7 @@ def build_digest(
             waiting.append(item)
 
     someday_counts = SomedayStore(Path(ws)).counts(now=now)
+    q2 = q2_candidates_safe(Path(ws), now)
     retro_status = retro_mod.status(now=now, config=retro_config, directory=retro_dir)
 
     parts = [_plural(len(wins), "win", "wins")]
@@ -505,4 +506,16 @@ def build_digest(
         "waiting": waiting,
         "someday": someday_counts,
         "retro": {"due": retro_status["due"], "week": retro_status["week"]},
+        "q2_candidates": q2,
     }
+
+
+def q2_candidates_safe(workspace: Path, now: datetime) -> List[Dict[str, Any]]:
+    """v4 Q2 candidates (deterministic); [] if anything about the stores fails."""
+    try:
+        from ..cockpit.goal_status import q2_candidates
+
+        return q2_candidates(workspace, now)
+    except Exception as e:
+        logger.debug(f"Q2 candidates unavailable for {workspace}: {e}")
+        return []

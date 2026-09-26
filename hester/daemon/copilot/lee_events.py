@@ -26,7 +26,11 @@ FLUSH_INTERVAL_S = 2.0
 MAX_BATCH = 500
 MAX_BUFFER = 2000
 
-INGEST_TYPES = {"model.call", "someday.triage", "digest.shown", "retro.shown", "retro.answered"}
+INGEST_TYPES = {
+    "model.call", "someday.triage", "digest.shown", "retro.shown", "retro.answered",
+    # copilot v4: Lee's ingest allow-list must accept these too
+    "task.override", "steward.request", "steward.quiet", "proposal.outcome",
+}
 
 
 def utc_now_iso() -> str:

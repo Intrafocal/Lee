@@ -51,8 +51,8 @@ Two-sided, per `GOALS.md`: for each part, the metrics it moves, the metrics it c
 | Tasks, check-ins, operations, `tab` domain, Cockpit tab (§4.2, §7) | G2 attributed_agent_time ↑, G1 toil_load ↓ (Hester runs operations) | Assign/confirm steps count toward toil_load | v2 |
 | Toil lint (§10.2) | G1 toil_load ↓ via fixes | Nudges (G3 vs flow) | v2 |
 | Explore made durable (§7.5) | G2 lost_threads ↓; fixes known breakage (tool_failures ↓) | None | v3 |
-| Goals section, Evaluate, steward, quadrants as ordering (§2.2, §3, §7.3) | G3 pull_usage ↑, human_balance ↑ | Cloud spend on demand only | v4 |
-| Hygiene, scope, attention lint (§10.2) | G3 nudge_acceptance (to be proven) | Nudges; each rule demotes itself if ignored | v2–v4 |
+| Goals section, Evaluate, steward, quadrants as ordering (§2.2, §3, §7.3) | G3 pull_usage ↑, human_balance ↑ | Cloud spend on demand only | v4 (built 2026-09-26) |
+| Hygiene, scope, attention lint (§10.2) | G3 nudge_acceptance (to be proven) | Nudges; each rule demotes itself if ignored | v2–v4 (hygiene, scope, attention, agent-use and project rules built in v4) |
 | Copilot mode (§11) | G1 catch_up_time ↓ | Local compute while away; complexity | v5 (kept as specified by decision) |
 | ~~`pattern/duplicate-*`, `agent/spec-in-prompt`~~ | Nothing in `GOALS.md` | Nudges | **Cut** |
 | ~~Play budget, required reasons~~ | Nothing | G1 (ceremony, capped play) | **Cut** |
@@ -626,7 +626,7 @@ A linter for **how you're working**, not just the code. It watches the same sign
 
 **Lint is purely deterministic pattern matching.** No model, local or cloud, is involved in deciding whether a rule fires. Every rule is a predicate over counts, timings, paths, string repeats or syntax patterns, so a diagnostic is reproducible and its evidence is the explanation. Judgment about a diagnostic is available on demand, by asking Hester about it (§10.4).
 
-Hester already has two rules without the structure: `hester/daemon/knowledge/git_watcher.py` pushes "N uncommitted changes. Commit?" (≥5 changes) and "N new files. Document?", and `KnowledgeEngine` runs an idle doc-gap check. Both become rules in this engine.
+Hester had two rules without the structure: `hester/daemon/knowledge/git_watcher.py` pushed "N uncommitted changes. Commit?" (≥5 changes) and "N new files. Document?", and `KnowledgeEngine` ran an idle doc-gap check. Both became rules in this engine in v4 (`commit/large-diff`, `commit/new-files-undocumented`) and are gone from Hester.
 
 ### 10.1 Model
 
@@ -835,13 +835,13 @@ hester:
 |---|---|---|
 | Library → Workstream promote | **Fixed in v3.** Was broken twice: preload lacked `sendCommand` (punch list C27), and `promote_to_workstream` called nonexistent `manager.get_session` | Now the Explore promote (`hester/daemon/cockpit/explore_ops.py`): an outline brief plus design decisions; the pane opens the workstream through `onOpenWorkstream` |
 | Library persistence | **Fixed in v3.** Was Redis with a 2 h TTL (`hester/daemon/session.py`) | The Explore file store (`.hester/explore/`); the Redis managers are deleted |
-| Workstream backend | Complete on the backend; UI partial | `serves:`, soft phases |
+| Workstream backend | **`serves:` and soft phases done in v4.** Complete on the backend; UI partial | `POST /workstream/{id}/phase/{phase}` accepts any phase, backwards included; decisions carry a goal trade-off |
 | DevOps services | `services:` model plus TUI | Extend to `operations:`, one-shots, `produces:`, `idle_ok:` |
 | Agent telemetry and hooks | `AgentTelemetry` with task and workstream IDs; `workstream/hooks.py` registers SessionStart, PreToolUse, PostToolUse, Stop, treats Stop as completion, and writes into `.claude/settings.local.json` | Report hooks (§4.1): `lee-status` parsing, Notification, SessionEnd, per-session install; screen-tail tier |
 | Status bar | Message queue plus flyout | Severity, actions, lint count, needs-you pill |
 | Context stream | Tabs carry `provider`, `workstreamId` (punch list D10) | Add `taskId`, `operationId` |
 | PTY input/output | `ptyManager.write` and `ptyBuffers` exist, reachable only via the Aeronaut PTY WebSocket | `tab` command domain: `send_input`, `read_output`, `state` (§4.2) |
-| Proactive hints | `git_watcher.py` commit/new-file hints and `KnowledgeEngine` doc-gap check, hard-coded | Move into the lint engine as the first rules |
+| Proactive hints | **Moved in v4.** `git_watcher.py` no longer pushes the commit/new-file hints and `KnowledgeEngine` has no idle doc-gap check; `GitWatcher` only caches status | Lint rules `commit/large-diff` and `commit/new-files-undocumented` in Lee main (§10) |
 | Local model | `OllamaGemmaClient` used by the hybrid ReAct loop, on request | Model routing (§13); keep the user-triggered local routing; the copilot job runner is the only *automatic* user of the local client |
 | Idle tracking | `lastInteraction` / `idleSeconds` in `context-bridge.ts`, updated only on editor and tab events (not terminal input); the 10-second-quiet idle heuristic in `TerminalPane.tsx`, only on watched tabs | Event log with input counts from every tab; at-the-machine presence vs engagement, sent as events |
 | **C1/C2 violations today** | `KnowledgeEngine._process_context_debounced` calls `SemanticRouter.match_knowledge`, which embeds editor context via Gemini (`gemini-embedding-001`) on every context change. `ProactiveWatcher` runs docs indexing (Gemini), drift, tests and ideas checks on timers (10–120 min) regardless of presence | Gate both behind a user action or an explicit setting, and log calls with their trigger (v0). Not fixed yet by decision; recorded here |
@@ -865,6 +865,7 @@ Ordered so the top-priority goals (G1, G4) move first, and so every phase is use
 3. **v2: Cockpit and tasks.** Cockpit and Workbench modes (§6.0) with the Cockpit's sections (Feed, Tasks, Operations, Tabs, History); agent tiles; tasks with leads and confirmed links; check-ins and the `tab` domain; Hester running operations; the toil lint family with fixes; the daemon rework to hold several workspaces (§13).
 4. **v3: Explore.** Persisted explorations (fixes the broken promote and the 2 h Redis expiry), decision and spike nodes, working promotes.
 5. **v4: Goals and steward.** The Goals section and Evaluate; quadrants as ordering and the `human_balance` strip; steward mode, What next? and launch suggestions; the attention and agent-use lint rules; project rules.
+   - *Status 2026-09-26:* built to [`docs/plans/2026-09-26-copilot-v4-contracts.md`](plans/2026-09-26-copilot-v4-contracts.md). Hester side: full GOALS.md parsing, `GET /cockpit/goals/status`, `human_balance` (metrics formula v4), derived quadrants with overrides, the steward endpoints (`/cockpit/what-next`, `/cockpit/goals/{id}/evaluate`, `/cockpit/tasks/{id}/suggest`, `/cockpit/ask`, `/cockpit/goals/draft` and `/apply`, `/cockpit/goals/{id}/workstream`, `/cockpit/steward`, `/cockpit/proposals/{id}/outcome`), digest Q2 candidates and History goal impact. The ask/steer split is deterministic (a fixed list of instruction prefixes), so it costs no model call.
 6. **v5: Copilot mode**, as specified in §11.
 7. **v6: Anywhere, complete.** Aeronaut and Dirigible render the full Cockpit model (reply and capture already shipped in v0).
 8. **Later:** PR checks against goals.

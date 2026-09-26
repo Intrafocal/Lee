@@ -30,8 +30,8 @@ class MessageProcessor:
         self._session_manager = None
 
     def _daemon_headers(self) -> dict:
-        """Bearer token plus X-Lee-Workspace, so the daemon attributes this TUI's work to its workspace."""
-        extra = {}
+        """Bearer token, X-Lee-Workspace (this TUI's workspace) and X-Lee-Trigger: tui (model-call surface)."""
+        extra = {"X-Lee-Trigger": "tui"}
         workspace = os.path.abspath(os.path.expanduser(self.runner.working_directory or ""))
         if self.runner.working_directory and os.path.isdir(workspace):
             extra["X-Lee-Workspace"] = encode_workspace_header(workspace)

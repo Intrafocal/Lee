@@ -29,7 +29,7 @@ CLOSED_STATUSES = ("done", "discarded")
 STATUSES = OPEN_STATUSES + CLOSED_STATUSES
 PATCH_STATUSES = ("queued", "running", "review")
 TITLE_SOURCES = ("user", "agent", "auto")
-ORIGIN_KINDS = ("launcher", "agent", "checkin", "someday", "operation", "lint", "hester", "explore")
+ORIGIN_KINDS = ("launcher", "agent", "checkin", "someday", "operation", "lint", "hester", "explore", "goal-eval")
 MAX_FILES = 200
 MAX_TEXT = 2000
 MAX_TITLE = 200
@@ -50,6 +50,8 @@ FIELDS = (
     "timebox_min", "due", "origin", "busy_ms", "turns", "files", "files_count", "summary",
     "lee_status", "last_checkin_at", "commits", "outcome", "accepted", "created_at",
     "updated_at", "closed_at", "version", "worktree",
+    # v4: quadrant derivation (contract section 4) and scope growth
+    "importance_rank", "overrides", "urgency_cleared_at", "files_at_first_report",
 )
 FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions")
 # Persisted in the frontmatter but not part of the API shape.
@@ -182,12 +184,109 @@ def default_task(task_id: str, workspace: str, now: Optional[datetime] = None) -
         "closed_at": None,
         "version": 0,
         "worktree": None,
+        "importance_rank": None,
+        "overrides": None,
+        "urgency_cleared_at": None,
+        "files_at_first_report": None,
         "applied_through": None,
     }
 
 
 def to_api(task: Dict[str, Any]) -> Dict[str, Any]:
     return {k: task.get(k) for k in FIELDS}
+
+
+# ---------------------------------------------------------------------------
+# Quadrants (copilot v4, contract section 4): pure and deterministic
+# ---------------------------------------------------------------------------
+
+QUADRANT_RANK = {"Q1": 0, "Q2": 1, "Q3": 2, None: 3, "Q4": 4}
+
+
+def _due_date(value: Any):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        dt = parse_time(s)
+        return dt.date() if dt else None
+
+
+def derive(task: Dict[str, Any], goals: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    ``{important, urgent, urgency, quadrant, importance_rank}`` for a task.
+
+    ``goals`` is ``parse_goals_full(...)['goals']`` (ids and priorities).
+    Important: ``overrides.important`` if set, else the task serves a known
+    goal. Urgent: ``overrides.urgent`` if set, else waiting, an open
+    operation-origin task, or ``due`` within a day. Neither: Q4 when chosen
+    play, overridden unimportant or once-urgent; otherwise unclassified (None).
+    """
+    now = now or utc_now()
+    priorities = {g["id"]: int(g.get("priority") or 0) for g in goals or [] if isinstance(g, dict) and g.get("id")}
+    overrides = task.get("overrides") if isinstance(task.get("overrides"), dict) else {}
+    served = [gid for gid in task.get("serves") or [] if gid in priorities]
+    rank = min(priorities[g] for g in served) if served else None
+    important = overrides.get("important") if isinstance(overrides.get("important"), bool) else bool(served)
+
+    urgency: Optional[Dict[str, Any]] = None
+    forced = overrides.get("urgent")
+    if isinstance(forced, bool):
+        urgency = {"signal": "override", "ref": None} if forced else None
+    else:
+        origin = task.get("origin") or {}
+        due = _due_date(task.get("due"))
+        if task.get("status") == "waiting":
+            urgency = {"signal": "agent-waiting", "ref": None}
+        elif is_open(task) and origin.get("kind") == "operation":
+            urgency = {"signal": "op-failure", "ref": origin.get("ref")}
+        elif due is not None and due <= now.date() + timedelta(days=1):
+            urgency = {"signal": "due", "ref": due.isoformat()}
+    urgent = urgency is not None
+
+    if important:
+        quadrant: Optional[str] = "Q1" if urgent else "Q2"
+    elif urgent:
+        quadrant = "Q3"
+    elif task.get("play") or overrides.get("important") is False or task.get("urgency_cleared_at"):
+        quadrant = "Q4"
+    else:
+        quadrant = None
+    return {"important": important, "urgent": urgent, "urgency": urgency, "quadrant": quadrant, "importance_rank": rank}
+
+
+def apply_derived(task: Dict[str, Any], goals: List[Dict[str, Any]], now: Optional[datetime] = None, saving: bool = True) -> Dict[str, Any]:
+    """Store the derived fields on the task; on save, stamp ``urgency_cleared_at`` when urgency just cleared."""
+    now = now or utc_now()
+    before = task.get("urgency")
+    d = derive(task, goals, now)
+    # An agent waiting on you and then resuming is the ordinary rhythm, not a
+    # cleared urgency: only a real signal (a failure, a due date, your override)
+    # clearing makes continued unlinked work Q4 drift.
+    if saving and before and before.get("signal") != "agent-waiting" and d["urgency"] is None:
+        task["urgency_cleared_at"] = iso_s(now)
+        d = derive(task, goals, now)
+    task["urgency"] = d["urgency"]
+    task["quadrant"] = d["quadrant"]
+    task["importance_rank"] = d["importance_rank"]
+    return task
+
+
+def workspace_goals(workspace: Path) -> List[Dict[str, Any]]:
+    from .goals import load_goals_full
+
+    try:
+        return load_goals_full(Path(workspace))["goals"]
+    except Exception:
+        return []
+
+
+def open_sort_key(task: Dict[str, Any]):
+    """Within one status: quadrant (Q1, Q2, Q3, unclassified, Q4), then goal priority."""
+    rank = task.get("importance_rank")
+    return (QUADRANT_RANK.get(task.get("quadrant"), 3), rank if isinstance(rank, int) else 1_000_000)
 
 
 def task_sessions(task: Dict[str, Any]) -> List[str]:
@@ -478,6 +577,7 @@ class CockpitTaskStore:
         task["updated_at"] = iso_s(now or utc_now())
         task["version"] = int(task.get("version") or 0) + 1
         task["files_count"] = len(task.get("files") or [])
+        apply_derived(task, workspace_goals(self.workspace), now or utc_now())
         meta = {k: task.get(k) for k in FIELDS}
         for k in EXTRA_KEYS:
             meta[k] = task.get(k)
@@ -595,7 +695,8 @@ class CockpitTaskStore:
 
     def patch(self, task_id: str, payload: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         task = self.require(task_id)
-        allowed = {"title", "name", "kind", "lead", "play", "serves", "workstream", "timebox_min", "due", "status"}
+        allowed = {"title", "name", "kind", "lead", "play", "serves", "workstream", "timebox_min", "due", "status",
+                   "important", "urgent"}
         unknown = set(payload) - allowed
         if unknown:
             raise TaskError(f"cannot patch: {', '.join(sorted(unknown))}")
@@ -624,6 +725,18 @@ class CockpitTaskStore:
         if "status" in payload:
             task["status"] = _choice("status", payload["status"], PATCH_STATUSES)
             task["closed_at"] = None
+        if "important" in payload or "urgent" in payload:
+            # Quadrant overrides: true/false set, null clears (back to derived). No reason asked.
+            current = task.get("overrides") if isinstance(task.get("overrides"), dict) else {}
+            overrides = {"important": current.get("important"), "urgent": current.get("urgent"), "at": None}
+            for key in ("important", "urgent"):
+                if key in payload:
+                    value = payload[key]
+                    if value is not None and not isinstance(value, bool):
+                        raise TaskError(f"{key} must be a boolean or null")
+                    overrides[key] = value
+            overrides["at"] = iso_s(now or utc_now())
+            task["overrides"] = overrides
         return self.save(task, now=now)
 
     def find_by_session(self, session_id: str) -> Optional[Dict[str, Any]]:

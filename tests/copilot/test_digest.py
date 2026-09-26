@@ -208,3 +208,47 @@ def test_not_a_git_repo(tmp_path, now, events_dir):
     d = digest.build_digest(ws, now=now, since=now - timedelta(hours=1), events_dir=events_dir, attention_items=[],
                             retro_config={}, retro_dir=tmp_path / "r")
     assert d["wins"] == [] and d["changed"]["commits"] == 0
+    assert d["q2_candidates"] == []  # no GOALS.md
+
+
+Q2_GOALS = "# Goals\n\n## Goals\n\n### G1 One\n\n### G2 Two\n\n### G3 Three\n"
+
+
+def test_q2_candidates(tmp_path, now, events_dir):
+    from hester.daemon.cockpit.explorations import ExplorationStore
+    from hester.daemon.cockpit.goal_status import q2_candidates
+    from hester.daemon.cockpit.tasks import CockpitTaskStore
+
+    ws = tmp_path / "q2"
+    ws.mkdir()
+    (ws / "GOALS.md").write_text(Q2_GOALS)
+    CockpitTaskStore(ws).upsert({"title": "serves G1", "serves": ["G1"]})
+    exps = ExplorationStore(ws)
+    quiet = exps.create({"title": "Quiet idea", "serves": ["G2"]}, now=now - timedelta(days=9))
+    fresh = exps.create({"title": "Fresh idea", "serves": ["G3"]}, now=now - timedelta(days=1))
+    loose = exps.create({"title": "Loose idea"}, now=now - timedelta(days=30))
+    ev_dir = ws / ".hester" / "goals" / "evaluations"
+    ev_dir.mkdir(parents=True)
+    (ev_dir / f"G1-{(now - timedelta(days=3)).strftime('%Y%m%dT%H%M%S')}.md").write_text("x")
+    (ev_dir / f"G3-{(now - timedelta(days=20)).strftime('%Y%m%dT%H%M%S')}.md").write_text("x")
+
+    got = q2_candidates(ws, now)
+    assert [(c["kind"], c["ref"]) for c in got] == [
+        # G1: served and recently evaluated -> nothing
+        ("exploration-quiet", quiet["id"]),   # G2 is served by a (quiet) active exploration, so not unserved
+        ("evaluation-due", "G2"),
+        ("evaluation-due", "G3"),             # G3 served by the fresh exploration; evaluated 20 days ago
+        ("exploration-quiet", loose["id"]),
+    ]
+    assert got[0]["goal_id"] == "G2" and got[0]["detail"] == "Untouched for 9 days."
+    assert got[1]["detail"] == "Never evaluated." and got[2]["detail"] == "Last evaluated 20 days ago."
+    assert got[3]["goal_id"] is None
+
+    # nothing serving G3 any more -> goal-unserved for it; capped at 5
+    exps.patch(fresh["id"], {"status": "archived"})
+    got = q2_candidates(ws, now)
+    assert ("goal-unserved", "G3") in [(c["kind"], c["ref"]) for c in got] and len(got) <= 5
+
+    d = digest.build_digest(ws, now=now, since=now - timedelta(hours=1), events_dir=events_dir, attention_items=[],
+                            retro_config={}, retro_dir=tmp_path / "r")
+    assert d["q2_candidates"] == q2_candidates(ws, now)

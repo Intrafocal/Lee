@@ -536,8 +536,14 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
 | GET | `/workspaces` | Workspaces the daemon is serving (`POST /workspaces/open`, `/workspaces/close`) |
 | GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
-| GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote` |
-| GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks + readings, operation readings |
+| GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote`. Each save derives `quadrant`, `urgency` and `importance_rank` from GOALS.md; PATCH `{important?, urgent?}` sets or clears overrides (logged as `task.override`) |
+| GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks (with `goal_impact`) + readings (with `goal_id`, `delta`), operation readings |
+| GET | `/cockpit/goals/status?days=7` | Per goal: metric values, trend and ok against targets, what serves it, `flagged`, `last_evaluated_at`, focus time; constraints, tensions and the `human_balance` strip. Deterministic (computes a metrics record when the newest is over an hour old) |
+| POST | `/cockpit/what-next`, `/cockpit/goals/{gid}/evaluate`, `/cockpit/tasks/{id}/suggest`, `/cockpit/ask` | Steward answers (user-triggered model calls): `{text, proposals, steer, surface, request_id}`. Evaluate adds the deterministic `packet`, `stale_measure` and saves `.hester/goals/evaluations/<gid>-<stamp>.md` (`{packet_only: true}` returns the packet without a model call). Ask classifies steer vs ask deterministically; a steer returns the exact text to type and sends nothing |
+| POST | `/cockpit/goals/draft`, `/cockpit/goals/draft/{id}/apply` | Guided GOALS.md edit: a draft in `.hester/goals/drafts/` with a unified diff; apply writes GOALS.md only on that call and only if the file is unchanged since the draft (409 otherwise). Never commits |
+| POST | `/cockpit/goals/{gid}/workstream` | Build toward: a workstream with `serves: [gid]` |
+| GET/POST | `/cockpit/steward` | `{enabled, not_today_until, active}`; POST `{not_today: bool}` quiets the steward until local midnight. `hester.steward: on\|off` in `.lee/config.yaml` |
+| POST | `/cockpit/proposals/{id}/outcome` | `{outcome: accepted\|dismissed}` for a proposal from a steward answer (`.hester/cockpit/proposals.jsonl`) |
 | GET/POST/PATCH | `/cockpit/explorations[/{id}]` | Explorations in `<ws>/.hester/explore/` (one markdown file each, with a node tree); `/{id}/open` seeds the Hester chat session `explore-<id>`, whose turns are written back to the file |
 | POST/PATCH | `/cockpit/explorations/{id}/nodes[/{nid}]`, `/nodes/{nid}/prune`, `/decisions`, `/spikes[/{nid}]` | Tree edits: branches, decisions (reason optional), spikes (agent tasks in a worktree whose evidence comes back as a node) |
 | POST | `/cockpit/explorations/{id}/promote`, `/archive` | Promote to a task, workstream or goal draft (`.hester/goals/drafts/`); archive, optionally as knowledge (`.hester/knowledge/explore-<id>.md`, read by the `knowledge_notes` tool) |
@@ -550,7 +556,7 @@ Every endpoint except `/health` needs `Authorization: Bearer <token>`: the share
 
 ### Copilot: C1/C2 gating and model-call logging
 
-- Every Gemini call in the daemon (class-level wrap of `google.genai` `Models`/`AsyncModels`) and every Ollama call in `prepare.py` is sent to Lee's event log (`POST :9001/events/ingest`) as `model.call` with its trigger: `user` inside an authenticated request (surface from `X-Lee-Trigger`), `automatic` for background loops, `unknown` otherwise.
+- Every Gemini call in the daemon (class-level wrap of `google.genai` `Models`/`AsyncModels`) and every Ollama call in `prepare.py` is sent to Lee's event log (`POST :9001/events/ingest`) as `model.call` with its trigger: `user` inside an authenticated request (surface: the `ContextRequest.surface`, else `X-Lee-Trigger` (the palette sends `palette`, the Hester TUI `tui`), else `http`), `automatic` for background loops, `unknown` otherwise.
 - Knowledge auto-match (`hester.proactive.knowledge_auto_match`) is off by default. The model-using proactive tasks (`docs_index`, `drift_check`, `bundles`) are off by default and, when enabled, run only while you're away from the machine (Lee's `GET /presence`) unless `hester.proactive.run_while_present` is true.
 
 ### Health Check Response

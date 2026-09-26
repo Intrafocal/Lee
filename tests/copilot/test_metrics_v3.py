@@ -55,7 +55,7 @@ def test_attributed_accepted_and_lost_threads(tmp_path, events_dir):
     ])
     rec = metrics.run(T0, at(hours=1), workspace=W, events_dir=events_dir, now=at(hours=2))
     m = rec["metrics"]
-    assert rec["formula_version"] == 3
+    assert rec["formula_version"] == 4
     assert m["agent_busy_ms"] == 200000
     assert m["attributed_busy_ms"] == 100000  # confirmed + accepted (play counts) + rejected
     assert m["attributed_agent_time"] == 0.5
@@ -172,7 +172,7 @@ def test_cli_prints_v3_metrics(tmp_path, events_dir):
     ])
     assert result.exit_code == 0, result.output
     assert "attributed_agent_time" in result.output and "nudge_acceptance" in result.output
-    assert "formula v3" in result.output
+    assert "formula v4" in result.output
 
 
 def test_peek_counted_when_tab_focus_is_logged_before_leaving_the_cockpit(tmp_path, events_dir):

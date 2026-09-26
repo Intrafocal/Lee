@@ -48,6 +48,7 @@ from ..shared.workspace import (
 )
 from .cockpit.follower import EventFollower
 from .cockpit.explorations import configure_sessions as configure_explore_sessions
+from .cockpit.steward import set_agent_provider as configure_steward_agent
 from .cockpit.routes import create_cockpit_router
 from .copilot import lee_events, presence as copilot_presence
 from .copilot.model_log import install_model_call_logging, reset_trigger, set_trigger
@@ -809,6 +810,8 @@ app.include_router(create_copilot_router())
 app.include_router(create_cockpit_router())
 # Explore deep dives seed and write back through the daemon's chat sessions.
 configure_explore_sessions(lambda: getattr(app_state, "session_manager", None))
+# Steward endpoints (copilot v4) answer through the daemon's agent.
+configure_steward_agent(lambda: getattr(app_state, "agent", None))
 app.include_router(create_workspaces_router())
 
 

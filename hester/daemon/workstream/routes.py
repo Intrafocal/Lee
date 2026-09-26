@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from .models import WorkstreamPhase
 from .orchestrator import WorkstreamOrchestrator
 from .store import WorkstreamStore
 
@@ -22,6 +23,7 @@ class CreateWorkstreamRequest(BaseModel):
     title: str
     objective: str = ""
     rationale: str = ""
+    serves: List[str] = []
 
 
 class PhaseDesignRequest(BaseModel):
@@ -55,11 +57,18 @@ class ResearchRequest(BaseModel):
     summary: str
 
 
+class TradeoffRequest(BaseModel):
+    favoured: List[str] = []
+    over: List[str] = []
+    note: Optional[str] = None
+
+
 class DecisionRequest(BaseModel):
     question: str
     decision: str
     rationale: str
     alternatives: List[str] = []
+    tradeoff: Optional[TradeoffRequest] = None
 
 
 class DispatchRequest(BaseModel):
@@ -113,6 +122,7 @@ def create_workstream_router(
             title=req.title,
             objective=req.objective,
             rationale=req.rationale,
+            serves=req.serves,
         )
         return _ws_response(ws)
 
@@ -197,6 +207,19 @@ def create_workstream_router(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    @router.post("/{ws_id}/phase/{phase}")
+    async def set_phase(ws_id: str, phase: str):
+        """Soft phases: any WorkstreamPhase, backwards included (exploration, review, done, ...)."""
+        try:
+            target = WorkstreamPhase(phase)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Unknown phase: {phase}")
+        try:
+            ws = await _orch().set_phase(ws_id, target)
+            return _ws_response(ws)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
     # ── Runbook ───────────────────────────────────────────
 
     @router.post("/{ws_id}/runbook/tasks")
@@ -256,7 +279,8 @@ def create_workstream_router(
     async def record_decision(ws_id: str, req: DecisionRequest):
         try:
             ws = await _orch().record_decision(
-                ws_id, req.question, req.decision, req.rationale, req.alternatives
+                ws_id, req.question, req.decision, req.rationale, req.alternatives,
+                tradeoff=req.tradeoff.model_dump() if req.tradeoff else None,
             )
             return {"status": "recorded"}
         except ValueError as e:
@@ -349,6 +373,7 @@ def _ws_response(ws) -> Dict[str, Any]:
         "id": ws.id,
         "title": ws.title,
         "phase": ws.phase.value,
+        "serves": list(getattr(ws, "serves", []) or []),
         "created_at": ws.created_at.isoformat(),
         "updated_at": ws.updated_at.isoformat(),
         "completed_task_ids": ws.completed_task_ids,

@@ -8,6 +8,7 @@ window where the formula needs it. v3 also reads Cockpit task files
 (``<workspace>/.hester/cockpit/tasks/``) for attributed and accepted agent time.
 """
 
+import bisect
 import json
 import os
 import statistics
@@ -23,9 +24,11 @@ from .event_reader import iso, parse_ts, read_events
 # v3: attributed_agent_time, background_leverage accepted part, toil_load
 # command repeats and flaky reruns, peek_rate with Cockpit modes,
 # nudge_acceptance, lost_threads.
-FORMULA_VERSION = 3
+# v4: human_balance (your focus time by the quadrant of the task it went to).
+FORMULA_VERSION = 4
 
-UNAVAILABLE = ["background_leverage.reverted", "human_balance.goal_linked"]
+UNAVAILABLE = ["background_leverage.reverted"]
+BALANCE_BANDS = ("Q1", "Q2", "Q3", "Q4", "play", "unclassified")
 
 LOOKBACK = timedelta(hours=24)
 COMMAND_LOOKBACK = timedelta(days=7)
@@ -371,6 +374,20 @@ def load_tasks(workspaces: Iterable[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def load_goals_by_workspace(workspaces: Iterable[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """``{normpath(ws): goals}`` from each workspace's GOALS.md (for human_balance quadrants)."""
+    from ..cockpit.goals import load_goals_full
+
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for ws in workspaces:
+        if not ws:
+            continue
+        key = os.path.normpath(str(ws))
+        if key not in out and os.path.isdir(key):
+            out[key] = load_goals_full(Path(key))["goals"]
+    return out
+
+
 def _task_session_map(tasks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     from ..cockpit.tasks import task_sessions
 
@@ -379,6 +396,173 @@ def _task_session_map(tasks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         for sid in task_sessions(t):
             out[sid] = t
     return out
+
+
+def _input_minutes(events: List[Dict[str, Any]], start: datetime, end: datetime) -> Dict[Any, Set[datetime]]:
+    """Per window, the minutes that had input (keys + clicks > 0 in an ``input.counts``)."""
+    out: Dict[Any, Set[datetime]] = defaultdict(set)
+    for ev in events:
+        if ev.get("type") != "input.counts":
+            continue
+        d = _data(ev)
+        if int(d.get("keys") or 0) + int(d.get("clicks") or 0) <= 0:
+            continue
+        ts = ev["_ts"]
+        if ts < start - timedelta(minutes=1) or ts > end + timedelta(minutes=1):
+            continue
+        span = timedelta(milliseconds=float(d.get("span_ms") or 0))
+        m = (ts - span).replace(second=0, microsecond=0)
+        last = ts.replace(second=0, microsecond=0)
+        while m <= last:
+            out[ev.get("window_id")].add(m)
+            m += timedelta(minutes=1)
+    return out
+
+
+def active_focus_pieces(events: List[Dict[str, Any]], start: datetime, end: datetime) -> List[Dict[str, Any]]:
+    """``focus_intervals`` clipped to ``[start, end)`` and to minutes of that window that had input."""
+    minutes = _input_minutes(events, start, end)
+    pieces: List[Dict[str, Any]] = []
+    for iv in focus_intervals([e for e in events if e["_ts"] < end], end):
+        a, b = max(iv["start"], start), min(iv["end"], end)
+        if a >= b:
+            continue
+        active = minutes.get(iv["window_id"])
+        if not active:
+            continue
+        m = a.replace(second=0, microsecond=0)
+        while m < b:
+            if m in active:
+                pa, pb = max(a, m), min(b, m + timedelta(minutes=1))
+                if pa < pb:
+                    pieces.append({**iv, "start": pa, "end": pb})
+            m += timedelta(minutes=1)
+    return pieces
+
+
+class _Timeline:
+    """The latest value set at or before a time."""
+
+    def __init__(self) -> None:
+        self.times: List[datetime] = []
+        self.values: List[Any] = []
+
+    def set(self, ts: datetime, value: Any) -> None:
+        # Events arrive sorted by ts.
+        self.times.append(ts)
+        self.values.append(value)
+
+    def at(self, ts: datetime) -> Any:
+        i = bisect.bisect_right(self.times, ts)
+        return self.values[i - 1] if i else None
+
+
+def _task_open_at(task: Dict[str, Any], ts: datetime) -> bool:
+    created = parse_ts(task.get("created_at"))
+    closed = parse_ts(task.get("closed_at")) if task.get("status") in ("done", "discarded") else None
+    return (created is None or created <= ts) and (closed is None or ts < closed)
+
+
+def _goals_for(task: Dict[str, Any], goals: Optional[Dict[str, List[Dict[str, Any]]]]) -> List[Dict[str, Any]]:
+    if not goals:
+        return []
+    ws = task.get("workspace")
+    if isinstance(ws, str) and ws:
+        hit = goals.get(os.path.normpath(ws))
+        if hit is not None:
+            return hit
+    return next(iter(goals.values())) if len(goals) == 1 else []
+
+
+def human_balance(
+    events: List[Dict[str, Any]],
+    start: datetime,
+    end: datetime,
+    tasks: List[Dict[str, Any]],
+    goals: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    Your focus time (never agent time) by the quadrant of the task it went to.
+
+    Attribution, first rule that matches: the focus session's item is the
+    task; the focused tab is the task's agent pty (session join); the focused
+    file is in the task's files while it was open (newest update wins);
+    otherwise unclassified. ``human_balance = (Q1+Q2) / (Q1+Q2+Q3+Q4+play)``.
+    """
+    from ..cockpit.tasks import derive
+
+    now = now or end
+    by_id = {t["id"]: t for t in tasks if isinstance(t, dict) and t.get("id")}
+    session_task = _task_session_map(tasks)
+
+    focus_item = _Timeline()
+    pty_session: Dict[int, _Timeline] = defaultdict(_Timeline)
+    for ev in events:
+        if ev["_ts"] >= end:
+            break
+        t = ev.get("type") or ""
+        d = _data(ev)
+        if t in ("focus.start", "focus.item"):
+            item = d.get("item")
+            focus_item.set(ev["_ts"], item if isinstance(item, dict) else None)
+        elif t == "focus.end":
+            focus_item.set(ev["_ts"], None)
+        elif t.startswith("agent.") and isinstance(d.get("pty_id"), int) and d.get("session_id"):
+            pty_session[d["pty_id"]].set(ev["_ts"], d["session_id"])
+
+    file_tasks: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for task in tasks:
+        base = task.get("workspace") if isinstance(task.get("workspace"), str) else None
+        for f in task.get("files") or []:
+            if isinstance(f, str) and f:
+                p = os.path.normpath(f if os.path.isabs(f) or not base else os.path.join(base, f))
+                file_tasks[p].append(task)
+
+    def attribute(piece: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        mid = piece["start"] + (piece["end"] - piece["start"]) / 2
+        item = focus_item.at(mid)
+        if isinstance(item, dict) and item.get("kind") == "task" and item.get("task_id") in by_id:
+            return by_id[item["task_id"]]
+        pty = piece.get("pty_id")
+        if isinstance(pty, int) and pty in pty_session:
+            task = session_task.get(pty_session[pty].at(mid))
+            if task is not None:
+                return task
+        fp = piece.get("file_path")
+        if isinstance(fp, str) and fp:
+            hits = [t for t in file_tasks.get(os.path.normpath(fp), []) if _task_open_at(t, mid)]
+            if hits:
+                hits.sort(key=lambda t: str(t.get("updated_at") or ""), reverse=True)
+                return hits[0]
+        return None
+
+    bands = {b: 0.0 for b in BALANCE_BANDS}
+    by_goal: Dict[str, float] = defaultdict(float)
+    band_cache: Dict[str, Tuple[str, List[str]]] = {}
+    for piece in active_focus_pieces(events, start, end):
+        ms = _ms(piece["end"] - piece["start"])
+        task = attribute(piece)
+        if task is None:
+            bands["unclassified"] += ms
+            continue
+        if task["id"] not in band_cache:
+            goal_list = _goals_for(task, goals)
+            q = derive(task, goal_list, now)["quadrant"]
+            band = "unclassified" if q is None else ("play" if q == "Q4" and task.get("play") else q)
+            known = {g["id"] for g in goal_list}
+            served = [g for g in task.get("serves") or [] if isinstance(g, str) and (g in known if known else g.startswith("G"))]
+            band_cache[task["id"]] = (band, served)
+        band, served = band_cache[task["id"]]
+        bands[band] += ms
+        for gid in served:
+            by_goal[gid] += ms
+    classified = sum(bands[b] for b in ("Q1", "Q2", "Q3", "Q4", "play"))
+    return {
+        "human_balance": _round((bands["Q1"] + bands["Q2"]) / classified) if classified else None,
+        "human_balance_ms": {b: int(round(v)) for b, v in bands.items()},
+        "human_balance_by_goal": {g: int(round(v)) for g, v in sorted(by_goal.items())},
+    }
 
 
 def repeated_approvals(events, start, end) -> int:
@@ -403,8 +587,9 @@ def compute_metrics(
     start: datetime,
     end: datetime,
     tasks: Optional[List[Dict[str, Any]]] = None,
+    goals: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
-    """All section 2.5 metrics (formula v3) over ``[start, end)``.
+    """All section 2.5 metrics (formula v4) over ``[start, end)``.
 
     ``events`` must be sorted by ts and may extend before ``start`` (7-day
     lookback) and after ``end`` (14-day capture pickup lookahead). ``tasks``
@@ -633,6 +818,7 @@ def compute_metrics(
         "nudge_acceptance_by_rule": nudge_by_rule,
         "lost_threads": lost,
     }
+    metrics.update(human_balance(events, start, end, tasks, goals))
     return metrics
 
 
@@ -665,13 +851,16 @@ def run(
             task_workspaces = [workspace]
         else:
             task_workspaces = sorted({e["workspace"] for e in events if isinstance(e.get("workspace"), str) and e["workspace"]})
+    task_workspaces = list(task_workspaces)
     return {
         "ts": iso(now),
         "from": iso(start),
         "to": iso(end),
         "formula_version": FORMULA_VERSION,
         "workspace": os.path.normpath(workspace) if workspace else None,
-        "metrics": compute_metrics(events, start, end, tasks=load_tasks(task_workspaces)),
+        "metrics": compute_metrics(
+            events, start, end, tasks=load_tasks(task_workspaces), goals=load_goals_by_workspace(task_workspaces),
+        ),
         "unavailable": list(UNAVAILABLE),
     }
 

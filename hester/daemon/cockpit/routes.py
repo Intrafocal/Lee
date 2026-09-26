@@ -29,10 +29,13 @@ from .tasks import (
     RECENT_CLOSED_DAYS,
     TaskError,
     TaskNotFound,
+    apply_derived,
     is_open,
     iso_s,
+    open_sort_key,
     parse_time,
     to_api,
+    workspace_goals,
 )
 
 OPEN_ORDER = {s: i for i, s in enumerate(OPEN_STATUSES)}
@@ -105,9 +108,11 @@ def build_snapshot(ctx, now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     store = ctx.tasks()
     tasks = store.load_all()
-    open_tasks = [t for t in tasks if is_open(t)]
+    goals = workspace_goals(ctx.path)
+    open_tasks = [apply_derived(t, goals, now, saving=False) for t in tasks if is_open(t)]
+    # Status, then quadrant (Q1, Q2, Q3, unclassified, Q4), then goal priority, then newest.
     open_tasks.sort(key=lambda t: str(t.get("updated_at") or ""), reverse=True)
-    open_tasks.sort(key=lambda t: OPEN_ORDER.get(t.get("status"), len(OPEN_ORDER)))
+    open_tasks.sort(key=lambda t: (OPEN_ORDER.get(t.get("status"), len(OPEN_ORDER)),) + open_sort_key(t))
     cutoff = now - timedelta(days=RECENT_CLOSED_DAYS)
     closed = [
         t for t in tasks
@@ -264,6 +269,8 @@ def create_cockpit_router() -> APIRouter:
                 if op == "patch":
                     task = store.patch(task_id, body)
                     await _sync_spike(ctx, task)
+                    if "important" in body or "urgent" in body:
+                        _log_override(ctx, task, request)
                     return _ok(ctx, to_api(task))
                 if op == "confirm":
                     return _ok(ctx, to_api(store.confirm(task_id, body)))
@@ -499,7 +506,24 @@ def create_cockpit_router() -> APIRouter:
             return explore_ops.archive(ctx, exp_id, as_knowledge)
         return await _exp_op(request, op)
 
+    from .steward_routes import create_steward_router
+
+    router.include_router(create_steward_router())
     return router
+
+
+def _log_override(ctx, task: Dict[str, Any], request: Request) -> None:
+    """A quadrant override to Lee's log as ``task.override`` (Hester -> Lee event path)."""
+    from ..copilot import lee_events
+    from ..copilot.routes import caller_actor
+
+    overrides = task.get("overrides") or {}
+    try:
+        lee_events.ingest("task.override", {
+            "task_id": task["id"], "important": overrides.get("important"), "urgent": overrides.get("urgent"),
+        }, workspace=str(ctx.path), actor=caller_actor(request))
+    except Exception:
+        pass
 
 
 async def _sync_spike(ctx, task: Dict[str, Any]) -> None:

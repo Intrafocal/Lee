@@ -63,6 +63,22 @@ def trigger(kind: str, **fields: Any) -> Iterator[None]:
         reset_trigger(token)
 
 
+@contextmanager
+def surface_override(surface: Optional[str]) -> Iterator[None]:
+    """Within this block, model calls carry ``surface`` (the request's own surface beats X-Lee-Trigger)."""
+    if not surface:
+        yield
+        return
+    current = current_trigger.get()
+    trigger_ = dict(current) if current else {"kind": "unknown"}
+    trigger_["surface"] = str(surface)
+    token = current_trigger.set(trigger_)
+    try:
+        yield
+    finally:
+        reset_trigger(token)
+
+
 def get_trigger() -> Dict[str, Any]:
     value = current_trigger.get()
     return dict(value) if value else {"kind": "unknown"}

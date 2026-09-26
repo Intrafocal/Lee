@@ -557,6 +557,9 @@ class EventFollower:
             if summary:
                 task["summary"] = summary
             task["lee_status"] = lee_status
+            if task.get("files_at_first_report") is None:
+                # Set once: the baseline for Lee's scope/task-growth lint rule.
+                task["files_at_first_report"] = len(task.get("files") or [])
             set_status(task, status_from_lee_status(lee_status), ev)
             source = task.get("title_source")
             if source == "auto" or (not respect_agent_title and source != "user"):

@@ -14,6 +14,7 @@ from .models import (
     Workstream,
     WorkstreamPhase,
     WorkstreamBrief,
+    DecisionTradeoff,
     DesignDecision,
     DesignDoc,
     Runbook,
@@ -47,10 +48,11 @@ class WorkstreamOrchestrator:
         title: str,
         objective: str = "",
         rationale: str = "",
+        serves: Optional[List[str]] = None,
     ) -> Workstream:
         """Create a new workstream in EXPLORATION phase."""
         brief = WorkstreamBrief(objective=objective, rationale=rationale)
-        ws = Workstream(title=title, brief=brief)
+        ws = Workstream(title=title, brief=brief, serves=[s for s in (serves or []) if isinstance(s, str) and s])
         self.ws_store.create(ws)
         self.ws_store.save_brief(ws.id, brief)
         logger.info(f"Created workstream: {ws.id} - {title}")
@@ -117,10 +119,8 @@ class WorkstreamOrchestrator:
         constraints: Optional[List[str]] = None,
         out_of_scope: Optional[List[str]] = None,
     ) -> Workstream:
-        """Finalize exploration and advance to DESIGN phase."""
+        """Move to DESIGN (from any phase: phases are soft in v4), saving brief edits."""
         ws = self._load(ws_id)
-        if ws.phase != WorkstreamPhase.EXPLORATION:
-            raise ValueError(f"Workstream must be in EXPLORATION to finalize brief, got {ws.phase}")
 
         if ws.brief:
             if constraints:
@@ -140,15 +140,14 @@ class WorkstreamOrchestrator:
         summary: str = "",
         architecture_notes: str = "",
     ) -> Workstream:
-        """Finalize design and advance to PLANNING phase."""
+        """Move to PLANNING (from any phase), keeping the design doc's decisions and research."""
         ws = self._load(ws_id)
-        if ws.phase != WorkstreamPhase.DESIGN:
-            raise ValueError(f"Workstream must be in DESIGN to finalize design, got {ws.phase}")
 
-        design = DesignDoc(
-            summary=summary,
-            architecture_notes=architecture_notes,
-        )
+        design = ws.design_doc or DesignDoc(summary="")
+        if summary or not design.summary:
+            design.summary = summary
+        if architecture_notes:
+            design.architecture_notes = architecture_notes
         ws.design_doc = design
         self.ws_store.save_design(ws.id, design)
 
@@ -158,12 +157,8 @@ class WorkstreamOrchestrator:
         return ws
 
     async def finalize_planning(self, ws_id: str) -> Workstream:
-        """Finalize planning and advance to EXECUTION phase."""
+        """Move to EXECUTION (from any phase; an empty runbook is allowed)."""
         ws = self._load(ws_id)
-        if ws.phase != WorkstreamPhase.PLANNING:
-            raise ValueError(f"Workstream must be in PLANNING to finalize planning, got {ws.phase}")
-        if not ws.runbook.tasks:
-            raise ValueError("Cannot finalize planning with empty runbook")
 
         ws.phase = WorkstreamPhase.EXECUTION
         self.ws_store.save(ws)
@@ -176,6 +171,13 @@ class WorkstreamOrchestrator:
         if ws.phase not in NEXT_PHASE:
             raise ValueError(f"Cannot advance from {ws.phase}")
         ws.phase = NEXT_PHASE[ws.phase]
+        self.ws_store.save(ws)
+        return ws
+
+    async def set_phase(self, ws_id: str, phase: WorkstreamPhase) -> Workstream:
+        """Soft phases (v4): move to any phase, backwards included, without pausing."""
+        ws = self._load(ws_id)
+        ws.phase = WorkstreamPhase(phase)
         self.ws_store.save(ws)
         return ws
 
@@ -225,8 +227,9 @@ class WorkstreamOrchestrator:
         decision: str,
         rationale: str,
         alternatives: Optional[List[str]] = None,
+        tradeoff: Optional[Dict[str, Any]] = None,
     ) -> Workstream:
-        """Record a design decision."""
+        """Record a design decision (v4: optionally the trade-off between goals)."""
         ws = self._load(ws_id)
         if not ws.design_doc:
             ws.design_doc = DesignDoc(summary="")
@@ -235,6 +238,7 @@ class WorkstreamOrchestrator:
             decision=decision,
             rationale=rationale,
             alternatives=alternatives or [],
+            tradeoff=DecisionTradeoff(**tradeoff) if tradeoff else None,
         ))
         self.ws_store.save_design(ws.id, ws.design_doc)
         return ws

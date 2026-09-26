@@ -602,6 +602,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
         session: HesterSession,
         warm_context: Optional["WarmContext"] = None,
         prepare_result: Optional[PrepareResult] = None,
+        extra_layer: str = "",
     ) -> str:
         """
         Build the system prompt using the bespoke agent registry.
@@ -613,6 +614,8 @@ class HesterDaemonAgent(HybridGeminiCapability):
             session: Current session with editor state
             warm_context: Optional pre-loaded knowledge context from KnowledgeEngine
             prepare_result: Prepare result with prompt_id and tool list
+            extra_layer: Appended last (copilot v4 steward: steward.md on steer
+                surfaces when the steward is on, then the request's steward_context)
 
         Returns:
             Complete system prompt with all context sections
@@ -648,7 +651,21 @@ class HesterDaemonAgent(HybridGeminiCapability):
                     f"{len(warm_context.docs)} docs, ~{warm_context.token_estimate} tokens"
                 )
 
+        if extra_layer:
+            base_prompt += "\n\n" + extra_layer
+
         return base_prompt
+
+    @staticmethod
+    def _steward_layer(request: ContextRequest, working_dir: Optional[str]) -> str:
+        """steward.md / steward_context for this request (never fails the request)."""
+        try:
+            from .cockpit.steward import prompt_layer_for_request
+
+            return prompt_layer_for_request(request, working_dir)
+        except Exception as e:
+            logger.warning(f"Steward layer unavailable: {e}")
+            return ""
 
     def _build_editor_context(self, session: HesterSession) -> str:
         """Build the editor context section from multiple sources."""
@@ -786,6 +803,17 @@ You are operating in: {working_dir}
 """
 
     async def process_context(
+        self,
+        request: ContextRequest,
+        phase_callback: Optional[PhaseCallback] = None,
+    ) -> ContextResponse:
+        """Process a context request; model calls carry ``request.surface`` when it is set."""
+        from .copilot.model_log import surface_override
+
+        with surface_override(getattr(request, "surface", None)):
+            return await self._process_context(request, phase_callback=phase_callback)
+
+    async def _process_context(
         self,
         request: ContextRequest,
         phase_callback: Optional[PhaseCallback] = None,
@@ -1011,6 +1039,7 @@ You are operating in: {working_dir}
             session,
             warm_context=warm_context,
             prepare_result=prepare_result,
+            extra_layer=self._steward_layer(request, working_dir),
         )
 
         # Create handlers bound to working directory

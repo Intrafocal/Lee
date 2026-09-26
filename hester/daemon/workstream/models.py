@@ -145,7 +145,31 @@ class DesignDecision(BaseModel):
     rationale: str = Field(description="Why this approach")
     alternatives: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+    # v4: which goals (or constraints) this decision favoured over which, and why
+    tradeoff: Optional["DecisionTradeoff"] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DecisionTradeoff(BaseModel):
+    """``{favoured: [ids], over: [ids], note}``, rendered "G2 over G4 because <note>"."""
+    favoured: List[str] = Field(default_factory=list)
+    over: List[str] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    def render(self) -> str:
+        text = f"{', '.join(self.favoured) or '?'} over {', '.join(self.over) or '?'}"
+        return text + (f" because {self.note}" if self.note else "")
+
+    @classmethod
+    def parse(cls, text: str) -> Optional["DecisionTradeoff"]:
+        m = re.match(r"^\s*(.+?)\s+over\s+(.+?)(?:\s+because\s+(.+))?\s*$", text or "", re.DOTALL)
+        if not m:
+            return None
+        ids = lambda s: [x.strip() for x in s.split(",") if x.strip() and x.strip() != "?"]  # noqa: E731
+        return cls(favoured=ids(m.group(1)), over=ids(m.group(2)), note=(m.group(3) or "").strip() or None)
+
+
+DesignDecision.model_rebuild()
 
 
 class DesignDoc(BaseModel):
@@ -197,6 +221,8 @@ class DesignDoc(BaseModel):
                     lines.append(f"**Alternatives:** {', '.join(d.alternatives)}")
                 if d.risks:
                     lines.append(f"**Risks:** {', '.join(d.risks)}")
+                if d.tradeoff:
+                    lines.append(f"**Trade-off:** {d.tradeoff.render()}")
                 lines.append("")
 
         if self.research:
@@ -235,7 +261,7 @@ class DesignDoc(BaseModel):
         decisions = []
         decisions_match = re.search(r"## Decisions\n(.*?)(?=\n## (?!#)|\Z)", body, re.DOTALL)
         if decisions_match:
-            decision_pattern = r"### (.+?)\n\*\*Decision:\*\* (.+?)\n\*\*Rationale:\*\* (.+?)(?:\n\*\*Alternatives:\*\* (.+?))?(?:\n\*\*Risks:\*\* (.+?))?(?=\n### |\n## |\Z)"
+            decision_pattern = r"### (.+?)\n\*\*Decision:\*\* (.+?)\n\*\*Rationale:\*\* (.+?)(?:\n\*\*Alternatives:\*\* (.+?))?(?:\n\*\*Risks:\*\* (.+?))?(?:\n\*\*Trade-off:\*\* (.+?))?(?=\n### |\n## |\Z)"
             for m in re.finditer(decision_pattern, decisions_match.group(1), re.DOTALL):
                 decisions.append(DesignDecision(
                     question=m.group(1).strip(),
@@ -243,6 +269,7 @@ class DesignDoc(BaseModel):
                     rationale=m.group(3).strip(),
                     alternatives=[a.strip() for a in m.group(4).split(",")] if m.group(4) else [],
                     risks=[r.strip() for r in m.group(5).split(",")] if m.group(5) else [],
+                    tradeoff=DecisionTradeoff.parse(m.group(6).strip()) if m.group(6) else None,
                 ))
 
         research = []
