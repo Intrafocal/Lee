@@ -32,7 +32,13 @@ pid, fd = pty.fork()
 if pid == 0:
     os.chdir(cfg['cwd'])
     os.execve(cfg['argv'][0], cfg['argv'], cfg['env'])
+os.set_blocking(fd, False)
 out = b''
+def send(b):
+    try:
+        os.write(fd, b)
+    except OSError:
+        pass
 def pump(t):
     global out
     end = time.time() + t
@@ -41,6 +47,8 @@ def pump(t):
         if r:
             try:
                 d = os.read(fd, 65536)
+            except BlockingIOError:
+                continue
             except OSError:
                 return
             if not d:
@@ -48,24 +56,34 @@ def pump(t):
             out += d
 pump(cfg['startup'])
 for line in cfg['input']:
-    os.write(fd, (line + '\\r').encode())
+    send((line + '\\r').encode())
     pump(cfg['wait'])
-os.write(fd, b'exit\\r')
+send(b'exit\\r')
 pump(0.8)
 try:
     os.kill(pid, 9)
 except Exception:
     pass
-sys.stdout.write(out.decode('utf-8', 'replace'))
+with open(cfg['out'], 'wb') as f:
+    f.write(out)
 `;
 
+let runs = 0;
 function runShell(argv, env, input) {
-  const r = spawnSync('python3', ['-c', PY, JSON.stringify({ argv, env, input, cwd: tmpHome, startup: 2.5, wait: 0.8 })], {
-    encoding: 'utf8',
-    timeout: 60_000,
-  });
-  if (r.error) throw r.error;
-  return r.stdout;
+  // Output goes through a file and stdio is ignored, so a straggling process
+  // holding an inherited pipe can't keep spawnSync waiting.
+  const out = path.join(os.tmpdir(), `lee-shell-smoke-out-${process.pid}-${runs++}`);
+  const cfg = { argv, env, input, cwd: tmpHome, startup: 2.5, wait: 0.8, out };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fs.rmSync(out, { force: true });
+    spawnSync('python3', ['-c', PY, JSON.stringify(cfg)], { stdio: 'ignore', timeout: 60_000, killSignal: 'SIGKILL' });
+    if (fs.existsSync(out)) {
+      const text = fs.readFileSync(out, 'utf8');
+      fs.rmSync(out, { force: true });
+      return text;
+    }
+  }
+  throw new Error(`shell run produced no output: ${argv.join(' ')}`);
 }
 
 function write(file, content) {
