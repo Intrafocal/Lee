@@ -232,6 +232,12 @@
   word-break: break-word;
 }
 
+.copilot-item-text .agent-md {
+  margin-top: 2px;
+  max-height: 18em;
+  overflow-y: auto;
+}
+
 .copilot-item-text-label {
   color: var(--text-muted);
   font-style: italic;

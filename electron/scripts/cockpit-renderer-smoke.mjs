@@ -48,6 +48,15 @@ const {
   keyAction,
   feedNeedsCount,
   formatDuration,
+  stripMarkdown,
+  plainTitle,
+  plainPreview,
+  plainLine,
+  looksLikeCode,
+  taskTitle,
+  taskNeedsYou,
+  tasksBadge,
+  opsBadge,
 } = mod;
 
 let passed = 0;
@@ -213,9 +222,9 @@ test('tileModel without snapshot.agents: tiles from tabs + items + tasks + runti
   assert.deepEqual(claude.chip, { label: 'needs approval', tone: 'needs' });
   assert.equal(claude.approval.id, 'ap');
   assert.equal(claude.tabId, 3);
-  assert.deepEqual(claude.summary, { text: 'Added requireAuth', label: 'Claude says' });
+  assert.deepEqual(claude.summary, { text: 'Added requireAuth', preview: 'Added requireAuth', label: 'Claude says' });
   assert.ok(claude.meta.includes('unconfirmed'));
-  assert.ok(claude.meta.includes('12m busy'));
+  assert.ok(!claude.meta.some((m) => /busy/.test(m)), 'no busy time while not busy');
   assert.equal(claude.canCheckin, false);
   const pi = tiles[1];
   assert.equal(pi.title, 'Pi');
@@ -245,10 +254,81 @@ test('tileModel with snapshot.agents: state, last_summary, last_tool; other work
   assert.deepEqual(tiles.map((t) => t.ptyId), [12, 40]);
   assert.equal(tiles[0].chip.label, 'busy 7m');
   assert.equal(tiles[0].agentState, 'busy');
-  assert.deepEqual(tiles[0].summary, { text: 'Working on it', label: 'Claude says' });
+  assert.deepEqual(tiles[0].summary, { text: 'Working on it', preview: 'Working on it', label: 'Claude says' });
   assert.deepEqual(tiles[0].meta, ['Edit', '2 files']);
-  assert.equal(tiles[1].chip.label, 'idle');
+  assert.equal(tiles[1].chip.label, 'finished 1m ago');
   assert.equal(tiles[1].title, 'Claude 2');
+});
+
+test('tileModel: the tab runtime state wins over an unknown agent summary (same source as the Tabs list)', () => {
+  const idleRt = runtime({ pty_id: 12, kind: 'agent', provider: 'claude', fidelity: 'structured', label: 'Claude', state: { ...runtime({}).state, pty_id: 12, state: 'idle-at-prompt', source: 'hooks', since: ago(3), quiet_ms: 60000 } });
+  const task = { id: 't1', title: 'Fix it', title_source: 'user', agent: { provider: 'claude', pty_id: 12 }, busy_ms: 91 * 60000, lead: 'delegate', confirmed: true, summary: null, status: 'running' };
+  const agents = [{ pty_id: 12, window_id: 1, tab_id: 3, label: 'Claude', provider: 'claude', workspace: WS, state: 'unknown', busy_since: null, idle_since: null, last_tool: null, last_summary: null, files_touched_count: 0 }];
+  const [t] = tileModel({ workspace: WS, tabs: [agentTab], sets: noSets, snapshot: snapshot({ agents }), runtime: [idleRt], tasks: [task], now: NOW });
+  assert.equal(t.chip.label, 'idle 3m');
+  assert.equal(t.chip.tone, 'idle');
+  assert.equal(t.agentState, 'idle-at-prompt');
+  assert.ok(!t.meta.some((m) => /busy/.test(m)), `no busy time while idle: ${t.meta}`);
+  // Busy: the chip shows the current turn, the meta the total.
+  const busyRt = { ...idleRt, state: { ...idleRt.state, state: 'busy', since: ago(5) } };
+  const [b] = tileModel({ workspace: WS, tabs: [agentTab], sets: noSets, snapshot: snapshot({ agents }), runtime: [busyRt], tasks: [task], now: NOW });
+  assert.equal(b.chip.label, 'busy 5m');
+  assert.ok(b.meta.includes('1h 31m busy in total'));
+  // Only an unknown runtime state and an unknown agent: no "unknown" chip, a quiet time instead.
+  const unkRt = { ...idleRt, state: { ...idleRt.state, state: 'unknown', quiet_ms: 4 * 60000 } };
+  const [u] = tileModel({ workspace: WS, tabs: [agentTab], sets: noSets, snapshot: snapshot({ agents }), runtime: [unkRt], tasks: [], now: NOW });
+  assert.equal(u.chip.label, 'quiet 4m');
+});
+
+test('tileModel: agent/auto task titles are made plain; user titles kept', () => {
+  const mk = (title, title_source) =>
+    tileModel({ workspace: WS, tabs: [agentTab], sets: noSets, snapshot: snapshot({}), runtime: [], now: NOW,
+      tasks: [{ id: 't', title, title_source, agent: { provider: 'claude', pty_id: 12 }, busy_ms: 0, lead: 'delegate', confirmed: true, summary: '## Done\n\nFixed **the** `parser`.\n\n```ts\nconst x = 1;\n```', status: 'review' }] })[0];
+  assert.equal(mk("u: ${item.title}. ${item.text}',", 'agent').title, 'Claude', 'code-looking agent title falls back to the tab label');
+  assert.equal(mk('**Fixed** the `/fs/list` 404 in [api](http://x). Also more.', 'agent').title, 'Fixed the /fs/list 404 in api.');
+  assert.equal(mk('*my* title', 'user').title, '*my* title');
+  assert.equal(mk('(untitled)', 'auto').title, 'Claude');
+  const t = mk('x', 'user');
+  assert.equal(t.summary.preview, 'Done Fixed the parser.');
+  assert.ok(t.summary.text.includes('```ts'), 'the raw text is kept for the markdown view');
+});
+
+test('badges: suggestions and unconfirmed tasks are ambient; failures, proposals, waiting agents are ember', () => {
+  assert.deepEqual(opsBadge({ failing: 0, proposals: 0, suggestions: 30 }), { count: 30, ember: false });
+  assert.deepEqual(opsBadge({ failing: 1, proposals: 1, suggestions: 30 }), { count: 2, ember: true });
+  assert.deepEqual(opsBadge({ failing: 0, proposals: 0, suggestions: 0 }), { count: 0, ember: false });
+  const t = (status, confirmed) => ({ status, confirmed });
+  assert.equal(taskNeedsYou(t('review', false)), false, 'an unconfirmed auto task in review is ambient');
+  assert.equal(taskNeedsYou(t('review', true)), true);
+  assert.equal(taskNeedsYou(t('waiting', false)), true, 'a waiting agent needs you');
+  assert.equal(taskNeedsYou(t('running', true)), false);
+  assert.deepEqual(tasksBadge([t('review', false), t('running', true), t('review', false), t('idle', false)]), { count: 4, ember: false });
+  assert.deepEqual(tasksBadge([t('review', true), t('running', true), t('waiting', false)]), { count: 2, ember: true });
+});
+
+test('stripMarkdown / plainTitle / plainPreview / looksLikeCode', () => {
+  assert.deepEqual(
+    stripMarkdown('# Title\n\n- **bold** item\n1. _em_ and snake_case_name\n> quote with [link](http://a.b) and ![alt](x.png)\n\n```lee-status\nstatus: done\n```\n---\n| a | b |\n|---|---|\n<b>html</b> ~~gone~~'),
+    ['Title', '', 'bold item', 'em and snake_case_name', 'quote with link and alt', '', 'a · b', 'html gone'],
+  );
+  assert.deepEqual(stripMarkdown('Head\n```ts\nconst unclosed = 1;'), ['Head'], 'an unclosed (clipped) fence drops the rest');
+  assert.deepEqual(stripMarkdown(null), []);
+  for (const code of ["u: ${item.title}. ${item.text}',", 'const x = foo(bar);', '});', 'x = 1', 'if (a) {', '// comment', 'return { a: 1 };', "'hello',"]) {
+    assert.ok(looksLikeCode(code), `code: ${code}`);
+  }
+  for (const prose of ['Fixed the parser (see below).', 'Summary: tests pass', 'Import the file and run it.', 'I renamed foo() to bar() in two places.', 'The build is green.', 'Need a decision: A or B?']) {
+    assert.ok(!looksLikeCode(prose), `prose: ${prose}`);
+  }
+  // Starts mid-code (the old Pi tail clip): the first prose line wins.
+  assert.equal(plainTitle("  title: item.title,\n});\n```\n\nAll tests pass now. Next I will clean up."), 'All tests pass now.');
+  assert.equal(plainTitle('Done. Fixed the flaky test in the queue.'), 'Done. Fixed the flaky test in the queue.', 'a very short first sentence keeps the line');
+  const long = plainTitle('This is a very long first sentence that goes on and on well past the eighty character limit for titles');
+  assert.ok(long.length <= 80 && long.endsWith('…'), long);
+  assert.equal(plainTitle('```\nonly code\n```'), '');
+  assert.equal(plainPreview('Line one.\n\n```\ncode\n```\n- two\n- three\n- four', 3), 'Line one. two three');
+  assert.equal(plainLine('**Fixed** it: review'), 'Fixed it: review');
+  assert.equal(taskTitle({ title: '`x`', title_source: 'user' }), '`x`');
+  assert.equal(taskTitle({ title: '# Heading', title_source: 'auto' }), 'Heading');
 });
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Icon } from '../Icon';
 import { fetchDigest, type DigestResponse } from '../../lib/hesterCopilot';
+import { AgentMarkdown } from './AgentMarkdown';
 
 interface CockpitRailProps {
   workspace: string;
@@ -45,13 +46,13 @@ export const CockpitRail: React.FC<CockpitRailProps> = ({ workspace, about, retu
       {!digest && !error && <div className="cockpit-muted">Loading…</div>}
       {digest && (
         <div className="cockpit-rail-body">
-          <div className="cockpit-rail-topline">{digest.top_line}</div>
+          <AgentMarkdown className="cockpit-rail-topline" text={digest.top_line} />
           {digest.wins.length > 0 && (
             <div className="cockpit-rail-group">
               <div className="cockpit-rail-head">Progress</div>
               {digest.wins.slice(0, 8).map((w, i) => (
                 <div key={`${w.kind}-${w.ref ?? i}`} className="cockpit-rail-line">
-                  {w.verified && <Icon name="check" size={10} />} {w.title}
+                  {w.verified && <Icon name="check" size={10} />} <AgentMarkdown inline text={w.title} />
                 </div>
               ))}
             </div>
@@ -61,7 +62,7 @@ export const CockpitRail: React.FC<CockpitRailProps> = ({ workspace, about, retu
               <div className="cockpit-rail-head">Agents said</div>
               {digest.agent_claims.slice(0, 5).map((c, i) => (
                 <div key={`${c.session_id}-${i}`} className="cockpit-rail-line">
-                  <span className="cockpit-agent-label">Agent:</span> {c.summary}
+                  <span className="cockpit-agent-label">Agent:</span> <AgentMarkdown inline text={c.summary} />
                 </div>
               ))}
             </div>

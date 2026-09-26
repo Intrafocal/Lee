@@ -8,6 +8,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { AttentionItemRow } from './AttentionItemRow';
 import { RetroCard } from './RetroCard';
+import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { fetchDigest, type DigestResponse } from '../../lib/hesterCopilot';
 import type { CopilotAPI, FocusItem } from '../../../shared/copilot';
 
@@ -78,8 +79,8 @@ export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since,
                   <div className="copilot-digest-section-title">Agent claims</div>
                   {digest.agent_claims.map((c) => (
                     <div className="copilot-digest-claim" key={c.session_id + c.at}>
-                      <span className="copilot-digest-claim-label">Claude says:</span>
-                      {c.summary}
+                      <span className="copilot-digest-claim-label">Agent says:</span>
+                      <AgentMarkdown inline text={c.summary} />
                       <span className="copilot-digest-badge is-unverified" style={{ marginLeft: 6 }}>
                         unverified
                       </span>

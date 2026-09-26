@@ -242,7 +242,8 @@ export interface TileModel {
   chip: { label: string; tone: TileTone };
   /** For cockpit.go_into. */
   agentState: AgentState | TabRunState;
-  summary: { text: string; label: string } | null;
+  /** The agent's own words: `text` as sent (markdown), `preview` plain and short. */
+  summary: { text: string; preview: string; label: string } | null;
   /** Screen-tier agents: the last lines instead of a summary. */
   tail: string[] | null;
   meta: string[];
@@ -333,26 +334,48 @@ export function tileModel(input: TileInput): TileModel[] {
     const needsItem = items.find((i) => NEEDS_ITEM_KINDS.has(i.kind)) ?? null;
     const provider = agent?.provider ?? rt?.provider ?? tab?.provider ?? task?.agent?.provider ?? null;
 
+    // One state source for tiles and the Tabs list: the tab runtime (hooks for
+    // hooked agents, else shell/pattern/quiet) when it knows; the queue's
+    // agent summary only when the runtime doesn't.
     let chip: TileModel['chip'];
     let agentState: AgentState | TabRunState;
+    const rtState = rt && rt.state.state !== 'unknown' ? rt.state : null;
+    const since = (iso: string | null | undefined): number => {
+      const t = iso ? Date.parse(iso) : NaN;
+      return Number.isNaN(t) ? NaN : t;
+    };
+    const idleChip = (): TileModel['chip'] => {
+      const finished = since(agent?.idle_since);
+      if (!Number.isNaN(finished)) return { label: now - finished < 60000 ? 'finished just now' : `finished ${formatDuration(now - finished)} ago`, tone: 'idle' };
+      const idleAt = since(rtState?.since);
+      return { label: Number.isNaN(idleAt) ? 'idle' : `idle ${formatDuration(now - idleAt)}`, tone: 'idle' };
+    };
+    let busyNow = false;
     if (needsItem) {
       chip = { label: needsItem.kind === 'approval' ? 'needs approval' : 'waiting on you', tone: 'needs' };
       agentState = 'waiting';
-    } else if (agent) {
-      agentState = agent.state;
-      if (agent.state === 'busy') {
-        const since = agent.busy_since ? Date.parse(agent.busy_since) : NaN;
-        chip = { label: Number.isNaN(since) ? 'busy' : `busy ${formatDuration(now - since)}`, tone: 'busy' };
-      } else if (agent.state === 'idle') chip = { label: 'idle', tone: 'idle' };
-      else if (agent.state === 'waiting') chip = { label: 'waiting', tone: 'needs' };
-      else chip = { label: 'unknown', tone: 'muted' };
-    } else if (rt) {
-      agentState = rt.state.state;
-      const s = rt.state.state;
-      if (s === 'busy') chip = { label: `busy ${formatDuration(now - Date.parse(rt.state.since))}`, tone: 'busy' };
-      else if (s === 'idle-at-prompt') chip = { label: 'idle', tone: 'idle' };
+    } else if (rtState) {
+      agentState = rtState.state;
+      const s = rtState.state;
+      if (s === 'busy') {
+        busyNow = true;
+        const t = since(agent?.state === 'busy' ? agent.busy_since : null);
+        const from = Number.isNaN(t) ? since(rtState.since) : t;
+        chip = { label: Number.isNaN(from) ? 'busy' : `busy ${formatDuration(now - from)}`, tone: 'busy' };
+      } else if (s === 'idle-at-prompt') chip = idleChip();
       else if (s === 'awaiting-input') chip = { label: 'waiting on you', tone: 'needs' };
       else chip = { label: s, tone: 'muted' };
+    } else if (agent && agent.state !== 'unknown') {
+      agentState = agent.state;
+      if (agent.state === 'busy') {
+        busyNow = true;
+        const t = since(agent.busy_since);
+        chip = { label: Number.isNaN(t) ? 'busy' : `busy ${formatDuration(now - t)}`, tone: 'busy' };
+      } else if (agent.state === 'idle') chip = idleChip();
+      else chip = { label: 'waiting', tone: 'needs' };
+    } else if (agent || rt) {
+      agentState = 'unknown';
+      chip = { label: rt ? `quiet ${formatDuration(rt.state.quiet_ms)}` : 'state unknown', tone: 'muted' };
     } else {
       agentState = 'unknown';
       chip = { label: 'starting', tone: 'muted' };
@@ -361,20 +384,21 @@ export function tileModel(input: TileInput): TileModel[] {
     const fidelity = rt?.fidelity ?? null;
     const screen = fidelity === 'screen';
     const summaryText = agent?.last_summary || task?.summary || null;
-    const summary = !screen && summaryText ? { text: summaryText, label: `${providerName(provider)} says` } : null;
+    const preview = summaryText ? plainPreview(summaryText) : '';
+    const summary = !screen && summaryText ? { text: summaryText, preview, label: `${providerName(provider)} says` } : null;
     const tail = screen && rt && rt.tail.length ? rt.tail : null;
 
     const meta: string[] = [];
     if (agent?.last_tool) meta.push(agent.last_tool);
     if (agent && agent.files_touched_count > 0) meta.push(`${agent.files_touched_count} file${agent.files_touched_count === 1 ? '' : 's'}`);
-    if (task && task.busy_ms > 0) meta.push(`${formatDuration(task.busy_ms)} busy`);
+    // Busy time only while busy (the chip already says idle/finished otherwise).
+    if (busyNow && task && task.busy_ms > 60000) meta.push(`${formatDuration(task.busy_ms)} busy in total`);
     if (task && task.lead !== 'delegate') meta.push(task.lead === 'human' ? 'you lead' : 'plan');
     if (task && !task.confirmed) meta.push('unconfirmed');
     if (task?.agent?.model) meta.push(task.agent.model);
     if (screen) meta.push('screen');
 
-    const title =
-      task?.title && task.title !== '(untitled)' ? task.title : tab?.label ?? agent?.label ?? rt?.label ?? `${providerName(provider)} ${ptyId}`;
+    const title = taskTitle(task) || tab?.label || agent?.label || rt?.label || `${providerName(provider)} ${ptyId}`;
 
     return {
       ptyId,
@@ -477,7 +501,8 @@ export function mergeFeed(input: FeedInput): FeedRow[] {
       kind: 'event',
       severity: 'ambient',
       at: event.at,
-      title: event.text,
+      // Hester's notes embed task titles, which can be raw agent words.
+      title: plainLine(event.text, 140) || 'Task update',
       event,
     });
   });
@@ -581,6 +606,154 @@ export interface SectionBadge {
   ember: boolean;
 }
 
-export function taskNeedsYou(task: CockpitTask): boolean {
-  return task.status === 'waiting' || task.status === 'review';
+/**
+ * Does this task genuinely need you? A waiting agent does; a finished one
+ * awaiting review does only once you've confirmed the task. Unconfirmed
+ * (automatic) tasks are ambient (spec §2.3 ceremony, §7.2).
+ */
+export function taskNeedsYou(task: Pick<CockpitTask, 'status' | 'confirmed'>): boolean {
+  return task.status === 'waiting' || (task.status === 'review' && task.confirmed);
+}
+
+/**
+ * Nav badge for Tasks: ember with the needs-you count when any task needs
+ * you, else a neutral count of open tasks.
+ */
+export function tasksBadge(open: readonly Pick<CockpitTask, 'status' | 'confirmed'>[]): SectionBadge {
+  const n = open.filter(taskNeedsYou).length;
+  return n > 0 ? { count: n, ember: true } : { count: open.length, ember: false };
+}
+
+/**
+ * Nav badge for Ops: failing operations and proposals (a run someone asked
+ * for, awaiting your approval) are ember; auto-detected suggestions are
+ * ambient (spec §7.4, §8.2) and only show as a neutral count.
+ */
+export function opsBadge(input: { failing: number; proposals: number; suggestions: number }): SectionBadge {
+  const needs = input.failing + input.proposals;
+  return needs > 0 ? { count: needs, ember: true } : { count: input.suggestions, ember: false };
+}
+
+// ---------------------------------------------------------------------------
+// Plain text from agent words (titles and previews)
+// ---------------------------------------------------------------------------
+
+const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
+
+function stripInline(line: string): string {
+  let s = line;
+  s = s.replace(/<\/?[A-Za-z][^>]*>/g, ''); // HTML tags
+  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1'); // images -> alt
+  s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1'); // [t](u) -> t
+  s = s.replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1'); // [t][ref] -> t
+  s = s.replace(/<((?:https?|mailto):[^>\s]+)>/g, '$1'); // <autolink>
+  s = s.replace(/(`+)([^`]*?)\1/g, '$2'); // inline code keeps its text
+  s = s.replace(/(\*\*|__)(?=\S)([^]*?\S)\1/g, '$2'); // bold
+  s = s.replace(/~~(?=\S)([^]*?\S)~~/g, '$1'); // strikethrough
+  s = s.replace(/(^|[^\w*])\*(?=\S)([^*]*?\S)\*(?!\w)/g, '$1$2'); // *em*
+  s = s.replace(/(^|[^\w])_(?=\S)([^_]*?\S)_(?!\w)/g, '$1$2'); // _em_ (not snake_case)
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Markdown to plain lines: fenced code blocks (including lee-status) are
+ * dropped with their contents; headings, quotes, list and task markers,
+ * rules, table separators, emphasis, inline-code ticks, links (kept as their
+ * text) and HTML tags are stripped. Blank lines are kept as '' (paragraph
+ * breaks). An unclosed fence (a clipped message) drops the rest.
+ */
+export function stripMarkdown(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  let fence: string | null = null;
+  let lines = text.replace(/\r\n?/g, '\n').split('\n');
+  // Text that starts mid-code (a tail clip) has an odd number of fence lines
+  // and a bare first fence closing code above it: drop through that fence.
+  const fences = lines.map((l, i) => (FENCE_OPEN.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (fences.length % 2 === 1 && /^[ \t]*(`{3,}|~{3,})[ \t]*$/.test(lines[fences[0]]) && lines.slice(0, fences[0]).some((l) => looksLikeCode(l))) {
+    lines = lines.slice(fences[0] + 1);
+  }
+  for (const raw of lines) {
+    const open = FENCE_OPEN.exec(raw);
+    if (fence !== null) {
+      const t = raw.trim();
+      if (open && t[0] === fence[0] && t.length >= fence.length && /^(`+|~+)$/.test(t)) fence = null;
+      continue;
+    }
+    if (open) {
+      fence = open[1];
+      continue;
+    }
+    let line = raw.trim();
+    if (!line) {
+      if (out.length && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+    if (/^([-*_])(\s*\1){2,}$/.test(line)) continue; // rule
+    if (/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(line)) continue; // table separator
+    line = line.replace(/^(>\s?)+/, '');
+    line = line.replace(/^#{1,6}\s+/, '').replace(/\s+#+$/, '');
+    line = line.replace(/^([-*+]|\d{1,3}[.)])\s+/, '');
+    line = line.replace(/^\[[ xX]\]\s+/, '');
+    if (line.startsWith('|') && line.endsWith('|')) line = line.slice(1, -1).split('|').map((c) => c.trim()).filter(Boolean).join(' · ');
+    line = stripInline(line);
+    if (line) out.push(line);
+  }
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
+}
+
+const CODE_KEYWORD = /^(const|let|var|function|def|class|import|export|return|async|await|package|public|private)\s+\S/;
+
+/** Does a (stripped) line look like source code rather than prose? */
+export function looksLikeCode(line: string): boolean {
+  const s = line.trim();
+  if (!s) return false;
+  if (/^(\/\/|\/\*|\*\/|#!|#include\b)/.test(s)) return true;
+  if (/,\s*$/.test(s) && s.split(/\s+/).length <= 4) return true; // a list/object line: "key: value,"
+  if (/\$\{|=>|\)\s*\{|;\s*$|^[)}\]]|[{[(]\s*$|['"`],\s*$|^['"`][^'"`]*['"`],?$/.test(s)) return true;
+  if (CODE_KEYWORD.test(s) && /[=(){};]/.test(s)) return true;
+  if (/^[\w.$[\]]+\s*[-+*/]?=\s*[^=\s]/.test(s)) return true; // x = y, x += 1
+  // Symbol density; `name()` mentions in prose don't count.
+  const sym = (s.replace(/\w\(\)/g, 'x').match(/[{}[\]();=<>$|&\\]/g) ?? []).length;
+  return sym >= 3 && sym / s.length > 0.08;
+}
+
+function clipWords(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max - 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:.–—-]+$/, '')}…`;
+}
+
+/**
+ * A plain-text title from agent words: markdown stripped, code-looking lines
+ * skipped, the first meaningful sentence, at most `max` chars. '' when
+ * nothing usable is left (callers fall back to a label).
+ */
+export function plainTitle(text: string | null | undefined, max = 80): string {
+  const line = stripMarkdown(text).find((l) => l && !looksLikeCode(l) && /[A-Za-z]{2}/.test(l));
+  if (!line) return '';
+  const m = /^(.+?[.!?])(?=\s+\S)/.exec(line);
+  const sentence = m && m[1].length >= 16 ? m[1] : line;
+  return clipWords(sentence.replace(/[:;,]\s*$/, ''), max);
+}
+
+/** The first plain, non-code line, at most `max` chars (no sentence split). */
+export function plainLine(text: string | null | undefined, max = 120): string {
+  const line = stripMarkdown(text).find((l) => l && !looksLikeCode(l));
+  return line ? clipWords(line, max) : '';
+}
+
+/** A plain-text preview: markdown stripped, code dropped, the first few lines joined. */
+export function plainPreview(text: string | null | undefined, maxLines = 3, maxChars = 240): string {
+  const lines = stripMarkdown(text).filter((l) => l && !looksLikeCode(l));
+  return clipWords(lines.slice(0, maxLines).join(' '), maxChars);
+}
+
+/** A task's display title: a user's title as given; an agent/auto title made plain. */
+export function taskTitle(task: Pick<CockpitTask, 'title' | 'title_source'> | null | undefined): string {
+  if (!task || !task.title || task.title === '(untitled)') return '';
+  if (task.title_source === 'user') return task.title;
+  return plainTitle(task.title);
 }

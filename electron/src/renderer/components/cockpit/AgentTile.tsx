@@ -15,6 +15,7 @@ import type { TileModel } from '../../lib/cockpitModel';
 import { closeTask, confirmTask } from '../../lib/hesterCockpit';
 import type { CockpitCtx } from './CockpitHost';
 import { isControlTarget } from './dom';
+import { AgentMarkdown } from './AgentMarkdown';
 
 interface AgentTileProps {
   ctx: CockpitCtx;
@@ -80,11 +81,17 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
           <Icon name="lock" size={11} /> {tile.approval.tool.name}: <code>{tile.approval.tool.preview}</code>
         </div>
       )}
-      {tile.summary && (
-        <div className="cockpit-tile-summary">
-          <span className="cockpit-agent-label">{tile.summary.label}:</span> {tile.summary.text}
-        </div>
-      )}
+      {tile.summary &&
+        (selected ? (
+          <div className="cockpit-tile-summary is-expanded" onDoubleClick={(e) => e.stopPropagation()}>
+            <span className="cockpit-agent-label">{tile.summary.label}:</span>
+            <AgentMarkdown text={tile.summary.text} />
+          </div>
+        ) : (
+          <div className="cockpit-tile-summary">
+            <span className="cockpit-agent-label">{tile.summary.label}:</span> {tile.summary.preview || '(code)'}
+          </div>
+        ))}
       {tile.tail && <pre className="cockpit-tile-tail">{tile.tail.join('\n')}</pre>}
       {tile.meta.length > 0 && <div className="cockpit-tile-meta">{tile.meta.join(' · ')}</div>}
       <div className="cockpit-tile-actions" onClick={(e) => e.stopPropagation()}>

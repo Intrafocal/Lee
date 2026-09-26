@@ -10,6 +10,7 @@
 import React, { useEffect, useState } from 'react';
 import { Icon } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
+import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 
 interface AttentionItemRowProps {
   item: AttentionItem;
@@ -154,8 +155,8 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
       )}
       {!question && !compact && item.text && (
         <div className="copilot-item-text">
-          <span className="copilot-item-text-label">Claude:</span>
-          {item.text}
+          <span className="copilot-item-text-label">{item.source.provider === 'pi' ? 'Pi' : 'Claude'}:</span>
+          <AgentMarkdown text={item.text} />
         </div>
       )}
       <div className="copilot-item-actions">

@@ -9,7 +9,8 @@ import React, { useEffect, useState } from 'react';
 import { Icon } from '../../Icon';
 import { AttentionItemRow } from '../../copilot/AttentionItemRow';
 import type { FeedAction, FeedEntry } from '../../../../shared/cockpit';
-import { formatAge, type FeedRow } from '../../../lib/cockpitModel';
+import { formatAge, plainPreview, type FeedRow } from '../../../lib/cockpitModel';
+import { AgentMarkdown } from '../AgentMarkdown';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
@@ -68,7 +69,7 @@ const KIND_ICONS: Record<string, 'lock' | 'warning' | 'info' | 'bell' | 'check' 
   prepared: 'play',
 };
 
-const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry }> = ({ ctx, entry }) => {
+const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry; selected: boolean }> = ({ ctx, entry, selected }) => {
   const [pending, setPending] = useState<FeedAction | null>(null);
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -104,11 +105,19 @@ const FeedEntryRow: React.FC<{ ctx: CockpitCtx; entry: FeedEntry }> = ({ ctx, en
         <span className="cockpit-row-title">{entry.title}</span>
         <span className="cockpit-muted">{formatAge(entry.updated_at, ctx.now)}</span>
       </div>
-      {entry.text && (
-        <div className={entry.text_is_agent ? 'cockpit-agent-words' : 'cockpit-row-text'}>
-          {entry.text_is_agent && <span className="cockpit-agent-label">Agent says:</span>} {entry.text}
-        </div>
-      )}
+      {entry.text &&
+        (!entry.text_is_agent ? (
+          <div className="cockpit-row-text">{entry.text}</div>
+        ) : selected ? (
+          <div className="cockpit-agent-words is-expanded">
+            <span className="cockpit-agent-label">Agent says:</span>
+            <AgentMarkdown text={entry.text} />
+          </div>
+        ) : (
+          <div className="cockpit-agent-words">
+            <span className="cockpit-agent-label">Agent says:</span> {plainPreview(entry.text) || '(code)'}
+          </div>
+        ))}
       {pending && (
         <div className="cockpit-confirm" onClick={(e) => e.stopPropagation()}>
           {pending.confirm_text && (
@@ -213,7 +222,7 @@ export const FeedSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                 )}
               </>
             )}
-            {row.source === 'lee' && <FeedEntryRow ctx={ctx} entry={row.entry} />}
+            {row.source === 'lee' && <FeedEntryRow ctx={ctx} entry={row.entry} selected={sel?.kind === 'row' && sel.id === row.id} />}
             {row.source === 'hester' && (
               <div className="cockpit-row-head">
                 <Icon name="check" size={12} />

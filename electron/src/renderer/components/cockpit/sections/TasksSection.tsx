@@ -1,13 +1,14 @@
 /**
  * TasksSection - Hester's task records for this workspace (contracts §4.2,
  * §6.3): running, waiting, idle, review, queued, then closed in the last 7
- * days. Confirm, Link…, Accept/Discard, Promote…, Go into, Check in.
+ * days. Confirm, Link…, Accept/Discard, Promote…, Peek, Check in.
  */
 
 import React, { useEffect, useState } from 'react';
 import { Icon } from '../../Icon';
 import type { CockpitTask, TaskStatus } from '../../../../shared/cockpit';
-import { formatAge, formatDuration } from '../../../lib/cockpitModel';
+import { formatAge, formatDuration, plainPreview, taskNeedsYou, taskTitle } from '../../../lib/cockpitModel';
+import { AgentMarkdown } from '../AgentMarkdown';
 import {
   closeTask,
   confirmTask,
@@ -136,16 +137,24 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
     >
       <div className="cockpit-row-head">
         <span className={`cockpit-status st-${task.status}`}>{task.status}</span>
-        <span className="cockpit-row-title">{task.title}</span>
+        <span className="cockpit-row-title" title={task.title}>
+          {taskTitle(task) || task.title}
+        </span>
         {!task.confirmed && <span className="cockpit-tag">unconfirmed</span>}
         {task.accepted === true && <span className="cockpit-tag is-ok">accepted</span>}
       </div>
       <div className="cockpit-row-meta">{meta.join(' · ')}</div>
-      {task.summary && !closed && (
-        <div className="cockpit-agent-words">
-          <span className="cockpit-agent-label">Agent says:</span> {task.summary}
-        </div>
-      )}
+      {task.summary && !closed &&
+        (selected ? (
+          <div className="cockpit-agent-words is-expanded">
+            <span className="cockpit-agent-label">Agent says:</span>
+            <AgentMarkdown text={task.summary} />
+          </div>
+        ) : (
+          <div className="cockpit-agent-words">
+            <span className="cockpit-agent-label">Agent says:</span> {plainPreview(task.summary) || '(code)'}
+          </div>
+        ))}
       {closed && task.outcome && <div className="cockpit-row-text">{task.outcome}</div>}
       {linking ? (
         <LinkPicker ctx={ctx} task={task} onDone={() => setLinking(false)} />
@@ -186,7 +195,7 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
               </button>
             )}
             {tile?.canCheckin && (
-              <button className="cockpit-btn" onClick={() => ctx.openCheckin(tile.ptyId, task.title)}>
+              <button className="cockpit-btn" onClick={() => ctx.openCheckin(tile.ptyId, taskTitle(task) || tile.title)}>
                 Check in
               </button>
             )}
@@ -207,7 +216,7 @@ export const TasksSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     const tile = pty != null ? ctx.tiles.find((x) => x.ptyId === pty) : undefined;
     return {
       id: `task:${t.id}`,
-      title: t.title,
+      title: taskTitle(t) || t.title,
       ptyId: pty,
       open: tile ? () => ctx.goInto(tile.ptyId, 'tabs') : undefined,
       approval: tile?.approval ?? null,
@@ -218,14 +227,14 @@ export const TasksSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     ctx.registerRows(handles);
   });
   const sel = ctx.mode.selected;
-  const waiting = open.filter((t) => t.status === 'waiting' || t.status === 'review').length;
+  const waiting = open.filter(taskNeedsYou).length;
 
   return (
     <section className="cockpit-sec">
       <header className="cockpit-sec-head">
         <h2>Tasks</h2>
         <span className="cockpit-muted">
-          {open.length} open{waiting ? ` · ${waiting} waiting or in review` : ''} · {closed.length} closed this week
+          {open.length} open{waiting ? ` · ${waiting} need${waiting === 1 ? 's' : ''} you` : ''} · {closed.length} closed this week
         </span>
         <span className="cockpit-header-spacer" />
         <button className="cockpit-btn" onClick={() => ctx.openLauncher()}>

@@ -583,6 +583,22 @@
   margin-top: 2px;
 }
 
+/* Selected tile / row: the agent's words in full, as markdown, scrollable. */
+.cockpit-tile-summary.is-expanded,
+.cockpit-agent-words.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: 18em;
+  overflow-y: auto;
+  cursor: auto;
+  user-select: text;
+}
+
+.cockpit-tile-summary.is-expanded .agent-md,
+.cockpit-agent-words.is-expanded .agent-md {
+  margin-top: 2px;
+}
+
 .cockpit-agent-label {
   color: var(--text-muted);
   font-style: italic;
@@ -955,4 +971,10 @@
   .cockpit-agents-hint {
     display: none;
   }
+}
+
+/* Ambient summary rows (e.g. N suggested operations): neutral, clickable. */
+.cockpit-row.is-ambient {
+  cursor: pointer;
+  color: var(--text-secondary);
 }
