@@ -113,10 +113,10 @@ def test_reader_sorts_and_filters(events_dir):
 
 
 def test_record_shape(record):
-    assert record["formula_version"] == 2
+    assert record["formula_version"] == 3
     assert record["workspace"] is None
     assert record["from"] == "2026-09-21T10:00:00.000Z"
-    assert set(record["unavailable"]) == {"background_leverage.accepted", "toil_load.command_repeats"}
+    assert set(record["unavailable"]) == {"background_leverage.reverted", "human_balance.goal_linked"}
 
 
 def test_active_hours_and_peek_rate(record):
@@ -128,7 +128,10 @@ def test_active_hours_and_peek_rate(record):
 
 def test_toil_load(record):
     m = record["metrics"]
-    assert m["toil_load_parts"] == {"ui_ceremony": 1, "snooze": 1, "dismiss": 1, "handoff_start": 1, "repeated_approvals": 2}
+    assert m["toil_load_parts"] == {
+        "ui_ceremony": 1, "snooze": 1, "dismiss": 1, "handoff_start": 1, "repeated_approvals": 2,
+        "command_repeats": 0, "flaky_reruns": 0,
+    }
     assert m["toil_load"] == 3.0
 
 
@@ -224,7 +227,7 @@ def test_cli_write(events_dir, tmp_path):
     lines = (ws / ".hester" / "goals" / "metrics.jsonl").read_text().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["formula_version"] == 2
+    assert rec["formula_version"] == 3
     assert rec["workspace"] == str(ws.resolve())
     assert "peek_rate" in rec["metrics"]
 
