@@ -208,7 +208,7 @@ export const FeedSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                 <AttentionItemRow item={row.item} api={ctx.copilotApi} />
                 {row.item.source.pty_id != null && (
                   <button className="cockpit-btn cockpit-row-go" onClick={() => ctx.goInto(row.item.source.pty_id as number, 'feed')}>
-                    <Icon name="arrow-right" size={11} /> Go into
+                    <Icon name="arrow-right" size={11} /> Peek
                   </button>
                 )}
               </>

@@ -23,7 +23,7 @@ export const AgentTiles: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         <span>Agents</span>
         <span className="cockpit-muted">{tiles.length}</span>
         {needs > 0 && <span className="cockpit-badge is-ember">{needs} need you</span>}
-        <span className="cockpit-agents-hint">h/l select · ⏎ go into · ⇧⌘C new</span>
+        <span className="cockpit-agents-hint">h/l select · ⏎ peek · ⇧⌘C new</span>
       </button>
       {!collapsed && (
         <div className="cockpit-tiles">

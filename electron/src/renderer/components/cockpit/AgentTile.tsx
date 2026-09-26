@@ -2,7 +2,7 @@
  * AgentTile - one agent: state chip, title, the agent's latest words (or its
  * screen tail), meta and actions (contracts §3.5). Approve/Deny and Reply use
  * the v0 queue; Check in shows the exact fixed prompt before anything is
- * typed (C3); Go into opens the terminal.
+ * typed (C3); Peek opens the terminal.
  *
  * Also exports the Reply and Check-in popovers the keyboard map opens.
  */
@@ -130,8 +130,8 @@ export const AgentTile: React.FC<AgentTileProps> = ({ ctx, tile, selected, onSel
             </button>
           </>
         )}
-        <button className="cockpit-btn is-go" disabled={busy} onClick={() => ctx.goInto(tile.ptyId, 'tile')} title="Go into this agent's terminal (Enter)">
-          <Icon name="arrow-right" size={11} /> ⏎
+        <button className="cockpit-btn is-go" disabled={busy} onClick={() => ctx.goInto(tile.ptyId, 'tile')} title="Peek at this agent's terminal (Enter)">
+          <Icon name="arrow-right" size={11} /> Peek <kbd>⏎</kbd>
         </button>
       </div>
     </div>

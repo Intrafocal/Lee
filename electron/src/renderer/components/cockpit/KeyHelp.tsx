@@ -9,7 +9,7 @@ const KEYS: Array<[string, string]> = [
   ['1–6', 'Feed, Tasks, Ops, Someday, Tabs, History'],
   ['j / k, ↓ / ↑', 'Next / previous row'],
   ['h / l, ← / →', 'Previous / next agent tile'],
-  ['Enter', 'Go into the selected agent, or open the row'],
+  ['Enter', 'Peek at the selected agent, or open the row'],
   ['a / d', 'Approve / deny the selected approval'],
   ['r', 'Reply to the selected item'],
   ['c', 'Check in on the selected agent (shows the prompt first)'],

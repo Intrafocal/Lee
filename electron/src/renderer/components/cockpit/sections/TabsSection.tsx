@@ -217,7 +217,7 @@ export const TabsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
               ) : (
                 <div className="cockpit-row-actions" onClick={(e) => e.stopPropagation()}>
                   <button className="cockpit-btn" onClick={() => handles[i].open?.()}>
-                    {row.isAgent ? 'Go into' : 'Open'}
+                    {row.isAgent ? 'Peek' : 'Open'}
                   </button>
                   {canAssign && (
                     <button className="cockpit-btn" onClick={() => setAssigning(row.id)}>

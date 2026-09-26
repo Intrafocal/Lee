@@ -182,7 +182,7 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
             </button>
             {tile && (
               <button className="cockpit-btn" onClick={() => ctx.goInto(tile.ptyId, 'tabs')}>
-                <Icon name="arrow-right" size={11} /> Go into
+                <Icon name="arrow-right" size={11} /> Peek
               </button>
             )}
             {tile?.canCheckin && (
