@@ -96,6 +96,7 @@ assert.deepStrictEqual(edit.tool_input, { file_path: 'src/a.ts' });
 assert.strictEqual(edit.tool_name, 'Edit');
 assert.strictEqual(get('PostToolUseFailure').tool_name, 'Bash');
 assert.strictEqual(get('Stop').last_assistant_message.length, 2000);
+assert.ok(get('Stop').last_assistant_message.startsWith('Done. '), 'a long message keeps its beginning');
 assert.ok(!JSON.stringify(posts).includes('SECRET'), 'no prompt, tool input or user text leaves Pi');
 console.log('ok - hook posts are Claude-shaped, loopback-only, with no prompt or tool input');
 
@@ -139,10 +140,49 @@ console.log('ok - hook posts are Claude-shaped, loopback-only, with no prompt or
   for (const t of ['agent.session_start', 'agent.prompt', 'agent.tool', 'agent.turn_end']) assert.ok(types.includes(t), t);
   const end = seen.find((e) => e.type === 'agent.turn_end');
   assert.strictEqual(end.data.pty_id, 42);
-  assert.ok(end.data.summary.startsWith('y'));
+  assert.ok(end.data.summary.startsWith('Done. '));
   const snap = q.snapshot({ all: true });
   assert.ok(snap.items.some((i) => i.kind === 'review' && i.source.pty_id === 42), 'a review item after the turn');
   console.log('ok - the v0 queue turns Pi posts into agent.prompt / agent.tool / agent.turn_end and a review item');
+}
+
+// A long message that ends with a lee-status block keeps its head and the block.
+{
+  const before = posts.length;
+  server.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  process.env.LEE_API_URL = `http://127.0.0.1:${server.address().port}`;
+  const block = '```lee-status\nstatus: done\nsummary: tests pass\n```';
+  const long = 'Fixed the parser.\n\n```ts\n' + 'const x = 1;\n'.repeat(400) + '```\n\nAll good.\n\n' + block;
+  await fire('message_end', { type: 'message_end', message: { role: 'assistant', content: [
+    { type: 'thinking', thinking: 'SECRET thought' },
+    { type: 'text', text: long },
+  ] } });
+  await fire('agent_settled', { type: 'agent_settled' });
+  const until = Date.now() + 5000;
+  while (posts.length <= before && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
+  server.close();
+  const msg = posts[posts.length - 1].body.last_assistant_message;
+  assert.ok(msg.length <= 2000, `clipped to the cap (${msg.length})`);
+  assert.ok(msg.startsWith('Fixed the parser.'), 'head kept');
+  assert.ok(msg.endsWith(block), 'trailing lee-status block kept');
+  assert.ok(msg.includes('\n\u2026\n```lee-status'), 'ellipsis between head and block');
+  assert.ok(!msg.includes('SECRET'), 'thinking parts are not sent');
+  const { parseLeeStatus } = require(path.join(here, '..', 'dist', 'main', 'copilot', 'hook-payload.js'));
+  const st = parseLeeStatus(msg);
+  assert.ok(st && st.status === 'done', 'the queue still parses the lee-status block: ' + JSON.stringify(st));
+  // A short message passes through unchanged.
+  const before2 = posts.length;
+  server.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  process.env.LEE_API_URL = `http://127.0.0.1:${server.address().port}`;
+  await fire('message_end', { type: 'message_end', message: { role: 'assistant', content: 'Short.\n\n' + block } });
+  await fire('agent_settled', { type: 'agent_settled' });
+  const until2 = Date.now() + 5000;
+  while (posts.length <= before2 && Date.now() < until2) await new Promise((r) => setTimeout(r, 25));
+  server.close();
+  assert.strictEqual(posts[posts.length - 1].body.last_assistant_message, 'Short.\n\n' + block);
+  console.log('ok - long messages keep their beginning plus a trailing lee-status block; thinking is dropped');
 }
 
 // A dead Lee API must not throw into Pi. (Non-loopback URLs fall back to
@@ -153,4 +193,4 @@ await new Promise((r) => setTimeout(r, 300));
 console.log('ok - an unreachable API is swallowed');
 
 fs.rmSync(tmpHome, { recursive: true, force: true });
-console.log('\n4 checks passed');
+console.log('\n5 checks passed');

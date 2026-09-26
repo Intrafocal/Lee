@@ -16,7 +16,8 @@ import * as yaml from 'js-yaml';
 export const PI_EXTENSION = `// Lee relay for Pi lifecycle events. Written by Lee at startup; edits are overwritten.
 // Loaded per session with \`pi --extension <this file>\`. Posts Claude-shaped hook
 // payloads to Lee's loopback API. Never sends prompts or tool input (file paths
-// only); the one exception is the agent's own last message, clipped to 2000 chars.
+// only); the one exception is the agent's own last message (text parts only), clipped to its
+// first 2000 chars plus any trailing lee-status block.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -89,6 +90,23 @@ function messageText(message: unknown): string | null {
   return parts.length > 0 ? parts.join("\\n") : null;
 }
 
+// Keep the beginning of a long message (the queue and tiles read it as a
+// summary). A trailing lee-status block is kept too, after an ellipsis, so the
+// queue can still parse it.
+const LEE_STATUS_TAIL = /(^|\\n)([ \\t]*(\\x60{3,}|~{3,})[ \\t]*lee-status[ \\t]*\\r?\\n[\\s\\S]*?\\r?\\n[ \\t]*\\3[ \\t]*)$/;
+function clipText(raw: string): string {
+  const text = raw.trim();
+  if (text.length <= TEXT_MAX) return text;
+  const m = LEE_STATUS_TAIL.exec(text);
+  const sep = "\\n\u2026\\n";
+  if (m) {
+    const block = m[2].trim();
+    const room = TEXT_MAX - block.length - sep.length;
+    if (room > 0) return text.slice(0, room).trimEnd() + sep + block;
+  }
+  return text.slice(0, TEXT_MAX);
+}
+
 export default function (pi: any) {
   let sessionId: string | null = null;
   let lastText: string | null = null;
@@ -130,7 +148,7 @@ export default function (pi: any) {
     if (text && text.trim()) lastText = text;
   });
   pi.on("agent_settled", (_e: any, ctx: any) => {
-    const text = lastText ? lastText.trim().slice(-TEXT_MAX) : null;
+    const text = lastText ? clipText(lastText) : null;
     lastText = null;
     post("Stop", { session_id: sid(ctx), ...(text ? { last_assistant_message: text } : {}) });
   });
