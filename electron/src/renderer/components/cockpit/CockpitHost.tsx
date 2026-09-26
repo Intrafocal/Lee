@@ -24,7 +24,8 @@ import {
   keyAction,
   mergeFeed,
   runtimeAgentPtys,
-  taskNeedsYou,
+  opsBadge,
+  tasksBadge,
   tileModel,
   type FeedRow,
   type ModelTab,
@@ -587,17 +588,12 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   const badges: NavBadges = {
     feed: { count: needsCount, ember: needsCount > 0 },
-    tasks: (() => {
-      const open = hester.snapshot?.tasks.open ?? [];
-      const n = open.filter(taskNeedsYou).length;
-      return { count: open.length, ember: n > 0 };
-    })(),
-    ops: (() => {
-      const list = ops?.operations ?? [];
-      const bad = list.filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length;
-      const pending = (ops?.proposals.length ?? 0) + (ops?.suggestions.length ?? 0);
-      return { count: bad + pending, ember: bad + pending > 0 };
-    })(),
+    tasks: tasksBadge(hester.snapshot?.tasks.open ?? []),
+    ops: opsBadge({
+      failing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
+      proposals: ops?.proposals.length ?? 0,
+      suggestions: ops?.suggestions.length ?? 0,
+    }),
     someday: { count: hester.snapshot?.someday.open ?? 0, ember: (hester.snapshot?.someday.untriaged_over_7d ?? 0) > 0 },
     tabs: { count: tabs.length, ember: false },
     history: { count: 0, ember: false },

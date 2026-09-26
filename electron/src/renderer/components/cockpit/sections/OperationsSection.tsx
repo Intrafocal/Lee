@@ -168,6 +168,8 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const [running, setRunning] = useState<OperationInfo | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // Suggestions are ambient: one collapsed row until you choose to review them.
+  const [reviewing, setReviewing] = useState(false);
 
   const startRun = (op: OperationInfo) => {
     if (!ctx.api) return;
@@ -277,9 +279,36 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         </div>
       )}
 
-      {suggestions.length > 0 && (
+      {suggestions.length > 0 && !reviewing && (
+        <div className="cockpit-row is-ambient" onClick={() => setReviewing(true)}>
+          <div className="cockpit-row-head">
+            <Icon name="info" size={12} />
+            <span className="cockpit-row-title">
+              {suggestions.length} suggested operation{suggestions.length === 1 ? '' : 's'}
+            </span>
+            <span className="cockpit-muted">detected from project files, not saved yet</span>
+            <span className="cockpit-header-spacer" />
+            <button
+              className="cockpit-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setReviewing(true);
+              }}
+            >
+              Review
+            </button>
+          </div>
+        </div>
+      )}
+
+      {suggestions.length > 0 && reviewing && (
         <div className="cockpit-group">
-          <div className="cockpit-group-title">Suggestions (detected, not saved yet)</div>
+          <div className="cockpit-group-title">
+            Suggestions (detected, not saved yet){' '}
+            <button className="cockpit-btn" onClick={() => setReviewing(false)}>
+              Hide
+            </button>
+          </div>
           {suggestions.map((s) => (
             <div key={s.def.name} className="cockpit-row">
               <label className="cockpit-check">
