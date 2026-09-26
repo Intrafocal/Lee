@@ -2,8 +2,10 @@
 GOALS.md metrics computed from Lee's event log alone (contract section 2.5).
 
 Deterministic; no model. Every metric covers the window ``[from, to)``.
-Lookbacks (repeated approvals: previous 24 h) and lookaheads (capture
-pickup: 14 days) read outside the window where the formula needs it.
+Lookbacks (repeated approvals: previous 24 h; manual command repeats:
+previous 7 days) and lookaheads (capture pickup: 14 days) read outside the
+window where the formula needs it. v3 also reads Cockpit task files
+(``<workspace>/.hester/cockpit/tasks/``) for attributed and accepted agent time.
 """
 
 import json
@@ -12,17 +14,24 @@ import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from .event_reader import iso, read_events
+from .event_reader import iso, parse_ts, read_events
 
 # v2: capture_pickup counts only acting triages (explore/promote/drop, not
 # keep) and leaves out spooled captures that never got a someday_id.
-FORMULA_VERSION = 2
+# v3: attributed_agent_time, background_leverage accepted part, toil_load
+# command repeats and flaky reruns, peek_rate with Cockpit modes,
+# nudge_acceptance, lost_threads.
+FORMULA_VERSION = 3
 
-UNAVAILABLE = ["background_leverage.accepted", "toil_load.command_repeats"]
+UNAVAILABLE = ["background_leverage.reverted", "human_balance.goal_linked"]
 
 LOOKBACK = timedelta(hours=24)
+COMMAND_LOOKBACK = timedelta(days=7)
+COMMAND_REPEAT_MIN = 2
+LOST_THREAD_AGE = timedelta(days=7)
+NUDGE_OUTCOMES = ("fixed", "dismissed", "suppressed", "ignored")
 PICKUP_WINDOW = timedelta(days=14)
 RETURN_MIN_AWAY_MS = 30 * 60 * 1000
 PEEK_MIN_MS = 2000
@@ -134,9 +143,14 @@ class BusyIndex:
 
 
 def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[str, Any]]:
-    """tab.focus intervals per window: until the next tab.focus or window.focus false."""
+    """tab.focus intervals per window: until the next tab.focus or window.focus false.
+
+    ``cockpit.mode`` to ``cockpit`` also ends the interval (the overlay covers
+    the tabs); the next one starts at the first tab.focus after ``workbench``.
+    """
     out: List[Dict[str, Any]] = []
     open_by_window: Dict[Any, Dict[str, Any]] = {}
+    in_cockpit: Set[Any] = set()
 
     def close(window: Any, ts: datetime) -> None:
         cur = open_by_window.pop(window, None)
@@ -147,8 +161,18 @@ def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[st
     for ev in events:
         t = ev.get("type")
         window = ev.get("window_id")
+        if t == "cockpit.mode":
+            to = _data(ev).get("to")
+            if to == "cockpit":
+                close(window, ev["_ts"])
+                in_cockpit.add(window)
+            elif to == "workbench":
+                in_cockpit.discard(window)
+            continue
         if t == "tab.focus":
             close(window, ev["_ts"])
+            if window in in_cockpit:
+                continue
             d = _data(ev)
             open_by_window[window] = {
                 "window_id": window, "tab_id": d.get("tab_id"), "pty_id": d.get("pty_id"),
@@ -184,6 +208,56 @@ def _keys_during(inputs: List[Dict[str, Any]], window: Any, tab_id: Any, start: 
 # ---------------------------------------------------------------------------
 
 
+def _pty_keys_during(inputs: List[Dict[str, Any]], window: Any, pty: Any, start: datetime, end: datetime) -> int:
+    total = 0
+    for ev in inputs:
+        if ev.get("window_id") != window or _data(ev).get("pty_id") != pty:
+            continue
+        d = _data(ev)
+        ts = ev["_ts"]
+        span = timedelta(milliseconds=d.get("span_ms") or 0)
+        if ts > start and ts - span < end:
+            total += int(d.get("keys") or 0)
+    return total
+
+
+def go_into_peeks(events, start, end, focus_peeks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``cockpit.go_into`` a busy agent with no keys before the window's next focus change.
+
+    Going into an idle or waiting agent is a review, not a peek. A go-into
+    that a tab.focus peek already counted (same window and pty, within 5 s)
+    is not counted twice.
+    """
+    inputs = [e for e in events if e.get("type") == "input.counts"]
+    found = []
+    for i, ev in enumerate(events):
+        if ev.get("type") != "cockpit.go_into" or not _in(ev, start, end):
+            continue
+        d = _data(ev)
+        if d.get("agent_state") != "busy":
+            continue
+        window, pty = ev.get("window_id"), d.get("pty_id")
+        stop = end
+        for nxt in events[i + 1:]:
+            if nxt.get("window_id") != window:
+                continue
+            nt = nxt.get("type")
+            if nt == "cockpit.go_into" or (nt == "cockpit.mode" and _data(nxt).get("to") == "cockpit") or (
+                nt == "window.focus" and _data(nxt).get("focused") is False
+            ) or (nt == "tab.focus" and _data(nxt).get("pty_id") != pty):
+                stop = nxt["_ts"]
+                break
+        if any(
+            p["window_id"] == window and p["pty_id"] == pty and abs(_ms(p["start"] - ev["_ts"])) <= 5000
+            for p in focus_peeks
+        ):
+            continue
+        if _pty_keys_during(inputs, window, pty, ev["_ts"], stop) > 0:
+            continue
+        found.append({"window_id": window, "pty_id": pty, "start": ev["_ts"], "end": stop})
+    return found
+
+
 def peeks(events, start, end, busy: BusyIndex) -> List[Dict[str, Any]]:
     inputs = [e for e in events if e.get("type") == "input.counts"]
     found = []
@@ -197,7 +271,97 @@ def peeks(events, start, end, busy: BusyIndex) -> List[Dict[str, Any]]:
         if _keys_during(inputs, iv["window_id"], iv["tab_id"], iv["start"], iv["end"]) > 0:
             continue
         found.append(iv)
-    return found
+    return found + go_into_peeks(events, start, end, found)
+
+
+def command_repeats(events, start, end) -> int:
+    """Commands typed by hand (no operation) whose sig was run by hand >= 2 times in the previous 7 days."""
+    seen: Dict[str, List[datetime]] = defaultdict(list)
+    count = 0
+    for ev in events:
+        if ev.get("type") != "terminal.command":
+            continue
+        d = _data(ev)
+        sig = d.get("sig")
+        if d.get("by") != "user" or d.get("op") is not None or not sig:
+            continue
+        ts = ev["_ts"]
+        if _in(ev, start, end):
+            prior = sum(1 for t in seen[sig] if ts - COMMAND_LOOKBACK <= t < ts)
+            if prior >= COMMAND_REPEAT_MIN:
+                count += 1
+        seen[sig].append(ts)
+    return count
+
+
+def flaky_reruns(events, start, end) -> int:
+    """``operation.run`` whose previous run of the same op and inputs failed."""
+    status: Dict[str, str] = {}
+    for ev in events:
+        if ev.get("type") == "operation.result":
+            d = _data(ev)
+            if d.get("run_id"):
+                status[d["run_id"]] = d.get("status")
+    last_run: Dict[Tuple[Any, Any, Any], str] = {}
+    count = 0
+    for ev in events:
+        if ev.get("type") != "operation.run":
+            continue
+        d = _data(ev)
+        key = (ev.get("workspace"), d.get("op"), d.get("inputs_sig"))
+        prev = last_run.get(key)
+        if prev is not None and _in(ev, start, end) and status.get(prev) == "failed":
+            count += 1
+        if d.get("run_id"):
+            last_run[key] = d["run_id"]
+    return count
+
+
+def nudge_acceptance(window: List[Dict[str, Any]]) -> Tuple[Optional[float], Dict[str, Any]]:
+    per_rule: Dict[str, Dict[str, int]] = defaultdict(lambda: {o: 0 for o in NUDGE_OUTCOMES})
+    for ev in window:
+        if ev.get("type") != "lint.outcome":
+            continue
+        d = _data(ev)
+        outcome = d.get("outcome")
+        if outcome not in NUDGE_OUTCOMES:
+            continue
+        per_rule[str(d.get("rule") or "unknown")][outcome] += 1
+    by_rule: Dict[str, Any] = {}
+    fixed = total = 0
+    for rule, c in sorted(per_rule.items()):
+        n = sum(c.values())
+        fixed += c["fixed"]
+        total += n
+        by_rule[rule] = {"acceptance": _round(c["fixed"] / n) if n else None, "n": n, **c}
+    return (_round(fixed / total) if total else None), by_rule
+
+
+def load_tasks(workspaces: Iterable[str]) -> List[Dict[str, Any]]:
+    """Cockpit task records of these workspaces (read-only)."""
+    from ..cockpit.tasks import CockpitTaskStore
+
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for ws in workspaces:
+        if not ws:
+            continue
+        key = os.path.normpath(str(ws))
+        if key in seen or not os.path.isdir(key):
+            continue
+        seen.add(key)
+        out.extend(CockpitTaskStore(Path(key)).load_all())
+    return out
+
+
+def _task_session_map(tasks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    from ..cockpit.tasks import task_sessions
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for t in tasks:
+        for sid in task_sessions(t):
+            out[sid] = t
+    return out
 
 
 def repeated_approvals(events, start, end) -> int:
@@ -221,12 +385,15 @@ def compute_metrics(
     events: List[Dict[str, Any]],
     start: datetime,
     end: datetime,
+    tasks: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """All section 2.5 metrics over ``[start, end)``.
+    """All section 2.5 metrics (formula v3) over ``[start, end)``.
 
-    ``events`` must be sorted by ts and may extend before ``start`` (24 h
-    lookback) and after ``end`` (14-day capture pickup lookahead).
+    ``events`` must be sorted by ts and may extend before ``start`` (7-day
+    lookback) and after ``end`` (14-day capture pickup lookahead). ``tasks``
+    are Cockpit task records (any workspace), read at computation time.
     """
+    tasks = tasks or []
     window = [e for e in events if _in(e, start, end)]
     hours = active_hours(window, start, end)
     n_hours = len(hours)
@@ -249,6 +416,8 @@ def compute_metrics(
         "dismiss": counts["attention.dismiss"],
         "handoff_start": counts["handoff.start"],
         "repeated_approvals": repeats,
+        "command_repeats": command_repeats(events, start, end),
+        "flaky_reruns": flaky_reruns(events, start, end),
     }
     toil_total = sum(toil_parts.values())
 
@@ -308,10 +477,40 @@ def compute_metrics(
         if surfaced_by_session.get(_data(e).get("session_id"), 0) != int(_data(e).get("interruptions") or 0)
     )
 
-    # background_leverage (busy time only)
+    # background_leverage (busy time; v3 adds the accepted part)
     busy_ms = sum(float(_data(e).get("busy_ms") or 0) for e in window if e.get("type") == "agent.turn_end")
     focus_ms = sum(float(_data(e).get("duration_ms") or 0) for e in focus_ends)
     focus_hours = focus_ms / 3_600_000.0
+
+    # attributed_agent_time and the accepted part (Cockpit task files)
+    session_task = _task_session_map(tasks)
+    attributed_ms = 0.0
+    accepted_ms = 0.0
+    accepted_spend: Dict[str, Dict[str, Any]] = {}
+    for ev in window:
+        if ev.get("type") != "agent.turn_end":
+            continue
+        d = _data(ev)
+        task = session_task.get(d.get("session_id"))
+        if task is None:
+            continue
+        ms = float(d.get("busy_ms") or 0)
+        if task.get("confirmed"):
+            attributed_ms += ms
+        if task.get("accepted") is True and task.get("status") == "done":
+            accepted_ms += ms
+            spend = accepted_spend.setdefault(task["id"], {
+                "task_id": task["id"], "model": (task.get("agent") or {}).get("model"), "busy_ms": 0.0,
+            })
+            spend["busy_ms"] += ms
+    lost = 0
+    for task in tasks:
+        if task.get("status") in ("done", "discarded"):
+            continue
+        updated = parse_ts(task.get("updated_at"))
+        if updated is not None and updated < end - LOST_THREAD_AGE:
+            lost += 1
+    nudge_rate, nudge_by_rule = nudge_acceptance(window)
 
     # device_creative_share
     per_device: Dict[str, Dict[str, float]] = defaultdict(lambda: {"creative": 0, "managing": 0})
@@ -396,7 +595,13 @@ def compute_metrics(
         "focus_sessions": len(focus_ends),
         "focus_interruptions_crosscheck_mismatches": mismatches,
         "background_leverage_busy_ms_per_focus_hour": _round(busy_ms / focus_hours, 0) if focus_hours else None,
+        "background_leverage_accepted_ms_per_focus_hour": _round(accepted_ms / focus_hours, 0) if focus_hours else None,
         "agent_busy_ms": busy_ms,
+        "accepted_busy_ms": accepted_ms,
+        "accepted_tasks": len(accepted_spend),
+        "accepted_task_spend": sorted(accepted_spend.values(), key=lambda r: r["task_id"]),
+        "attributed_agent_time": _round(attributed_ms / busy_ms) if busy_ms else None,
+        "attributed_busy_ms": attributed_ms,
         "focus_ms": focus_ms,
         "device_creative_share": overall_device,
         "device_creative_share_by_device": device_share,
@@ -407,6 +612,9 @@ def compute_metrics(
         "c1_violations": c1,
         "c2_violations": c2,
         "c3_violations": c3,
+        "nudge_acceptance": nudge_rate,
+        "nudge_acceptance_by_rule": nudge_by_rule,
+        "lost_threads": lost,
     }
     return metrics
 
@@ -424,19 +632,29 @@ def run(
     workspace: Optional[str] = None,
     events_dir: Optional[Path] = None,
     now: Optional[datetime] = None,
+    task_workspaces: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
-    """Read the log and compute. Returns the metrics.jsonl record."""
+    """Read the log and compute. Returns the metrics.jsonl record.
+
+    Task files are read from ``task_workspaces`` if given, else from
+    ``workspace``, else from every workspace named by an event in range.
+    """
     now = now or datetime.now(timezone.utc)
     read_until = max(end, min(now, end + PICKUP_WINDOW) + timedelta(seconds=1))
-    events = read_events(since=start - LOOKBACK, until=read_until, directory=events_dir)
+    events = read_events(since=start - COMMAND_LOOKBACK, until=read_until, directory=events_dir)
     events = _filter_workspace(events, workspace)
+    if task_workspaces is None:
+        if workspace:
+            task_workspaces = [workspace]
+        else:
+            task_workspaces = sorted({e["workspace"] for e in events if isinstance(e.get("workspace"), str) and e["workspace"]})
     return {
         "ts": iso(now),
         "from": iso(start),
         "to": iso(end),
         "formula_version": FORMULA_VERSION,
         "workspace": os.path.normpath(workspace) if workspace else None,
-        "metrics": compute_metrics(events, start, end),
+        "metrics": compute_metrics(events, start, end, tasks=load_tasks(task_workspaces)),
         "unavailable": list(UNAVAILABLE),
     }
 

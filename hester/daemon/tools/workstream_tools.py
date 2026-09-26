@@ -10,22 +10,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("hester.tools.workstream")
 
-# Module-level reference, set by init_workstream_tools()
-_orchestrator = None
+# Resolves the WorkstreamStore at call time, set by init_workstream_tools()
+_store_provider = None
 
 
-def init_workstream_tools(ws_store):
-    """Initialize workstream tools with the store from app_state.
+def init_workstream_tools(ws_store_or_provider):
+    """Initialize workstream tools with a store, or a callable returning one.
 
-    Called once at daemon startup from main.py lifespan.
+    The daemon passes a provider that resolves the current request's
+    workspace through the registry, so tools follow the workspace being
+    served instead of the one the daemon booted in.
     """
-    global _orchestrator
-    if ws_store is None:
+    global _store_provider
+    if ws_store_or_provider is None:
         logger.warning("WorkstreamStore not available, workstream tools disabled")
+        _store_provider = None
         return
-    from ..workstream.orchestrator import WorkstreamOrchestrator
-    _orchestrator = WorkstreamOrchestrator(ws_store=ws_store)
+    if callable(ws_store_or_provider):
+        _store_provider = ws_store_or_provider
+    else:
+        _store_provider = lambda: ws_store_or_provider  # noqa: E731
     logger.info("Workstream tools initialized")
+
+
+def _get_orchestrator():
+    if _store_provider is None:
+        return None
+    try:
+        store = _store_provider()
+    except Exception as e:
+        logger.warning(f"Workstream store unavailable: {e}")
+        return None
+    if store is None:
+        return None
+    from ..workstream.orchestrator import WorkstreamOrchestrator
+    return WorkstreamOrchestrator(ws_store=store)
 
 
 async def execute_workstream_create(
@@ -34,6 +53,7 @@ async def execute_workstream_create(
     rationale: str = "",
 ) -> Dict[str, Any]:
     """Create a new workstream in EXPLORATION phase."""
+    _orchestrator = _get_orchestrator()
     if not _orchestrator:
         return {"success": False, "error": "Workstream system not initialized"}
     try:
@@ -62,6 +82,7 @@ async def execute_workstream_set_brief(
     out_of_scope: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Update the brief on an existing workstream."""
+    _orchestrator = _get_orchestrator()
     if not _orchestrator:
         return {"success": False, "error": "Workstream system not initialized"}
     try:
@@ -92,6 +113,7 @@ async def execute_workstream_advance_to_design(
     workstream_id: str,
 ) -> Dict[str, Any]:
     """Finalize brief and advance to DESIGN phase."""
+    _orchestrator = _get_orchestrator()
     if not _orchestrator:
         return {"success": False, "error": "Workstream system not initialized"}
     try:
@@ -111,6 +133,7 @@ async def execute_workstream_list(
     phase: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List existing workstreams."""
+    _orchestrator = _get_orchestrator()
     if not _orchestrator:
         return {"success": False, "error": "Workstream system not initialized"}
     try:

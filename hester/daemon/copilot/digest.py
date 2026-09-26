@@ -2,7 +2,8 @@
 Session-start digest (v1): deterministic, no model.
 
 Leads with **verified** wins only (commits and merges on the default branch,
-decisions answered in the attention queue, Someday items triaged). What an
+decisions answered in the attention queue, operations that passed, Someday
+items triaged). What an
 agent says about its own work ("tests pass") is listed separately under
 ``agent_claims`` with ``verified: false`` and is never a win.
 """
@@ -34,6 +35,7 @@ DIGEST_EVENT_TYPES = {
     "agent.session_start",
     "agent.tool",
     "agent.turn_end",
+    "operation.result",
 }
 
 
@@ -270,6 +272,37 @@ def decision_wins(
     return wins
 
 
+def operation_wins(
+    events: List[Dict[str, Any]],
+    workspace: str,
+    since: datetime,
+    until: datetime,
+) -> List[Dict[str, Any]]:
+    """``operation.result`` with status passed in this workspace: Lee saw the exit code."""
+    wins = []
+    for ev in events:
+        if ev.get("type") != "operation.result" or not (since <= ev["_ts"] < until):
+            continue
+        if not ev.get("workspace") or os.path.normpath(ev["workspace"]) != workspace:
+            continue
+        data = ev.get("data") or {}
+        if data.get("status") != "passed" or not data.get("op"):
+            continue
+        win = {
+            "kind": "operation",
+            "title": f"{data['op']} passed",
+            "ref": data.get("run_id"),
+            "at": iso(ev["_ts"]),
+            "verified": True,
+            "related": False,
+        }
+        readings = [r for r in data.get("readings") or [] if isinstance(r, dict)]
+        if readings:
+            win["readings"] = readings
+        wins.append(win)
+    return wins
+
+
 def agent_claims(
     events: List[Dict[str, Any]],
     sessions: _Sessions,
@@ -378,6 +411,7 @@ def verified_wins(
     focus_n = normalize_focus(focus, ws)
     raw = git_wins(Path(ws), since, until)
     raw += decision_wins(events, sessions, ws, since, until)
+    raw += operation_wins(events, ws, since, until)
     raw += _someday_wins(Path(ws), since, until)
     return _finish(raw, focus_n, only_related)
 
@@ -420,7 +454,12 @@ def build_digest(
     sessions = _Sessions(events)
 
     commits = git_wins(Path(ws), since, until)
-    raw_wins = commits + decision_wins(events, sessions, ws, since, until) + _someday_wins(Path(ws), since, until)
+    raw_wins = (
+        commits
+        + decision_wins(events, sessions, ws, since, until)
+        + operation_wins(events, ws, since, until)
+        + _someday_wins(Path(ws), since, until)
+    )
     wins = _finish(raw_wins, focus_n, only_related)
     claims = _finish(agent_claims(events, sessions, ws, since, until), focus_n, only_related)
 

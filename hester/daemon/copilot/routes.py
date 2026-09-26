@@ -21,6 +21,9 @@ from fastapi.responses import JSONResponse
 
 from ...shared.auth import auth_headers
 from ...shared.workspace import get_current_workspace
+from ..cockpit.tasks import first_line, new_task_id
+from ..cockpit.tasks import to_api as task_to_api
+from ..workspaces.registry import get_registry
 from . import digest as digest_mod
 from . import lee_events
 from . import retro as retro_mod
@@ -172,13 +175,24 @@ def create_copilot_router() -> APIRouter:
 
     @router.post("/someday/{item_id}/triage")
     async def someday_triage(item_id: str, request: Request):
+        task_id = None
         try:
             body = await _json_body(request)
             ws = resolve_workspace(body.get("workspace"))
             note = body.get("note")
             if note is not None and not isinstance(note, str):
                 raise BadRequest("note must be a string")
-            item = SomedayStore(ws).triage(item_id, str(body.get("action") or ""), note=note)
+            action = str(body.get("action") or "")
+            to = body.get("to")
+            if to is not None:
+                if to != "task":
+                    raise BadRequest("to must be 'task'")
+                if action != "promote":
+                    raise BadRequest("to is only valid with action promote")
+                task_id = new_task_id()
+                if not note:
+                    note = f"task:{task_id}"
+            item = SomedayStore(ws).triage(item_id, action, note=note)
         except BadRequest as e:
             return _err(str(e), e.status)
         except SomedayError as e:
@@ -191,7 +205,20 @@ def create_copilot_router() -> APIRouter:
             workspace=str(ws),
             actor=caller_actor(request),
         )
-        return _ok(item.to_dict())
+        if task_id is None:
+            return _ok(item.to_dict())
+        ctx = get_registry().get(ws, source="request")
+        async with ctx.lock:
+            task, _ = ctx.tasks().upsert({
+                "id": task_id,
+                "title": first_line(item.text, 80) or "Someday idea",
+                "status": "queued",
+                "lead": "delegate",
+                "kind": "unknown",
+                "confirmed": True,
+                "origin": {"kind": "someday", "ref": item.id},
+            })
+        return _ok({"item": item.to_dict(), "task": task_to_api(task)})
 
     # ------------------------------------------------------------------ digest
 

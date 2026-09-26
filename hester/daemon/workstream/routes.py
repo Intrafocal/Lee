@@ -5,7 +5,7 @@ Mounted on the Hester daemon as /workstream/.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -74,24 +74,42 @@ class FollowUpRequest(BaseModel):
 # ── Router Factory ────────────────────────────────────────────
 
 def create_workstream_router(
-    ws_store: WorkstreamStore,
+    ws_store: Optional[WorkstreamStore] = None,
     task_store: Any = None,
     bundle_service: Any = None,
+    ws_store_provider: Optional[Callable[[], WorkstreamStore]] = None,
+    bundle_service_provider: Optional[Callable[[], Any]] = None,
 ) -> APIRouter:
-    """Create the workstream router with injected dependencies."""
+    """Create the workstream router with injected dependencies.
+
+    ``ws_store_provider`` resolves the store per request (the daemon passes the
+    request's workspace from the registry); a fixed ``ws_store`` still works.
+    The orchestrator holds no state beyond its stores, so it is built per request.
+    """
+    if ws_store_provider is None:
+        if ws_store is None:
+            raise ValueError("ws_store or ws_store_provider is required")
+        ws_store_provider = lambda: ws_store  # noqa: E731
+    if bundle_service_provider is None:
+        bundle_service_provider = lambda: bundle_service  # noqa: E731
 
     router = APIRouter(prefix="/workstream", tags=["workstream"])
-    orch = WorkstreamOrchestrator(
-        ws_store=ws_store,
-        task_store=task_store,
-        bundle_service=bundle_service,
-    )
+
+    def _store() -> WorkstreamStore:
+        return ws_store_provider()
+
+    def _orch() -> WorkstreamOrchestrator:
+        return WorkstreamOrchestrator(
+            ws_store=_store(),
+            task_store=task_store,
+            bundle_service=bundle_service_provider(),
+        )
 
     # ── CRUD ──────────────────────────────────────────────
 
     @router.post("/")
     async def create_workstream(req: CreateWorkstreamRequest):
-        ws = await orch.create_workstream(
+        ws = await _orch().create_workstream(
             title=req.title,
             objective=req.objective,
             rationale=req.rationale,
@@ -100,24 +118,24 @@ def create_workstream_router(
 
     @router.get("/")
     async def list_workstreams(phase: Optional[str] = None):
-        ws_ids = ws_store.list_all()
+        ws_ids = _store().list_all()
         result = []
         for ws_id in ws_ids:
-            ws = ws_store.get(ws_id)
+            ws = _store().get(ws_id)
             if ws and (phase is None or ws.phase.value == phase):
                 result.append(_ws_response(ws))
         return result
 
     @router.get("/{ws_id}")
     async def get_workstream(ws_id: str):
-        ws = ws_store.get(ws_id)
+        ws = _store().get(ws_id)
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
         return _ws_response(ws)
 
     @router.delete("/{ws_id}")
     async def delete_workstream(ws_id: str):
-        if not ws_store.delete(ws_id):
+        if not _store().delete(ws_id):
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
         return {"status": "deleted", "id": ws_id}
 
@@ -126,7 +144,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/design")
     async def advance_to_design(ws_id: str, req: Optional[PhaseDesignRequest] = None):
         try:
-            ws = await orch.finalize_brief(
+            ws = await _orch().finalize_brief(
                 ws_id,
                 constraints=req.constraints if req else None,
                 out_of_scope=req.out_of_scope if req else None,
@@ -138,7 +156,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/planning")
     async def advance_to_planning(ws_id: str, req: Optional[PhasePlanningRequest] = None):
         try:
-            ws = await orch.finalize_design(
+            ws = await _orch().finalize_design(
                 ws_id,
                 summary=req.summary if req else "",
                 architecture_notes=req.architecture_notes if req else "",
@@ -150,7 +168,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/execution")
     async def advance_to_execution(ws_id: str):
         try:
-            ws = await orch.finalize_planning(ws_id)
+            ws = await _orch().finalize_planning(ws_id)
             return _ws_response(ws)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -158,7 +176,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/advance")
     async def advance_phase(ws_id: str):
         try:
-            ws = await orch.advance_phase(ws_id)
+            ws = await _orch().advance_phase(ws_id)
             return _ws_response(ws)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -166,7 +184,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/paused")
     async def pause_workstream(ws_id: str):
         try:
-            ws = await orch.pause(ws_id)
+            ws = await _orch().pause(ws_id)
             return _ws_response(ws)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -174,7 +192,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/phase/resume")
     async def resume_workstream(ws_id: str):
         try:
-            ws = await orch.resume(ws_id)
+            ws = await _orch().resume(ws_id)
             return _ws_response(ws)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -184,7 +202,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/runbook/tasks")
     async def add_runbook_task(ws_id: str, req: AddTaskRequest):
         try:
-            task = await orch.add_runbook_task(
+            task = await _orch().add_runbook_task(
                 ws_id,
                 title=req.title,
                 goal=req.goal,
@@ -196,7 +214,7 @@ def create_workstream_router(
 
     @router.get("/{ws_id}/runbook")
     async def get_runbook(ws_id: str):
-        ws = ws_store.get(ws_id)
+        ws = _store().get(ws_id)
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
         return {
@@ -207,7 +225,7 @@ def create_workstream_router(
     @router.get("/{ws_id}/next-task")
     async def get_next_task(ws_id: str):
         try:
-            task = await orch.get_next_task(ws_id)
+            task = await _orch().get_next_task(ws_id)
             if not task:
                 return None
             return task.model_dump()
@@ -219,7 +237,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/complete/{task_id}")
     async def complete_task(ws_id: str, task_id: str, req: CompleteTaskRequest):
         try:
-            ws = await orch.complete_task(ws_id, task_id, success=req.success, output=req.output)
+            ws = await _orch().complete_task(ws_id, task_id, success=req.success, output=req.output)
             return _ws_response(ws)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -229,7 +247,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/design/research")
     async def add_research(ws_id: str, req: ResearchRequest):
         try:
-            ws = await orch.add_research(ws_id, req.title, req.source, req.summary)
+            ws = await _orch().add_research(ws_id, req.title, req.source, req.summary)
             return {"status": "added"}
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -237,7 +255,7 @@ def create_workstream_router(
     @router.post("/{ws_id}/design/decision")
     async def record_decision(ws_id: str, req: DecisionRequest):
         try:
-            ws = await orch.record_decision(
+            ws = await _orch().record_decision(
                 ws_id, req.question, req.decision, req.rationale, req.alternatives
             )
             return {"status": "recorded"}
@@ -248,16 +266,16 @@ def create_workstream_router(
 
     @router.post("/{ws_id}/warehouse/bundle")
     async def add_warehouse_bundle(ws_id: str, req: AddBundleRequest):
-        ws = ws_store.get(ws_id)
+        ws = _store().get(ws_id)
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
         ws.add_to_warehouse(req.bundle_id)
-        ws_store.save(ws)
+        _store().save(ws)
         return {"status": "added", "bundle_id": req.bundle_id}
 
     @router.get("/{ws_id}/warehouse")
     async def get_warehouse(ws_id: str):
-        ws = ws_store.get(ws_id)
+        ws = _store().get(ws_id)
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
         return {
@@ -272,7 +290,7 @@ def create_workstream_router(
     async def generate_runbook(ws_id: str):
         """Generate runbook tasks from the design doc using Gemini."""
         try:
-            tasks = await orch.generate_runbook_from_design(ws_id)
+            tasks = await _orch().generate_runbook_from_design(ws_id)
             return {
                 "status": "generated",
                 "task_count": len(tasks),
@@ -288,7 +306,7 @@ def create_workstream_router(
     async def dispatch_task(ws_id: str, task_id: str, req: DispatchRequest):
         """Dispatch a task to an agent with context slice."""
         try:
-            payload = await orch.dispatch_task(
+            payload = await _orch().dispatch_task(
                 ws_id, task_id, req.agent_id, req.agent_type,
             )
             return payload
@@ -299,7 +317,7 @@ def create_workstream_router(
     async def suggest_follow_ups(ws_id: str, task_id: str, req: FollowUpRequest):
         """Get Gemini-suggested follow-up tasks after task completion."""
         try:
-            suggestions = await orch.suggest_follow_up_tasks(
+            suggestions = await _orch().suggest_follow_up_tasks(
                 ws_id, task_id, req.task_output,
             )
             return {
@@ -316,10 +334,10 @@ def create_workstream_router(
     @router.get("/{ws_id}/telemetry")
     async def get_workstream_telemetry(ws_id: str, limit: int = 50):
         """Get recent telemetry events for a workstream."""
-        ws = ws_store.get(ws_id)
+        ws = _store().get(ws_id)
         if not ws:
             raise HTTPException(status_code=404, detail=f"Workstream not found: {ws_id}")
-        events = ws_store.get_telemetry(ws_id, limit=limit)
+        events = _store().get_telemetry(ws_id, limit=limit)
         return {"workstream_id": ws_id, "events": events}
 
     return router
