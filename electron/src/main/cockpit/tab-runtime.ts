@@ -96,6 +96,14 @@ interface TabLocation {
   workspace: string | null;
 }
 
+/** Tab types and providers that are the user's own, never agents (user decision; see renderer cockpitModel.isWallExempt). */
+const OWN_TAB_TYPES = new Set(['hester', 'hester-qa', 'devops']);
+const OWN_PROVIDERS = new Set(['hester']);
+
+function isOwnTab(tab: Pick<TabContext, 'type' | 'provider'>): boolean {
+  return OWN_TAB_TYPES.has(tab.type) || (!!tab.provider && OWN_PROVIDERS.has(tab.provider));
+}
+
 function isoNow(now: number = Date.now()): string {
   return new Date(now).toISOString();
 }
@@ -428,6 +436,9 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
 
   kindOf(ptyId: number, loc: TabLocation | null = this.locate(ptyId)): TabKind {
     const proc = this.host.get(ptyId);
+    // Hester chat and DevOps are the user's own tabs (never walled, never
+    // agents), matching the renderer's isWallExempt().
+    if (loc && isOwnTab(loc.tab)) return proc ? 'tui' : 'other';
     if (this.host.isClaudePty(ptyId) || loc?.tab.type === 'agent' || !!loc?.tab.provider || this.entries.get(ptyId)?.hookSeen) {
       return 'agent';
     }

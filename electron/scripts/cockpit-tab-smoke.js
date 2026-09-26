@@ -228,6 +228,17 @@ async function main() {
     assert.deepStrictEqual(rt.list('/elsewhere'), []);
   });
 
+  await check('runtime: Hester chat and DevOps tabs are own tabs, not agents', () => {
+    const h2 = new FakePty();
+    const rt2 = new TabRuntimeImpl(h2, { now: () => clock });
+    h2.add(91, { name: 'Hester' });
+    h2.add(92, { name: 'DevOps' });
+    const loc = (tab) => ({ window_id: 1, tab, workspace: WS });
+    assert.strictEqual(rt2.kindOf(91, loc({ id: 91, type: 'agent', provider: 'hester', label: 'Hester', ptyId: 91, dockPosition: 'center', state: 'active' })), 'tui');
+    assert.strictEqual(rt2.kindOf(92, loc({ id: 92, type: 'devops', label: 'DevOps', ptyId: 92, dockPosition: 'center', state: 'active' })), 'tui');
+    assert.strictEqual(rt2.kindOf(3, loc({ id: 13, type: 'agent', provider: 'screenbot', label: 'Screenbot', ptyId: 3, dockPosition: 'center', state: 'active' })), 'agent');
+  });
+
   await check('runtime: pattern state for a hook-less agent', () => {
     host.emit('data', 3, 'thinking...\r\n> ');
     clock += 2000;
