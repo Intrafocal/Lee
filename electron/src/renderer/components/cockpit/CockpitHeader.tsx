@@ -14,11 +14,12 @@ interface CockpitHeaderProps {
   copilotApi: CopilotAPI | null;
   toast: { message: string; level: 'info' | 'error' } | null;
   onLaunch: () => void;
+  onExplore: () => void;
   onRun: () => void;
   onHelp: () => void;
 }
 
-export const CockpitHeader: React.FC<CockpitHeaderProps> = ({ workspace, focusActive, copilotApi, toast, onLaunch, onRun, onHelp }) => {
+export const CockpitHeader: React.FC<CockpitHeaderProps> = ({ workspace, focusActive, copilotApi, toast, onLaunch, onExplore, onRun, onHelp }) => {
   const [busy, setBusy] = useState(false);
   const name = workspace.split('/').filter(Boolean).pop() || workspace;
 
@@ -46,6 +47,9 @@ export const CockpitHeader: React.FC<CockpitHeaderProps> = ({ workspace, focusAc
       <span className="cockpit-header-spacer" />
       <button className="cockpit-btn is-primary" onClick={onLaunch} title="New task (n)">
         <Icon name="plus" size={12} /> Task <kbd>n</kbd>
+      </button>
+      <button className="cockpit-btn" onClick={onExplore} title="New exploration (Explore section)">
+        <Icon name="plus" size={12} /> Explore
       </button>
       <button className="cockpit-btn" onClick={onRun} title="Operations (o)">
         <Icon name="play" size={12} /> Run <Icon name="chevron-down" size={10} /> <kbd>o</kbd>

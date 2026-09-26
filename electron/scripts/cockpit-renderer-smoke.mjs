@@ -527,6 +527,12 @@ test('nav: Files sits between Ops and Someday', () => {
   assert.equal(SECTIONS.indexOf('someday'), SECTIONS.indexOf('files') + 1);
 });
 
+test('nav: Explore comes right after Someday; the full order', () => {
+  assert.equal(SECTIONS.indexOf('explore'), SECTIONS.indexOf('someday') + 1);
+  assert.deepEqual([...SECTIONS], ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history']);
+  assert.equal(SECTIONS.length, 9, 'exactly fills the 1–9 number keys');
+});
+
 test('flattenFileTree: expanded dirs inline their children; a filter keeps matches and their folders', () => {
   const d = (path) => ({ name: path.split('/').pop(), path, type: 'directory' });
   const f = (path) => ({ name: path.split('/').pop(), path, type: 'file' });

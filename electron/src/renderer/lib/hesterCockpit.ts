@@ -185,12 +185,71 @@ export function listSomeday(workspace: string, status: 'open' | 'all'): Promise<
   return call<SomedayItem[]>(workspace, 'GET', `/someday?status=${status}`);
 }
 
-export type SomedayTriage = { action: 'explore' } | { action: 'keep' } | { action: 'drop' } | { action: 'promote'; to?: 'task' };
+export type SomedayTriage =
+  | { action: 'explore'; to?: 'explore' }
+  | { action: 'keep' }
+  | { action: 'drop' }
+  | { action: 'promote'; to?: 'task' };
 
 export function triageSomeday(
   workspace: string,
   id: string,
   triage: SomedayTriage,
-): Promise<HesterResult<SomedayItem | { item: SomedayItem; task: CockpitTask }>> {
+): Promise<HesterResult<SomedayItem | { item: SomedayItem; task: CockpitTask } | { item: SomedayItem; exploration: Exploration }>> {
   return call(workspace, 'POST', `/someday/${encodeURIComponent(id)}/triage`, { ...triage, workspace });
+}
+
+// ---------------------------------------------------------------------------
+// Explore (spec §7.5, v-now: section + persistence). Files live in the
+// workspace's .hester/explore/; a deep dive is the Hester chat session
+// `explore-<id>`, seeded by /open and written back after every turn.
+// ---------------------------------------------------------------------------
+
+export type ExplorationStatus = 'active' | 'archived';
+
+export interface Exploration {
+  id: string;
+  workspace: string;
+  title: string;
+  status: ExplorationStatus;
+  seed: string | null;
+  origin: { kind: 'cockpit' | 'someday' | 'hester'; ref: string | null };
+  session_id: string;
+  turns: number;
+  created_at: string;
+  updated_at: string;
+  last_touched_at: string | null;
+  archived_at: string | null;
+  version: number;
+  /** Only on GET /cockpit/explorations/{id}: the file's markdown body (Seed + Log). */
+  body?: string;
+}
+
+export interface ExplorationCreate {
+  title?: string;
+  seed?: string;
+  origin?: { kind: 'cockpit' | 'someday' | 'hester'; ref?: string | null };
+}
+
+export function listExplorations(workspace: string, status: ExplorationStatus | 'all' = 'active'): Promise<HesterResult<Exploration[]>> {
+  return call<Exploration[]>(workspace, 'GET', `/cockpit/explorations?status=${status}`);
+}
+
+export function createExploration(workspace: string, input: ExplorationCreate): Promise<HesterResult<Exploration>> {
+  return call<Exploration>(workspace, 'POST', '/cockpit/explorations', { ...input, workspace });
+}
+
+export function getExploration(workspace: string, id: string): Promise<HesterResult<Exploration>> {
+  return call<Exploration>(workspace, 'GET', `/cockpit/explorations/${encodeURIComponent(id)}`);
+}
+
+export function patchExploration(workspace: string, id: string, body: { title?: string; status?: ExplorationStatus }): Promise<HesterResult<Exploration>> {
+  return call<Exploration>(workspace, 'PATCH', `/cockpit/explorations/${encodeURIComponent(id)}`, { ...body, workspace });
+}
+
+export function openExploration(
+  workspace: string,
+  id: string,
+): Promise<HesterResult<{ exploration: Exploration; session_id: string; seeded: boolean }>> {
+  return call(workspace, 'POST', `/cockpit/explorations/${encodeURIComponent(id)}/open`, { workspace });
 }

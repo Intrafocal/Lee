@@ -74,6 +74,8 @@ export interface TabData extends Tab {
   browserCheckpointReady?: boolean; // True when session+email captured for Frame checkpoint
   // Workstream-specific data (for type='workstream')
   workstreamId?: string;
+  /** Hester chat tabs resumed on a known session (an Explore deep dive), so a second open refocuses it. */
+  hesterSessionId?: string;
   // Machine-specific data (for type='spyglass' or 'bridge')
   machineConfig?: {
     name: string;
@@ -1216,14 +1218,22 @@ const App: React.FC = () => {
   }, []);
 
   // Handle opening a Hester session from the command palette as a full tab
-  const handleOpenHesterTab = useCallback(async (sessionId: string) => {
+  const handleOpenHesterTab = useCallback(async (sessionId: string, label?: string): Promise<number | null> => {
     console.log('Opening Hester session as tab:', sessionId);
 
-    // Spawn a new Hester TUI with the session ID to resume the conversation
-    // This always creates a new tab (doesn't reuse existing) since it's resuming a specific session
+    // Spawn a new Hester TUI with the session ID to resume the conversation.
+    // A labelled open (an Explore deep dive) refocuses its tab if it's still open.
     if (!isElectron) {
       console.warn('Cannot create tab - not running in Electron');
-      return;
+      return null;
+    }
+    if (label) {
+      const existing = tabs.find((t) => t.hesterSessionId === sessionId && t.ptyId != null && t.dockPosition === 'center');
+      if (existing) {
+        setActiveTabId(existing.id);
+        setFocusedPanel('center');
+        return existing.id;
+      }
     }
 
     try {
@@ -1236,23 +1246,27 @@ const App: React.FC = () => {
         const newTab: TabData = {
           id: tabId,
           type: 'agent',
-          label: 'Hester',
+          label: label || 'Hester',
           closable: true,
           ptyId,
           dockPosition: 'center',
           provider: 'hester',
+          ...(label ? { hesterSessionId: sessionId } : {}),
         };
 
         lee.context.recordAction('tab_create', `${tabId}:hester:${sessionId}`);
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(tabId);
         setFocusedPanel('center');
+        return tabId;
       }
+      return null;
     } catch (error) {
       console.error('Failed to spawn Hester with session:', error);
       notify('error', `Couldn't resume that Hester session: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
-  }, [workspace, notify]);
+  }, [workspace, notify, tabs]);
 
   // Handle Ask Hester from file tree context menu
   // autoSubmit defaults to true - set false to pre-populate without sending
@@ -2734,6 +2748,7 @@ const App: React.FC = () => {
           else handlePanelTabSelect(tabId, t.dockPosition);
         }}
         onOpenFile={(path: string) => handleFileOpenRef.current(path)}
+        onOpenHesterSession={(sessionId: string, label: string) => handleOpenHesterTab(sessionId, label)}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
       />
       <StatusBar

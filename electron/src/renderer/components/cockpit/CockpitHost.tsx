@@ -48,6 +48,8 @@ import { FilesSection } from './sections/FilesSection';
 import { TasksSection } from './sections/TasksSection';
 import { OperationsSection } from './sections/OperationsSection';
 import { SomedaySection } from './sections/SomedaySection';
+import { ExploreSection } from './sections/ExploreSection';
+import { openExploration, type Exploration } from '../../lib/hesterCockpit';
 import { TabsSection } from './sections/TabsSection';
 import { HistorySection } from './sections/HistorySection';
 import { isControlTarget, isTypingTarget } from './dom';
@@ -91,6 +93,8 @@ export interface CockpitCtx {
   openOwnTab: (tabId: number) => void;
   /** Open a file the way the Workbench does, then switch to the Workbench. */
   openFile: (path: string) => void;
+  /** Seed an exploration's Hester session and open it as a Hester tab in the Workbench. */
+  openExploration: (exp: Exploration) => Promise<void>;
   focusPty: (ptyId: number) => void;
   notify: (message: string, level?: 'info' | 'error') => void;
   openLauncher: (prefill?: LauncherPrefill) => void;
@@ -112,6 +116,8 @@ interface CockpitHostProps {
   onOpenTab: (tabId: number) => void;
   /** The Workbench's open-file path (App.handleFileOpen). */
   onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
+  /** Open (or refocus) a Hester chat tab resumed on this session (App.handleOpenHesterTab). */
+  onOpenHesterSession?: (sessionId: string, label: string) => Promise<number | null> | void;
   onAskHester: (prompt: string) => void;
 }
 
@@ -154,6 +160,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onCreateTab,
   onOpenTab,
   onOpenFile,
+  onOpenHesterSession,
   onAskHester,
 }) => {
   const state = useCockpitModeState();
@@ -200,6 +207,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   openRef.current = onOpenTab;
   const openFileRef = useRef(onOpenFile);
   openFileRef.current = onOpenFile;
+  const openHesterRef = useRef(onOpenHesterSession);
+  openHesterRef.current = onOpenHesterSession;
 
   const hesterTasks = useMemo(
     () => [...(hester.snapshot?.tasks.open ?? []), ...(hester.snapshot?.tasks.recent_closed ?? [])],
@@ -313,6 +322,29 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         .catch(() => notify('Could not open that file', 'error'));
     },
     [notify],
+  );
+
+  const openExplorationTab = useCallback(
+    async (exp: Exploration) => {
+      const open = openHesterRef.current;
+      if (!open) {
+        notify('Hester tabs are not available here', 'error');
+        return;
+      }
+      const r = await openExploration(workspace, exp.id);
+      if (!r.ok) {
+        notify(r.error, 'error');
+        return;
+      }
+      try {
+        const tabId = await open(r.data.session_id, `Explore: ${exp.title}`.slice(0, 60));
+        if (tabId == null) return;
+        cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
+      } catch {
+        notify('Could not open the deep dive', 'error');
+      }
+    },
+    [workspace, notify],
   );
 
   const focusPty = useCallback(
@@ -432,6 +464,12 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   // ---- popovers, rows, keyboard ----
   const [popover, setPopover] = useState<Popover>(null);
+  // "+ Explore" in the header: go to Explore and focus its new-exploration field.
+  const [exploreNonce, setExploreNonce] = useState(0);
+  const startExplore = useCallback(() => {
+    cockpitModeStore.setSection('explore');
+    setExploreNonce((n) => n + 1);
+  }, []);
   const [drawerFocus, setDrawerFocus] = useState(false);
   const rowsRef = useRef<RowHandle[]>([]);
   const registerRows = useCallback((rows: RowHandle[]) => {
@@ -612,6 +650,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     goInto,
     openOwnTab,
     openFile,
+    openExploration: openExplorationTab,
     focusPty,
     notify,
     openLauncher,
@@ -634,6 +673,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       suggestions: ops?.suggestions.length ?? 0,
     }),
     files: { count: 0, ember: false },
+    explore: { count: 0, ember: false },
     someday: { count: hester.snapshot?.someday.open ?? 0, ember: (hester.snapshot?.someday.untriaged_over_7d ?? 0) > 0 },
     tabs: { count: tabs.length, ember: false },
     history: { count: 0, ember: false },
@@ -657,6 +697,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         copilotApi={copilotApi}
         toast={toast}
         onLaunch={() => openLauncher()}
+        onExplore={startExplore}
         onRun={() => setPopover({ kind: 'run' })}
         onHelp={() => setPopover({ kind: 'help' })}
       />
@@ -679,6 +720,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
             {section === 'ops' && <OperationsSection ctx={ctx} />}
             {section === 'files' && <FilesSection ctx={ctx} />}
             {section === 'someday' && <SomedaySection ctx={ctx} />}
+            {section === 'explore' && <ExploreSection ctx={ctx} focusCreateNonce={exploreNonce} />}
             {section === 'tabs' && <TabsSection ctx={ctx} />}
             {section === 'history' && <HistorySection ctx={ctx} />}
           </div>

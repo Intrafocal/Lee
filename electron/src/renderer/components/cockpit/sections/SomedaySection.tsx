@@ -23,6 +23,7 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const [asExplore, setAsExplore] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [links, setLinks] = useState<Record<string, string>>({});
+  const [explored, setExplored] = useState<Record<string, string>>({});
 
   const load = useCallback(() => {
     listSomeday(ctx.workspace, showAll ? 'all' : 'open').then((r) => {
@@ -80,6 +81,13 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
           setLinks((l) => ({ ...l, [item.id]: task!.id }));
           ctx.notify(`Task queued: ${task.title}`);
           ctx.hester.refresh();
+        }
+      }
+      if (t.action === 'explore' && 'to' in t && t.to === 'explore') {
+        const exp = r.data && typeof r.data === 'object' && 'exploration' in r.data ? r.data.exploration : null;
+        if (exp) {
+          setExplored((l) => ({ ...l, [item.id]: exp.id }));
+          ctx.notify(`Exploration started: ${exp.title}`);
         }
       }
       if (then) await then();
@@ -151,6 +159,7 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         {list.map((item, i) => {
           const open = item.status === 'open';
           const linked = links[item.id] ?? (item.triage?.note?.startsWith('task:') ? item.triage.note.slice(5) : null);
+          const exploration = explored[item.id] ?? (item.triage?.note?.startsWith('explore:') ? item.triage.note.slice(8) : null);
           return (
             <div
               key={item.id}
@@ -176,11 +185,27 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                     → task
                   </button>
                 )}
+                {exploration && (
+                  <button
+                    className="cockpit-link"
+                    onClick={() => {
+                      ctx.setSection('explore');
+                      ctx.selectRow(`explore:${exploration}`);
+                    }}
+                  >
+                    → exploration
+                  </button>
+                )}
               </div>
               {open && (
                 <div className="cockpit-row-actions" onClick={(e) => e.stopPropagation()}>
-                  <button className="cockpit-btn" disabled={busy === item.id} onClick={() => void triage(item, { action: 'explore' })}>
-                    Explore
+                  <button
+                    className="cockpit-btn"
+                    disabled={busy === item.id}
+                    title="Start a durable exploration seeded from this idea (Explore section)"
+                    onClick={() => void triage(item, { action: 'explore', to: 'explore' })}
+                  >
+                    Promote → Explore
                   </button>
                   <button className="cockpit-btn" disabled={busy === item.id || !ctx.api} onClick={() => void planWithAgent(item)}>
                     <Icon name="agent" size={11} /> Plan with agent

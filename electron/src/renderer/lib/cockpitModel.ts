@@ -18,10 +18,10 @@ import type {
   TabRuntimeInfo,
 } from '../../shared/cockpit';
 
-export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'files' | 'someday' | 'tabs' | 'history';
+export type SectionId = 'copilot' | 'feed' | 'tasks' | 'ops' | 'files' | 'someday' | 'explore' | 'tabs' | 'history';
 
 /** Nav order; number keys 1..n follow it. Copilot (Hester) is always first. */
-export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'tabs', 'history'];
+export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history'];
 
 /** Where the Cockpit lands when nothing is remembered for the workspace. */
 export const DEFAULT_SECTION: SectionId = 'feed';
@@ -33,6 +33,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   ops: 'Ops',
   files: 'Files',
   someday: 'Someday',
+  explore: 'Explore',
   tabs: 'Tabs',
   history: 'History',
 };

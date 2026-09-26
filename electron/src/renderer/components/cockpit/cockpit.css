@@ -453,6 +453,16 @@
   opacity: 1;
 }
 
+/* Explore section */
+
+.cockpit-explore-notes {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* Copilot section (Hester's home; replaced the right rail) */
 
 .cockpit-brief-card {
