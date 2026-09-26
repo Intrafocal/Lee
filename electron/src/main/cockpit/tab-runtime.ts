@@ -110,7 +110,7 @@ interface TabLocation {
 
 /** Tab types and providers that are the user's own, never agents (user decision; see renderer cockpitModel.isWallExempt). */
 const OWN_TAB_TYPES = new Set(['hester', 'hester-qa', 'devops']);
-const OWN_PROVIDERS = new Set(['hester']);
+const OWN_PROVIDERS = new Set(['hester', 'devops']);
 
 function isOwnTab(tab: Pick<TabContext, 'type' | 'provider'>): boolean {
   return OWN_TAB_TYPES.has(tab.type) || (!!tab.provider && OWN_PROVIDERS.has(tab.provider));

@@ -664,7 +664,7 @@ async function main() {
     relay.stop();
   });
 
-  await check('relay: a non-ASCII workspace path goes in ?workspace= (a header would throw and block the spool)', async () => {
+  await check('relay: a non-ASCII workspace path is percent-encoded in X-Lee-Workspace (a raw header would throw and block the spool)', async () => {
     const got = [];
     const server = http.createServer((req, res2) => {
       got.push({ url: req.url, ws: req.headers['x-lee-workspace'] });
@@ -683,8 +683,8 @@ async function main() {
     r2.stop();
     assert.strictEqual(out.ok, true, JSON.stringify(out));
     assert.strictEqual(got.length, 1, JSON.stringify(out));
-    assert.strictEqual(got[0].ws, undefined);
-    assert.strictEqual(got[0].url, `/cockpit/tasks?workspace=${encodeURIComponent(uni)}`);
+    assert.strictEqual(got[0].ws, encodeURI(uni));
+    assert.strictEqual(got[0].url, '/cockpit/tasks');
   });
 
   await check('create-tab fallback: v0 system:create-tab when no bridge answers', async () => {
