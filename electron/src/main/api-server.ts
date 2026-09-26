@@ -31,6 +31,7 @@ import {
 import { LeeContext } from '../shared/context';
 import type { Principal } from '../shared/copilot';
 import { registerQueueRoutes } from './copilot/queue-routes';
+import { cockpitBus } from './cockpit/cockpit-bus';
 
 export interface APIServerConfig {
   port: number;
@@ -1040,11 +1041,19 @@ export class APIServer {
             return this.handleStatusCommand(action, params, res);
           case 'browser':
             return await this.handleBrowserCommand(action, params, res);
-          default:
+          default: {
+            // Copilot v2 domains ('tab', 'ops') register on the cockpit bus.
+            const cockpitDomain = cockpitBus.getCommandDomain(domain);
+            if (cockpitDomain) {
+              const out = await cockpitDomain(action, params, res.locals.principal as Principal | undefined);
+              res.status(out.status).json(out.body);
+              return;
+            }
             res.status(400).json({
               success: false,
-              error: `Unknown domain: ${domain}. Use: system, editor, tui, panel, status, browser`,
+              error: `Unknown domain: ${domain}. Use: system, editor, tui, panel, status, browser, tab, ops`,
             });
+          }
         }
       } catch (error) {
         res.status(500).json({
@@ -1403,6 +1412,7 @@ export class APIServer {
       });
     });
     registerQueueRoutes(this.app, { ptyManager: this.ptyManager });
+    cockpitBus.setExpressApp(this.app);
 
   }
 
