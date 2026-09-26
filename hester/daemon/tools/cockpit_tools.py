@@ -71,7 +71,10 @@ def _result(out: Dict[str, Any], message: Optional[str] = None) -> Dict[str, Any
     body = out["body"]
     if out["status"] >= 400 or body.get("success") is False:
         return {"success": False, "error": body.get("error") or f"HTTP {out['status']}"}
-    result = {"success": True, "data": body.get("data")}
+    # Lee's `tab` domain and most `ops` actions wrap results in {success, data};
+    # `ops run`/`propose` return the OpRunResult itself (proposal_id, run, ...).
+    data = body["data"] if "data" in body else {k: v for k, v in body.items() if k != "success"}
+    result = {"success": True, "data": data}
     if message:
         result["message"] = message
     return result
