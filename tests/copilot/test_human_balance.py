@@ -91,4 +91,4 @@ def test_compute_metrics_includes_human_balance():
     m = metrics.compute_metrics(events, T0, at(60), tasks=tasks, goals=GOALS)
     assert m["human_balance"] == round(10 / 30, 3)
     assert "human_balance_ms" in m and "human_balance_by_goal" in m
-    assert metrics.FORMULA_VERSION == 4 and "human_balance.goal_linked" not in metrics.UNAVAILABLE
+    assert metrics.FORMULA_VERSION == 5 and "human_balance.goal_linked" not in metrics.UNAVAILABLE

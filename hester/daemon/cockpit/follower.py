@@ -529,6 +529,9 @@ class EventFollower:
             for key in ("summary", "lee_status", "last_checkin_at"):
                 if not dst.get(key) and src.get(key):
                     dst[key] = src[key]
+            # the file count at the agent's first report (0 is a real value)
+            if dst.get("files_at_first_report") is None and src.get("files_at_first_report") is not None:
+                dst["files_at_first_report"] = src["files_at_first_report"]
             if dst.get("title_source") == "auto" and src.get("title_source") == "agent" and src.get("title"):
                 dst["title"], dst["title_source"] = src["title"], "agent"
             if is_open(dst) and src.get("status") in ("waiting", "idle", "review"):

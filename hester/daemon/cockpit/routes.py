@@ -30,6 +30,7 @@ from .tasks import (
     TaskError,
     TaskNotFound,
     apply_derived,
+    derive_inputs_key,
     is_open,
     iso_s,
     open_sort_key,
@@ -200,7 +201,13 @@ def create_cockpit_router() -> APIRouter:
             since = _int(since_version, -1, -1, 2**62, "since_version")
         except BadRequest as e:
             return _err(str(e), e.status)
-        version = ctx.tasks().counter.get()
+        # The version also moves when the local date or GOALS.md changes (derived quadrants depend on them).
+        key = derive_inputs_key(ctx.path)
+        counter = ctx.tasks().counter
+        version, seen = await asyncio.to_thread(counter.state)
+        if seen != key:
+            async with ctx.lock:
+                version = await asyncio.to_thread(counter.sync_inputs, key)
         if since >= 0 and since == version:
             return _ok(ctx, {"unchanged": True, "version": version})
         snap = await asyncio.to_thread(build_snapshot, ctx)
@@ -222,7 +229,10 @@ def create_cockpit_router() -> APIRouter:
     async def cockpit_task(task_id: str):
         try:
             ctx = context_for()
-            return _ok(ctx, to_api(ctx.tasks().require(task_id)))
+            task = ctx.tasks().require(task_id)
+            if is_open(task):
+                apply_derived(task, workspace_goals(ctx.path), saving=False)
+            return _ok(ctx, to_api(task))
         except BadRequest as e:
             return _err(str(e), e.status)
         except TaskError as e:

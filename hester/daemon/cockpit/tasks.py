@@ -203,6 +203,16 @@ def to_api(task: Dict[str, Any]) -> Dict[str, Any]:
 QUADRANT_RANK = {"Q1": 0, "Q2": 1, "Q3": 2, None: 3, "Q4": 4}
 
 
+# The zone "today" is judged in for due dates: None is the machine's local
+# zone (tests set a fixed one).
+LOCAL_TZ = None
+
+
+def local_date(now: datetime):
+    """The calendar date of ``now`` in the local zone (``LOCAL_TZ``)."""
+    return parse_time(now).astimezone(LOCAL_TZ).date()
+
+
 def _due_date(value: Any):
     if not isinstance(value, str) or not value.strip():
         return None
@@ -211,7 +221,7 @@ def _due_date(value: Any):
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except ValueError:
         dt = parse_time(s)
-        return dt.date() if dt else None
+        return dt.astimezone(LOCAL_TZ).date() if dt else None
 
 
 def derive(task: Dict[str, Any], goals: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -242,7 +252,7 @@ def derive(task: Dict[str, Any], goals: List[Dict[str, Any]], now: Optional[date
             urgency = {"signal": "agent-waiting", "ref": None}
         elif is_open(task) and origin.get("kind") == "operation":
             urgency = {"signal": "op-failure", "ref": origin.get("ref")}
-        elif due is not None and due <= now.date() + timedelta(days=1):
+        elif due is not None and due <= local_date(now) + timedelta(days=1):
             urgency = {"signal": "due", "ref": due.isoformat()}
     urgent = urgency is not None
 
@@ -467,6 +477,37 @@ class VersionCounter:
         atomic_write(self.path, json.dumps(state))
         return v + 1
 
+    def state(self) -> Tuple[int, Optional[str]]:
+        """``(version, inputs key last seen)``."""
+        data = self._read()
+        v = data.get("version")
+        return (v if isinstance(v, int) else 0), data.get("inputs")
+
+    def sync_inputs(self, key: str) -> int:
+        """
+        The version, bumped first when ``key`` (what derived fields depend on
+        besides task writes: the local date and GOALS.md) differs from the one
+        last seen, so ``since_version`` never hides a due-date or GOALS.md change.
+        """
+        state = self._read()
+        v = state.get("version") if isinstance(state.get("version"), int) else 0
+        if state.get("inputs") == key:
+            return v
+        state["version"] = v + 1
+        state["inputs"] = key
+        atomic_write(self.path, json.dumps(state))
+        return v + 1
+
+
+def derive_inputs_key(workspace: Path, now: Optional[datetime] = None) -> str:
+    """The local date and GOALS.md (mtime_ns, size): the non-task inputs of ``derive``."""
+    try:
+        st = (Path(workspace) / "GOALS.md").stat()
+        goals = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        goals = "none"
+    return f"{local_date(now or utc_now()).isoformat()}|{goals}"
+
 
 # ---------------------------------------------------------------------------
 # Store
@@ -567,7 +608,12 @@ class CockpitTaskStore:
         elif status == "closed":
             tasks = [t for t in tasks if not is_open(t)]
         tasks.sort(key=lambda t: (str(t.get("updated_at") or ""), t["id"]), reverse=True)
-        return [to_api(t) for t in tasks[: max(0, limit)]]
+        tasks = tasks[: max(0, limit)]
+        if any(is_open(t) for t in tasks):
+            # quadrant/urgency as of now (a due date can come due without a save)
+            goals, now = workspace_goals(self.workspace), utc_now()
+            tasks = [apply_derived(t, goals, now, saving=False) if is_open(t) else t for t in tasks]
+        return [to_api(t) for t in tasks]
 
     def save(self, task: Dict[str, Any], body: Optional[str] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
         """Write the task (bumps its version, updated_at and the workspace version)."""

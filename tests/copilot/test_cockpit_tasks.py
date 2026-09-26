@@ -156,7 +156,8 @@ def test_snapshot_version_and_per_workspace_isolation(cockpit_env):
     env = cockpit_env
     c = env.client
     snap = c.get("/cockpit/snapshot", headers=hdr(env.a)).json()["data"]
-    assert snap["version"] == 0 and snap["tasks"]["open"] == []
+    # the first snapshot records the date/GOALS.md inputs (one bump)
+    assert snap["version"] == 1 and snap["tasks"]["open"] == []
     assert snap["someday"] == {"open": 0, "untriaged_over_7d": 0}
     assert snap["readings"] == {"latest": []}
 
@@ -165,15 +166,15 @@ def test_snapshot_version_and_per_workspace_isolation(cockpit_env):
     c.post("/cockpit/tasks", headers=hdr(env.b), json={"title": "B only"})
 
     snap = c.get("/cockpit/snapshot", headers=hdr(env.a)).json()["data"]
-    assert snap["workspace"] == str(env.a) and snap["version"] == 2
+    assert snap["workspace"] == str(env.a) and snap["version"] == 3
     assert [t["title"] for t in snap["tasks"]["open"]] == ["A running", "A queued"]
     assert [e["kind"] for e in snap["tasks"]["recent_events"]] == ["created", "created"]
-    r = c.get("/cockpit/snapshot", headers=hdr(env.a), params={"since_version": 2}).json()["data"]
-    assert r == {"unchanged": True, "version": 2}
+    r = c.get("/cockpit/snapshot", headers=hdr(env.a), params={"since_version": 3}).json()["data"]
+    assert r == {"unchanged": True, "version": 3}
 
     c.post(f"/cockpit/tasks/{rid}/close", headers=hdr(env.a), json={"status": "done"})
-    snap = c.get("/cockpit/snapshot", headers=hdr(env.a), params={"since_version": 2}).json()["data"]
-    assert snap["version"] == 3 and [t["id"] for t in snap["tasks"]["recent_closed"]] == [rid]
+    snap = c.get("/cockpit/snapshot", headers=hdr(env.a), params={"since_version": 3}).json()["data"]
+    assert snap["version"] == 4 and [t["id"] for t in snap["tasks"]["recent_closed"]] == [rid]
 
     assert [t["title"] for t in c.get("/cockpit/tasks", headers=hdr(env.b)).json()["data"]] == ["B only"]
     # a device token may read too

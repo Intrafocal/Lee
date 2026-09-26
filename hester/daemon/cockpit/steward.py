@@ -22,6 +22,8 @@ import os
 import re
 import secrets
 import tempfile
+import textwrap
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -37,8 +39,24 @@ SURFACES = ("launch-suggest", "what-next", "evaluate", "lint-ask", "rail-steer",
 STEER_SURFACES = frozenset({"launch-suggest", "what-next", "evaluate", "lint-ask", "rail-steer", "goal-edit"})
 ABOUT_KINDS = ("task", "exploration", "goal", "lint", "feed", "tile", "operation")
 STEER_PREFIXES = (
-    "keep going", "continue", "go ahead", "stop", "wait", "tell it", "tell the agent", "ask it", "have it",
-    "start", "now ", "please ", "instead", "don't", "do not", "switch to", "focus on",
+    "keep going", "continue", "go ahead", "stop", "wait", "tell it", "tell the agent", "ask it", "ask the agent",
+    "have it", "get it to", "start", "now", "please", "instead", "don't", "do not", "switch to", "focus on",
+)
+# Each prefix must end at a word boundary ("stop now" steers, "Stopwatch?" asks).
+_STEER_RE = re.compile(r"^(?:" + "|".join(re.escape(p) for p in STEER_PREFIXES) + r")\b")
+# A question ("...?") steers only when it asks to relay something to the agent.
+_QUESTION_STEER_RE = re.compile(
+    r"^(?:(?:can|could|would|will) you (?:please )?|please )?"
+    r"(?:tell it|tell the agent|ask it|ask the agent|have it|get it to)\b"
+)
+# Tools a steward call may use: observe and read only. No writes (files, docs,
+# GOALS.md), no bash or git writes, devops, ui_control, tab input or task
+# orchestration. The agent enforces it at declaration and at call time.
+STEWARD_TOOLS: Tuple[str, ...] = (
+    "read_file", "search_files", "search_content", "list_directory",
+    "git_status", "git_diff", "git_log", "git_branch",
+    "semantic_doc_search", "get_context_bundle", "list_context_bundles",
+    "cockpit_tasks", "knowledge_notes", "lee_tabs", "lee_tab_read", "lee_operations", "lee_operation_result",
 )
 RAIL_STEER_INSTRUCTION = (
     "The user wants to steer the agent working on this task. End with a fenced `lee-steer` block holding "
@@ -220,8 +238,12 @@ def classify(question: str, about_kind: Optional[str], task: Optional[Dict[str, 
     """'steer' only for a task/tile with a live agent and a question that reads as an instruction to it."""
     if about_kind not in ("task", "tile") or live_pty(task) is None:
         return "ask"
-    q = (question or "").strip().lower()
-    return "steer" if any(q.startswith(p) for p in STEER_PREFIXES) else "ask"
+    q = " ".join((question or "").strip().lower().replace("’", "'").split())
+    if not q:
+        return "ask"
+    if q.endswith("?"):
+        return "steer" if _QUESTION_STEER_RE.match(q) else "ask"
+    return "steer" if (_STEER_RE.match(q) or _QUESTION_STEER_RE.match(q)) else "ask"
 
 
 # ---------------------------------------------------------------------------
@@ -230,16 +252,66 @@ def classify(question: str, about_kind: Optional[str], task: Optional[Dict[str, 
 
 
 def _items(block: str) -> List[str]:
-    items: List[str] = []
+    """
+    The top-level ``- `` items of a block, each as its own dedented one-item
+    YAML list (continuation lines keep their relative indentation, so
+    block-style mappings and multi-line flow mappings survive).
+    """
+    items: List[List[str]] = []
+    base: Optional[int] = None
     for line in block.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             continue
-        if stripped.startswith("- "):
-            items.append(stripped[2:].strip())
+        indent = len(line) - len(line.lstrip())
+        is_item = line.lstrip().startswith("- ")
+        if is_item and (base is None or indent <= base):
+            base = indent
+            items.append([line])
+        elif items and indent > (base or 0):
+            items[-1].append(line)
         elif items:
-            items[-1] += " " + stripped
-    return items
+            # a flush-left continuation (e.g. of a flow mapping)
+            items[-1].append(" " * ((base or 0) + 2) + line.lstrip())
+    return [textwrap.dedent("\n".join(lines)) for lines in items]
+
+
+# Free-text keys whose unquoted values may carry a colon ("label: Spike: defer mDNS").
+_TOLERANT_RE = re.compile(
+    r"(?P<key>\b(?:label|title|text|prompt|seed)[ \t]*:[ \t]+)(?![\"'\[{|>])"
+    r"(?P<value>[^\n]+?)(?=[ \t]*,[ \t]*[A-Za-z_]+[ \t]*:|[ \t]*\}|[ \t]*$)",
+    re.MULTILINE,
+)
+
+
+def _tolerant(text: str) -> str:
+    """Quote free-text values; deterministic (a JSON string is a YAML double-quoted scalar)."""
+    return _TOLERANT_RE.sub(lambda m: m.group("key") + json.dumps(m.group("value").strip(), ensure_ascii=False), text)
+
+
+def _load_item(raw: str) -> Any:
+    for candidate in (raw, _tolerant(raw)):
+        try:
+            data = yaml.safe_load(candidate)
+        except yaml.YAMLError:
+            continue
+        if isinstance(data, list) and len(data) == 1:
+            data = data[0]
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _proposal_items(block: str) -> List[Any]:
+    """The whole block as YAML (block list, flow list, JSON), else item by item with a tolerant retry."""
+    try:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError:
+        data = None
+    if isinstance(data, dict):
+        data = data.get("proposals") if isinstance(data.get("proposals"), list) else [data]
+    if isinstance(data, list) and any(isinstance(x, dict) for x in data):
+        return data
+    return [_load_item(raw) for raw in _items(block)]
 
 
 def _text_param(value: Any) -> Optional[str]:
@@ -295,11 +367,7 @@ def parse_proposals(text: str, origin: Optional[Dict[str, Any]] = None) -> Tuple
     proposals: List[Dict[str, Any]] = []
     if not blocks:
         return clean, proposals
-    for raw in _items(blocks[-1]):
-        try:
-            item = yaml.safe_load(raw)
-        except yaml.YAMLError:
-            continue
+    for item in _proposal_items(blocks[-1]):
         if not isinstance(item, dict):
             continue
         action = item.get("action")
@@ -342,18 +410,38 @@ def parse_steer(text: str) -> Tuple[str, Optional[str]]:
 # ---------------------------------------------------------------------------
 
 
+MAX_PROPOSAL_ROWS = 2000
+# proposals.jsonl is written from worker threads (asyncio.to_thread); one lock
+# for every workspace's file keeps appends and trims whole.
+_STORE_LOCK = threading.RLock()
+
+
 class ProposalStore:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, max_rows: int = MAX_PROPOSAL_ROWS):
         self.path = Path(workspace) / PROPOSALS_FILE
+        self.max_rows = max_rows
 
     def _append(self, row: Dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(row, separators=(",", ":")) + "\n")
+        with _STORE_LOCK:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row, separators=(",", ":")) + "\n")
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+            self._trim()
+
+    def _trim(self) -> None:
+        """Keep the newest ``max_rows`` lines (atomic rewrite, only when over)."""
         try:
-            os.chmod(self.path, 0o600)
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
         except OSError:
-            pass
+            return
+        if len(lines) <= self.max_rows:
+            return
+        atomic_write(self.path, "".join(lines[-self.max_rows:]))
 
     def rows(self) -> List[Dict[str, Any]]:
         out = []
@@ -391,15 +479,16 @@ class ProposalStore:
             raise StewardError("invalid proposal id")
         if outcome not in ("accepted", "dismissed"):
             raise StewardError("outcome must be accepted or dismissed")
-        hit = self.find(proposal_id)
-        if hit is None:
-            raise StewardError("not found", 404)
-        answer, proposal = hit
-        row = {
-            "kind": "outcome", "at": iso(now), "proposal_id": proposal_id, "outcome": outcome,
-            "action": proposal.get("action"), "request_id": answer.get("request_id"), "surface": answer.get("surface"),
-        }
-        self._append(row)
+        with _STORE_LOCK:
+            hit = self.find(proposal_id)
+            if hit is None:
+                raise StewardError("not found", 404)
+            answer, proposal = hit
+            row = {
+                "kind": "outcome", "at": iso(now), "proposal_id": proposal_id, "outcome": outcome,
+                "action": proposal.get("action"), "request_id": answer.get("request_id"), "surface": answer.get("surface"),
+            }
+            self._append(row)
         return row
 
 
@@ -419,13 +508,21 @@ def read_goals_text(workspace: Path) -> str:
         return ""
 
 
+def _looks_like_goals(lang: str, body: str) -> bool:
+    return lang.lower() not in ("lee-proposals", "lee-steer") and ("### G" in body or body.lstrip().startswith("# "))
+
+
+def strip_goals_file(text: str) -> str:
+    """``text`` without fenced blocks that look like a GOALS.md (what proposals.jsonl stores for goal-edit)."""
+    out = _FENCE_RE.sub(lambda m: "" if _looks_like_goals(m.group(1), m.group(2)) else m.group(0), text or "")
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
 def extract_goals_file(answer: str) -> Optional[str]:
     """The proposed GOALS.md in an answer: the largest fenced block that looks like it, else the answer itself."""
     candidates = []
     for lang, body in _FENCE_RE.findall(answer or ""):
-        if lang.lower() in ("lee-proposals", "lee-steer"):
-            continue
-        if "### G" in body or body.lstrip().startswith("# "):
+        if _looks_like_goals(lang, body):
             candidates.append(body)
     if candidates:
         text = max(candidates, key=len)
@@ -447,8 +544,16 @@ def _drafts_dir(workspace: Path) -> Path:
     return Path(workspace) / DRAFTS_DIR
 
 
-def save_draft(workspace: Path, proposed: str, instruction: str, goal_id: Optional[str], now: datetime) -> Dict[str, Any]:
-    base = read_goals_text(workspace)
+def save_draft(
+    workspace: Path, proposed: str, instruction: str, goal_id: Optional[str], now: datetime,
+    base: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    ``base`` is the GOALS.md text the model was shown; the draft's hash and
+    diff are against it, so an edit made during the model call makes apply 409.
+    """
+    if base is None:
+        base = read_goals_text(workspace)
     draft_id = f"draft-{now.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(2)}"
     d = _drafts_dir(workspace)
     atomic_write(d / f"{draft_id}.GOALS.md", proposed)
@@ -544,17 +649,59 @@ async def call_model(workspace: Path, surface: str, message: str, steward_contex
     agent = _agent_provider() if _agent_provider else None
     if agent is None:
         raise StewardError("Hester's agent isn't ready", 503)
+    session_id = f"steward-{request_id}"
     request = ContextRequest(
-        session_id=f"steward-{request_id}",
+        session_id=session_id,
         message=message,
         editor_state=EditorState(working_directory=str(workspace)),
         surface=surface,
         steward_context=steward_context,
+        tool_allowlist=list(STEWARD_TOOLS),
     )
-    response = await agent.process_context(request)
-    if getattr(response, "status", None) == "error":
-        raise StewardError(getattr(response, "response", None) or "Hester couldn't answer", 502)
-    return getattr(response, "response", None) or ""
+    try:
+        response = await agent.process_context(request)
+    finally:
+        await _drop_session(agent, session_id)
+    status = getattr(response, "status", None)
+    text = getattr(response, "response", None)
+    failure = model_failure(status, text)
+    if failure:
+        logger.warning(f"steward {surface} {request_id}: model call failed ({failure}): {str(text or '')[:300]}")
+        raise StewardError(f"Hester couldn't answer ({failure}); try again", 502)
+    return text
+
+
+# What the agent returns (with status "complete") when a turn failed.
+_AGENT_ERROR_PREFIXES = ("I encountered an error:", "An unexpected error occurred:")
+_AGENT_EMPTY_FALLBACK = "I couldn't generate a response. Please try rephrasing your question."
+
+
+def model_failure(status: Any, text: Any) -> Optional[str]:
+    """A short reason when an agent response is a failure, else None."""
+    if status == "error":
+        return "error"
+    if status == "max_iterations":
+        return "ran out of steps"
+    if not isinstance(text, str) or not text.strip():
+        return "empty answer"
+    t = text.strip()
+    if t.startswith(_AGENT_ERROR_PREFIXES):
+        return "error"
+    if t == _AGENT_EMPTY_FALLBACK:
+        return "empty answer"
+    return None
+
+
+async def _drop_session(agent: Any, session_id: str) -> None:
+    """Each steward call is one-shot: delete its chat session so none pile up (never fails the call)."""
+    sessions = getattr(agent, "sessions", None)
+    delete = getattr(sessions, "delete", None)
+    if delete is None:
+        return
+    try:
+        await delete(session_id)
+    except Exception as e:
+        logger.debug(f"could not delete steward session {session_id}: {e}")
 
 
 async def answer(
@@ -578,8 +725,9 @@ async def answer(
         steer = {"task_id": steer_target.get("task_id"), "pty_id": steer_target.get("pty_id"), "text": steer_text}
     out = {"text": text, "proposals": proposals, "steer": steer, "surface": surface, "request_id": request_id, "raw": raw}
     now = now or utc_now()
+    stored = dict(out, text=strip_goals_file(text)) if surface == "goal-edit" else out
     try:
-        await asyncio.to_thread(ProposalStore(workspace).record_answer, out, record or {}, now)
+        await asyncio.to_thread(ProposalStore(workspace).record_answer, stored, record or {}, now)
     except OSError as e:
         logger.warning(f"could not store steward answer: {e}")
     return out

@@ -51,7 +51,7 @@ def test_readings_endpoint_and_snapshot(cockpit_env):
     assert [x["value"] for x in r.json()["data"]] == [3]
     assert env.client.get("/cockpit/readings", headers=hdr(env.a)).json()["data"] == []
     snap = env.client.get("/cockpit/snapshot", headers=hdr(env.b)).json()["data"]
-    assert snap["version"] == 1 and [x["metric"] for x in snap["readings"]["latest"]] == ["m"]
+    assert snap["version"] == 2 and [x["metric"] for x in snap["readings"]["latest"]] == ["m"]
 
 
 def test_operation_wins_and_history(cockpit_env, events_dir, monkeypatch):

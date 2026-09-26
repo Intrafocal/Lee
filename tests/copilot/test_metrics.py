@@ -113,7 +113,7 @@ def test_reader_sorts_and_filters(events_dir):
 
 
 def test_record_shape(record):
-    assert record["formula_version"] == 4
+    assert record["formula_version"] == 5
     assert record["workspace"] is None
     assert record["from"] == "2026-09-21T10:00:00.000Z"
     assert set(record["unavailable"]) == {"background_leverage.reverted"}
@@ -227,7 +227,7 @@ def test_cli_write(events_dir, tmp_path):
     lines = (ws / ".hester" / "goals" / "metrics.jsonl").read_text().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["formula_version"] == 4
+    assert rec["formula_version"] == 5
     assert rec["workspace"] == str(ws.resolve())
     assert "peek_rate" in rec["metrics"]
 

@@ -157,6 +157,9 @@ def create_steward_router() -> APIRouter:
             return _err("not found", 404)
         except ValueError as e:
             return _err(str(e))
+        except Exception:
+            logger.exception(f"{request.method} {request.url.path} failed")
+            return _err("Hester couldn't answer this time; the daemon log has the details", 502)
         return _ok(ctx, data, status)
 
     # ------------------------------------------------------------ goal status
@@ -380,8 +383,10 @@ def create_steward_router() -> APIRouter:
             draft = {"draft_id": None, "diff": None, "path": None}
             if proposed is not None:
                 async with ctx.lock:
+                    # against the text the model saw, not a re-read (an edit meanwhile makes apply 409)
                     draft = await asyncio.to_thread(
                         steward.save_draft, Path(ctx.path), proposed, instruction.strip(), goal_id, goal_status.utc_now(),
+                        current,
                     )
             text = ans["text"]
             if proposed is not None:

@@ -220,7 +220,7 @@ def test_status_serving_clears_flag(ws):
 
 def test_status_runs_metrics_when_stale(ws, monkeypatch):
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    write_lines(ws, [record(ws, now - timedelta(hours=3), peek_rate=3.0)])
+    write_lines(ws, [record(ws, now - timedelta(days=7), peek_rate=4.0), record(ws, now - timedelta(hours=3), peek_rate=3.0)])
     calls = []
 
     def fake_run(start, end, workspace):
@@ -231,9 +231,10 @@ def test_status_runs_metrics_when_stale(ws, monkeypatch):
     s = goal_status.build_status(ws, 7, now)
     assert len(calls) == 1 and calls[0][2] == str(ws) and calls[0][1] - calls[0][0] == timedelta(days=7)
     assert s["goals"][0]["metrics"][0]["value"] == 1.0
-    assert s["goals"][0]["metrics"][0]["previous"] == 3.0
+    # previous is at least half a window older: the 3-hour-old record is too recent
+    assert s["goals"][0]["metrics"][0]["previous"] == 4.0
     lines = (ws / ".hester" / "goals" / "metrics.jsonl").read_text().splitlines()
-    assert len(lines) == 2
+    assert len(lines) == 3
     # cached: a second call within 10 min doesn't recompute
     goal_status.build_status(ws, 7, now)
     assert len(calls) == 1

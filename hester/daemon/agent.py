@@ -13,6 +13,7 @@ Users can override with /quick, /deep, or /reason prefixes.
 """
 
 import asyncio
+import contextvars
 import logging
 import json
 import re
@@ -183,6 +184,25 @@ except ImportError as e:
 from .tools.definitions import get_tools_description_for_names
 
 logger = logging.getLogger("hester.daemon.agent")
+
+# The tools the current request may run (``ContextRequest.tool_allowlist``);
+# None means unrestricted. A context variable because ``_tool_handlers`` is
+# shared by concurrent requests.
+_TOOL_ALLOWLIST: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
+    "hester_tool_allowlist", default=None
+)
+
+
+def effective_tool_filter(tool_filter: Optional[List[str]], allowlist: Optional[List[str]]) -> Optional[List[str]]:
+    """The prepare step's tool selection narrowed to ``allowlist`` (never widened; never empty when restricted)."""
+    if allowlist is None:
+        return tool_filter
+    allowed = list(dict.fromkeys(allowlist))
+    if tool_filter:
+        narrowed = [t for t in tool_filter if t in set(allowed)]
+        if narrowed:
+            return narrowed
+    return allowed
 
 
 # Command prefixes for manual depth override
@@ -810,8 +830,24 @@ You are operating in: {working_dir}
         """Process a context request; model calls carry ``request.surface`` when it is set."""
         from .copilot.model_log import surface_override
 
-        with surface_override(getattr(request, "surface", None)):
-            return await self._process_context(request, phase_callback=phase_callback)
+        allowlist = getattr(request, "tool_allowlist", None)
+        token = _TOOL_ALLOWLIST.set(frozenset(allowlist) if allowlist is not None else None)
+        try:
+            with surface_override(getattr(request, "surface", None)):
+                return await self._process_context(request, phase_callback=phase_callback)
+        finally:
+            _TOOL_ALLOWLIST.reset(token)
+
+    async def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]):
+        """Run a tool unless the request's allow-list excludes it (checked at call time, not just declared)."""
+        allowed = _TOOL_ALLOWLIST.get()
+        if allowed is not None and tool_name not in allowed:
+            logger.warning(f"Tool {tool_name} refused: not in this request's allow-list")
+            return ToolResult(
+                tool_name=tool_name, arguments=arguments, result=None, success=False,
+                error=f"Tool {tool_name} is not available for this request (read-only)",
+            )
+        return await super()._execute_tool(tool_name, arguments)
 
     async def _process_context(
         self,
@@ -845,8 +881,10 @@ You are operating in: {working_dir}
         # =====================================================================
         # SHORTCUT DETECTION - Fast path for simple commands like cd, ls, cat
         # =====================================================================
+        tool_allowlist = getattr(request, "tool_allowlist", None)
         shortcut = detect_shortcut(cleaned_message)
-        if shortcut.is_shortcut and shortcut.tool_name:
+        # Shortcuts run tools and CLI commands directly; a restricted request never takes them.
+        if tool_allowlist is None and shortcut.is_shortcut and shortcut.tool_name:
             logger.info(f"Shortcut detected: {shortcut.tool_name} - {shortcut.reason}")
             shortcut_response = await self._execute_shortcut(
                 request=request,
@@ -972,6 +1010,11 @@ You are operating in: {working_dir}
                 cleaned_message,
                 explicit_depth,
             )
+
+        if tool_allowlist is not None:
+            tool_filter = effective_tool_filter(tool_filter, tool_allowlist)
+            if prepare_result is not None:
+                prepare_result.relevant_tools = list(tool_filter or [])
 
         logger.info(
             f"Processing with depth={depth.name}, model={model}, "

@@ -25,7 +25,8 @@ from .event_reader import iso, parse_ts, read_events
 # command repeats and flaky reruns, peek_rate with Cockpit modes,
 # nudge_acceptance, lost_threads.
 # v4: human_balance (your focus time by the quadrant of the task it went to).
-FORMULA_VERSION = 4
+# v5: pull_usage (user-triggered steward requests per week).
+FORMULA_VERSION = 5
 
 UNAVAILABLE = ["background_leverage.reverted"]
 BALANCE_BANDS = ("Q1", "Q2", "Q3", "Q4", "play", "unclassified")
@@ -47,6 +48,9 @@ DEVICE_CREATIVE = {"capture", "decide", "reply", "launch", "start_work"}
 PICKUP_ACTIONS = {"explore", "promote", "drop"}
 LATENCY_KINDS = {"approval", "waiting", "decision", "blocker"}
 LATENCY_RESOLUTIONS = {"reply", "answered_in_tab"}
+# steward.request surfaces that are you asking Hester for judgment (G3 pull_usage).
+PULL_SURFACES = ("what-next", "evaluate", "rail-ask", "rail-steer", "lint-ask", "launch-suggest", "goal-edit")
+WEEK = timedelta(days=7)
 
 
 def _ms(delta: timedelta) -> float:
@@ -589,7 +593,7 @@ def compute_metrics(
     tasks: Optional[List[Dict[str, Any]]] = None,
     goals: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
-    """All section 2.5 metrics (formula v4) over ``[start, end)``.
+    """All section 2.5 metrics (formula v5) over ``[start, end)``.
 
     ``events`` must be sorted by ts and may extend before ``start`` (7-day
     lookback) and after ``end`` (14-day capture pickup lookahead). ``tasks``
@@ -819,7 +823,26 @@ def compute_metrics(
         "lost_threads": lost,
     }
     metrics.update(human_balance(events, start, end, tasks, goals))
+    metrics.update(pull_usage(window, start, end))
     return metrics
+
+
+def pull_usage(window: List[Dict[str, Any]], start: datetime, end: datetime) -> Dict[str, Any]:
+    """``steward.request`` events from pull surfaces in the window, as a per-week rate and by surface."""
+    by_surface: Dict[str, int] = {}
+    for ev in window:
+        if ev.get("type") != "steward.request":
+            continue
+        surface = _data(ev).get("surface")
+        if surface in PULL_SURFACES:
+            by_surface[surface] = by_surface.get(surface, 0) + 1
+    total = sum(by_surface.values())
+    weeks = (end - start) / WEEK
+    return {
+        "pull_usage": _round(total / weeks) if weeks > 0 else None,
+        "pull_requests": total,
+        "pull_usage_by_surface": dict(sorted(by_surface.items())),
+    }
 
 
 def _filter_workspace(events: List[Dict[str, Any]], workspace: Optional[str]) -> List[Dict[str, Any]]:

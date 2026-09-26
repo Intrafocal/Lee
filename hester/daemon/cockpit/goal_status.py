@@ -4,7 +4,7 @@ evidence packet (copilot v4, contract sections 2, 3, 5.2 and 6).
 
 Everything here is deterministic: no model. Values come from
 ``<workspace>/.hester/goals/metrics.jsonl`` (metrics records and operation
-readings); when the newest metrics record is missing or over an hour old,
+readings); when the newest metrics record for the requested window length is missing or over an hour old,
 ``metrics.run`` computes one from Lee's event log and appends it.
 """
 
@@ -38,6 +38,9 @@ METRIC_KEY = {
 JUDGED = {"weekly_retro": ("ideas_or_plumbing", "stuck_good_bad"), "surprise": ("surprise",)}
 
 RECORD_MAX_AGE = timedelta(hours=1)
+WINDOW_SLACK = timedelta(hours=1)
+# ``previous`` is a record at least this share of ``days`` older than the current one.
+PREVIOUS_MIN_GAP = 0.5
 CACHE_S = 600.0
 FLAT = 0.02
 SERVING_CLOSED_DAYS = 14
@@ -115,32 +118,48 @@ def invalidate(workspace: Optional[Path] = None) -> None:
         if workspace is None:
             _ensured.clear()
         else:
-            _ensured.pop(_norm_ws(workspace), None)
+            ws = _norm_ws(workspace)
+            for k in [k for k in _ensured if k.split("|", 1)[0] == ws]:
+                _ensured.pop(k, None)
+
+
+def window_matches(record: Dict[str, Any], days: int) -> bool:
+    """The record covers a ``days``-long window (``to - from``, within an hour)."""
+    start, end = parse_ts(record.get("from")), parse_ts(record.get("to"))
+    if start is None or end is None:
+        return False
+    return abs((end - start) - timedelta(days=days)) <= WINDOW_SLACK
+
+
+def window_records(records: List[Dict[str, Any]], days: int) -> List[Dict[str, Any]]:
+    """Records whose window is ``days`` long, oldest first."""
+    return [r for r in records if window_matches(r, days)]
 
 
 def ensure_record(workspace: Path, days: int, now: datetime) -> List[Dict[str, Any]]:
     """
-    The workspace's metrics records, computing and appending a fresh one first
-    when the newest is missing or more than an hour old (at most every 10 min).
+    The workspace's ``days``-window metrics records (oldest first), computing
+    and appending a fresh one first when the newest of that window is missing
+    or more than an hour old (at most every 10 min per workspace and window).
     """
     from ..copilot import metrics
 
-    records = metrics_records(workspace)
+    records = window_records(metrics_records(workspace), days)
     newest = parse_ts(records[-1].get("ts")) if records else None
     stale = newest is None or now - newest > RECORD_MAX_AGE
     key = _norm_ws(workspace)
     if stale:
         with _cache_lock:
-            recent = _ensured.get(key)
+            recent = _ensured.get(f"{key}|{days}")
             if recent is not None and time.monotonic() - recent < CACHE_S:
                 return records
-            _ensured[key] = time.monotonic()
+            _ensured[f"{key}|{days}"] = time.monotonic()
         try:
             record = run_metrics(now - timedelta(days=days), now, str(workspace))
             if isinstance(record, dict) and isinstance(record.get("metrics"), dict):
                 record.setdefault("workspace", key)
                 metrics.append_record(record, Path(workspace))
-                records = metrics_records(workspace)
+                records = window_records(metrics_records(workspace), days)
         except Exception as e:
             logger.warning(f"Goal status: metrics run failed for {workspace}: {e}")
     return records
@@ -336,6 +355,11 @@ def _metric_readings(rows: List[Dict[str, Any]], metric: Dict[str, Any]) -> List
     ]
 
 
+def _older(row: Dict[str, Any], than: datetime, days: int) -> bool:
+    at = parse_ts(row.get("ts"))
+    return at is not None and at <= than - timedelta(days=days) * PREVIOUS_MIN_GAP
+
+
 def metric_status(
     metric: Dict[str, Any],
     records: List[Dict[str, Any]],
@@ -355,16 +379,22 @@ def metric_status(
         return out
     key = METRIC_KEY.get(name, name)
     value_of = lambda r: (r.get("metrics") or {}).get(key)  # noqa: E731
+    # ``records`` are this window's records; previous is one at least half a
+    # window older than the current one (else no trend).
     newest = records[-1] if records else None
     value = _number(value_of(newest)) if newest else None
     at = newest.get("ts") if newest and value is not None else None
-    previous_rows = records[:-1] if records else []
-    prev = _closest(previous_rows, generated - timedelta(days=days), value_of)
+    newest_at = parse_ts(newest.get("ts")) if newest else None
+    prev = None
+    if newest_at is not None:
+        previous_rows = [r for r in records[:-1] if _older(r, newest_at, days)]
+        prev = _closest(previous_rows, newest_at - timedelta(days=days), value_of)
     previous = _number(value_of(prev)) if prev else None
     source = "metrics" if value is not None else None
 
     mine = _metric_readings(reading_rows, metric)
     if mine and (value is None or str(mine[-1].get("ts") or "") > str(at or "")):
+        # operation readings: the previous reading closest to a window ago
         last = mine[-1]
         value, at, source = _number(last.get("value")), last.get("ts"), "reading"
         prev_r = _closest(mine[:-1], generated - timedelta(days=days), lambda r: r.get("value"))
@@ -501,7 +531,11 @@ def build_status(
     workspace = Path(workspace)
     parsed = load_goals_full(workspace)
     goals = parsed["goals"]
-    records = ensure_record(workspace, days, now) if goals or parsed["constraints"] else metrics_records(workspace)
+    # only records of this window length: a 30-day status never shows a 7-day record
+    records = (
+        ensure_record(workspace, days, now) if goals or parsed["constraints"]
+        else window_records(metrics_records(workspace), days)
+    )
     reading_rows = readings(workspace)
     newest = records[-1] if records else None
     items = items or Items(workspace)
@@ -608,7 +642,7 @@ def evidence_packet(workspace: Path, gid: str, days: int = 7, now: Optional[date
     items = items or Items(workspace)
     status = build_status(workspace, days, now, items=items)
     gs = next(g for g in status["goals"] if g["id"] == gid)
-    records = metrics_records(workspace)
+    records = window_records(metrics_records(workspace), days)
     reading_rows = readings(workspace)
     for m_status, m_def in zip(gs["metrics"], goal["metrics"]):
         m_status["history"] = metric_history(m_def, records, reading_rows)
