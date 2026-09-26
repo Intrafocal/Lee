@@ -71,5 +71,6 @@ export const cockpitApi: CockpitAPI = {
     suppress: (diagId, scope) => ipcRenderer.invoke(COCKPIT_IPC.lintSuppress, diagId, scope),
     shown: (diagIds, surface) => ipcRenderer.send(COCKPIT_IPC.lintShown, { diag_ids: diagIds, surface }),
     learnTool: (info) => ipcRenderer.send(COCKPIT_IPC.lintLearnTool, info),
+    overrideNudge: (itemRef, stateKey) => ipcRenderer.invoke(COCKPIT_IPC.nudgeOverride, itemRef, stateKey),
   },
 };

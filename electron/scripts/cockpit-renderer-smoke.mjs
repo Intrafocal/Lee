@@ -783,6 +783,12 @@ test('v4: proposals: bad input plans nothing; task ids come from params', () => 
   assert.equal(mod.proposalTaskId({ action: 'set_lead', params: { task_id: 't1', lead: 'plan' } }), 't1');
   assert.equal(mod.proposalTaskId({ action: 'park', params: { text: 'x' } }), null);
 });
+test('v4: link_goal adds to the task\'s serves (PATCH replaces, so the current ones are merged in)', () => {
+  const plan = mod.proposalPlan({ action: 'link_goal', params: { task_id: 't1', serves: ['G2', 'G1'] } }, '/ws');
+  assert.deepEqual(plan, { kind: 'patch_task', taskId: 't1', body: { serves: ['G2', 'G1'] } });
+  assert.deepEqual(mod.mergeServes(['G1', 'G3'], plan.body.serves), ['G1', 'G3', 'G2']);
+  assert.deepEqual(mod.mergeServes(null, ['G2']), ['G2']);
+});
 test('v4: renderer_action is read from lint.fix and from feed.act (nested) results', () => {
   assert.deepEqual(mod.rendererAction({ success: true, data: { renderer_action: 'link-goal', task_id: 't1' } }), { action: 'link-goal', taskId: 't1' });
   assert.deepEqual(mod.rendererAction({ success: true, data: { success: true, data: { renderer_action: 'what-next' } } }), { action: 'what-next', taskId: null });

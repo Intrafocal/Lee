@@ -27,9 +27,11 @@ interface RunOpDialogProps {
   ctx: CockpitCtx;
   op: OperationInfo;
   onClose: () => void;
+  /** The op actually started (a cancel or failure never calls it). */
+  onRan?: () => void;
 }
 
-export const RunOpDialog: React.FC<RunOpDialogProps> = ({ ctx, op, onClose }) => {
+export const RunOpDialog: React.FC<RunOpDialogProps> = ({ ctx, op, onClose, onRan }) => {
   const names = op.def.params ?? [];
   const [params, setParams] = useState<Record<string, string>>({});
   const [ports, setPorts] = useState<string[]>([]);
@@ -59,6 +61,7 @@ export const RunOpDialog: React.FC<RunOpDialogProps> = ({ ctx, op, onClose }) =>
       .then((r) => {
         if (r.success) {
           ctx.notify(`Running ${op.def.name}`);
+          onRan?.();
           onClose();
         } else if (r.missing_params?.length) setError(`Missing: ${r.missing_params.join(', ')}`);
         else setError(r.error || 'Run failed');

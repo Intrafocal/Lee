@@ -9,7 +9,7 @@
 
 import { EventEmitter } from 'events';
 import * as crypto from 'crypto';
-import type { LeeEvent } from '../../../shared/copilot';
+import type { LeeEvent, Principal } from '../../../shared/copilot';
 import type {
   CockpitEventType,
   CockpitTask,
@@ -175,10 +175,11 @@ export class LintEngine extends EventEmitter {
     return !(this.deps.providers.stewardActive?.(ws) ?? false);
   }
 
-  private fixContext(): LintFixContext {
+  private fixContext(by: Principal): LintFixContext {
     const p = this.deps.providers;
     return {
       ...this.context(),
+      by,
       launcher: p.launcher(),
       writeClaudeAllow: (ws, rules) => p.writeClaudeAllow(ws, rules),
       effects: p.effects?.() ?? {},
@@ -188,6 +189,20 @@ export class LintEngine extends EventEmitter {
         this.deps.store.saveSuppressions(ws, next);
       },
     };
+  }
+
+  /**
+   * Rule ids as outcomes and states know them: the project rule set expands to
+   * one `project/<id>` per rule loaded for the workspace (none machine-wide).
+   */
+  private ruleIds(ws: string | null): string[] {
+    const out: string[] = [];
+    for (const r of this.deps.rules) {
+      if (r.family === 'project' && r.id.endsWith('/*')) {
+        if (ws) for (const def of this.deps.providers.projectRules?.(ws) ?? []) out.push(`project/${def.id}`);
+      } else out.push(r.id);
+    }
+    return out;
   }
 
   private ruleState(ws: string | null, rule: string): RuleState {
@@ -321,11 +336,14 @@ export class LintEngine extends EventEmitter {
       }
     }
 
+    // Workspaces with an open window (null: the provider isn't wired, so don't gate on it).
+    const openWs = this.deps.providers.workspaces ? new Set(ctx.workspaces()) : null;
     for (const [id, o] of [...this.open]) {
       if (seen.has(id)) continue;
-      // Withdrawn by steward gating: no outcome, so it doesn't count as ignored.
+      // Withdrawn by steward gating, or its window closed: no outcome, so it doesn't count as ignored.
       const gated = this.gatedOut(o.diag.family, o.diag.workspace);
-      if (!gated && o.diag.shown && o.outcome === null) this.recordOutcome(o, 'ignored');
+      const closedWs = openWs !== null && o.diag.workspace !== null && !openWs.has(o.diag.workspace);
+      if (!gated && !closedWs && o.diag.shown && o.outcome === null) this.recordOutcome(o, 'ignored');
       this.open.delete(id);
       if (o.visible) this.deps.feedClose(id, 'done');
       changed = true;
@@ -375,7 +393,8 @@ export class LintEngine extends EventEmitter {
     this.emit('change');
   }
 
-  async fix(diagId: string, fixId: string): Promise<LintFixResult> {
+  /** `by`: who applied it (defaults to the local user, the renderer). */
+  async fix(diagId: string, fixId: string, by: Principal = { kind: 'local-user' }): Promise<LintFixResult> {
     const o = this.open.get(diagId);
     if (!o) return { success: false, error: 'not_found' };
     if (!o.finding.fixes.some((f) => f.id === fixId)) return { success: false, error: 'unknown_fix' };
@@ -389,7 +408,7 @@ export class LintEngine extends EventEmitter {
     o.touched = true;
     let res: LintFixResult;
     try {
-      res = await rule.fix(o.finding, fixId, this.fixContext());
+      res = await rule.fix(o.finding, fixId, this.fixContext(by));
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -496,7 +515,8 @@ export class LintEngine extends EventEmitter {
     const now = this.now();
     const since = now - cfg.window_days * DAY_MS;
     let dirty = false;
-    for (const rule of this.deps.rules) {
+    for (const id of this.ruleIds(ws)) {
+      const rule = { id };
       const st = { ...(states[rule.id] ?? emptyState()) };
       if (!force && st.computed_at && now - Date.parse(st.computed_at) < RECOMPUTE_MS) continue;
       const changedAt = st.changed_at ? Date.parse(st.changed_at) : -Infinity;
@@ -543,7 +563,8 @@ export class LintEngine extends EventEmitter {
     const cfg = this.deps.demotion(ws);
     const since = this.now() - cfg.window_days * DAY_MS;
     const outs = this.deps.store.outcomes(ws).filter((r) => Date.parse(r.ts) >= since);
-    return this.deps.rules.map((r) => {
+    return this.ruleIds(ws).map((id) => {
+      const r = { id };
       const st = this.ruleState(ws, r.id);
       const sev = this.effective(r.id, ws);
       const counts: Record<LintOutcome, number> = { fixed: 0, dismissed: 0, ignored: 0, suppressed: 0 };

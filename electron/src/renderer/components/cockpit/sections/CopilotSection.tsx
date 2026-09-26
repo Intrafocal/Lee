@@ -64,14 +64,27 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
   const [stewardBusy, setStewardBusy] = useState(false);
   const askRef = useRef<HTMLInputElement | null>(null);
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   const workspace = ctx.workspace;
+  // Request sequences: only the latest Ask / What next? answer lands; a
+  // workspace switch bumps both so an answer about the old one is dropped.
+  const askSeq = useRef(0);
+  const nextSeq = useRef(0);
+  const [answersFor, setAnswersFor] = useState(workspace);
+  if (answersFor !== workspace) {
+    setAnswersFor(workspace);
+    askSeq.current++;
+    nextSeq.current++;
+    setAsk({ phase: 'idle' });
+    setNext({ phase: 'idle' });
+  }
 
+  // On open (mount), workspace change and return, so "Not today" clears after midnight.
   useEffect(() => {
     let cancelled = false;
     fetchSteward(workspace).then((r) => {
@@ -80,7 +93,7 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
     return () => {
       cancelled = true;
     };
-  }, [workspace]);
+  }, [workspace, returnNonce]);
 
   const toggleNotToday = () => {
     if (!steward || stewardBusy) return;
@@ -98,9 +111,10 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
     (q: string, ref: AboutRef | null) => {
       const text = q.trim();
       if (!text) return;
+      const seq = ++askSeq.current;
       setAsk({ phase: 'loading', label: text });
       askSteward(workspace, text, ref).then((r) => {
-        if (!alive.current) return;
+        if (!alive.current || seq !== askSeq.current) return;
         setAsk(r.ok ? { phase: 'done', answer: r.data, label: text } : { phase: 'error', error: r.error });
       });
     },
@@ -108,9 +122,10 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
   );
 
   const runNext = useCallback(() => {
+    const seq = ++nextSeq.current;
     setNext({ phase: 'loading', label: 'What next?' });
     whatNext(workspace).then((r) => {
-      if (!alive.current) return;
+      if (!alive.current || seq !== nextSeq.current) return;
       setNext(r.ok ? { phase: 'done', answer: r.data, label: 'What next?' } : { phase: 'error', error: r.error });
     });
   }, [workspace]);
@@ -173,7 +188,8 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
 
   const submit = () => {
     const q = question.trim();
-    if (!q) return;
+    // Enter bypasses the disabled button: no second ask while one is loading.
+    if (!q || ask.phase === 'loading') return;
     runAsk(q, about);
     setQuestion('');
   };
@@ -184,7 +200,13 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
 
   const rows: RowHandle[] = [
     { id: ASK_ROW, title: 'Ask Hester', open: () => askRef.current?.focus() },
-    { id: NEXT_ROW, title: 'What next?', open: () => runNext() },
+    {
+      id: NEXT_ROW,
+      title: 'What next?',
+      open: () => {
+        if (next.phase !== 'loading') runNext();
+      },
+    },
     { id: DIGEST_ROW, title: 'Since you left', open: () => load() },
   ];
   useEffect(() => {

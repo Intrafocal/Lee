@@ -115,21 +115,26 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
   const [instruction, setInstruction] = useState('');
   const [building, setBuilding] = useState(false);
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
+  // Request sequences: only the latest answer lands (Enter and clicks can race a slow one).
+  const evalSeq = useRef(0);
+  const draftSeq = useRef(0);
 
   const s = goal.serving;
   const servingCount = s.tasks.length + s.workstreams.length + s.explorations.length;
 
   const evaluate = async (note?: string) => {
+    if (evalState.phase === 'loading') return;
+    const seq = ++evalSeq.current;
     setEvalState({ phase: 'loading', note });
     setStaleDeclined(false);
     const r = await evaluateGoal(ctx.workspace, goal.id);
-    if (!alive.current) return;
+    if (!alive.current || seq !== evalSeq.current) return;
     if (r.ok) {
       setEvalState({ phase: 'done', answer: r.data });
       onChanged();
@@ -145,9 +150,10 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
       setOpDialog(op);
       return;
     }
+    const seq = ++evalSeq.current;
     setEvalState({ phase: 'measuring', name });
     const r = await ctx.api.ops.run({ workspace: ctx.workspace, name });
-    if (!alive.current) return;
+    if (!alive.current || seq !== evalSeq.current) return;
     if (!r.success || !r.run) {
       setEvalState({ phase: 'error', error: r.error || `Could not run ${name}` });
       return;
@@ -165,7 +171,7 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
         break;
       }
     }
-    if (alive.current) void evaluate(`after running ${name}`);
+    if (alive.current && seq === evalSeq.current) void evaluate(`after running ${name}`);
   };
 
   const buildToward = async () => {
@@ -182,18 +188,20 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
 
   const requestDraft = async () => {
     const text = instruction.trim();
-    if (!text) return;
+    if (!text || draft.phase === 'loading' || draft.phase === 'applying') return;
+    const seq = ++draftSeq.current;
     setDraft({ phase: 'loading' });
     const r = await draftGoals(ctx.workspace, text, goal.id);
-    if (!alive.current) return;
+    if (!alive.current || seq !== draftSeq.current) return;
     setDraft(r.ok ? { phase: 'ready', draft: r.data } : { phase: 'error', error: r.error });
   };
 
   const applyDraft = async (d: GoalDraftAnswer) => {
-    if (!d.draft_id) return;
+    if (!d.draft_id || draft.phase === 'applying') return;
+    const seq = ++draftSeq.current;
     setDraft({ phase: 'applying', draft: d });
     const r = await applyGoalDraft(ctx.workspace, d.draft_id);
-    if (!alive.current) return;
+    if (!alive.current || seq !== draftSeq.current) return;
     if (r.ok) {
       ctx.notify('GOALS.md updated (not committed)');
       setDraft({ phase: 'closed' });
@@ -290,7 +298,13 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
         <button className="cockpit-btn" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
           Edit
         </button>
-        <button className="cockpit-btn" onClick={() => setDraft(draft.phase === 'closed' ? { phase: 'input' } : { phase: 'closed' })}>
+        <button
+          className="cockpit-btn"
+          onClick={() => {
+            draftSeq.current++;
+            setDraft(draft.phase === 'closed' ? { phase: 'input' } : { phase: 'closed' });
+          }}
+        >
           Guided edit…
         </button>
       </div>
@@ -453,7 +467,8 @@ export const GoalsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       )}
       <div className="cockpit-rows">
         {goals.map((g, i) => (
-          <GoalRow key={g.id} ctx={ctx} goal={g} handle={handles[i]} selected={sel?.kind === 'row' && sel.id === handles[i].id} onChanged={refresh} />
+          // Keyed by workspace too: a switch drops that goal's Evaluate/draft state.
+          <GoalRow key={`${ctx.workspace}:${g.id}`} ctx={ctx} goal={g} handle={handles[i]} selected={sel?.kind === 'row' && sel.id === handles[i].id} onChanged={refresh} />
         ))}
       </div>
       {data && (data.tensions.length > 0 || constraints.length > 0) && (

@@ -1093,6 +1093,11 @@ export function steerSendLabel(state: string | null | undefined): string {
   return state === 'busy' ? 'Send now (agent is busy)' : 'Send';
 }
 
+/** `link_goal` adds goals: the task's current serves plus the proposed ones (order kept, no duplicates). */
+export function mergeServes(current: readonly string[] | null | undefined, add: readonly string[]): string[] {
+  return [...new Set([...(current ?? []), ...add])];
+}
+
 /** What a proposal click does, through existing client calls (v4 §8.3). null: malformed (not shown). */
 export type ProposalPlan =
   | {

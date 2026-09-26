@@ -389,25 +389,6 @@ export function proposalOutcome(workspace: string, proposalId: string, outcome: 
   return call(workspace, 'POST', `/cockpit/proposals/${encodeURIComponent(proposalId)}/outcome`, { outcome });
 }
 
-const LEE_API = 'http://127.0.0.1:9001';
-
-/**
- * Record an override on Lee's nudge budget (POST /nudges/override on the Lee
- * API, loopback + shared token): the steward stays quiet on that item until
- * its state changes. Best effort.
- */
-export async function overrideNudge(itemRef: string, stateKey: string): Promise<boolean> {
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const token = await getApiToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`${LEE_API}/nudges/override`, { method: 'POST', headers, body: JSON.stringify({ item_ref: itemRef, state_key: stateKey }) });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Explore (spec §7.5; v3 contract: Explore absorbs the Library). Files live
 // in the workspace's .hester/explore/; a deep dive is the Hester chat session

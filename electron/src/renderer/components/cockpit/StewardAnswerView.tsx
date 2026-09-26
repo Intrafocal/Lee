@@ -36,8 +36,10 @@ export const SteerCard: React.FC<{ ctx: CockpitCtx; steer: StewardSteer; onDone:
     if (!ctx.api || ptyId == null || busy) return;
     setBusy(true);
     setError(null);
+    // You saw the exact text: while_busy types even mid-turn (the agent queues it);
+    // force keeps its own meaning, typing when Lee can't read the agent's state.
     ctx.api.tabs
-      .send(ptyId, { text: steer.text, submit: true, purpose: 'manual', force: true })
+      .send(ptyId, { text: steer.text, submit: true, purpose: 'manual', while_busy: true, force: true })
       .then((r) => {
         if (!r.success) {
           setError(SEND_ERRORS[r.error ?? ''] ?? 'Send failed');

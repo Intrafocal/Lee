@@ -66,7 +66,7 @@ export async function fixWrapUp(task: CockpitTask | null, ctx: LintFixContext): 
   const pty = task?.agent?.pty_id;
   if (pty == null) return { success: false, error: 'The task has no live agent tab' };
   if (!ctx.effects.sendInput) return UNAVAILABLE;
-  const r = await ctx.effects.sendInput(pty, WRAP_UP_TEXT);
+  const r = await ctx.effects.sendInput(pty, WRAP_UP_TEXT, ctx.by);
   return r.success ? { success: true, message: `Asked ${taskLabel(task!)} to wrap up` } : { success: false, error: r.error ?? 'send_failed' };
 }
 

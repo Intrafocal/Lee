@@ -182,12 +182,12 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
   const [quadMenu, setQuadMenu] = useState(false);
   const [view, setView] = useState<ViewState>({ phase: 'idle' });
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   // A lint fix's renderer_action 'link-goal' opens this task's goal picker.
   const pending = ctx.pendingSteward;
   useEffect(() => {
@@ -199,10 +199,13 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
     document.querySelector(`[data-cockpit-row="${CSS.escape(handle.id)}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [pending, task.id, handle.id, ctx]);
 
+  const viewSeq = useRef(0);
   const hesterView = () => {
+    if (view.phase === 'loading') return;
+    const seq = ++viewSeq.current;
     setView({ phase: 'loading' });
     suggestTask(ctx.workspace, task.id).then((r) => {
-      if (!alive.current) return;
+      if (!alive.current || seq !== viewSeq.current) return;
       setView(r.ok ? { phase: 'done', answer: r.data } : { phase: 'error', error: r.error });
     });
   };

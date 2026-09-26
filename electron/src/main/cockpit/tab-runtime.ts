@@ -836,7 +836,8 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       if (st === 'exited') return { success: false, error: 'not_found', state: st };
       if (st === 'busy') {
         // v4 §8.4: you clicked "Send now (agent is busy)" on text shown first (steer card, wrap-up fix).
-        if ((req.while_busy || req.force) && by.kind === 'local-user' && kind === 'agent') return null;
+        // Only while_busy: `force` keeps meaning "state unknown" (a forced check-in never types into a busy turn).
+        if (req.while_busy && by.kind === 'local-user' && kind === 'agent') return null;
         return { success: false, error: 'busy', state: st };
       }
       if (st === 'awaiting-input') return { success: false, error: 'awaiting_input', state: st };

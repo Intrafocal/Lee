@@ -360,6 +360,7 @@ export function createFakeCockpitApi(): CockpitAPI {
       suppress: () => Promise.resolve({ success: true }),
       shown: () => {},
       learnTool: () => {},
+      overrideNudge: () => Promise.resolve({ success: true }),
     },
   };
 }

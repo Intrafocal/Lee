@@ -294,6 +294,12 @@ async function main() {
     hook('agent.prompt', 1);
     assert.strictEqual(rt.state(1).state, 'busy');
     assert.deepStrictEqual(await rt.send(1, { text: 'hi', submit: true }, LOCAL), { success: false, error: 'busy', state: 'busy' });
+    // force means "state unknown" only; while_busy is local-user only.
+    assert.strictEqual((await rt.send(1, { text: 'hi', force: true }, LOCAL)).error, 'busy', 'force never types into a busy agent');
+    assert.strictEqual((await rt.send(1, { text: 'hi', while_busy: true }, DEVICE)).error, 'busy', 'a device never types while busy');
+    host.writes.length = 0;
+    assert.strictEqual((await rt.send(1, { text: 'hi', while_busy: true }, LOCAL)).success, true, 'you, in Lee, may type while busy');
+    host.writes.length = 0;
     hook('agent.waiting', 1, { kind: 'approval' });
     assert.strictEqual((await rt.send(1, { text: 'hi' }, DEVICE)).error, 'awaiting_input');
     assert.strictEqual((await rt.send(1, { text: 'hi' }, HESTER)).error, 'forbidden');

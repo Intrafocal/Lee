@@ -2,7 +2,7 @@
  * Work lint rule interface (contracts §8.2). Pure: no Electron, no I/O.
  */
 
-import type { LeeEvent } from '../../../shared/copilot';
+import type { LeeEvent, Principal } from '../../../shared/copilot';
 import type { CockpitTask, GitSnapshot, LintFamily, LintFix, LintFixResult, LintSeverity } from '../../../shared/cockpit';
 import type { OpsProvider, TaskLauncher } from '../cockpit-bus';
 import type { LintRuleConfig } from '../cockpit-config';
@@ -75,8 +75,12 @@ export interface LintEffects {
   openGit?(workspace: string): Promise<boolean>;
   /** Open a file (absolute path) at a line in the workspace's window. */
   openFile?(workspace: string, file: string, line: number | null): Promise<boolean>;
-  /** Type into an agent tab as you (the tab domain's send_input with submit). */
-  sendInput?(ptyId: number, text: string): Promise<{ success: boolean; error?: string }>;
+  /**
+   * Type into an agent tab (the tab domain's send_input with submit) as `by`,
+   * the principal who clicked the fix. Only the local user types while the
+   * agent is busy.
+   */
+  sendInput?(ptyId: number, text: string, by: Principal): Promise<{ success: boolean; error?: string }>;
   checkin?(ptyId: number): Promise<{ success: boolean; error?: string }>;
   focusTab?(ptyId: number): Promise<{ success: boolean; error?: string }>;
   /** Someday capture (source lee). */
@@ -87,6 +91,8 @@ export interface LintEffects {
 }
 
 export interface LintFixContext extends LintContext {
+  /** Who applied the fix (the renderer: local-user; a Feed action: its principal). */
+  by: Principal;
   launcher: TaskLauncher | null;
   writeClaudeAllow(workspace: string, rules: string[]): Promise<void>;
   ignoreCommands(workspace: string, sigs: string[]): Promise<void>;

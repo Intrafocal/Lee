@@ -1304,6 +1304,161 @@ async function main() {
     assert.strictEqual(v4.cache.parseSteward({ success: false }), null);
   });
 
+  // -------------------------------------------------------------------------
+  // v4 review fixes
+  // -------------------------------------------------------------------------
+
+  await test('git parsing: an added line starting "++ " is content; ---/+++ are headers only before the first hunk', () => {
+    const diff = [
+      'diff --git a/n.md b/n.md',
+      '--- a/n.md',
+      '+++ b/n.md',
+      '@@ -1,0 +2,2 @@',
+      '+++ counter',
+      '+--- rule',
+      'diff --git a/m.md b/m.md',
+      '--- a/m.md',
+      '+++ b/m.md',
+      '@@ -0,0 +1 @@',
+      '+x',
+    ].join('\n');
+    assert.deepStrictEqual(v4.gitSnap.parseAddedLines(diff), [
+      { path: 'n.md', line: 2, text: '++ counter' },
+      { path: 'n.md', line: 3, text: '--- rule' },
+      { path: 'm.md', line: 1, text: 'x' },
+    ]);
+  });
+
+  await test('git facts: a failed git read keeps the last good snapshot (no flapping to clean); forget frees closed workspaces', async () => {
+    let reads = 0;
+    const updates = [];
+    const facts = new v4.gitSnap.GitFacts({
+      now: () => NOW,
+      onUpdate: (ws) => updates.push(ws),
+      readGit: async () => {
+        reads++;
+        if (reads === 1) return gitSnap({ changed: [{ path: 'a.ts', status: 'M' }] });
+        throw new Error('index.lock exists');
+      },
+    });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    assert.strictEqual(facts.snapshot(V4WS), null);
+    await flush();
+    assert.deepStrictEqual(facts.snapshot(V4WS).changed, [{ path: 'a.ts', status: 'M' }]);
+    facts.invalidate(V4WS);
+    facts.snapshot(V4WS);
+    await flush();
+    assert.strictEqual(reads, 2);
+    assert.deepStrictEqual(facts.snapshot(V4WS).changed, [{ path: 'a.ts', status: 'M' }], 'kept the last good snapshot');
+    assert.deepStrictEqual(updates, [V4WS], 'no update for the failed read');
+    facts.forget(new Set());
+    assert.strictEqual(facts.snapshot(V4WS), null, 'forgotten');
+    const notRepo = mkWorkspace('notrepo');
+    assert.strictEqual(await v4.gitSnap.readGitSnapshot(notRepo, NOW), null, 'outside a work tree: null');
+  });
+
+  await test('project rules: long lines capped, line budget and time budget skip a rule', () => {
+    const def = { id: 'no-log', message: 'm', severity: 'warn', pattern: 'console\\.log\\(', paths: [], file: 'x' };
+    const long = { path: 'a.js', line: 1, text: `${'x'.repeat(v4.project.MAX_LINE_CHARS)}console.log(1)` };
+    const short = { path: 'a.js', line: 2, text: 'console.log(2)' };
+    assert.deepStrictEqual(v4.project.projectMatches(def, [long, short]).get('a.js').map((l) => l.line), [2]);
+    assert.strictEqual(v4.project.projectMatches(def, [short, short, short], { lines: 2 }), null, 'out of lines');
+    let clock = 0;
+    assert.strictEqual(v4.project.projectMatches(def, [short], { lines: 10, ms: 200, now: () => (clock += 300) }), null, 'too slow');
+    assert.ok(v4.project.projectMatches(def, [short], { lines: 10, ms: 200, now: () => 0 }).has('a.js'));
+  });
+
+  await test('project rules: demotion and the flyout per project/<id>; closing a window records no outcome', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lee-lint-store-'));
+    const ws = mkWorkspace('projdemote');
+    const store = new LintStore({ home });
+    const defs = [
+      { id: 'no-log', message: 'console.log left in', severity: 'warn', pattern: 'console\\.log\\(', paths: [], file: 'a.yaml' },
+      { id: 'no-todo', message: 'TODO left in', severity: 'warn', pattern: 'TODO', paths: [], file: 'a.yaml' },
+    ];
+    const lines = [{ path: 'src/a.ts', line: 3, text: 'console.log(x)' }];
+    const env = { open: [ws] };
+    const logged = [];
+    const engine = new LintEngine({
+      rules: [new v4.project.ProjectRules()],
+      store,
+      providers: {
+        commandText: () => null,
+        toolInfo: () => null,
+        ops: () => null,
+        launcher: () => null,
+        writeClaudeAllow: async () => {},
+        workspaces: () => env.open,
+        projectRules: () => defs,
+        addedLines: () => lines,
+      },
+      config: (rule) => (rule.startsWith('project/') ? { severity: 'warn' } : { severity: 'off' }),
+      demotion: () => ({ ...COCKPIT_DEFAULTS.lint.demotion }),
+      log: (type, workspace, data) => logged.push({ type, data }),
+      ceremony: () => {},
+      claimNudge: () => ({ granted: true, reason: null }),
+      overrideNudge: () => {},
+      feedPost: () => {},
+      feedClose: () => {},
+      branch: () => 'main',
+      now: () => NOW,
+    });
+    for (let i = 0; i < 10; i++) {
+      store.appendOutcome(ws, { ts: new Date(NOW - DAY + i).toISOString(), diag_id: `d${i}`, rule: 'project/no-log', subject: `s${i}`, outcome: 'dismissed' });
+    }
+    engine.recomputeDemotions(ws, true);
+    const rules = engine.snapshot(ws).rules;
+    assert.deepStrictEqual(rules.map((r) => [r.rule, r.severity, r.demoted, r.outcomes_30d.dismissed]), [
+      ['project/no-log', 'info', true, 10],
+      ['project/no-todo', 'warn', false, 0],
+    ]);
+    assert.ok(logged.some((l) => l.type === 'lint.demote' && l.data.rule === 'project/no-log'));
+    engine.evaluate();
+    const snap = engine.snapshot(ws);
+    assert.deepStrictEqual(snap.diagnostics.map((d) => [d.rule, d.severity]), [['project/no-log', 'info']]);
+    engine.shown(snap.diagnostics.map((d) => d.id), 'status');
+    env.open = [];
+    engine.evaluate();
+    assert.strictEqual(engine.snapshot(ws).diagnostics.length, 0);
+    assert.ok(!logged.some((l) => l.type === 'lint.outcome'), 'window closed: withdrawn without an ignored outcome');
+  });
+
+  await test('C3: the acting principal reaches sendInput; only the local user types into a busy agent', async () => {
+    const DEVICE = { kind: 'device', device_id: 'd1', name: 'Phone', device_kind: 'aeronaut', ip: '192.168.1.8' };
+    // engine.fix hands `by` to the rule's fix context (default: the local user).
+    const t = makeEngine();
+    const seen = [];
+    t.fake.fix = async (_f, _id, ctx) => (seen.push(ctx.by.kind), { success: true });
+    t.fake.findings = [t.finding('one'), t.finding('two')];
+    t.engine.evaluate();
+    await t.engine.fix(diagIdFor('fake/rule', t.ws, 'one'), 'go', DEVICE);
+    await t.engine.fix(diagIdFor('fake/rule', t.ws, 'two'), 'go');
+    assert.deepStrictEqual(seen, ['device', 'local-user']);
+    // wrap-up passes it on.
+    const v = v4Ctx();
+    const got = [];
+    v.ctx.effects.sendInput = async (_pty, _text, by) => (got.push(by.kind), { success: true });
+    await v4.common.fixWrapUp(task(), { ...v.ctx, by: DEVICE });
+    assert.deepStrictEqual(got, ['device']);
+    // lint-main's effect: while_busy only for the local user; a device gets "send from Lee".
+    const { lintEffects } = require(path.join(dist, 'lint-main.js'));
+    const prev = cockpitBus.tabRuntime;
+    const sent = [];
+    cockpitBus.tabRuntime = {
+      send: async (_pty, req, by) => {
+        sent.push([!!req.while_busy, by.kind]);
+        return req.while_busy && by.kind === 'local-user' ? { success: true } : { success: false, error: 'busy', state: 'busy' };
+      },
+    };
+    try {
+      assert.deepStrictEqual(await lintEffects().sendInput(7, 'wrap up', DEVICE), { success: false, error: 'Agent is working; send from Lee' });
+      assert.deepStrictEqual(await lintEffects().sendInput(7, 'wrap up', { kind: 'local-user' }), { success: true });
+    } finally {
+      cockpitBus.tabRuntime = prev;
+    }
+    assert.deepStrictEqual(sent, [[false, 'device'], [true, 'local-user']]);
+  });
+
   await test('lint-main: scans history, serves IPC, posts to the Feed, persists nudges', async () => {
     const { COCKPIT_IPC } = require(path.join(__dirname, '..', 'dist', 'shared', 'cockpit.js'));
     const eventsDir = path.join(tmpHome, '.lee', 'events');

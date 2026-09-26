@@ -4,17 +4,22 @@
  * (proposalPlan maps it), then records `accepted`; ✕ records `dismissed`
  * and, when the proposal is about a task, a nudge override on Lee so the
  * steward stays quiet on it. Nothing ever asks for a reason.
+ *
+ * Two proposals only open something you then confirm: `launch` opens the
+ * Launcher prefilled with the model-written prompt (you press Enter; it is
+ * recorded `accepted` when the Launcher opens), and an op with params or a
+ * confirm opens the Ops dialog (recorded `accepted` only when it runs; Cancel
+ * leaves the proposal clickable).
  */
 
 import React, { useState } from 'react';
 import { Icon } from '../Icon';
 import type { OperationInfo, Proposal } from '../../../shared/cockpit';
-import { proposalPlan, proposalTaskId, type ProposalPlan } from '../../lib/cockpitModel';
+import { mergeServes, proposalPlan, proposalTaskId, type ProposalPlan } from '../../lib/cockpitModel';
 import {
   createExploration,
   createTask,
   fetchWorkstreams,
-  overrideNudge,
   patchTask,
   proposalOutcome,
 } from '../../lib/hesterCockpit';
@@ -51,15 +56,27 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
       return { ok: true, message: 'Task added' };
     }
     case 'launch': {
-      if (!ctx.api) return { ok: false, error: 'Launching needs the Cockpit runtime' };
-      const r = await ctx.api.launch(plan.req);
-      if (!r.success) return { ok: false, error: r.error || 'Launch failed' };
-      ctx.hester.refresh();
-      if (r.task_id) ctx.selectRow(`task:${r.task_id}`);
-      return { ok: true, message: plan.req.lead === 'human' ? 'Task added' : 'Launched' };
+      // The prompt is model-written: show it in the Launcher, you press Enter (C3).
+      const req = plan.req;
+      const text = req.prompt ?? req.title ?? '';
+      ctx.openLauncher({
+        text,
+        ...(req.lead ? { lead: req.lead } : {}),
+        ...(req.kind ? { kind: req.kind } : {}),
+        ...(req.serves?.length ? { serves: req.serves } : {}),
+        origin: req.origin ?? { kind: 'hester' },
+      });
+      return { ok: true };
     }
     case 'patch_task': {
-      const r = await patchTask(ws, plan.taskId, plan.body);
+      let body = plan.body;
+      if ('serves' in body) {
+        // link_goal adds a goal; PATCH replaces serves, so send the task's current ones too.
+        const snap = ctx.hester.snapshot?.tasks;
+        const task = [...(snap?.open ?? []), ...(snap?.recent_closed ?? [])].find((t) => t.id === plan.taskId);
+        body = { serves: mergeServes(task?.serves, body.serves) };
+      }
+      const r = await patchTask(ws, plan.taskId, body);
       if (!r.ok) return { ok: false, error: r.error };
       ctx.hester.refresh();
       return { ok: true, message: 'serves' in plan.body ? `Linked to ${plan.body.serves.join(', ')}` : `Lead: ${plan.body.lead}` };
@@ -99,7 +116,7 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
 
 export const Proposals: React.FC<{ ctx: CockpitCtx; proposals: readonly Proposal[] | null | undefined }> = ({ ctx, proposals }) => {
   const [state, setState] = useState<Record<string, 'busy' | 'accepted' | 'dismissed'>>({});
-  const [dialog, setDialog] = useState<OperationInfo | null>(null);
+  const [dialog, setDialog] = useState<{ op: OperationInfo; p: Proposal } | null>(null);
   const items = (proposals ?? [])
     .map((p) => ({ p, plan: proposalPlan(p, ctx.workspace) }))
     .filter((x): x is { p: Proposal; plan: ProposalPlan } => !!x.plan)
@@ -124,11 +141,31 @@ export const Proposals: React.FC<{ ctx: CockpitCtx; proposals: readonly Proposal
       });
       return;
     }
-    if (res.ok === 'dialog') setDialog(res.op);
-    else if (res.message) ctx.notify(res.message);
+    if (res.ok === 'dialog') {
+      // Accepted only when the op runs (the dialog's onRan); Cancel leaves it pending.
+      setDialog({ op: res.op, p });
+      return;
+    }
+    if (res.message) ctx.notify(res.message);
+    accepted(p);
+  };
+
+  const accepted = (p: Proposal) => {
     ctx.copilotApi?.logCeremony('confirm', 'proposal');
     setState((s) => ({ ...s, [p.id]: 'accepted' }));
     void proposalOutcome(ctx.workspace, p.id, 'accepted');
+  };
+
+  const closeDialog = () => {
+    const p = dialog?.p;
+    setDialog(null);
+    if (!p) return;
+    setState((s) => {
+      if (s[p.id] !== 'busy') return s;
+      const n = { ...s };
+      delete n[p.id];
+      return n;
+    });
   };
 
   const dismiss = (p: Proposal) => {
@@ -136,7 +173,8 @@ export const Proposals: React.FC<{ ctx: CockpitCtx; proposals: readonly Proposal
     setState((s) => ({ ...s, [p.id]: 'dismissed' }));
     void proposalOutcome(ctx.workspace, p.id, 'dismissed');
     const taskId = proposalTaskId(p);
-    if (taskId) void overrideNudge(`task:${ctx.workspace}:${taskId}`, `steward:${p.id}`);
+    // Over IPC (local user): a direct fetch of Lee's API fails CORS in packaged builds.
+    if (taskId) void ctx.api?.lint.overrideNudge(`task:${ctx.workspace}:${taskId}`, `steward:${p.id}`).catch(() => undefined);
   };
 
   return (
@@ -157,7 +195,7 @@ export const Proposals: React.FC<{ ctx: CockpitCtx; proposals: readonly Proposal
           </span>
         );
       })}
-      {dialog && <RunOpDialog ctx={ctx} op={dialog} onClose={() => setDialog(null)} />}
+      {dialog && <RunOpDialog ctx={ctx} op={dialog.op} onRan={() => accepted(dialog.p)} onClose={closeDialog} />}
     </div>
   );
 };

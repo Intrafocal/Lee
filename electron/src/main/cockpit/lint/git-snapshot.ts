@@ -79,19 +79,28 @@ export function parseAddedLines(diff: string, limit = MAX_ADDED_LINES): AddedLin
   const out: AddedLine[] = [];
   let file: string | null = null;
   let line = 0;
+  // ---/+++ are headers only between `diff --git` and the file's first hunk; after
+  // that an added line whose text starts with "++ " is content.
+  let inHeader = false;
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('+++ ')) {
+    if (raw.startsWith('diff --git')) {
+      inHeader = true;
+      file = null;
+      continue;
+    }
+    if (inHeader && raw.startsWith('+++ ')) {
       const p = raw.slice(4);
       file = p === '/dev/null' ? null : p.startsWith('b/') ? p.slice(2) : p;
       continue;
     }
-    if (raw.startsWith('--- ') || raw.startsWith('diff --git')) continue;
+    if (inHeader && raw.startsWith('--- ')) continue;
     if (raw.startsWith('@@')) {
+      inHeader = false;
       const m = /\+(\d+)(?:,\d+)?/.exec(raw);
       line = m ? Number(m[1]) : 0;
       continue;
     }
-    if (!file) continue;
+    if (!file || inHeader) continue;
     if (raw.startsWith('+')) {
       out.push({ path: file, line, text: raw.slice(1) });
       line++;
@@ -101,19 +110,33 @@ export function parseAddedLines(diff: string, limit = MAX_ADDED_LINES): AddedLin
   return out;
 }
 
+/**
+ * Throws when a call whose answer matters fails (timeout, index.lock...), so
+ * the caller keeps its last good snapshot instead of seeing a clean tree.
+ * Null: not a git work tree.
+ */
 export async function readGitSnapshot(ws: string, now: number = Date.now()): Promise<GitSnapshot | null> {
-  const inside = await gitOr(ws, ['rev-parse', '--is-inside-work-tree'], null);
-  if (!inside || inside.trim() !== 'true') return null;
+  let inside: string;
+  try {
+    inside = await git(ws, ['rev-parse', '--is-inside-work-tree']);
+  } catch (err) {
+    // Killed (timeout) or couldn't spawn: unknown, not "outside git".
+    const e = err as { killed?: boolean; signal?: unknown; code?: unknown };
+    if (e.killed || e.signal || typeof e.code === 'string') throw err;
+    return null;
+  }
+  if (inside.trim() !== 'true') return null;
   const [branchOut, statusOut, refsOut, stashOut, originHead] = await Promise.all([
+    // Lenient: fails on an unborn branch.
     gitOr(ws, ['rev-parse', '--abbrev-ref', 'HEAD'], ''),
-    gitOr(ws, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], ''),
-    gitOr(ws, ['for-each-ref', 'refs/heads', '--format=%(refname:short)%09%(committerdate:unix)'], ''),
-    gitOr(ws, ['stash', 'list', '--format=%gd%x09%ct%x09%gs'], ''),
+    git(ws, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    git(ws, ['for-each-ref', 'refs/heads', '--format=%(refname:short)%09%(committerdate:unix)']),
+    git(ws, ['stash', 'list', '--format=%gd%x09%ct%x09%gs']),
     gitOr(ws, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], null),
   ]);
   const branch = (branchOut ?? '').trim() || null;
   const heads = new Map<string, number>();
-  for (const line of (refsOut ?? '').split('\n')) {
+  for (const line of refsOut.split('\n')) {
     const [name, ct] = line.split('\t');
     const s = Number(ct);
     if (name && Number.isFinite(s)) heads.set(name, s * 1000);
@@ -122,10 +145,10 @@ export async function readGitSnapshot(ws: string, now: number = Date.now()): Pro
   if (!def || !heads.has(def)) def = heads.has('main') ? 'main' : heads.has('master') ? 'master' : def && heads.has(def) ? def : null;
   const merged = new Set<string>();
   if (def) {
-    const m = await gitOr(ws, ['for-each-ref', 'refs/heads', '--merged', def, '--format=%(refname:short)'], '');
-    for (const n of (m ?? '').split('\n')) if (n.trim()) merged.add(n.trim());
+    const m = await git(ws, ['for-each-ref', 'refs/heads', '--merged', def, '--format=%(refname:short)']);
+    for (const n of m.split('\n')) if (n.trim()) merged.add(n.trim());
   }
-  const { changed, untracked } = parsePorcelainZ(statusOut ?? '');
+  const { changed, untracked } = parsePorcelainZ(statusOut);
   return {
     workspace: ws,
     at: now,
@@ -134,12 +157,13 @@ export async function readGitSnapshot(ws: string, now: number = Date.now()): Pro
     changed,
     untracked,
     branches: [...heads.entries()].map(([name, ms]) => ({ name, last_commit_ms: ms, merged: merged.has(name) })),
-    stashes: parseStashes(stashOut ?? ''),
+    stashes: parseStashes(stashOut),
   };
 }
 
+/** Throws when the diff fails, so the caller keeps its last good lines. */
 export async function readAddedLines(ws: string, untracked: string[]): Promise<AddedLine[]> {
-  const diff = (await gitOr(ws, ['diff', 'HEAD', '--unified=0', '--no-color', '--no-ext-diff'], '')) ?? '';
+  const diff = await git(ws, ['diff', 'HEAD', '--unified=0', '--no-color', '--no-ext-diff']);
   const out = parseAddedLines(diff);
   for (const rel of untracked) {
     if (out.length >= MAX_ADDED_LINES) break;
@@ -259,6 +283,7 @@ export class GitFacts {
           e.stale = false;
           if (changed) this.opts.onUpdate?.(ws);
         })
+        // A failed read (timeout, index.lock) keeps the last good snapshot; still stale, so the next read retries.
         .catch(() => undefined)
         .finally(() => {
           e.inflight = false;

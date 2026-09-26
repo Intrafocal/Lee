@@ -147,9 +147,9 @@ export interface TabSendRequest {
   submit?: boolean;
   purpose?: TabInputPurpose;
   /**
-   * Local user only: send even though the state is 'unknown'. On an agent tab
-   * it also types while the agent is busy (v4 §8.4, "Send now (agent is
-   * busy)"). Never overrides 'awaiting-input'.
+   * Local user only: send even though the state is 'unknown'. Never types
+   * into a busy agent (that is `while_busy`) and never overrides
+   * 'awaiting-input'.
    */
   force?: boolean;
   /**
@@ -803,6 +803,8 @@ export const COCKPIT_IPC = {
   lintShown: 'cockpit:lint:shown',
   /** send, renderer to main: { signature, tool, preview } seen on an approval item. Memory only. */
   lintLearnTool: 'cockpit:lint:learn-tool',
+  /** invoke (item_ref, state_key): the local user overrides a nudge (a dismissed steward proposal). */
+  nudgeOverride: 'cockpit:nudges:override',
 } as const;
 
 export type CockpitUnsubscribe = () => void;
@@ -868,6 +870,8 @@ export interface CockpitAPI {
     /** The renderer displayed these diagnostics (outside focus). */
     shown: (diagIds: string[], surface: 'status' | 'feed') => void;
     learnTool: (info: { signature: string; tool: string; preview: string }) => void;
+    /** Record a nudge override (the local user): that item stays quiet until its state changes. */
+    overrideNudge: (itemRef: string, stateKey: string) => Promise<{ success: boolean }>;
   };
 }
 

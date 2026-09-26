@@ -141,7 +141,8 @@ function openFileInWindow(workspace: string, file: string, line: number | null):
   });
 }
 
-function lintEffects(): LintEffects {
+/** Exported for the smoke test. */
+export function lintEffects(): LintEffects {
   return {
     openGit: async (ws) => {
       const bw = windowFor(ws);
@@ -153,11 +154,16 @@ function lintEffects(): LintEffects {
       return true;
     },
     openFile: (ws, file, line) => openFileInWindow(ws, file, line),
-    sendInput: async (ptyId, text) => {
+    sendInput: async (ptyId, text, by) => {
       const rt = cockpitBus.tabRuntime;
       if (!rt) return { success: false, error: 'unavailable' };
-      const r = await rt.send(ptyId, { text, submit: true, purpose: 'manual', while_busy: true }, { kind: 'local-user' });
-      return r.success ? { success: true } : { success: false, error: r.error ?? 'send_failed' };
+      // C3: the acting principal types, never laundered into the local user. Only
+      // you, in Lee, type into a busy agent; a paired device's click waits for idle.
+      const local = by.kind === 'local-user';
+      const r = await rt.send(ptyId, { text, submit: true, purpose: 'manual', while_busy: local }, by);
+      if (r.success) return { success: true };
+      if (r.error === 'busy' && !local) return { success: false, error: 'Agent is working; send from Lee' };
+      return { success: false, error: r.error ?? 'send_failed' };
     },
     capture: async (ws, text) => {
       const relay = getCaptureRelay();
@@ -268,7 +274,7 @@ function createEngine(store: LintStore): LintEngine {
       new FocusThrashRule(),
       new Q2StarvedRule(),
       new FixLoopRule(),
-      new ProjectRules(),
+      new ProjectRules(leeLog),
     ],
     store,
     providers: {
@@ -329,12 +335,19 @@ function withActor<T>(by: Principal | undefined, fn: () => T): T {
   }
 }
 
+/** Evaluate, first freeing the git caches of workspaces whose windows closed. */
+function evaluateNow(): void {
+  if (!state) return;
+  gitFacts?.forget(new Set(openWorkspaces()));
+  state.engine.evaluate();
+}
+
 function scheduleEvaluate(): void {
   if (!state || state.evalTimer) return;
   state.evalTimer = setTimeout(() => {
     if (!state) return;
     state.evalTimer = null;
-    state.engine.evaluate();
+    evaluateNow();
   }, EVALUATE_DEBOUNCE_MS);
 }
 
@@ -368,7 +381,7 @@ function registerIpc(): void {
   ipcMain.handle(COCKPIT_IPC.lintFix, async (_e, diagId: unknown, fixId: unknown): Promise<LintFixResult> => {
     if (!state) return { success: false, error: 'unavailable' };
     if (typeof diagId !== 'string' || typeof fixId !== 'string') return { success: false, error: 'invalid' };
-    return state.engine.fix(diagId, fixId);
+    return state.engine.fix(diagId, fixId, { kind: 'local-user' });
   });
   ipcMain.handle(COCKPIT_IPC.lintDismiss, (_e, diagId: unknown): { success: boolean } => {
     if (!state || typeof diagId !== 'string') return { success: false };
@@ -377,6 +390,13 @@ function registerIpc(): void {
   ipcMain.handle(COCKPIT_IPC.lintSuppress, (_e, diagId: unknown, scope: unknown): { success: boolean } => {
     if (!state || typeof diagId !== 'string' || !SUPPRESS_SCOPES.includes(scope as LintSuppressScope)) return { success: false };
     return withActor({ kind: 'local-user' }, () => state!.engine.suppress(diagId, scope as LintSuppressScope));
+  });
+  // The renderer (local user) overriding a nudge; replaces a direct fetch of
+  // /nudges/override, which fails CORS from a packaged renderer.
+  ipcMain.handle(COCKPIT_IPC.nudgeOverride, (_e, itemRef: unknown, stateKey: unknown): { success: boolean } => {
+    if (typeof itemRef !== 'string' || !itemRef || typeof stateKey !== 'string') return { success: false };
+    cockpitBus.nudges.override(itemRef.slice(0, 512), stateKey.slice(0, 512));
+    return { success: true };
   });
   ipcMain.on(COCKPIT_IPC.lintShown, (_e, payload: { diag_ids?: unknown; surface?: unknown }) => {
     if (!state || !payload || !Array.isArray(payload.diag_ids)) return;
@@ -397,7 +417,7 @@ function registerIpc(): void {
 }
 
 function unregisterIpc(): void {
-  for (const ch of [COCKPIT_IPC.lintList, COCKPIT_IPC.lintFix, COCKPIT_IPC.lintDismiss, COCKPIT_IPC.lintSuppress]) {
+  for (const ch of [COCKPIT_IPC.lintList, COCKPIT_IPC.lintFix, COCKPIT_IPC.lintDismiss, COCKPIT_IPC.lintSuppress, COCKPIT_IPC.nudgeOverride]) {
     ipcMain.removeHandler(ch);
   }
   ipcMain.removeAllListeners(COCKPIT_IPC.lintShown);
@@ -471,7 +491,7 @@ function registerFeed(engine: LintEngine): () => void {
       const r = withActor(by, () => engine.suppress(diagId, 'item'));
       return { success: r.success, entry: cockpitBus.feed.get(entry.id) ?? entry };
     }
-    const r = await engine.fix(diagId, actionId);
+    const r = await engine.fix(diagId, actionId, by);
     return { success: r.success, error: r.error, data: r, entry: cockpitBus.feed.get(entry.id) ?? entry };
   });
   // The Feed's built-in Dismiss (bus-side) closes the entry; record it as a lint dismissal.
@@ -543,7 +563,7 @@ export function initCockpitLint(): void {
   };
   const tick = setInterval(() => {
     cockpitBus.nudges.perHour = getCockpitConfig().cockpit.nudges.max_per_hour;
-    state?.engine.evaluate();
+    evaluateNow();
   }, EVALUATE_EVERY_MS);
   tick.unref?.();
   state.timers.push(tick);
