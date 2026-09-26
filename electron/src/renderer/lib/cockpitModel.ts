@@ -579,7 +579,6 @@ export function feedNeedsCount(rows: readonly FeedRow[]): number {
 // ---------------------------------------------------------------------------
 
 export type CockpitKeyAction =
-  | { kind: 'section'; section: SectionId }
   | { kind: 'row'; delta: 1 | -1 }
   | { kind: 'tile'; delta: 1 | -1 }
   | { kind: 'enter' }
@@ -588,12 +587,10 @@ export type CockpitKeyAction =
   | { kind: 'reply' }
   | { kind: 'checkin' }
   | { kind: 'rename' }
-  | { kind: 'launcher' }
   | { kind: 'run' }
   | { kind: 'dismiss' }
   | { kind: 'drawer' }
   | { kind: 'drawer-move'; delta: 1 | -1 }
-  | { kind: 'help' }
   | { kind: 'escape' };
 
 export interface KeyContext {
@@ -604,53 +601,80 @@ export interface KeyContext {
   meta?: boolean;
   ctrl?: boolean;
   alt?: boolean;
+  shift?: boolean;
+  /**
+   * The physical key (`KeyboardEvent.code`). The shifted punctuation chords
+   * (⌘< ⌘> ⌘{) match on it, since `key` under ⌘⇧ varies by layout and OS.
+   */
+  code?: string;
   /** The drawer has keyboard focus: ←/→ move within it. */
   drawer?: boolean;
 }
 
+/**
+ * The Cockpit's keys (display form), in the order KeyHelp lists them. Actions
+ * follow Lee's ⌘-chord convention; only navigation (arrows, Enter, Esc) is
+ * bare, so a stray keystroke can never approve, deny or send. ⌘N has no
+ * keyAction: the File > New File menu accelerator owns it, and App routes it
+ * to the Launcher while the Cockpit is showing.
+ */
+export const COCKPIT_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ['⌘0', 'Cockpit ↔ Workbench (⇧⌘0 resets zoom)'],
+  ['⌘N', 'New task (the Launcher)'],
+  ['↓ / ↑', 'Next / previous row'],
+  ['← / →', 'Previous / next agent tile'],
+  ['Enter', 'Peek at the selected agent, or open the row'],
+  ['⌘⏎ / ⌘D', 'Approve / deny the selected approval'],
+  ['⌘<', 'Reply to the selected item'],
+  ['⌘>', 'Check in on the selected agent (shows the prompt first; queued if it is busy)'],
+  ['⌘E', 'Rename the selected agent or task'],
+  ['⌘{', 'Run ▾ operations'],
+  ['⌘⌫', 'Dismiss the selected Feed entry'],
+  ['⌘T', 'Focus your tabs (the drawer)'],
+  ['Esc', 'Close popovers, clear selection'],
+];
+
 export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null {
-  if (ctx.inInput || ctx.meta || ctx.ctrl || ctx.alt) return null;
+  if (ctx.inInput || ctx.ctrl || ctx.alt) return null;
+  if (ctx.meta) {
+    if (ctx.shift) {
+      if (ctx.code === 'Comma' || key === '<') return { kind: 'reply' };
+      if (ctx.code === 'Period' || key === '>') return { kind: 'checkin' };
+      if (ctx.code === 'BracketLeft' || key === '{') return { kind: 'run' };
+      return null;
+    }
+    switch (key.length === 1 ? key.toLowerCase() : key) {
+      case 'Enter':
+        return { kind: 'approve' };
+      case 'd':
+        return { kind: 'deny' };
+      case 'e':
+        return { kind: 'rename' };
+      case 'Backspace':
+        return { kind: 'dismiss' };
+      case 't':
+        return { kind: 'drawer' };
+      default:
+        return null;
+    }
+  }
+  if (ctx.shift) return null;
   if (ctx.onControl && (key === 'Enter' || key === ' ')) return null;
-  if (key.length === 1 && key >= '1' && key <= '9' && Number(key) <= SECTIONS.length) return { kind: 'section', section: SECTIONS[Number(key) - 1] };
   if (ctx.drawer) {
-    if (key === 'ArrowLeft' || key === 'h') return { kind: 'drawer-move', delta: -1 };
-    if (key === 'ArrowRight' || key === 'l') return { kind: 'drawer-move', delta: 1 };
+    if (key === 'ArrowLeft') return { kind: 'drawer-move', delta: -1 };
+    if (key === 'ArrowRight') return { kind: 'drawer-move', delta: 1 };
   }
   switch (key) {
-    case 'j':
     case 'ArrowDown':
       return { kind: 'row', delta: 1 };
-    case 'k':
     case 'ArrowUp':
       return { kind: 'row', delta: -1 };
-    case 'h':
     case 'ArrowLeft':
       return { kind: 'tile', delta: -1 };
-    case 'l':
     case 'ArrowRight':
       return { kind: 'tile', delta: 1 };
     case 'Enter':
       return { kind: 'enter' };
-    case 'a':
-      return { kind: 'approve' };
-    case 'd':
-      return { kind: 'deny' };
-    case 'r':
-      return { kind: 'reply' };
-    case 'c':
-      return { kind: 'checkin' };
-    case 'e':
-      return { kind: 'rename' };
-    case 'n':
-      return { kind: 'launcher' };
-    case 'o':
-      return { kind: 'run' };
-    case 'x':
-      return { kind: 'dismiss' };
-    case '`':
-      return { kind: 'drawer' };
-    case '?':
-      return { kind: 'help' };
     case 'Escape':
       return { kind: 'escape' };
     default:

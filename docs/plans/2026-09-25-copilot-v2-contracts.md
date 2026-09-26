@@ -247,27 +247,30 @@ One tile per agent PTY **in this window's workspace** (any window). Data, merged
 ### 3.6 Starting agents (⇧⌘C) and the drawer
 
 - ⇧⌘C keeps its existing handler (`createTab('agent', undefined, 'claude')`). In cockpit mode the new tab is created underneath and appears as a selected tile; **Enter** goes into it. In workbench mode it becomes active and is added to `enteredPtys` (you started it where you work). No change to the launch path, so one-offs stay instant (G2 vs speed of one-offs).
-- `+ Task` / `n` opens the Launcher (§4.2) for structured launches.
-- The **drawer** lists own tabs (all docks) by label and icon only. `` ` `` focuses it, ←/→ select, Enter opens (→ workbench, `open_tab`). Clicking opens.
+- `+ Task` / `⌘N` opens the Launcher (§4.2) for structured launches.
+- The **drawer** lists own tabs (all docks) by label and icon only. `⌘T` focuses it, ←/→ select, Enter opens (→ workbench, `open_tab`). Clicking opens.
 
 ### 3.7 Keyboard map (inside the Cockpit; ignored while typing in an input)
+
+Actions use ⌘ chords, like the rest of Lee; only navigation is a bare key, so a stray keystroke never approves, denies or sends. Sections have no keys (click them). Key help opens from the header button only.
 
 | Key | Action |
 |---|---|
 | `⌘0` | Cockpit ↔ Workbench (global, registry `cockpit_toggle`; the menu's Reset Zoom moves to `⇧⌘0`) |
-| `1`–`6` | Feed, Tasks, Ops, Someday, Tabs, History |
-| `j`/`k` or ↓/↑ | next/previous row in the section |
-| `h`/`l` or ←/→ | previous/next agent tile |
+| ↓/↑ | next/previous row in the section |
+| ←/→ | previous/next agent tile |
 | `Enter` | go into the selected agent / open the selected row's target |
-| `a` / `d` | approve / deny the selected approval |
-| `r` | reply to the selected item (inline box; Enter sends, Shift+Enter newline, Esc cancels) |
-| `c` | check in on the selected agent: shows the fixed prompt and target; Enter sends, Esc cancels |
-| `n` | Launcher (new task) |
-| `o` | `Run ▾` operations menu |
-| `x` | dismiss the selected Feed entry |
-| `` ` `` | focus the drawer |
-| `?` | key help |
+| `⌘⏎` / `⌘D` | approve / deny the selected approval |
+| `⌘<` (`⇧⌘,`) | reply to the selected item (inline box; Enter sends, Shift+Enter newline, Esc cancels) |
+| `⌘>` (`⇧⌘.`) | check in on the selected agent: shows the fixed prompt and target; Enter sends, Esc cancels |
+| `⌘E` | rename the selected agent or task |
+| `⌘N` | Launcher (new task): the File ▸ New File accelerator, routed to the Launcher while the Cockpit is showing |
+| `⌘{` (`⇧⌘[`) | `Run ▾` operations menu |
+| `⌘⌫` | dismiss the selected Feed entry |
+| `⌘T` | focus the drawer |
 | `Esc` | close popovers / clear selection |
+
+The shifted punctuation chords match `KeyboardEvent.code` (Comma, Period, BracketLeft). `⌘R` stays unused: main's `before-input-event` hook treats it as Reload outside terminal, agent and browser tabs.
 
 `⌘1`–`⌘9`, ⇧⌘C and every other global chord keep working (the existing hotkey map runs first). `⌘1`–`⌘9` and next/previous tab index the filtered strip (`stripTabs`), so they match the ⌘N badges and never activate a hidden agent tab; `⌘I` (cycle idle) still may, which counts as going into it.
 

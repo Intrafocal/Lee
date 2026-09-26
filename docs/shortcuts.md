@@ -95,6 +95,34 @@ keybindings:
 | `⌘E` | `editor_markdown_preview` | editor | Toggle markdown preview (markdown files only; handled inside the editor panel) |
 | `⌘F` | `editor_find` | editor | Find in file (CodeMirror's search keymap) |
 
+## Cockpit
+
+Active only while the Cockpit is showing, and ignored while you type in a
+field. Implemented by `keyAction` in `electron/src/renderer/lib/cockpitModel.ts`
+(`COCKPIT_KEYS` is the list the in-Cockpit key help shows), not by the
+registry, so these can't be overridden in `keybindings:`. Actions follow the
+⌘-chord convention; only navigation is a bare key, so a stray keystroke can't
+approve, deny or send anything. Every global chord above keeps working,
+including `⌘1`–`⌘9` (tabs). Sections have no keys; click them.
+
+| Chord | What it does |
+|---|---|
+| `⌘N` | New task (the Launcher). The File ▸ New File accelerator, which App routes to the Launcher while the Cockpit is showing |
+| `↓` / `↑` | Next / previous row |
+| `←` / `→` | Previous / next agent tile (within the drawer once it has focus) |
+| `Enter` | Peek at the selected agent, or open the row |
+| `⌘⏎` / `⌘D` | Approve / deny the selected approval |
+| `⌘<` (`⇧⌘,`) | Reply to the selected item |
+| `⌘>` (`⇧⌘.`) | Check in on the selected agent |
+| `⌘E` | Rename the selected agent or task |
+| `⌘{` (`⇧⌘[`) | Run ▾ operations |
+| `⌘⌫` | Dismiss the selected Feed entry |
+| `⌘T` | Focus your tabs (the drawer) |
+| `Esc` | Close popovers, clear selection |
+
+`⌘R` is deliberately unused: the main process's `before-input-event` hook
+treats it as Reload everywhere except terminal, agent and browser tabs.
+
 ## Global (system-wide) shortcut
 
 Lee can register one chord that works from any application, to bring its window

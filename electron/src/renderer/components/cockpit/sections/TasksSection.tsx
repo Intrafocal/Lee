@@ -203,7 +203,7 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
                 Check in
               </button>
             )}
-            <button className="cockpit-btn" title="Rename (e)" onClick={() => handle.rename?.()}>
+            <button className="cockpit-btn" title="Rename (⌘E)" onClick={() => handle.rename?.()}>
               Rename
             </button>
           </div>

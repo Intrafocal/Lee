@@ -577,9 +577,8 @@ test('§3.2 nothing moves while the Cockpit is disabled', () => {
 // keyAction
 // ---------------------------------------------------------------------------
 
-test('nav: Copilot first, every section labelled, at most 9 (number keys), landing stays Feed', () => {
+test('nav: Copilot first, every section labelled, landing stays Feed', () => {
   assert.equal(SECTIONS[0], 'copilot');
-  assert.ok(SECTIONS.length <= 9);
   assert.equal(new Set(SECTIONS).size, SECTIONS.length);
   for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
   assert.equal(DEFAULT_SECTION, 'feed');
@@ -593,7 +592,6 @@ test('nav: Files sits between Ops and Someday', () => {
 test('nav: Explore comes right after Someday; the full order', () => {
   assert.equal(SECTIONS.indexOf('explore'), SECTIONS.indexOf('someday') + 1);
   assert.deepEqual([...SECTIONS], ['copilot', 'feed', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history']);
-  assert.equal(SECTIONS.length, 9, 'exactly fills the 1–9 number keys');
 });
 
 test('flattenFileTree: expanded dirs inline their children; a filter keeps matches and their folders', () => {
@@ -611,40 +609,62 @@ test('flattenFileTree: expanded dirs inline their children; a filter keeps match
   assert.deepEqual(flattenFileTree(root, kids, new Set(), 'zzz'), []);
 });
 
-test('keyAction: map of §3.7', () => {
+test('keyAction: map of §3.7 (⌘ chords for actions, bare keys only navigate)', () => {
   const k = (key, ctx = {}) => keyAction(key, { inInput: false, ...ctx });
-  assert.deepEqual(k('1'), { kind: 'section', section: 'copilot' });
-  assert.deepEqual(k('2'), { kind: 'section', section: 'feed' });
-  assert.deepEqual(k(String(SECTIONS.length)), { kind: 'section', section: 'history' });
-  if (SECTIONS.length < 9) assert.equal(k(String(SECTIONS.length + 1)), null, 'no section past the end');
-  assert.equal(k('0'), null);
-  assert.deepEqual(k('j'), { kind: 'row', delta: 1 });
+  const cmd = (key, ctx = {}) => k(key, { meta: true, ...ctx });
+  assert.deepEqual(k('ArrowDown'), { kind: 'row', delta: 1 });
   assert.deepEqual(k('ArrowUp'), { kind: 'row', delta: -1 });
-  assert.deepEqual(k('h'), { kind: 'tile', delta: -1 });
+  assert.deepEqual(k('ArrowLeft'), { kind: 'tile', delta: -1 });
   assert.deepEqual(k('ArrowRight'), { kind: 'tile', delta: 1 });
   assert.deepEqual(k('Enter'), { kind: 'enter' });
-  for (const [key, kind] of [['a', 'approve'], ['d', 'deny'], ['r', 'reply'], ['c', 'checkin'], ['n', 'launcher'], ['o', 'run'], ['x', 'dismiss'], ['`', 'drawer'], ['?', 'help'], ['Escape', 'escape']]) {
-    assert.deepEqual(k(key), { kind }, key);
+  assert.deepEqual(k('Escape'), { kind: 'escape' });
+  for (const [key, kind] of [['Enter', 'approve'], ['d', 'deny'], ['e', 'rename'], ['Backspace', 'dismiss'], ['t', 'drawer']]) {
+    assert.deepEqual(cmd(key), { kind }, `⌘${key}`);
+  }
+  assert.deepEqual(cmd('D'), { kind: 'deny' }, 'caps lock does not matter');
+  // Shifted punctuation matches the physical key; `key` is only a fallback.
+  for (const [code, key, kind] of [['Comma', '<', 'reply'], ['Period', '>', 'checkin'], ['BracketLeft', '{', 'run']]) {
+    assert.deepEqual(cmd(',', { shift: true, code }), { kind }, code);
+    assert.deepEqual(cmd(key, { shift: true }), { kind }, key);
   }
   assert.deepEqual(k('ArrowLeft', { drawer: true }), { kind: 'drawer-move', delta: -1 });
-  assert.deepEqual(k('l', { drawer: true }), { kind: 'drawer-move', delta: 1 });
-  assert.equal(k('z'), null);
+  assert.deepEqual(k('ArrowRight', { drawer: true }), { kind: 'drawer-move', delta: 1 });
 });
 
-test('keyAction: ignored while typing in an input, and for modifier chords', () => {
-  for (const key of ['j', 'k', 'r', 'x', 'a', 'd', 'c', 'n', 'o', '1', 'Enter', 'Escape', '`', '?']) {
-    assert.equal(keyAction(key, { inInput: true }), null, key);
+test('keyAction: no bare letter, digit or symbol does anything', () => {
+  const printable = 'abcdefghijklmnopqrstuvwxyz0123456789`~!@#$%^&*()-_=+[]{}\\|;:\'",.<>/? ';
+  for (const key of printable) {
+    assert.equal(keyAction(key, { inInput: false }), null, JSON.stringify(key));
+    assert.equal(keyAction(key.toUpperCase(), { inInput: false, shift: true }), null, JSON.stringify(key));
   }
-  assert.equal(keyAction('0', { inInput: false, meta: true }), null);
-  assert.equal(keyAction('1', { inInput: false, meta: true }), null);
-  assert.equal(keyAction('c', { inInput: false, ctrl: true }), null);
-  assert.equal(keyAction('r', { inInput: false, alt: true }), null);
+  assert.equal(keyAction('Backspace', { inInput: false }), null);
+});
+
+test('keyAction: ⌘ chords the Cockpit leaves to Lee and the OS', () => {
+  const cmd = (key, ctx = {}) => keyAction(key, { inInput: false, meta: true, ...ctx });
+  // ⌘1–9 switch tabs, ⌘0 toggles the Cockpit, ⌘N is the menu's (App routes it
+  // to the Launcher), ⌘R reloads, ⌘A/C/X/V are the Edit menu, ⌘O opens a file.
+  for (const key of ['0', '1', '9', 'n', 'r', 'a', 'c', 'x', 'v', 'o', 'w', 'i', 's', '/', ',', '[', ']', '`']) {
+    assert.equal(cmd(key), null, `⌘${key}`);
+  }
+  assert.equal(cmd('Enter', { shift: true }), null, '⇧⌘⏎');
+  assert.equal(cmd('/', { shift: true, code: 'Slash' }), null, '⇧⌘/ is Ask Hester');
+});
+
+test('keyAction: ignored while typing in an input, and for ⌃/⌥ chords', () => {
+  for (const [key, ctx] of [['ArrowDown', {}], ['Enter', {}], ['Escape', {}], ['Enter', { meta: true }], ['Backspace', { meta: true }], ['d', { meta: true }], [',', { meta: true, shift: true, code: 'Comma' }]]) {
+    assert.equal(keyAction(key, { inInput: true, ...ctx }), null, key);
+  }
+  assert.equal(keyAction('d', { inInput: false, meta: true, ctrl: true }), null);
+  assert.equal(keyAction('Enter', { inInput: false, meta: true, alt: true }), null);
+  assert.equal(keyAction('ArrowDown', { inInput: false, ctrl: true }), null);
 });
 
 test('keyAction: Enter and Space on a focused button belong to the button', () => {
   assert.equal(keyAction('Enter', { inInput: false, onControl: true }), null);
   assert.equal(keyAction(' ', { inInput: false, onControl: true }), null);
-  assert.deepEqual(keyAction('j', { inInput: false, onControl: true }), { kind: 'row', delta: 1 }, 'j/k still move from a button');
+  assert.deepEqual(keyAction('ArrowDown', { inInput: false, onControl: true }), { kind: 'row', delta: 1 }, 'arrows still move from a button');
+  assert.deepEqual(keyAction('Enter', { inInput: false, onControl: true, meta: true }), { kind: 'approve' }, '⌘⏎ still approves from a button');
   assert.deepEqual(keyAction('Enter', { inInput: false, onControl: false }), { kind: 'enter' });
 });
 
