@@ -90,7 +90,8 @@ body {
  * (a --text-1 wash over whatever fill they have). Text inputs get no ring:
  * their border brightens to --ground-5 and the caret (--caret) shows where
  * you're typing. tabindex="-1" is a script-focused container (an overlay, a
- * sheet), never a keyboard stop, so it gets no ring either.
+ * sheet), never a keyboard stop, so it gets no ring either. The input rule
+ * is wrapped in :where() so a component's own :focus style still wins.
  */
 .btn:focus-visible,
 .btn-primary:focus-visible,
@@ -113,8 +114,8 @@ textarea,
   caret-color: var(--caret);
 }
 
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
-textarea:focus {
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"])):focus,
+:where(textarea):focus {
   outline: none;
   box-shadow: none;
   border-color: var(--ground-5);
