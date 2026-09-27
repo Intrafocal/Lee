@@ -9,7 +9,7 @@
 import React from 'react';
 import { MODE_LABELS } from '../../lib/cockpitModel';
 import { cockpitModeStore, useCockpitModeState } from './cockpitMode';
-import './cockpit.css';
+import './cockpit-shell.css';
 
 export const CockpitModeChip: React.FC = () => {
   const s = useCockpitModeState();

@@ -56,19 +56,17 @@ import { RunMenu } from './RunMenu';
 import { KeyHelp } from './KeyHelp';
 import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './AgentTile';
 import { fetchGoalsStatus, patchTask, type GoalsStatusResponse } from '../../lib/hesterCockpit';
-import { CopilotSection } from './sections/CopilotSection';
-import { FeedSection } from './sections/FeedSection';
+import { HomeSection } from './sections/HomeSection';
+import { WorkSection } from './sections/WorkSection';
 import { GoalsSection } from './sections/GoalsSection';
-import { FilesSection } from './sections/FilesSection';
-import { TasksSection } from './sections/TasksSection';
+import { LibrarySection } from './sections/LibrarySection';
 import { OperationsSection } from './sections/OperationsSection';
-import { SomedaySection } from './sections/SomedaySection';
-import { ExploreSection } from './sections/ExploreSection';
 import type { Exploration } from '../../lib/hesterCockpit';
-import { TabsSection } from './sections/TabsSection';
 import { HistorySection } from './sections/HistorySection';
 import { isControlTarget, isTypingTarget } from './dom';
-import './cockpit.css';
+import './cockpit-shell.css';
+import './work.css';
+import './library.css';
 
 export type CockpitTab = Tab & { ptyId: number | null; dockPosition: DockPosition };
 
@@ -253,14 +251,14 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     cockpitModeStore.setTabDisplay(tabDisplayFromRuntime(runtime));
   }, [runtime]);
 
-  // Back after an absence: the Cockpit on Copilot, unless you're deep in a
+  // Back after an absence: the Cockpit on Home, unless you're deep in a
   // Deep session, which a short absence doesn't end (D1 §8.3).
   const returnNonce = copilot.lastReturn?.nonce ?? 0;
   useEffect(() => {
     if (!returnNonce) return;
     cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'return' }));
     const st = cockpitModeStore.get();
-    if (!(st.deepActive && st.mode === 'deep')) cockpitModeStore.setSection('copilot');
+    if (!(st.deepActive && st.mode === 'deep')) cockpitModeStore.setSection('home');
   }, [returnNonce]);
 
   // Async check-ins: toast the result of a check-in this window saw pending.
@@ -572,10 +570,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   // ---- popovers, rows, keyboard ----
   const [popover, setPopover] = useState<Popover>(null);
-  // "+ Explore" in the header: go to Explore and focus its new-exploration field.
+  // "+ Explore" in the header: go to Library's Explore and focus its new-exploration field.
   const [exploreNonce, setExploreNonce] = useState(0);
   const startExplore = useCallback(() => {
-    cockpitModeStore.setSection('explore');
+    cockpitModeStore.setSection('library');
     setExploreNonce((n) => n + 1);
   }, []);
   const [drawerFocus, setDrawerFocus] = useState(false);
@@ -691,10 +689,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     },
     [notify],
   );
-  // A fresh brief after an absence: a neutral dot on Copilot until you look.
+  // A fresh brief after an absence: a neutral dot on Home until you look.
   const [seenNonce, setSeenNonce] = useState(0);
   useEffect(() => {
-    if (shown && state.section === 'copilot') setSeenNonce(returnNonce);
+    if (shown && state.section === 'home') setSeenNonce(returnNonce);
   }, [shown, state.section, returnNonce]);
 
   const copilotApi = copilot.api;
@@ -854,20 +852,19 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   if (!state.enabled || !available || state.mode !== 'cockpit') return null;
 
+  // Scaffold: the old per-section badges folded onto the six sections until
+  // R1's rail (one ember dot, no counts, cockpit-design §2.1).
+  const tasksNav = tasksBadge(hester.snapshot?.tasks.open ?? []);
   const badges: NavBadges = {
-    copilot: copilotBadge({ returnNonce, seenNonce }),
-    feed: { count: needsCount, ember: needsCount > 0 },
+    home: copilotBadge({ returnNonce, seenNonce }),
+    work: needsCount > 0 ? { count: needsCount, ember: true } : tasksNav,
     goals: goalsBadge(goalsData?.goals),
-    tasks: tasksBadge(hester.snapshot?.tasks.open ?? []),
+    library: somedayBadge({ open: hester.snapshot?.someday.open ?? 0, untriagedOver7d: hester.snapshot?.someday.untriaged_over_7d ?? 0 }),
     ops: opsBadge({
       failing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
       proposals: ops?.proposals.length ?? 0,
       suggestions: ops?.suggestions.length ?? 0,
     }),
-    files: { count: 0, ember: false },
-    explore: { count: 0, ember: false },
-    someday: somedayBadge({ open: hester.snapshot?.someday.open ?? 0, untriagedOver7d: hester.snapshot?.someday.untriaged_over_7d ?? 0 }),
-    tabs: { count: tabs.length, ember: false },
     history: { count: 0, ember: false },
   };
 
@@ -896,9 +893,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       <div className="cockpit-body">
         <CockpitNav section={section} badges={badges} onSelect={setSection} />
         <div className="cockpit-center">
-          <div className="cockpit-section">
-            {section === 'copilot' && (
-              <CopilotSection
+          {/* A view root for nextGuard: one phosphor next step per section (cockpit-design §1.3). */}
+          <div className="cockpit-section" data-view-root="section">
+            {section === 'home' && (
+              <HomeSection
                 ctx={ctx}
                 about={lastAbout}
                 onClearAbout={() => setLastAbout(null)}
@@ -906,14 +904,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
                 returnNonce={returnNonce}
               />
             )}
-            {section === 'feed' && <FeedSection ctx={ctx} />}
+            {section === 'work' && <WorkSection ctx={ctx} />}
             {section === 'goals' && <GoalsSection ctx={ctx} />}
-            {section === 'tasks' && <TasksSection ctx={ctx} />}
+            {section === 'library' && <LibrarySection ctx={ctx} focusCreateNonce={exploreNonce} />}
             {section === 'ops' && <OperationsSection ctx={ctx} />}
-            {section === 'files' && <FilesSection ctx={ctx} />}
-            {section === 'someday' && <SomedaySection ctx={ctx} />}
-            {section === 'explore' && <ExploreSection ctx={ctx} focusCreateNonce={exploreNonce} />}
-            {section === 'tabs' && <TabsSection ctx={ctx} />}
             {section === 'history' && <HistorySection ctx={ctx} />}
           </div>
           {/* The selected section reads first; the agent tiles sit below it. */}

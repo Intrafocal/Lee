@@ -178,7 +178,7 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                   <button
                     className="cockpit-link"
                     onClick={() => {
-                      ctx.setSection('tasks');
+                      ctx.setSection('work');
                       ctx.selectRow(`task:${linked}`);
                     }}
                   >
@@ -189,7 +189,7 @@ export const SomedaySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                   <button
                     className="cockpit-link"
                     onClick={() => {
-                      ctx.setSection('explore');
+                      ctx.setSection('library');
                       ctx.selectRow(`explore:${exploration}`);
                     }}
                   >

@@ -277,7 +277,7 @@ export const cockpitModeStore = {
   requestSteward(req: StewardRequest): boolean {
     if (!state.enabled || !stewardListeners.size) return false;
     if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'manual');
-    cockpitModeStore.setSection(req.kind === 'link-goal' ? 'tasks' : 'copilot');
+    cockpitModeStore.setSection(req.kind === 'link-goal' ? 'work' : 'home');
     for (const fn of stewardListeners) fn(req);
     return true;
   },
@@ -336,7 +336,7 @@ export const cockpitModeStore = {
     if (sel === state.selected || (sel && state.selected && sel.kind === state.selected.kind && sel.id === state.selected.id)) return;
     emit({ selected: sel });
   },
-  /** Cockpit's section memory lasts the session; every app start lands on Copilot (D1 §8.3). */
+  /** Cockpit's section memory lasts the session; every app start lands on Home (D1 §8.3). */
   setSection(section: SectionId): void {
     if (section === state.section) return;
     emit({ section, selected: null });
@@ -458,13 +458,13 @@ export const cockpitModeStore = {
   canRequestEndSession(): boolean {
     return endSessionListeners.size > 0 && !!state.deep.exploration_id;
   },
-  /** Show the Cockpit on Copilot and focus the opener's field (Go deep with nothing open). */
+  /** Show the Cockpit on Home and focus the opener's field (Go deep with nothing open). */
   focusOpener(): void {
     if (!state.enabled) return;
     if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'hop');
-    cockpitModeStore.setSection('copilot');
+    cockpitModeStore.setSection('home');
     openerPending = true;
-    // After the Cockpit (and its Copilot section) has rendered and taken focus.
+    // After the Cockpit (and its Home section) has rendered and taken focus.
     setTimeout(flushOpener, 50);
   },
   onFocusOpener(cb: () => void): () => void {
@@ -504,7 +504,7 @@ export async function openExplorationInDeep(
 
 /**
  * Go deep (retired manual Focus): the exploration this window has open, else
- * the opener on Copilot.
+ * the opener on Home.
  */
 export function goDeep(api: CopilotAPI | null | undefined, workspace: string): void {
   if (!state.enabled) return;

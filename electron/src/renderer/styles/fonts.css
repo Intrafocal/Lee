@@ -1,0 +1,25 @@
+/*
+ * Newsreader: the writing typeface, for your words only (cockpit-design §0
+ * rule 3, §1.2). Variable roman and italic (wght 200-800, opsz 6-72), bundled
+ * under assets/fonts/ with its OFL. Never fetched at runtime (C1).
+ * Use it through var(--font-write). The opsz axis follows the font size
+ * (font-optical-sizing: auto, the browser default); nothing turns it off.
+ */
+
+@font-face {
+  font-family: 'Newsreader';
+  src: url('../assets/fonts/Newsreader-VariableFont.woff2') format('woff2-variations'),
+       url('../assets/fonts/Newsreader-VariableFont.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Newsreader';
+  src: url('../assets/fonts/Newsreader-Italic-VariableFont.woff2') format('woff2-variations'),
+       url('../assets/fonts/Newsreader-Italic-VariableFont.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: italic;
+  font-display: swap;
+}

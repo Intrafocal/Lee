@@ -29,10 +29,10 @@ import type { CockpitCtx } from './CockpitHost';
 /** Select or open what an `open` proposal (or a Goals row) points at. */
 export async function openItem(ctx: CockpitCtx, target: 'task' | 'exploration' | 'goal' | 'workstream', id: string): Promise<void> {
   if (target === 'task') {
-    ctx.setSection('tasks');
+    ctx.setSection('work');
     ctx.selectRow(`task:${id}`);
   } else if (target === 'exploration') {
-    ctx.setSection('explore');
+    ctx.setSection('library');
     ctx.selectRow(`explore:${id}`);
   } else if (target === 'goal') {
     ctx.setSection('goals');
@@ -107,7 +107,7 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
     case 'explore': {
       const r = await createExploration(ws, { seed: plan.seed, origin: { kind: 'hester' } });
       if (!r.ok) return { ok: false, error: r.error };
-      ctx.setSection('explore');
+      ctx.setSection('library');
       ctx.selectRow(`explore:${r.data.id}`);
       return { ok: true, message: `Exploration started: ${r.data.title}` };
     }

@@ -1,0 +1,163 @@
+/*
+ * library.css - Library (cockpit-design §5; package R2): Files, Explore and
+ * Someday. Split out of cockpit.css by the scaffold as a pure move; loaded
+ * after cockpit-shell.css and work.css (CockpitHost imports all three).
+ */
+
+/* Files section */
+
+.cockpit-files {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.cockpit-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cockpit-file-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.cockpit-file-row.is-selected {
+  background: var(--bg-tertiary);
+  color: var(--accent-light);
+}
+
+.cockpit-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cockpit-file-open {
+  margin-left: auto;
+  opacity: 0;
+}
+
+.cockpit-file-row:hover .cockpit-file-open,
+.cockpit-file-row.is-selected .cockpit-file-open {
+  opacity: 1;
+}
+
+/* Explore section */
+
+.cockpit-explore-notes {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cockpit-explore-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cockpit-explore-node-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+  color: var(--text-secondary);
+}
+
+.cockpit-explore-node-label {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cockpit-explore-node.is-pruned .cockpit-explore-node-label {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.cockpit-explore-node-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: auto;
+  opacity: 0;
+}
+
+.cockpit-explore-node-line:hover .cockpit-explore-node-actions,
+.cockpit-explore-node-actions:focus-within {
+  opacity: 1;
+}
+
+.cockpit-explore-node-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1) 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cockpit-explore-node-detail .cockpit-agent-words {
+  flex-basis: 100%;
+}
+
+.cockpit-explore-diffstat {
+  flex-basis: 100%;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.cockpit-explore-inline {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.cockpit-explore-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  max-width: 640px;
+}
+
+.cockpit-explore-menu {
+  display: inline-flex;
+  flex-direction: column;
+  margin-top: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-secondary);
+}
+
+.cockpit-explore-log {
+  margin-top: var(--space-2);
+}
+
+.cockpit-explore-log summary {
+  cursor: pointer;
+}
+
+/* Someday section */
+
+.cockpit-someday-text {
+  white-space: normal;
+}

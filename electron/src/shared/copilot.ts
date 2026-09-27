@@ -6,7 +6,7 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
-import type { DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
+import type { AgentActivity, AgentNow, DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -349,6 +349,10 @@ export interface AgentSummary {
   /** The agent's last message; clipped to ~280 chars in compact snapshots. */
   last_summary: string | null;
   files_touched_count: number;
+  /** Cockpit design §7.1: what it's doing now (the open tool, else the last entry within 60s). */
+  now?: AgentNow | null;
+  /** Cockpit design §7.1: the last 8 activity entries, newest last. */
+  recent?: AgentActivity[];
 }
 
 export interface AttentionSnapshot {

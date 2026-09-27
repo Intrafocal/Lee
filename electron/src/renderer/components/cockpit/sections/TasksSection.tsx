@@ -335,7 +335,7 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
                     }
                     ctx.hester.refresh();
                     ctx.notify(`Exploration started: ${r.data.exploration.title}`);
-                    ctx.setSection('explore');
+                    ctx.setSection('library');
                     ctx.selectRow(`explore:${r.data.exploration.id}`);
                   })
                   .finally(() => setBusy(false));

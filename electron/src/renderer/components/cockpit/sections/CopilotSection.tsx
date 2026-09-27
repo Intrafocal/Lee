@@ -405,8 +405,8 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
               {digest.waiting.length > 0 && (
                 <div className="cockpit-brief-line">
                   {digest.waiting.length} waiting on you{' '}
-                  <button className="cockpit-link" onClick={() => ctx.setSection('feed')}>
-                    → Feed
+                  <button className="cockpit-link" onClick={() => ctx.setSection('work')}>
+                    → Work
                   </button>
                 </div>
               )}

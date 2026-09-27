@@ -70,3 +70,10 @@ flutter:
           weight: 400
         - asset: assets/fonts/JetBrainsMono-Bold.ttf
           weight: 700
+    # Your words (cockpit-design §1.2, 13 v6). Variable roman and italic,
+    # wght 200-800 and opsz 6-72; OFL in assets/fonts/Newsreader-OFL.txt.
+    - family: Newsreader
+      fonts:
+        - asset: assets/fonts/Newsreader-VariableFont.ttf
+        - asset: assets/fonts/Newsreader-Italic-VariableFont.ttf
+          style: italic

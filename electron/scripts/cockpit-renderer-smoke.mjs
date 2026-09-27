@@ -8,7 +8,9 @@
  * with esbuild, no React, no DOM. Also: Hester chat / DevOps are own tabs,
  * useHotkeys' chord builder matching ⇧⌘0 / ⌥⌘0 / ⌘. on e.code (D1 §1.3),
  * and the cockpitMode store's landing, Deep memory and switcher (bundled
- * with react external).
+ * with react external). Cockpit design scaffold: describeActivity's table
+ * (both tenses, failures, several files), LEGACY_SECTION / readSection, the
+ * six sections, QUICK_REPLIES and the nextGuard.
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -22,16 +24,25 @@ import * as esbuild from 'esbuild';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcPath = join(__dirname, '../src/renderer/lib/cockpitModel.ts');
 
-const result = await esbuild.build({ entryPoints: [srcPath], bundle: false, format: 'esm', platform: 'node', write: false });
+// Bundled so shared/cockpit.ts's pure values (LEGACY_SECTION) come along; any
+// other runtime import (React, the DOM, IPC) would stay external and fail here.
+const result = await esbuild.build({ entryPoints: [srcPath], bundle: true, format: 'esm', platform: 'node', write: false });
 const code = result.outputFiles[0].text;
 assert.ok(!/^\s*import\s/m.test(code), 'cockpitModel.ts must have type-only imports (pure)');
+const sharedResult = await esbuild.build({ entryPoints: [join(__dirname, '../src/shared/cockpit.ts')], bundle: true, format: 'esm', platform: 'node', write: false });
+const sharedCode = sharedResult.outputFiles[0].text;
+assert.ok(!/^\s*import\s/m.test(sharedCode), 'shared/cockpit.ts must have type-only imports (pure)');
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'lee-cockpit-smoke-'));
 const tmpFile = join(tmpDir, 'cockpitModel.mjs');
 writeFileSync(tmpFile, code);
+const sharedFile = join(tmpDir, 'cockpitShared.mjs');
+writeFileSync(sharedFile, sharedCode);
 let mod;
+let shared;
 try {
   mod = await import(pathToFileURL(tmpFile).href);
+  shared = await import(pathToFileURL(sharedFile).href);
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
@@ -65,6 +76,7 @@ const {
   SECTIONS,
   SECTION_LABELS,
   DEFAULT_SECTION,
+  readSection,
   flattenFileTree,
   tabDisplayFromRuntime,
   checkinToasts,
@@ -647,22 +659,10 @@ test('switcher: the chip opens the same cards; ⌘ release does not commit; clic
 // keyAction
 // ---------------------------------------------------------------------------
 
-test('nav: Copilot first, every section labelled, landing on Copilot (D1 §8.3)', () => {
-  assert.equal(SECTIONS[0], 'copilot');
-  assert.equal(new Set(SECTIONS).size, SECTIONS.length);
+test('nav: six sections, Home first, every section labelled, landing on Home (cockpit-design §2.2)', () => {
+  assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'library', 'ops', 'history']);
   for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
-  assert.equal(DEFAULT_SECTION, 'copilot');
-});
-
-test('nav: Files sits between Ops and Someday', () => {
-  assert.equal(SECTIONS.indexOf('files'), SECTIONS.indexOf('ops') + 1);
-  assert.equal(SECTIONS.indexOf('someday'), SECTIONS.indexOf('files') + 1);
-});
-
-test('nav: Explore comes right after Someday; the full order', () => {
-  assert.equal(SECTIONS.indexOf('explore'), SECTIONS.indexOf('someday') + 1);
-  assert.equal(SECTIONS[2], 'goals');
-  assert.deepEqual([...SECTIONS], ['copilot', 'feed', 'goals', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history']);
+  assert.equal(DEFAULT_SECTION, 'home');
 });
 
 test('flattenFileTree: expanded dirs inline their children; a filter keeps matches and their folders', () => {
@@ -776,19 +776,19 @@ async function bundle(rel, name) {
     assert.equal(store.get().mode, 'cockpit');
     store.configure(true);
     assert.equal(store.get().mode, 'cockpit');
-    assert.equal(store.get().section, 'copilot');
-    store.setSection('feed');
+    assert.equal(store.get().section, 'home');
+    store.setSection('work');
     store.configure(true);
-    assert.equal(store.get().section, 'feed', 'the section is remembered within the session');
-    store.setSection('copilot');
+    assert.equal(store.get().section, 'work', 'the section is remembered within the session');
+    store.setSection('home');
   });
 
   test('store: ⇧⌘0 with nothing open never shows an empty Deep (it opens a blank Page once one exists)', () => {
-    store.setSection('tasks');
+    store.setSection('work');
     store.toggleDeep();
     assert.equal(store.get().mode, 'cockpit', 'no Deep until the blank exploration exists');
-    assert.equal(store.get().section, 'tasks', 'the opener is not forced');
-    store.setSection('copilot');
+    assert.equal(store.get().section, 'work', 'the opener is not forced');
+    store.setSection('home');
   });
 
   test('store: openDeep remembers the exploration and shows Deep (deep_start, then hop)', () => {
@@ -848,9 +848,9 @@ async function bundle(rel, name) {
   const offOpener = store.onFocusOpener(() => (openerFocused += 1));
   store.focusOpener();
   await new Promise((r) => setTimeout(r, 80));
-  test('store: focusOpener shows the Cockpit on Copilot and focuses the opener once', () => {
+  test('store: focusOpener shows the Cockpit on Home and focuses the opener once', () => {
     assert.equal(store.get().mode, 'cockpit');
-    assert.equal(store.get().section, 'copilot');
+    assert.equal(store.get().section, 'home');
     assert.equal(openerFocused, 1);
   });
   offOpener();
@@ -976,5 +976,130 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
   assert.deepEqual(mod.rendererAction({ success: true, data: { success: true, data: { renderer_action: 'what-next' } } }), { action: 'what-next', taskId: null });
   assert.equal(mod.rendererAction({ success: true }), null);
 });
+
+// ---------------------------------------------------------------------------
+// Cockpit design scaffold (cockpit-design §9, §10 S): describeActivity's
+// §7.1 table in both tenses, and the section migration.
+// ---------------------------------------------------------------------------
+
+{
+  const { describeActivity, LEGACY_SECTION, QUICK_REPLIES } = shared;
+  const act = (tool, preview = '', files = [], extra = {}) => ({ tool, preview, files, ...extra });
+
+  test('describeActivity: edits, one file and several (now and past)', () => {
+    for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
+      assert.equal(describeActivity(act(tool, '/ws/src/main.ts', ['/ws/src/main.ts'])), 'Editing main.ts', tool);
+      assert.equal(describeActivity(act(tool, '/ws/src/main.ts', ['/ws/src/main.ts']), 'past'), 'Edited main.ts', tool);
+    }
+    assert.equal(describeActivity(act('MultiEdit', '/ws/a.ts', ['/ws/a.ts', '/ws/b.ts', '/ws/c.ts'])), 'Editing 3 files');
+    assert.equal(describeActivity(act('Edit', '', ['/ws/a.ts', '/ws/b.ts']), 'past'), 'Edited 2 files');
+    assert.equal(describeActivity(act('Write', '/ws/notes/plan.md')), 'Editing plan.md', 'no files: the preview names it');
+    assert.equal(describeActivity(act('Edit')), 'Editing', 'nothing names a file');
+  });
+
+  test('describeActivity: reads', () => {
+    assert.equal(describeActivity(act('Read', '/ws/README.md', ['/ws/README.md'])), 'Reading README.md');
+    assert.equal(describeActivity(act('Read', '', ['/a', '/b', '/c', '/d'])), 'Reading 4 files');
+    assert.equal(describeActivity(act('Read', '/ws/README.md', ['/ws/README.md']), 'past'), 'Read README.md');
+    assert.equal(describeActivity(act('Read', '', ['/a', '/b']), 'past'), 'Read 2 files');
+  });
+
+  test('describeActivity: searches, with the pattern only when the preview is one (≤ 30 chars)', () => {
+    assert.equal(describeActivity(act('Grep', 'describeActivity')), 'Searching for describeActivity');
+    assert.equal(describeActivity(act('Glob', 'src/**/*.tsx')), 'Searching for src/**/*.tsx');
+    assert.equal(describeActivity(act('Grep', 'describeActivity'), 'past'), 'Searched for describeActivity');
+    assert.equal(describeActivity(act('Grep', 'x'.repeat(31))), 'Searching', 'too long');
+    assert.equal(describeActivity(act('Grep', '/Users/ben/Development/Lee')), 'Searching', 'a path is not a pattern');
+    assert.equal(describeActivity(act('Glob', '')), 'Searching');
+    assert.equal(describeActivity(act('Glob', ''), 'past'), 'Searched');
+  });
+
+  test('describeActivity: Bash as tests, builds, git, else its first word', () => {
+    const now = (cmd) => describeActivity(act('Bash', cmd));
+    const past = (cmd) => describeActivity(act('Bash', cmd), 'past');
+    for (const cmd of ['npm test', 'pytest tests/copilot -q', 'npx jest', 'npx vitest run', 'node scripts/cockpit-renderer-smoke.mjs', 'PYTHONPATH=. python -m pytest']) {
+      assert.equal(now(cmd), 'Running tests', cmd);
+      assert.equal(past(cmd), 'Ran tests', cmd);
+    }
+    for (const cmd of ['npm run build', 'npm run build:main', 'npm run dist', 'npx tsc --noEmit', 'idf.py flash']) {
+      assert.equal(now(cmd), 'Building', cmd);
+      assert.equal(past(cmd), 'Built', cmd);
+    }
+    assert.equal(now('git status --short'), 'Using git');
+    assert.equal(now('git commit -m "fix the test"'), 'Using git', 'git by its first word, whatever the message says');
+    assert.equal(past('git push'), 'Used git');
+    assert.equal(now('ls -la'), 'Running ls');
+    assert.equal(now('/usr/bin/python3 x.py'), 'Running python3');
+    assert.equal(past('curl -s localhost:9000/health'), 'Ran curl');
+    assert.equal(now(''), 'Running a command');
+  });
+
+  test('describeActivity: web, subagents, questions, anything else', () => {
+    assert.equal(describeActivity(act('WebFetch', 'https://example.com')), 'Reading the web');
+    assert.equal(describeActivity(act('WebSearch', 'newsreader font')), 'Reading the web');
+    assert.equal(describeActivity(act('WebFetch'), 'past'), 'Read the web');
+    assert.equal(describeActivity(act('Task', 'explore the repo')), 'Working with a subagent');
+    assert.equal(describeActivity(act('Agent')), 'Working with a subagent');
+    assert.equal(describeActivity(act('Agent'), 'past'), 'Worked with a subagent');
+    assert.equal(describeActivity(act('AskUserQuestion')), 'Asking you a question');
+    assert.equal(describeActivity(act('AskUserQuestion'), 'past'), 'Asked you a question');
+    assert.equal(describeActivity(act('mcp__linear__create_issue', '{"title":"x"}')), 'mcp__linear__create_issue');
+    assert.equal(describeActivity(act('TodoWrite'), 'past'), 'TodoWrite');
+  });
+
+  test('describeActivity: a failed entry says so, in either tense', () => {
+    assert.equal(describeActivity(act('Bash', 'npm test', [], { failed: true })), 'Running tests (failed)');
+    assert.equal(describeActivity(act('Bash', 'npm test', [], { failed: true }), 'past'), 'Ran tests (failed)');
+    assert.equal(describeActivity(act('Edit', '', ['/a', '/b'], { failed: true }), 'past'), 'Edited 2 files (failed)');
+    assert.equal(describeActivity(act('Weird', '', [], { failed: true })), 'Weird (failed)');
+    assert.equal(describeActivity(act('Read', '/x', ['/x'], { failed: false })), 'Reading x');
+  });
+
+  test('LEGACY_SECTION: every old id to its new section; new ids to themselves', () => {
+    const expected = {
+      copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library',
+      home: 'home', work: 'work', goals: 'goals', library: 'library', ops: 'ops', history: 'history',
+    };
+    assert.deepEqual({ ...LEGACY_SECTION }, expected);
+    for (const id of SECTIONS) assert.equal(LEGACY_SECTION[id], id, id);
+    for (const target of Object.values(LEGACY_SECTION)) assert.ok(SECTIONS.includes(target), target);
+  });
+
+  test('readSection: maps through LEGACY_SECTION; unknown, empty and prototype keys land on Home', () => {
+    for (const [from, to] of Object.entries(LEGACY_SECTION)) assert.equal(readSection(from), to, from);
+    assert.equal(readSection('nope'), 'home');
+    assert.equal(readSection(''), 'home');
+    assert.equal(readSection(null), 'home');
+    assert.equal(readSection(undefined), 'home');
+    assert.equal(readSection('toString'), 'home');
+    assert.equal(readSection('__proto__'), 'home');
+  });
+
+  const guardBuilt = await esbuild.build({ entryPoints: [join(__dirname, '../src/renderer/components/cockpit/ui/nextGuard.ts')], bundle: true, format: 'esm', platform: 'node', write: false });
+  const g = await import(`data:text/javascript;base64,${Buffer.from(guardBuilt.outputFiles[0].text).toString('base64')}`);
+  test('nextGuard: a second next button in one view root warns; other roots and unmounts do not', () => {
+    assert.equal(g.nextGuard.enabled, false, 'off outside Vite development');
+    const warnings = [];
+    const guard = g.createNextGuard({ warn: (m) => warnings.push(m) });
+    const home = {};
+    const work = {};
+    const offA = guard.register(home, 'Continue');
+    guard.register(work, 'Allow');
+    assert.equal(warnings.length, 0);
+    const offB = guard.register(home, 'Send');
+    assert.equal(guard.count(home), 2);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /2 next buttons.*"Continue", "Send"/);
+    offB();
+    offA();
+    assert.equal(guard.count(home), 0);
+    guard.register(home, 'Continue');
+    assert.equal(warnings.length, 1, 'one again after the others unmounted');
+  });
+
+  test('QUICK_REPLIES: the four, in order (same list as Aeronaut quickReplyChips)', () => {
+    assert.deepEqual([...QUICK_REPLIES], ['Yes, go ahead', 'Stop and wait for me', 'Explain first', 'Show me the diff']);
+  });
+}
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

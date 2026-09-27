@@ -957,3 +957,115 @@ export function encodeWorkspaceHeader(workspace: string): string {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Cockpit design (docs/plans/2026-09-27-cockpit-design-contracts.md §9)
+// ---------------------------------------------------------------------------
+
+/** The six Cockpit sections (§2.2). Remembered ids from older builds map through LEGACY_SECTION. */
+export type SectionId = 'home' | 'work' | 'goals' | 'library' | 'ops' | 'history';
+
+/** Every section id Lee has used, old and new, to its section now (§2.2). */
+export const LEGACY_SECTION: Record<string, SectionId> = {
+  copilot: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library', tabs: 'home',
+  home: 'home', work: 'work', goals: 'goals', library: 'library', ops: 'ops', history: 'history',
+};
+
+/**
+ * The quick replies (§4.4): Work's list card shows the first three, the
+ * detail view all four. Same list as aeronaut/lib/widgets/attention_tile.dart
+ * quickReplyChips; change both together.
+ */
+export const QUICK_REPLIES = ['Yes, go ahead', 'Stop and wait for me', 'Explain first', 'Show me the diff'] as const;
+
+/** One entry of an agent session's activity ring (§7.1), from agent.tool pre and post. */
+export interface AgentActivity {
+  at: string;
+  tool: string;
+  /** toolPreview, capped at 160 chars. */
+  preview: string;
+  files: string[];
+  writes: boolean;
+  failed?: true;
+  phase: 'pre' | 'post';
+}
+
+/** What an agent is doing now (§7.1): the open tool, else the last entry within 60s. */
+export interface AgentNow {
+  tool: string;
+  preview: string;
+  files: string[];
+  since: string;
+}
+
+type ActivityVerb = { now: string; past: string };
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
+const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent']);
+const SEARCH_PATTERN_MAX = 30;
+
+const EDITING: ActivityVerb = { now: 'Editing', past: 'Edited' };
+const READING: ActivityVerb = { now: 'Reading', past: 'Read' };
+
+function baseName(path: string): string {
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+/** "Editing main.ts", "Editing 3 files", or the bare verb when nothing names a file. */
+function onFiles(verb: string, files: readonly string[], preview: string): string {
+  if (files.length > 1) return `${verb} ${files.length} files`;
+  const one = files[0] ?? preview.trim();
+  return one ? `${verb} ${baseName(one)}` : verb;
+}
+
+/** A Bash command in words: tests, builds and git by name, else its first word. */
+function describeCommand(command: string, past: boolean): string {
+  const words = command.trim().split(/\s+/).filter((w) => w && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+  const first = words[0] ? baseName(words[0]) : '';
+  if (first === 'git') return past ? 'Used git' : 'Using git';
+  const lower = command.toLowerCase();
+  if (/\b(test|tests|pytest|jest|vitest|smoke)\b/.test(lower)) return past ? 'Ran tests' : 'Running tests';
+  if (/\b(build|dist|tsc)\b|\bidf\.py\b/.test(lower)) return past ? 'Built' : 'Building';
+  if (!first) return past ? 'Ran a command' : 'Running a command';
+  return `${past ? 'Ran' : 'Running'} ${first}`;
+}
+
+/**
+ * A tool call as a short phrase (§7.1): present tense for "what it's doing
+ * now", past tense for the "Along the way" timeline. A failed entry gets
+ * " (failed)". Pure, so the renderer and the smokes share it; the Dart and
+ * C++ ports copy this table (13 v6).
+ */
+export function describeActivity(
+  a: { tool: string; preview: string; files: string[]; failed?: boolean },
+  tense: 'now' | 'past' = 'now',
+): string {
+  const past = tense === 'past';
+  const preview = a.preview ?? '';
+  const files = a.files ?? [];
+  let phrase: string;
+  if (EDIT_TOOLS.has(a.tool)) {
+    phrase = onFiles(EDITING[tense], files, preview);
+  } else if (a.tool === 'Read') {
+    phrase = onFiles(READING[tense], files, preview);
+  } else if (SEARCH_TOOLS.has(a.tool)) {
+    const p = preview.trim();
+    // toolPreview prefers a path over the pattern; a path or JSON is not a pattern.
+    const pattern = p && p !== a.tool && p.length <= SEARCH_PATTERN_MAX && !/^[/~{[]/.test(p) ? p : '';
+    phrase = `${past ? 'Searched' : 'Searching'}${pattern ? ` for ${pattern}` : ''}`;
+  } else if (a.tool === 'Bash') {
+    phrase = describeCommand(preview, past);
+  } else if (WEB_TOOLS.has(a.tool)) {
+    phrase = past ? 'Read the web' : 'Reading the web';
+  } else if (SUBAGENT_TOOLS.has(a.tool)) {
+    phrase = past ? 'Worked with a subagent' : 'Working with a subagent';
+  } else if (a.tool === 'AskUserQuestion') {
+    phrase = past ? 'Asked you a question' : 'Asking you a question';
+  } else {
+    phrase = a.tool;
+  }
+  return a.failed ? `${phrase} (failed)` : phrase;
+}

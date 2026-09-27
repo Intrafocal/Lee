@@ -16,7 +16,7 @@ import ReactDOM from 'react-dom';
 import type { LeeMode } from '../../../shared/cockpit';
 import { MODES, MODE_LABELS } from '../../lib/cockpitModel';
 import { cockpitModeStore, endDeepSession, useCockpitModeState, type CockpitModeState } from './cockpitMode';
-import './cockpit.css';
+import './cockpit-shell.css';
 
 /**
  * useHotkeys' intercept: while the switcher is pending or open it takes Esc,

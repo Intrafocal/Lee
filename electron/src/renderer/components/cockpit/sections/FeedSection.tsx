@@ -47,7 +47,7 @@ function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
       open: () => {
         if (e.ref.pty_id != null) ctx.focusPty(e.ref.pty_id);
         else if (e.ref.task_id) {
-          ctx.setSection('tasks');
+          ctx.setSection('work');
           ctx.selectRow(`task:${e.ref.task_id}`);
         } else if (e.ref.op || e.ref.proposal_id) ctx.setSection('ops');
       },
@@ -60,7 +60,7 @@ function rowHandle(ctx: CockpitCtx, row: FeedRow): RowHandle {
     title: row.title,
     about: { kind: 'task', id: ev.task_id, label: row.title },
     open: () => {
-      ctx.setSection('tasks');
+      ctx.setSection('work');
       ctx.selectRow(`task:${ev.task_id}`);
     },
   };

@@ -1,8 +1,9 @@
 /**
  * Pure Cockpit model (contracts §3, §4; Deep D1 §1): mode transitions, the
  * ⌘0 switcher, agent tiles, the merged Feed and the Cockpit keyboard map. No
- * React, no DOM, type-only imports, so scripts/cockpit-renderer-smoke.mjs can compile
- * it with esbuild and run it under plain node.
+ * React, no DOM, type-only imports (plus pure values from shared/cockpit), so
+ * scripts/cockpit-renderer-smoke.mjs can bundle it with esbuild and run it
+ * under plain node.
  */
 
 import type { AgentState, AgentSummary, AttentionItem, AttentionSnapshot } from '../../shared/copilot';
@@ -24,28 +25,36 @@ import type {
   TabFidelity,
   TabRunState,
   TabRuntimeInfo,
+  SectionId,
 } from '../../shared/cockpit';
+// The one value import: pure data from shared (the smoke bundles it in).
+import { LEGACY_SECTION } from '../../shared/cockpit';
 
-export type SectionId = 'copilot' | 'feed' | 'goals' | 'tasks' | 'ops' | 'files' | 'someday' | 'explore' | 'tabs' | 'history';
+export type { SectionId };
 
-/** Nav order (sections have no keys: click only). Copilot (Hester) is always first; Goals third (v4 §8.1). */
-export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'goals', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history'];
+/** Nav order (sections have no keys: click only). Home first (cockpit-design §2.2). */
+export const SECTIONS: readonly SectionId[] = ['home', 'work', 'goals', 'library', 'ops', 'history'];
 
-/** Where the Cockpit lands on app start and on return (Deep D1 §8.3). */
-export const DEFAULT_SECTION: SectionId = 'copilot';
+/** Where the Cockpit lands on app start and on return (Deep D1 §8.3; cockpit-design §2.2). */
+export const DEFAULT_SECTION: SectionId = 'home';
 
 export const SECTION_LABELS: Record<SectionId, string> = {
-  copilot: 'Copilot',
-  feed: 'Feed',
+  home: 'Home',
+  work: 'Work',
   goals: 'Goals',
-  tasks: 'Tasks',
+  library: 'Library',
   ops: 'Ops',
-  files: 'Files',
-  someday: 'Someday',
-  explore: 'Explore',
-  tabs: 'Tabs',
   history: 'History',
 };
+
+/**
+ * A remembered or requested section id, old or new, as a section now
+ * (cockpit-design §2.2): copilot and tabs → home, feed and tasks → work,
+ * explore, someday and files → library. Unknown ids land on the default.
+ */
+export function readSection(id: string | null | undefined): SectionId {
+  return (id && Object.prototype.hasOwnProperty.call(LEGACY_SECTION, id) ? LEGACY_SECTION[id] : null) ?? DEFAULT_SECTION;
+}
 
 /** The renderer tab fields the Cockpit needs (a structural subset of App's TabData). */
 export interface ModelTab {

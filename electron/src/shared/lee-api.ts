@@ -138,6 +138,11 @@ export interface LeeAPI {
      * (default 'quit'). The ending ritual has normally sent deepEnd already.
      */
     quit: (reason?: FocusEndReason) => void;
+    /**
+     * Cockpit design §7.2: the user's first name for Home's greeting
+     * (app.user_name, else the macOS full name's first word), or null.
+     */
+    userName: () => Promise<string | null>;
   };
   dialog: {
     showOpenDialog: (options: { properties?: string[]; title?: string }) => Promise<OpenDialogResult>;

@@ -275,7 +275,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
   const dive = (exp: Exploration) => withBusy(exp.id, () => ctx.openExploration(exp));
 
   const openTask = (taskId: string) => {
-    ctx.setSection('tasks');
+    ctx.setSection('work');
     ctx.selectRow(`task:${taskId}`);
   };
 

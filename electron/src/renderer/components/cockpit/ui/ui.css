@@ -1,0 +1,334 @@
+/*
+ * ui.css - the Cockpit primitives (cockpit-design §1.3). Tokens only: grounds
+ * and text from tokens.css, phosphor through --accent-next, ember through
+ * --needs-you, your words through --font-write. Focus rings come from the
+ * global rule (§1.4); a list's selected item uses --focus-ring here.
+ */
+
+/* SectionHead */
+
+.ui-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  min-width: 0;
+}
+
+.ui-section-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.ui-section-summary {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ui-section-right {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Eyebrow */
+
+.ui-eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.ui-eyebrow.is-needs {
+  color: var(--needs-you);
+}
+
+.ui-eyebrow-right {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-3);
+}
+
+/* Dot */
+
+.ui-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.ui-dot.is-needs {
+  background: var(--needs-you);
+}
+
+.ui-dot.is-working {
+  background: var(--accent-next);
+}
+
+.ui-dot.is-done {
+  border: 1px solid var(--text-2);
+}
+
+.ui-dot.is-idle {
+  background: var(--text-3);
+}
+
+/* Card */
+
+.ui-card {
+  display: block;
+  padding: var(--space-4);
+  border: 1px solid var(--ground-3);
+  border-radius: 10px;
+  background: var(--ground-2);
+  color: var(--text-1);
+  text-align: left;
+}
+
+.ui-card + .ui-card {
+  margin-top: var(--space-2);
+}
+
+.ui-card.is-raised {
+  background: var(--ground-3);
+  border-color: var(--ground-5);
+}
+
+.ui-card.is-openable {
+  cursor: pointer;
+}
+
+.ui-card.is-openable:hover {
+  border-color: var(--ground-4);
+}
+
+.ui-card.is-raised.is-openable:hover {
+  border-color: var(--ground-5);
+}
+
+.ui-card.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+/* A Card holding Rows: the rows carry the padding and share hairlines. */
+.ui-card > .ui-row:first-child {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.ui-card > .ui-row:last-child {
+  margin-bottom: calc(-1 * var(--space-2));
+}
+
+/* Row */
+
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) 0;
+  border: none;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+}
+
+.ui-row + .ui-row {
+  border-top: 1px solid var(--ground-3);
+}
+
+.ui-row.is-openable {
+  cursor: pointer;
+}
+
+.ui-row.is-openable:hover .ui-row-chevron {
+  color: var(--text-2);
+}
+
+.ui-row.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  border-radius: var(--radius-control);
+}
+
+.ui-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-row-title {
+  font-size: 14px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-row-sub {
+  font-size: 13px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-row-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.ui-row-chevron {
+  font-size: 14px;
+  color: var(--text-3);
+}
+
+/* Chip */
+
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid var(--ground-4);
+  border-radius: 16px;
+  background: var(--ground-3);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-chip:hover:not(:disabled) {
+  border-color: var(--ground-5);
+}
+
+.ui-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Btn */
+
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ui-btn.is-next {
+  background: var(--accent-next);
+  color: var(--on-phosphor);
+}
+
+.ui-btn.is-next:hover:not(:disabled) {
+  background: var(--phosphor-hi);
+}
+
+.ui-btn.is-plain {
+  background: var(--ground-4);
+  color: var(--text-1);
+}
+
+.ui-btn.is-plain:hover:not(:disabled) {
+  background: var(--ground-5);
+}
+
+.ui-btn.is-quiet {
+  padding-left: 0;
+  padding-right: 0;
+  background: none;
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.ui-btn.is-quiet:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.ui-kbd {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.ui-btn.is-next .ui-kbd {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* QuietLinks */
+
+.ui-quiet-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--ground-4);
+}
+
+.ui-quiet-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ui-quiet-link:hover {
+  color: var(--text-1);
+}
+
+/* WritingQuote: your words */
+
+.ui-writing-quote {
+  margin: var(--space-2) 0;
+  font-family: var(--font-write);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--text-2);
+}
