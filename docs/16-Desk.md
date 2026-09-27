@@ -66,6 +66,25 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 
 **Migration:** each existing exploration becomes a Page card in an Area named after it. Its node tree and chat log are dropped.
 
+## 6. Cockpit and Desk
+
+*Decided 2026-09-27.* The three modes are **Desk** (deep work), **Cockpit** (orchestration) and **Manual** (hands on).
+
+**The Cockpit's job is reassurance.** It exists so you trust that the work is handled, and feel free to go back to the Desk. What reassures you stays in the Cockpit; your own thinking moves to the Desk.
+
+| Today | Goes to |
+|---|---|
+| Work, Ops | Cockpit (unchanged) |
+| **History** | Folded into **Home**: a "shipped this week" strip, the weekly retro. Usage moves to Ops |
+| Goals: status (metrics, on track, Evaluate) | Cockpit's **Goals** |
+| Goals: the Goals Page | The Desk, pinned in every Area (§2) |
+| Library: explorations | The Desk: Areas and Drawers |
+| Library: ideas (Someday) | The Desk: an **"Ideas" Drawer** next to the Drawers of put-away Areas. Captures from the phone and T-Deck land there. Drag one onto an Area to start a Page from it |
+| Library: files | The Desk (Workbench) and Manual |
+| Home's opener ("What's on your mind?", start-from links) | The Desk's front: typing on an empty Area starts a Page |
+
+**The Cockpit becomes Home, Work, Goals and Ops** (`⌘1`–`⌘4`). **Home** is one reassuring sentence ("Everything's handled. Two agents working, one needs you."), the one or two things that need you (answerable there), what shipped, and one big door, **Back to your Desk**, showing your last card and your stopped-at line. You check the Cockpit and then leave it; the Desk is where you stay.
+
 ## 6. Still open
 
 - **The action row's vocabulary** (Capture vs Explore vs Keep), to settle after the current Deep round ships. The working proposal: drop Capture from the Page row; "New Page from this"; "Keep as reference".
