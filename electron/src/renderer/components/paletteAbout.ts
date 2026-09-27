@@ -50,6 +50,7 @@ const KIND_WORDS: Record<AboutKind, string> = {
   feed: 'item',
   tile: 'agent',
   operation: 'run',
+  page: 'page',
 };
 
 /** The about line's words: "about: agent Fix the login flow". */
