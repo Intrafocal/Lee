@@ -1,6 +1,5 @@
 """docs/15-Usage.md §5: aggregation, /cockpit/usage, per-task usage and the accepted-spend guard."""
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest

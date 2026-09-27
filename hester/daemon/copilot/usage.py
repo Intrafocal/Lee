@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .event_reader import iso, parse_ts, read_events
+from .event_reader import iso, read_events
 
 RANGES = ("today", "week", "month")
 RANGE_DAYS = {"today": 1, "week": 7, "month": 30}

@@ -533,6 +533,8 @@ When running as a server (`hester daemon start`), exposes REST API:
 | POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`; `to: task` / `to: explore` also creates one) |
 | GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
 | GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
+| GET/POST/DELETE | `/copilot/open-next` | Open next (`docs/14-Deep-Work.md` §8.1): `{exploration_id?, someday_id?}` the next Deep session opens first, in `<ws>/.hester/deep/open_next.json`. The opener's `pick_up` prefers it (a picked capture leads Captured away); it clears when that exploration's next session is recorded, when the capture is triaged, or after 3 days. Devices allowed |
+| GET | `/cockpit/usage?range=today\|week\|month` | Usage (`docs/15-Usage.md` §5): latest `limits` with age, `totals` and `by_day` by source (claude, pi, hester_cloud, hester_local) with spend (billed + estimate, dollars) apart from subscription (tokens only) and local, `hester` split by trigger, `top_tasks`. Pull-only. Tasks carry `usage` from `agent.usage` (follower) |
 | GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
 | GET | `/workspaces` | Workspaces the daemon is serving (`POST /workspaces/open`, `/workspaces/close`) |
 | GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
@@ -557,6 +559,7 @@ Every endpoint except `/health` needs `Authorization: Bearer <token>`: the share
 ### Copilot: C1/C2 gating and model-call logging
 
 - Every Gemini call in the daemon (class-level wrap of `google.genai` `Models`/`AsyncModels`) and every Ollama call in `prepare.py` is sent to Lee's event log (`POST :9001/events/ingest`) as `model.call` with its trigger: `user` inside an authenticated request (surface: the `ContextRequest.surface`, else `X-Lee-Trigger` (the palette sends `palette`, the Hester TUI `tui`), else `http`), `automatic` for background loops, `unknown` otherwise.
+- Each `model.call` carries a `usage` object when tokens are known (`docs/15-Usage.md` §4.1): Gemini `usage_metadata` (streams: the last chunk's; embeddings: per-embedding token counts), Ollama eval counts (basis `local`), Claude delegates (`provider: anthropic`, basis `billed` with `ANTHROPIC_API_KEY`, else `subscription`). Gemini dollars are estimates from `hester/daemon/copilot/prices.yaml`, overridable under `usage.prices` in `~/.lee/config.yaml`; unknown models get tokens, no cost.
 - Knowledge auto-match (`hester.proactive.knowledge_auto_match`) is off by default. The model-using proactive tasks (`docs_index`, `drift_check`, `bundles`) are off by default and, when enabled, run only while you're away from the machine (Lee's `GET /presence`) unless `hester.proactive.run_while_present` is true.
 
 ### Health Check Response
