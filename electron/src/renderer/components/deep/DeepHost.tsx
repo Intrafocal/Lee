@@ -533,7 +533,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       promotedTo.current = newId;
       realIdRef.current = newId;
       dropDraft(draftKey.current);
-      writeMirror(workspace, newId, { text: text.current, base: version.current, dirty: text.current !== page });
+      writeMirror(workspace, newId, { text: text.current, base: version.current, dirty: text.current !== lastSent.current });
       if (alive.current) {
         setOffline(false);
         setShownTitle(r.data.card.title);
@@ -1417,7 +1417,9 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   }, [workspace]);
   useEffect(
     () => () => {
-      void deleteIfEmpty();
+      void deleteIfEmpty().then((gone) => {
+        if (gone) void deskRef.current?.refresh();
+      });
     },
     [deleteIfEmpty],
   );
