@@ -93,7 +93,7 @@ class FocusMenuButton extends ConsumerWidget {
             PhosphorIcon(
               focus.active ? PhosphorIcons.eye : PhosphorIcons.eyeOff,
               size: 20,
-              color: focus.active ? AeronautColors.accent : AeronautColors.textSecondary,
+              color: focus.active ? AeronautColors.textPrimary : AeronautColors.textSecondary,
             ),
             if (focus.active && focus.quietCount > 0)
               Positioned(
@@ -102,12 +102,12 @@ class FocusMenuButton extends ConsumerWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                   decoration: BoxDecoration(
-                    color: AeronautColors.accent,
+                    color: AeronautColors.bgElevated,
                     borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
                   ),
                   child: Text(
                     '${focus.quietCount}',
-                    style: AeronautTheme.caption2.copyWith(color: AeronautColors.onAccent, fontSize: 9),
+                    style: AeronautTheme.caption2.copyWith(color: AeronautColors.textPrimary, fontSize: 9),
                   ),
                 ),
               ),
@@ -139,14 +139,15 @@ class _MenuRow extends StatelessWidget {
   }
 }
 
-/// App-bar Capture control: opens [CaptureSheet].
+/// App-bar Capture control, Work's + button (cockpit design §8.1): opens
+/// [CaptureSheet].
 class CaptureButton extends StatelessWidget {
   const CaptureButton({super.key});
 
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      icon: const PhosphorIcon(PhosphorIcons.edit, size: 20),
+      icon: const PhosphorIcon(PhosphorIcons.plus, size: 22),
       tooltip: 'Capture',
       onPressed: () => showModalBottomSheet<void>(
         context: context,

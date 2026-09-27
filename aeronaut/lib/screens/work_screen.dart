@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/activity.dart';
 import '../models/attention.dart';
 import '../models/hester_models.dart';
 import '../providers/attention_provider.dart';
@@ -16,40 +17,36 @@ import '../widgets/in_flight_section.dart';
 import '../widgets/machine_switcher.dart';
 import '../widgets/now_header_actions.dart';
 import '../widgets/phosphor_icon.dart';
+import '../widgets/work_ui.dart';
 import '../widgets/workspace_switcher.dart';
+import 'agent_screen.dart';
 
-/// The Now screen: steering, not monitoring (contracts §9.2). Waiting
-/// (Reply) first, then In flight (every running agent), then Progress (v1
-/// verified wins), all for the active machine. Capture, Focus and Launch
-/// (v1 hand-off) live in the app bar next to the machine switcher.
-class NowScreen extends ConsumerStatefulWidget {
-  const NowScreen({super.key});
+/// Items that need you: what Work's headline counts (cockpit design §4.1;
+/// summaries and ambient items don't).
+List<AttentionItem> waitingOnYou(AttentionSnapshot snapshot) => snapshot.items
+    .where((i) =>
+        (i.state == AttentionItemState.open || i.state == AttentionItemState.snoozed) &&
+        i.severity != AttentionSeverity.ambient &&
+        i.kind != AttentionKind.summary)
+    .toList();
 
-  @override
-  ConsumerState<NowScreen> createState() => _NowScreenState();
-}
-
-class _NowScreenState extends ConsumerState<NowScreen> {
-  /// Keys of the Waiting tiles, so an In flight agent can scroll to its item.
-  final _itemKeys = <String, GlobalKey>{};
-
-  GlobalKey _keyFor(String id) => _itemKeys.putIfAbsent(id, GlobalKey.new);
-
-  void _showItem(String id) {
-    final ctx = _itemKeys[id]?.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), alignment: 0.1);
-    }
-  }
+/// Work (cockpit design §4, §8.1): the Now screen, renamed. One serif line
+/// says what needs you, then the waiting cards (blocking first, oldest
+/// first), then In flight, then recent Progress. Capture (+), Focus and
+/// hand-off sit in the app bar; during a Deep session the header says "In
+/// deep work" instead of offering Focus (14 §8.1).
+class WorkScreen extends ConsumerWidget {
+  const WorkScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final machine = ref.watch(machinesProvider.select((s) => s.activeMachine));
     // RootShell wraps this tab in RequireMachine, so this only happens for
     // the frame in which the active machine is removed.
     if (machine == null) return const SizedBox.shrink();
 
     final windowsState = ref.watch(windowsProvider);
+    final deep = ref.watch(attentionProvider.select((s) => s.snapshot.deep));
 
     return Scaffold(
       appBar: AppBar(
@@ -61,13 +58,13 @@ class _NowScreenState extends ConsumerState<NowScreen> {
           ],
         ),
         actions: [
-          const CaptureButton(),
-          const FocusMenuButton(),
+          if (deep != null) const _InDeepWork() else const FocusMenuButton(),
           IconButton(
             icon: const PhosphorIcon(PhosphorIcons.send, size: 20),
             tooltip: 'Hand off…',
             onPressed: () => showHandoffSheet(context),
           ),
+          const CaptureButton(),
         ],
       ),
       body: RefreshIndicator.adaptive(
@@ -76,13 +73,77 @@ class _NowScreenState extends ConsumerState<NowScreen> {
         onRefresh: () => ref.read(attentionProvider.notifier).refresh(),
         child: ListView(
           padding: const EdgeInsets.only(bottom: AeronautTheme.spacingXl),
-          children: [
-            const _AwayBanner(),
-            _WaitingSection(keyFor: _keyFor),
-            InFlightSection(onShowItem: _showItem),
-            const _WinsSection(),
+          children: const [
+            _AwayBanner(),
+            _Headline(),
+            _WaitingSection(),
+            InFlightSection(),
+            _WinsSection(),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// "In deep work": a Deep session is running at the Mac, so devices hold
+/// notifications and Focus isn't offered (14 §8.1).
+class _InDeepWork extends StatelessWidget {
+  const _InDeepWork();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingSm),
+        child: Text(
+          'In deep work',
+          key: const ValueKey('in-deep-work'),
+          style: AeronautTheme.footnote.copyWith(color: AeronautColors.textSecondary),
+        ),
+      ),
+    );
+  }
+}
+
+/// Work's one serif line (§4.1): "Two things need you.", "Working on it."
+/// or "All clear.", with a neutral count line under it.
+class _Headline extends ConsumerWidget {
+  const _Headline();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final attention = ref.watch(attentionProvider);
+    final snapshot = attention.snapshot;
+    final waiting = waitingOnYou(snapshot).length;
+    final working = snapshot.agents.where((a) => a.state == AgentRunState.busy).length;
+    final summary = [
+      if (waiting > 0) '$waiting waiting on you',
+      if (working > 0) '$working working',
+    ].join(' · ');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AeronautTheme.spacingMd,
+        AeronautTheme.spacingLg,
+        AeronautTheme.spacingMd,
+        0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            workLine(waiting: waiting, working: working),
+            key: const ValueKey('work-line'),
+            style: writingStyle(size: 22),
+          ),
+          if (attention.error != null && snapshot.items.isEmpty) ...[
+            const SizedBox(height: 4),
+            QuietText(attention.error!),
+          ] else if (summary.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            QuietText(summary),
+          ],
+        ],
       ),
     );
   }
@@ -106,7 +167,7 @@ class _AwayBanner extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          const PhosphorIcon(PhosphorIcons.send, size: 14, color: AeronautColors.accent),
+          const PhosphorIcon(PhosphorIcons.send, size: 14, color: AeronautColors.textSecondary),
           const SizedBox(width: AeronautTheme.spacingSm),
           Text(
             'Away · ${away.parkedCount} parked',
@@ -118,10 +179,12 @@ class _AwayBanner extends ConsumerWidget {
   }
 }
 
+/// "Waiting on you" (§4.1): one card per live item, blocking first, then
+/// needs-you, then the rest, longest-waiting first within each. The first
+/// card is raised, so its Allow is the view's one phosphor control. A card
+/// opens the one-agent screen.
 class _WaitingSection extends ConsumerWidget {
-  final GlobalKey Function(String id) keyFor;
-
-  const _WaitingSection({required this.keyFor});
+  const _WaitingSection();
 
   static const _severityOrder = {
     AttentionSeverity.blocking: 0,
@@ -132,7 +195,8 @@ class _WaitingSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final attention = ref.watch(attentionProvider);
-    final items = attention.snapshot.items
+    final snapshot = attention.snapshot;
+    final items = snapshot.items
         .where((i) => i.state == AttentionItemState.open || i.state == AttentionItemState.snoozed)
         .toList()
       ..sort((a, b) {
@@ -141,40 +205,45 @@ class _WaitingSection extends ConsumerWidget {
         return b.activeWaitMs.compareTo(a.activeWaitMs);
       });
 
+    if (attention.loading && items.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(AeronautTheme.spacingLg),
+        child: Center(child: CircularProgressIndicator.adaptive(strokeWidth: 2)),
+      );
+    }
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    String? tokensFor(AttentionItem item) {
+      for (final a in snapshot.agents) {
+        if (a.ptyId == item.source.ptyId && a.usage != null && a.usage!.shownTokens > 0) {
+          return formatTokens(a.usage!.shownTokens);
+        }
+      }
+      return null;
+    }
+
+    void open(AttentionItem item, {bool focusReply = false}) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => AgentScreen(ptyId: item.source.ptyId, itemId: item.id, focusReply: focusReply),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingLg,
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingXs,
+        const Eyebrow('Waiting on you', needs: true),
+        for (var i = 0; i < items.length; i++)
+          AttentionTile(
+            key: ValueKey('waiting-${items[i].id}'),
+            item: items[i],
+            awayActive: snapshot.away.active,
+            raised: i == 0,
+            tokenLabel: tokensFor(items[i]),
+            onOpen: () => open(items[i]),
+            onWriteReply: () => open(items[i], focusReply: true),
           ),
-          child: Text('Waiting', style: AeronautTheme.headline),
-        ),
-        if (attention.loading && items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(AeronautTheme.spacingLg),
-            child: Center(child: CircularProgressIndicator.adaptive(strokeWidth: 2)),
-          )
-        else if (items.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AeronautTheme.spacingMd,
-              vertical: AeronautTheme.spacingLg,
-            ),
-            child: Text(
-              attention.error ?? "You're all caught up.",
-              style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
-            ),
-          )
-        else
-          for (final item in items)
-            KeyedSubtree(
-              key: keyFor(item.id),
-              child: AttentionTile(item: item, awayActive: attention.snapshot.away.active),
-            ),
       ],
     );
   }
@@ -229,24 +298,19 @@ class _WinsSectionState extends ConsumerState<_WinsSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingLg,
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingXs,
-          ),
-          child: Row(
-            children: [
-              const Text('Progress', style: AeronautTheme.headline),
-              const Spacer(),
-              if (workspace != null)
-                IconButton(
+        Row(
+          children: [
+            const Expanded(child: Eyebrow('Progress')),
+            if (workspace != null)
+              Padding(
+                padding: const EdgeInsets.only(top: AeronautTheme.spacingMd, right: AeronautTheme.spacingSm),
+                child: IconButton(
+                  tooltip: 'Refresh progress',
                   icon: const PhosphorIcon(PhosphorIcons.refresh, size: 16),
                   onPressed: _loading ? null : () => _load(workspace),
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
         if (workspace == null)
           const Padding(
@@ -328,7 +392,7 @@ class _WinRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          PhosphorIcon(icon, size: 14, color: verified ? AeronautColors.online : AeronautColors.textTertiary),
+          PhosphorIcon(icon, size: 14, color: verified ? AeronautColors.textSecondary : AeronautColors.textTertiary),
           const SizedBox(width: 8),
           Expanded(
             child: Column(

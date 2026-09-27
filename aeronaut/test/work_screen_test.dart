@@ -3,10 +3,26 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:aeronaut/models/attention.dart';
+import 'package:aeronaut/models/machine.dart';
 import 'package:aeronaut/providers/attention_provider.dart';
+import 'package:aeronaut/providers/machines_provider.dart';
+import 'package:aeronaut/screens/work_screen.dart';
+import 'package:aeronaut/services/machine_store.dart';
 import 'package:aeronaut/theme/aeronaut_theme.dart';
+import 'package:aeronaut/theme/phosphor_icons.generated.dart';
+import 'package:aeronaut/theme/phosphor_tokens.dart';
 import 'package:aeronaut/widgets/in_flight_section.dart';
 import 'package:aeronaut/widgets/now_header_actions.dart';
+import 'package:aeronaut/widgets/phosphor_icon.dart';
+
+const _machine = Machine(id: 'm1', name: 'Dev', host: '127.0.0.1', token: 't');
+
+/// [_machine] as the active machine, without SharedPreferences or health pings.
+class _FixedMachinesNotifier extends MachinesNotifier {
+  _FixedMachinesNotifier() : super(MachineStore()) {
+    state = const MachinesState(machines: [_machine], activeMachineId: 'm1');
+  }
+}
 
 /// Records capture/focus calls instead of making them, and lets a test set
 /// the snapshot the widgets read.
@@ -89,10 +105,10 @@ void main() {
       expect(groups.older, isEmpty);
     });
 
-    test('idle agents finished over an hour ago fold away', () {
+    test('idle agents finished over two hours ago fold away', () {
       final groups = inFlightGroups([
         agent(1, AgentRunState.idle, idleFor: const Duration(hours: 3)),
-        agent(2, AgentRunState.idle, idleFor: const Duration(minutes: 10)),
+        agent(2, AgentRunState.idle, idleFor: const Duration(minutes: 90)),
         agent(3, AgentRunState.busy, busyFor: const Duration(hours: 2)),
       ], now);
       expect(groups.visible.map((a) => a.ptyId), [3, 2]);
@@ -132,7 +148,9 @@ void main() {
               idleSince: now.subtract(const Duration(minutes: 5)), lastSummary: 'All tests pass.'),
           const AgentSummary(ptyId: 2, tabId: 12, label: 'Waiting one', state: AgentRunState.waiting),
           AgentSummary(ptyId: 3, tabId: 13, label: 'Busy one', state: AgentRunState.busy,
-              busySince: now.subtract(const Duration(minutes: 12)), lastTool: 'Edit'),
+              busySince: now.subtract(const Duration(minutes: 12)), lastTool: 'Edit',
+              now: const AgentNow(tool: 'Edit', files: ['/repo/src/main.ts']),
+              usage: const AgentUsage(shownTokens: 412000)),
         ],
       ));
       await tester.pump();
@@ -140,20 +158,117 @@ void main() {
       double y(String t) => tester.getTopLeft(find.text(t)).dy;
       expect(y('Busy one'), lessThan(y('Waiting one')));
       expect(y('Waiting one'), lessThan(y('Idle one')));
-      expect(find.text('busy 12m'), findsOneWidget);
-      expect(find.text('finished 5m ago'), findsOneWidget);
-      expect(find.text('needs you'), findsOneWidget);
-      expect(find.text('Claude wants to use Bash'), findsOneWidget, reason: 'waiting agent links its item');
-      expect(find.text('All tests pass.'), findsOneWidget);
+      expect(find.text('Editing main.ts'), findsOneWidget, reason: 'the doing-now line');
+      expect(find.text('12m · 412k tok'), findsOneWidget);
+      expect(find.text('needs you · Claude wants to use Bash'), findsOneWidget, reason: 'waiting agent names its item');
+      expect(find.text('done · ready to review'), findsOneWidget);
+      expect(find.text('IN FLIGHT'), findsOneWidget);
 
       await tester.tap(find.text('Busy one'));
       expect(opened, [3]);
     });
+
+    testWidgets('idle agents over two hours fold into "n earlier today"', (tester) async {
+      final notifier = await _pump(
+        tester,
+        body: const SingleChildScrollView(child: InFlightSection()),
+      );
+      final now = DateTime.now();
+      notifier.setSnapshot(AttentionSnapshot(agents: [
+        AgentSummary(ptyId: 1, label: 'Old one', state: AgentRunState.idle,
+            idleSince: now.subtract(const Duration(hours: 3))),
+        AgentSummary(ptyId: 2, label: 'Recent one', state: AgentRunState.idle,
+            idleSince: now.subtract(const Duration(minutes: 3))),
+      ]));
+      await tester.pump();
+      expect(find.text('Old one'), findsNothing);
+      expect(find.text('1 earlier today'), findsOneWidget);
+      await tester.tap(find.text('1 earlier today'));
+      await tester.pump();
+      expect(find.text('Old one'), findsOneWidget);
+    });
   });
 
-  group('Now header', () {
+  group('Work', () {
+    test('waitingOnYou counts needs-you items, not ambient ones or summaries', () {
+      const snap = AttentionSnapshot(items: [
+        AttentionItem(id: 'a', severity: AttentionSeverity.blocking),
+        AttentionItem(id: 'b', severity: AttentionSeverity.needsYou, state: AttentionItemState.snoozed),
+        AttentionItem(id: 'c', severity: AttentionSeverity.ambient),
+        AttentionItem(id: 'd', severity: AttentionSeverity.needsYou, kind: AttentionKind.summary),
+        AttentionItem(id: 'e', severity: AttentionSeverity.needsYou, state: AttentionItemState.resolved),
+      ]);
+      expect(waitingOnYou(snap).map((i) => i.id), ['a', 'b']);
+    });
+
+    testWidgets('headline, raised first card, and In deep work instead of Focus', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            machinesProvider.overrideWith((ref) => _FixedMachinesNotifier()),
+            attentionProvider.overrideWith(_RecordingAttentionNotifier.new),
+          ],
+          child: MaterialApp(theme: AeronautTheme.darkTheme, home: const WorkScreen()),
+        ),
+      );
+      await tester.pump();
+      final container = ProviderScope.containerOf(tester.element(find.byType(WorkScreen)));
+      final notifier = container.read(attentionProvider.notifier) as _RecordingAttentionNotifier;
+      notifier.setSnapshot(const AttentionSnapshot());
+      await tester.pump();
+      expect(find.text('All clear.'), findsOneWidget);
+      expect(find.byTooltip('Focus off'), findsOneWidget);
+      expect(find.byKey(const ValueKey('in-deep-work')), findsNothing);
+
+      notifier.setSnapshot(const AttentionSnapshot(
+        deep: DeepSession(explorationId: 'exp_1', title: 'Caching'),
+        items: [
+          AttentionItem(
+            id: 'x',
+            kind: AttentionKind.approval,
+            severity: AttentionSeverity.blocking,
+            title: 'Run npm test?',
+            activeWaitMs: 5000,
+            actions: [AttentionActionName.approve, AttentionActionName.deny],
+          ),
+          AttentionItem(
+            id: 'y',
+            kind: AttentionKind.approval,
+            severity: AttentionSeverity.needsYou,
+            title: 'Run ls?',
+            actions: [AttentionActionName.approve, AttentionActionName.deny],
+          ),
+        ],
+        agents: [AgentSummary(ptyId: 9, state: AgentRunState.busy)],
+      ));
+      await tester.pump();
+      expect(find.text('Two things need you.'), findsOneWidget);
+      expect(find.text('2 waiting on you · 1 working'), findsOneWidget);
+      expect(find.text('In deep work'), findsOneWidget);
+      expect(find.byTooltip('Focus off'), findsNothing, reason: 'devices show In deep work instead of Focus');
+
+      Color allowFill(String itemId) => tester
+          .widget<Material>(find
+              .descendant(
+                of: find.descendant(
+                  of: find.byKey(ValueKey('waiting-$itemId')),
+                  matching: find.byKey(const ValueKey('attention-allow')),
+                ),
+                matching: find.byType(Material),
+              )
+              .first)
+          .color!;
+      expect(allowFill('x'), Phosphor.phosphor, reason: 'the raised first card holds the one phosphor control');
+      expect(allowFill('y'), isNot(Phosphor.phosphor));
+    });
+  });
+
+  group('Work header', () {
     testWidgets('capture sheet sends the capture', (tester) async {
       final notifier = await _pump(tester, actions: const [CaptureButton()]);
+      expect(find.byType(PhosphorIcon), findsOneWidget);
+      expect(tester.widget<PhosphorIcon>(find.byType(PhosphorIcon)).icon, PhosphorIcons.plus,
+          reason: "Capture is the header's + button");
       await tester.tap(find.byTooltip('Capture'));
       await tester.pumpAndSettle();
 

@@ -4,7 +4,7 @@ import 'package:xterm/xterm.dart';
 
 import '../models/lee_context.dart';
 import '../providers/pty_provider.dart';
-import 'root_shell.dart' show RootTab, rootTabProvider;
+import 'root_shell.dart' show MachineView, RootTab, machineViewProvider, rootTabProvider;
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
@@ -120,9 +120,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     // The shell keeps every root tab mounted (IndexedStack). Only connect
-    // while the Tabs root tab is actually showing, so a terminal left behind
-    // it doesn't keep the Lee tab cast to this phone.
-    if (ref.watch(rootTabProvider) != RootTab.tabs) {
+    // while the Machine tab's Tabs view is actually showing, so a terminal
+    // left behind it doesn't keep the Lee tab cast to this phone.
+    if (ref.watch(rootTabProvider) != RootTab.machine ||
+        ref.watch(machineViewProvider) != MachineView.tabs) {
       return const SizedBox.shrink();
     }
 

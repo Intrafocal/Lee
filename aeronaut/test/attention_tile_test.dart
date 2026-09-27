@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aeronaut/models/attention.dart';
 import 'package:aeronaut/providers/attention_provider.dart';
 import 'package:aeronaut/theme/aeronaut_theme.dart';
+import 'package:aeronaut/theme/phosphor_tokens.dart';
 import 'package:aeronaut/widgets/attention_tile.dart';
 
 /// One recorded call into the notifier, for asserting exactly what a chip
@@ -74,7 +75,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   }
 }
 
-Future<_RecordingAttentionNotifier> _pumpTile(WidgetTester tester, AttentionItem item) async {
+Future<_RecordingAttentionNotifier> _pumpTile(WidgetTester tester, AttentionItem item, {bool raised = false}) async {
   late _RecordingAttentionNotifier notifier;
   await tester.pumpWidget(
     ProviderScope(
@@ -87,7 +88,7 @@ Future<_RecordingAttentionNotifier> _pumpTile(WidgetTester tester, AttentionItem
       child: MaterialApp(
         theme: AeronautTheme.darkTheme,
         home: Scaffold(
-          body: SingleChildScrollView(child: AttentionTile(item: item)),
+          body: SingleChildScrollView(child: AttentionTile(item: item, raised: raised)),
         ),
       ),
     ),
@@ -128,37 +129,40 @@ void main() {
   );
 
   group('quick-reply chips (contracts §5.2)', () {
-    testWidgets('review tile shows the chips once Reply is tapped', (tester) async {
+    test('the same four replies as QUICK_REPLIES in shared/cockpit.ts', () {
+      expect(quickReplyChips, ['Yes, go ahead', 'Stop and wait for me', 'Explain first', 'Show me the diff']);
+    });
+
+    testWidgets('review card shows the first three chips in a sideways scroll, no tap needed', (tester) async {
       await _pumpTile(tester, reviewItem);
 
-      expect(find.text('Reply'), findsOneWidget);
-      for (final chip in quickReplyChips) {
-        expect(find.text(chip), findsNothing);
+      for (final chip in quickReplyChips.take(3)) {
+        expect(find.text(chip), findsOneWidget);
       }
+      expect(find.text(quickReplyChips[3]), findsNothing, reason: 'the card shows three; the agent screen all four');
+      expect(
+        find.ancestor(of: find.text(quickReplyChips.first), matching: find.byType(SingleChildScrollView)),
+        findsWidgets,
+      );
+      expect(find.text('Write a reply…'), findsOneWidget);
+    });
 
-      await tester.tap(find.text('Reply'));
-      await tester.pumpAndSettle();
-
-      for (final chip in quickReplyChips) {
+    testWidgets('waiting tile also shows the chips', (tester) async {
+      await _pumpTile(tester, waitingItem);
+      for (final chip in quickReplyChips.take(3)) {
         expect(find.text(chip), findsOneWidget);
       }
     });
 
-    testWidgets('waiting (question) tile also shows the chips', (tester) async {
+    testWidgets('Write a reply… opens an inline field when there is no agent screen', (tester) async {
       await _pumpTile(tester, waitingItem);
-      await tester.tap(find.text('Reply'));
+      await tester.tap(find.text('Write a reply…'));
       await tester.pumpAndSettle();
-
-      for (final chip in quickReplyChips) {
-        expect(find.text(chip), findsOneWidget);
-      }
+      expect(find.byType(TextField), findsOneWidget);
     });
 
     testWidgets('tapping a chip sends a text reply with the item\'s version', (tester) async {
       final notifier = await _pumpTile(tester, reviewItem);
-
-      await tester.tap(find.text('Reply'));
-      await tester.pumpAndSettle();
 
       final chipText = quickReplyChips.first;
       await tester.tap(find.text(chipText));
@@ -171,9 +175,6 @@ void main() {
       expect(call.action, 'text');
       expect(call.text, chipText);
       expect(call.version, 5);
-
-      // The reply field closes, same as a typed send.
-      expect(find.text(chipText), findsNothing);
     });
 
     testWidgets('a kind outside the chip set (e.g. summary) shows no chips', (tester) async {
@@ -202,8 +203,10 @@ void main() {
         (tester) async {
       final notifier = await _pumpTile(tester, approvalItem);
 
-      expect(find.text('Approve'), findsOneWidget);
+      expect(find.text('Allow'), findsOneWidget);
       expect(find.text('Deny'), findsOneWidget);
+      expect(tester.getSize(find.byKey(const ValueKey('attention-allow'))).height, 44);
+      expect(tester.getSize(find.byKey(const ValueKey('attention-deny'))).height, 44);
       // Exactly one swipe surface for the whole tile (snooze + dismiss) —
       // there is no separate gesture target that could reach approve/deny.
       expect(find.byType(Dismissible), findsOneWidget);
@@ -220,9 +223,31 @@ void main() {
         isFalse,
       );
 
-      // Approve/Deny remain intact, tap-only.
-      expect(find.text('Approve'), findsOneWidget);
+      // Allow/Deny remain intact, tap-only.
+      expect(find.text('Allow'), findsOneWidget);
       expect(find.text('Deny'), findsOneWidget);
+    });
+
+    testWidgets('Allow sends approve; it is phosphor only on the raised card', (tester) async {
+      final notifier = await _pumpTile(tester, approvalItem, raised: true);
+      Color fill(String key) => tester
+          .widget<Material>(find.descendant(of: find.byKey(ValueKey(key)), matching: find.byType(Material)).first)
+          .color!;
+      expect(fill('attention-allow'), Phosphor.phosphor);
+      expect(fill('attention-deny'), isNot(Phosphor.phosphor));
+
+      await tester.tap(find.text('Allow'));
+      await tester.pumpAndSettle();
+      expect(notifier.calls.single.action, 'approve');
+      expect(notifier.calls.single.version, 2);
+    });
+
+    testWidgets('a card that is not raised has no phosphor Allow', (tester) async {
+      await _pumpTile(tester, approvalItem);
+      final allow = tester.widget<Material>(
+        find.descendant(of: find.byKey(const ValueKey('attention-allow')), matching: find.byType(Material)).first,
+      );
+      expect(allow.color, isNot(Phosphor.phosphor));
     });
 
     testWidgets('swipe right on a snoozable/dismissible tile opens the snooze menu', (tester) async {
@@ -334,7 +359,7 @@ void main() {
       expect(find.text('Which approach should I take?'), findsOneWidget);
       expect(find.text('Rewrite'), findsOneWidget);
       expect(find.text('Patch'), findsOneWidget);
-      expect(find.text('Approve'), findsNothing);
+      expect(find.text('Allow'), findsNothing);
       expect(find.text('Deny'), findsNothing);
       expect(find.text('Reply'), findsNothing);
     });
@@ -412,7 +437,7 @@ void main() {
     testWidgets('shows Open tab instead of Approve/Deny, with an explanation', (tester) async {
       await _pumpTile(tester, legacyItem);
 
-      expect(find.text('Approve'), findsNothing);
+      expect(find.text('Allow'), findsNothing);
       expect(find.text('Deny'), findsNothing);
       expect(find.text('Claude is asking a question — open the tab to answer.'), findsOneWidget);
       expect(find.text('Open tab'), findsOneWidget);

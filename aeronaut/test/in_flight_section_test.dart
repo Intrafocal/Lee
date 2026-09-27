@@ -1,113 +1,83 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:aeronaut/models/attention.dart';
-import 'package:aeronaut/providers/attention_provider.dart';
 import 'package:aeronaut/theme/aeronaut_theme.dart';
 import 'package:aeronaut/widgets/in_flight_section.dart';
+import 'package:aeronaut/widgets/work_ui.dart';
 
-/// Records [fetchFullAgentSummary] calls and serves canned data instead of
-/// hitting the network — same pattern as `attention_tile_test.dart`'s
-/// `_RecordingAttentionNotifier`.
-class _RecordingAttentionNotifier extends AttentionNotifier {
-  _RecordingAttentionNotifier(super.ref);
-
-  int fetchFullAgentSummaryCalls = 0;
-  AgentSummary? Function(int ptyId)? onFetch;
-
-  @override
-  Future<AgentSummary?> fetchFullAgentSummary(int ptyId) async {
-    fetchFullAgentSummaryCalls++;
-    return onFetch?.call(ptyId);
-  }
-}
-
-// [AgentRow] only reads `attentionProvider` lazily, inside the expand
-// handler — never during build — so the override factory below won't run
-// just from pumping the widget. Force it into existence afterwards via the
-// element's own provider container, instead of relying on the factory
-// closure to have fired.
-Future<_RecordingAttentionNotifier> _pumpRow(WidgetTester tester, AgentSummary agent) async {
+Future<void> _pumpRow(WidgetTester tester, AgentSummary agent, {AttentionItem? item, DateTime? now}) async {
   await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        attentionProvider.overrideWith((ref) => _RecordingAttentionNotifier(ref)),
-      ],
-      child: MaterialApp(
-        theme: AeronautTheme.darkTheme,
-        home: Scaffold(
-          body: AgentRow(agent: agent, now: DateTime.now()),
-        ),
+    MaterialApp(
+      theme: AeronautTheme.darkTheme,
+      home: Scaffold(
+        body: AgentRow(agent: agent, now: now ?? DateTime.now(), waitingItem: item),
       ),
     ),
   );
-  await tester.pumpAndSettle();
-  final context = tester.element(find.byType(AgentRow));
-  return ProviderScope.containerOf(context).read(attentionProvider.notifier) as _RecordingAttentionNotifier;
 }
 
 void main() {
-  group('AgentRow summary expand (In-flight full summary)', () {
-    final clippedSummary = '${'a' * 279}…'; // 280 chars, looks clipped
+  final now = DateTime.utc(2026, 9, 27, 15);
 
-    testWidgets('a clipped summary is expanded and replaced by the full one on tap', (tester) async {
-      final agent = AgentSummary(ptyId: 3, label: 'Claude: api', lastSummary: clippedSummary);
-      final notifier = await _pumpRow(tester, agent);
-      notifier.onFetch = (ptyId) => AgentSummary(
-            ptyId: ptyId,
-            lastSummary: 'the real, full unclipped summary text',
-          );
-
-      await tester.tap(find.text(clippedSummary));
-      await tester.pumpAndSettle();
-
-      expect(notifier.fetchFullAgentSummaryCalls, 1);
-      expect(find.text('the real, full unclipped summary text'), findsOneWidget);
-      expect(find.text(clippedSummary), findsNothing);
+  group('agentSubLine (the "doing now" line)', () {
+    test('busy: what it is doing now, else its last tool, else Working', () {
+      expect(
+        agentSubLine(const AgentSummary(
+          ptyId: 1,
+          state: AgentRunState.busy,
+          now: AgentNow(tool: 'Bash', preview: 'cd electron && npm test'),
+        )),
+        'Running tests',
+      );
+      expect(agentSubLine(const AgentSummary(ptyId: 1, state: AgentRunState.busy, lastTool: 'Read')), 'Reading');
+      expect(agentSubLine(const AgentSummary(ptyId: 1, state: AgentRunState.busy)), 'Working');
     });
 
-    testWidgets('a short summary never triggers a full-snapshot fetch', (tester) async {
-      const agent = AgentSummary(ptyId: 4, label: 'Claude: web', lastSummary: 'short and sweet');
-      final notifier = await _pumpRow(tester, agent);
-      notifier.onFetch = (ptyId) => const AgentSummary(ptyId: 4, lastSummary: 'should never be requested');
-
-      await tester.tap(find.text('short and sweet'));
-      await tester.pumpAndSettle();
-
-      expect(notifier.fetchFullAgentSummaryCalls, 0);
-      expect(find.text('short and sweet'), findsOneWidget);
+    test('waiting names the item; idle reads as done', () {
+      const item = AttentionItem(id: 'a', title: 'Claude wants to use Bash');
+      expect(agentSubLine(const AgentSummary(ptyId: 1, state: AgentRunState.waiting), waitingItem: item),
+          'needs you · Claude wants to use Bash');
+      expect(agentSubLine(const AgentSummary(ptyId: 1, state: AgentRunState.waiting)), 'needs you');
+      expect(agentSubLine(AgentSummary(ptyId: 1, state: AgentRunState.idle, idleSince: now)), 'done · ready to review');
+      expect(agentSubLine(const AgentSummary(ptyId: 1)), 'idle');
     });
+  });
 
-    testWidgets('collapsing and re-expanding reuses the already-fetched summary', (tester) async {
-      final agent = AgentSummary(ptyId: 5, label: 'Claude: worker', lastSummary: clippedSummary);
-      final notifier = await _pumpRow(tester, agent);
-      notifier.onFetch = (ptyId) => AgentSummary(ptyId: ptyId, lastSummary: 'full summary once');
+  test('agentMeta: elapsed, then tokens', () {
+    final busy = AgentSummary(
+      ptyId: 1,
+      state: AgentRunState.busy,
+      busySince: now.subtract(const Duration(minutes: 12)),
+      usage: const AgentUsage(shownTokens: 412000),
+    );
+    expect(agentMeta(busy, now), '12m · 412k tok');
+    expect(agentMeta(const AgentSummary(ptyId: 2, usage: AgentUsage(shownTokens: 0)), now), '');
+  });
 
-      await tester.tap(find.text(clippedSummary)); // expand
-      await tester.pumpAndSettle();
-      expect(notifier.fetchFullAgentSummaryCalls, 1);
-      expect(find.text('full summary once'), findsOneWidget);
+  testWidgets('AgentRow shows the dot, name, sub-line and meta', (tester) async {
+    await _pumpRow(
+      tester,
+      AgentSummary(
+        ptyId: 3,
+        label: 'Claude: api',
+        state: AgentRunState.busy,
+        busySince: now.subtract(const Duration(minutes: 5)),
+        now: const AgentNow(tool: 'Edit', files: ['/r/lib/main.dart']),
+        usage: const AgentUsage(shownTokens: 1500000),
+      ),
+      now: now,
+    );
+    expect(find.text('Claude: api'), findsOneWidget);
+    expect(find.text('Editing main.dart'), findsOneWidget);
+    expect(find.text('5m · 1.5M tok'), findsOneWidget);
+    expect(find.byKey(const ValueKey('dot-working')), findsOneWidget);
+    expect(find.byType(WorkDot), findsOneWidget);
+  });
 
-      await tester.tap(find.text('full summary once')); // collapse
-      await tester.pumpAndSettle();
-      expect(find.text(clippedSummary), findsOneWidget);
-
-      await tester.tap(find.text(clippedSummary)); // re-expand
-      await tester.pumpAndSettle();
-      expect(find.text('full summary once'), findsOneWidget);
-      expect(notifier.fetchFullAgentSummaryCalls, 1, reason: 'reused the already-fetched summary');
-    });
-
-    testWidgets('when the full summary is not available, the clipped one keeps showing', (tester) async {
-      final agent = AgentSummary(ptyId: 6, label: 'Claude: db', lastSummary: clippedSummary);
-      final notifier = await _pumpRow(tester, agent);
-      notifier.onFetch = (ptyId) => null; // e.g. the full snapshot didn't have this agent any more
-
-      await tester.tap(find.text(clippedSummary));
-      await tester.pumpAndSettle();
-
-      expect(find.text(clippedSummary), findsOneWidget);
-    });
+  testWidgets('a waiting agent gets the needs-you dot', (tester) async {
+    await _pumpRow(tester, const AgentSummary(ptyId: 4, label: 'Claude: web', state: AgentRunState.waiting));
+    expect(find.byKey(const ValueKey('dot-needs')), findsOneWidget);
+    expect(find.text('needs you'), findsOneWidget);
   });
 }

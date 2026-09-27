@@ -109,11 +109,16 @@ lib/
 │   ├── hester_provider.dart         # Hester SSE chat
 │   └── auth_provider.dart           # turns a 401 into UI state
 ├── screens/
-│   ├── machines_screen.dart         # machine list (launch screen)
+│   ├── root_shell.dart              # tabs: Work, Library, Hester, Machine
+│   ├── work_screen.dart             # Work: headline, waiting cards, In flight, Progress
+│   ├── agent_screen.dart            # one agent: its words, quick replies, reply bar
+│   ├── library_screen.dart          # Library: Carry, Explorations, Ideas
+│   ├── someday_screen.dart          # Someday list (Library's Ideas)
+│   ├── machines_screen.dart         # machine list (Machine tab until one is chosen)
 │   ├── add_machine_screen.dart      # manual pairing form
 │   ├── qr_scanner_screen.dart       # QR pairing
 │   ├── machine_detail_screen.dart   # Lee + Hester health, daemon workspace
-│   ├── home_screen.dart             # tab strip + per-tab routing
+│   ├── home_screen.dart             # Machine tab: Tabs | Files, tab strip + per-tab routing
 │   ├── editor_screen.dart           # live cursor/language bar + embedded FileViewerScreen
 │   ├── file_viewer_screen.dart      # markdown/code/image/pdf-placeholder/text file renderer
 │   ├── files_screen.dart            # Files browser (FilesBrowserBody + full-route FilesScreen)

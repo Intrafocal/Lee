@@ -13,9 +13,36 @@ Kept: structured live view of the IDE, one-tap focus/spawn, terminal I/O,
 cheap Hester chat, machine health, a read-only file viewer (markdown/code/
 images) and a Files browser (see "Tab type support" below).
 
+**Tabs (cockpit design §8.1, first pass 2026-09-27):** Work, Library, Hester,
+Machine.
+- **Work** (`screens/work_screen.dart`, was Now): the serif headline
+  (`workLine`), waiting cards (`widgets/attention_tile.dart`: 44px Allow/Deny,
+  the first three quick replies in a sideways scroll, swipe to snooze/dismiss,
+  `⋯` for the rest), In flight (`widgets/in_flight_section.dart`: grouped rows
+  with the "doing now" line and a token label), Progress. "In deep work"
+  replaces Focus in the header while `snapshot.deep` is set. Capture is the +.
+- **One agent** (`screens/agent_screen.dart`): It asked / It said, Allow/Deny,
+  the four quick replies as a 2×2 grid, Updates, Along the way, and a pinned
+  reply bar that sends through the item's Reply (disabled, "Reply from the
+  Mac for now", when the agent has no open item).
+- **Library** (`screens/library_screen.dart`): Carry (Lee `GET /carry`,
+  `POST /carry/capture`, `POST /carry/open-next`), Explorations (Hester
+  `GET /cockpit/explorations`), Ideas (the Someday list).
+- **Machine**: the machine list until one is chosen, then `HomeScreen` with
+  Tabs | Files and "All machines".
+
+Design rules (§0): phosphor marks the one next step per view (`BtnKind.next`
+in `widgets/work_ui.dart`), never nav or tabs; ember is a dot and means needs
+you; your words (stopped-at notes, open questions, device captures) are in
+Newsreader (`writingStyle`). `models/activity.dart` ports `describeActivity`,
+`formatTokens` and `workLine` from Lee; keep it in step with
+`electron/src/shared/cockpit.ts` (`test/activity_test.dart` pins the cases).
+Usage shows as tokens only, dollars only for billed/estimated spend
+(docs/15-Usage.md §9); the limits in the snapshot are parsed but not shown.
+
 Cut, on purpose — don't re-add without a decision: DevOps dashboard (the stub
-screen was deleted), Library screen, in-app editing (the viewer is
-read-only), voice input, a bespoke VPN (use Tailscale).
+screen was deleted), in-app editing (the viewer is read-only), voice input, a
+bespoke VPN (use Tailscale).
 
 ## Stack
 

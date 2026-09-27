@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -26,12 +27,13 @@ import 'editor_screen.dart';
 import 'files_screen.dart';
 import 'hester_screen.dart';
 import 'machine_detail_screen.dart';
+import 'machines_screen.dart';
+import 'root_shell.dart' show MachineView, machineViewProvider;
 import 'terminal_screen.dart';
 
-/// Main screen shown when connected to a machine.
-///
-/// Displays the machine name, tab strip from LeeContext, and
-/// tab-type-appropriate content for the active tab.
+/// The Machine tab once a machine is selected (cockpit design §8.1): the
+/// machine switcher in the app bar, then that machine's Tabs (the tab strip
+/// from LeeContext and the active tab's content) or its Files.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -47,6 +49,7 @@ class HomeScreen extends ConsumerWidget {
     if (activeMachine == null) return const SizedBox.shrink();
 
     final windowsState = ref.watch(windowsProvider);
+    final view = ref.watch(machineViewProvider);
     ref.watch(authGuardProvider);
 
     return Scaffold(
@@ -60,6 +63,13 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const PhosphorIcon(PhosphorIcons.list, size: 20),
+            tooltip: 'All machines',
+            onPressed: () => Navigator.of(context).push(
+              CupertinoPageRoute<void>(builder: (_) => const MachinesScreen()),
+            ),
+          ),
           // Machine health / details
           IconButton(
             icon: const PhosphorIcon(PhosphorIcons.info, size: 20),
@@ -71,19 +81,53 @@ class HomeScreen extends ConsumerWidget {
             ),
           ),
           // New tab button
-          IconButton(
-            icon: const PhosphorIcon(PhosphorIcons.plus),
-            tooltip: 'New tab',
-            onPressed: () => _showNewTabSheet(context, ref, activeMachine),
-          ),
+          if (view == MachineView.tabs)
+            IconButton(
+              icon: const PhosphorIcon(PhosphorIcons.plus),
+              tooltip: 'New tab',
+              onPressed: () => _showNewTabSheet(context, ref, activeMachine),
+            ),
           // Connection status indicator
           Padding(
             padding: const EdgeInsets.only(right: AeronautTheme.spacingMd),
             child: _ConnectionDot(status: connectionState.status),
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(44),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AeronautTheme.spacingMd,
+              0,
+              AeronautTheme.spacingMd,
+              AeronautTheme.spacingSm,
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: CupertinoSlidingSegmentedControl<MachineView>(
+                groupValue: view,
+                backgroundColor: AeronautColors.bgSurface,
+                thumbColor: AeronautColors.bgElevated,
+                children: const {
+                  MachineView.tabs: Text('Tabs', style: AeronautTheme.footnote),
+                  MachineView.files: Text('Files', style: AeronautTheme.footnote),
+                },
+                onValueChanged: (v) {
+                  if (v != null) ref.read(machineViewProvider.notifier).state = v;
+                },
+              ),
+            ),
+          ),
+        ),
       ),
-      body: RefreshIndicator.adaptive(
+      body: view == MachineView.files
+          ? const Column(
+              children: [
+                AuthBanner(),
+                Expanded(child: FilesBrowserBody()),
+              ],
+            )
+          : RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
         onRefresh: () => _refreshContext(ref, activeMachine),

@@ -9,16 +9,18 @@ import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../widgets/phosphor_icon.dart';
+import '../widgets/work_ui.dart';
 
 /// Someday list: open ideas captured via `CaptureSheet`
-/// (`widgets/now_header_actions.dart`), reached from its "Someday" link.
+/// (`widgets/now_header_actions.dart`), reached from its "Someday" link and
+/// embedded as Library's Ideas tab ([SomedayList]).
 ///
 /// Newest first (the daemon's `GET /someday` already sorts that way —
 /// contracts, `hester/daemon/copilot/someday.py`). Touch-only triage per
 /// docs/13-Copilot.md §5.2 ("the phone is bad at typing"): Explore, Promote,
 /// Keep, Drop buttons, no text entry. Refreshes after every triage and on
 /// pull-to-refresh.
-class SomedayScreen extends ConsumerStatefulWidget {
+class SomedayScreen extends StatelessWidget {
   final String? workspace;
 
   /// Test seam: build the [HesterApi] used for a given [Machine]. Defaults
@@ -29,10 +31,27 @@ class SomedayScreen extends ConsumerStatefulWidget {
   const SomedayScreen({required this.workspace, this.apiBuilder, super.key});
 
   @override
-  ConsumerState<SomedayScreen> createState() => _SomedayScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Someday')),
+      body: SomedayList(workspace: workspace, apiBuilder: apiBuilder),
+    );
+  }
 }
 
-class _SomedayScreenState extends ConsumerState<SomedayScreen> {
+/// The Someday list itself, without chrome: Library's Ideas tab embeds it
+/// and [SomedayScreen] wraps it in a route.
+class SomedayList extends ConsumerStatefulWidget {
+  final String? workspace;
+  final HesterApi Function(Machine machine)? apiBuilder;
+
+  const SomedayList({required this.workspace, this.apiBuilder, super.key});
+
+  @override
+  ConsumerState<SomedayList> createState() => _SomedayListState();
+}
+
+class _SomedayListState extends ConsumerState<SomedayList> {
   List<SomedayItem> _items = const [];
   bool _loading = true;
   String? _error;
@@ -103,20 +122,26 @@ class _SomedayScreenState extends ConsumerState<SomedayScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant SomedayList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workspace != widget.workspace && widget.workspace != null) {
+      _items = const [];
+      _load();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Someday')),
-      body: widget.workspace == null
-          ? const Center(
-              child: Text('No workspace selected.', style: AeronautTheme.caption1),
-            )
-          : RefreshIndicator.adaptive(
-              color: AeronautColors.accent,
-              backgroundColor: AeronautColors.bgSurface,
-              onRefresh: _load,
-              child: _buildBody(),
-            ),
-    );
+    return widget.workspace == null
+        ? const Center(
+            child: Text('No workspace selected.', style: AeronautTheme.caption1),
+          )
+        : RefreshIndicator.adaptive(
+            color: AeronautColors.accent,
+            backgroundColor: AeronautColors.bgSurface,
+            onRefresh: _load,
+            child: _buildBody(),
+          );
   }
 
   Widget _buildBody() {
@@ -168,6 +193,9 @@ class _SomedayScreenState extends ConsumerState<SomedayScreen> {
     );
   }
 }
+
+/// A thought captured away from the Mac is your words: Newsreader (§0 rule 3).
+bool _fromDevice(String surface) => const {'aeronaut', 'dirigible', 'device'}.contains(surface);
 
 String _sourceLabel(String surface) {
   switch (surface) {
@@ -240,7 +268,7 @@ class _SomedayTileState extends State<_SomedayTile> {
             onTap: () => setState(() => _expanded = !_expanded),
             child: Text(
               item.text,
-              style: AeronautTheme.footnote,
+              style: _fromDevice(item.sourceSurface) ? writingStyle(size: 16) : AeronautTheme.footnote,
               maxLines: _expanded ? null : 3,
               overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
             ),
@@ -262,12 +290,12 @@ class _SomedayTileState extends State<_SomedayTile> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(
-                    color: AeronautColors.accent.withValues(alpha: 0.15),
+                    color: AeronautColors.bgElevated,
                     borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
                   ),
                   child: Text(
                     'as exploration',
-                    style: AeronautTheme.caption2.copyWith(color: AeronautColors.accent),
+                    style: AeronautTheme.caption2.copyWith(color: AeronautColors.textSecondary),
                   ),
                 ),
               ],
