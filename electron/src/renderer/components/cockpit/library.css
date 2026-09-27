@@ -1,163 +1,263 @@
 /*
- * library.css - Library (cockpit-design §5; package R2): Files, Explore and
- * Someday. Split out of cockpit.css by the scaffold as a pure move; loaded
- * after cockpit-shell.css and work.css (CockpitHost imports all three).
+ * library.css - Library (cockpit-design §5; package R2): one column of
+ * --col-library with the tabs, find, exploration cards, ideas and files.
+ * Built on the primitives (ui/ui.css); this file only lays them out. The ⋯
+ * menu's styles are Work's (work.css). Loaded after cockpit-shell.css and
+ * work.css (CockpitHost imports all three).
  */
 
-/* Files section */
+.library {
+  max-width: var(--col-library);
+  margin: 0 auto;
+  padding: var(--space-5) 0 var(--space-6);
+  color: var(--text-1);
+}
 
-.cockpit-files {
-  display: flex;
-  flex-direction: column;
+.library-hint {
   font-size: 12px;
+  color: var(--text-3);
 }
 
-.cockpit-file-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
+.library-empty {
+  font-family: var(--font-write);
+  font-size: 18px;
+  color: var(--text-2);
+}
+
+/* Tabs: a segmented control */
+
+.library-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ground-3);
+}
+
+.library-tabs-item {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
-  white-space: nowrap;
 }
 
-.cockpit-file-row:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+.library-tabs-item:hover {
+  color: var(--text-1);
 }
 
-.cockpit-file-row.is-selected {
-  background: var(--bg-tertiary);
-  color: var(--accent-light);
+.library-tabs-item.is-on {
+  background: var(--ground-5);
+  color: var(--text-1);
 }
 
-.cockpit-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Find and the writing fields: borderless, with an underline */
+
+.library-find {
+  margin: var(--space-4) 0 var(--space-4);
 }
 
-.cockpit-file-open {
-  margin-left: auto;
-  opacity: 0;
+.library-find-field,
+.library-write-field {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 0;
+  border: none;
+  border-bottom: 1px solid var(--ground-4);
+  border-radius: 0;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: 14px;
+  caret-color: var(--caret);
+  outline: none;
 }
 
-.cockpit-file-row:hover .cockpit-file-open,
-.cockpit-file-row.is-selected .cockpit-file-open {
-  opacity: 1;
+.library-find-field:focus,
+.library-write-field:focus {
+  border-bottom-color: var(--ground-5);
 }
 
-/* Explore section */
-
-.cockpit-explore-notes {
-  margin-top: var(--space-2);
-  padding: var(--space-2);
-  border-top: 1px solid var(--border);
-  max-height: 320px;
-  overflow-y: auto;
+.library-find-field::placeholder,
+.library-write-field::placeholder {
+  color: var(--text-3);
 }
 
-.cockpit-explore-tree {
+/* Your words: Newsreader */
+.library-write-field {
+  font-family: var(--font-write);
+  font-size: 18px;
+}
+
+.library-create {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.library-create .library-write-field {
+  flex: 1;
+}
+
+/* Explorations */
+
+.library-cards {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-2);
 }
 
-.cockpit-explore-node-line {
+.library-card-head {
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: 24px;
-  color: var(--text-secondary);
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-.cockpit-explore-node-label {
-  color: var(--text-primary);
+.library-card-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-1);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-.cockpit-explore-node.is-pruned .cockpit-explore-node-label {
-  text-decoration: line-through;
-  color: var(--text-muted);
+.library-card-age {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
-.cockpit-explore-node-actions {
-  display: inline-flex;
-  gap: var(--space-1);
+.library-card-slot .ui-writing-quote {
+  margin: var(--space-2) 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.library-card-meta {
+  margin-top: var(--space-1);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.library-card-slot .ui-card.is-archived {
+  opacity: 0.7;
+}
+
+.library-fold {
+  padding: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+/* Ideas */
+
+.library-ideas {
+  display: flex;
+  flex-direction: column;
+}
+
+.library-idea {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border-radius: var(--radius-control);
+}
+
+.library-idea + .library-idea {
+  border-top: 1px solid var(--ground-3);
+}
+
+.library-idea.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.library-idea > .ui-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.library-idea .ui-row-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.library-idea-text.is-yours {
+  font-family: var(--font-write);
+  font-size: 16px;
+}
+
+.library-idea-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* Files */
+
+.library-files {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+
+.library-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.library-file:hover {
+  background: var(--ground-2);
+  color: var(--text-1);
+}
+
+.library-file.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  color: var(--text-1);
+}
+
+.library-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library-file-open {
   margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
   opacity: 0;
 }
 
-.cockpit-explore-node-line:hover .cockpit-explore-node-actions,
-.cockpit-explore-node-actions:focus-within {
+.library-file-open:hover {
+  color: var(--text-1);
+}
+
+.library-file:hover .library-file-open,
+.library-file.is-selected .library-file-open,
+.library-file-open:focus-visible {
   opacity: 1;
-}
-
-.cockpit-explore-node-detail {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-  margin: 0 0 var(--space-1) 18px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.cockpit-explore-node-detail .cockpit-agent-words {
-  flex-basis: 100%;
-}
-
-.cockpit-explore-diffstat {
-  flex-basis: 100%;
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-control);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  max-height: 120px;
-  overflow: auto;
-  white-space: pre;
-}
-
-.cockpit-explore-inline {
-  display: inline-flex;
-  gap: var(--space-1);
-  align-items: center;
-}
-
-.cockpit-explore-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-top: var(--space-2);
-  max-width: 640px;
-}
-
-.cockpit-explore-menu {
-  display: inline-flex;
-  flex-direction: column;
-  margin-top: var(--space-1);
-  padding: var(--space-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg-secondary);
-}
-
-.cockpit-explore-log {
-  margin-top: var(--space-2);
-}
-
-.cockpit-explore-log summary {
-  cursor: pointer;
-}
-
-/* Someday section */
-
-.cockpit-someday-text {
-  white-space: normal;
 }
