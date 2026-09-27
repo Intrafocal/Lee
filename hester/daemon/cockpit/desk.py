@@ -588,15 +588,28 @@ class DeskStore:
             self._write(raw)
         return self.area_api(area)
 
-    def delete_area(self, area_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    def delete_area(self, area_id: str, now: Optional[datetime] = None, with_cards: bool = False) -> Dict[str, Any]:
+        """An empty Area; with ``with_cards`` (the user confirmed), its cards go too. Not undoable."""
         with _LOCK:
             raw = self.load(now)
             area = self._area(raw, area_id)
-            if any(c.get("area_id") == area_id for c in raw["cards"]):
+            cards = [c["id"] for c in raw["cards"] if c.get("area_id") == area_id]
+            if cards and not with_cards:
                 raise DeskConflict("not_empty")
+            for card_id in cards:
+                self._drop_card(raw, card_id)
             raw["areas"].remove(area)
             self._write(raw)
-        return {"deleted": True}
+        return {"deleted": True, "cards": len(cards)}
+
+    def _drop_card(self, raw: Dict[str, Any], card_id: str) -> None:
+        """Remove a card and its folder from ``raw`` (caller holds the lock and writes)."""
+        shutil.rmtree(self.pages.dir / card_id, ignore_errors=True)
+        raw["cards"] = [c for c in raw["cards"] if c["id"] != card_id]
+        if raw.get("goals_card_id") == card_id:
+            raw["goals_card_id"] = None
+        if (raw.get("last") or {}).get("card_id") == card_id:
+            raw["last"] = None
 
     def put_away(self, area_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
@@ -767,18 +780,14 @@ class DeskStore:
         d = self.pages.dir / card_id
         return not any(deep.read_jsonl(d / f) for f in (deep.ANSWERS_FILE, deep.REFERENCES_FILE, deep.QUESTIONS_FILE))
 
-    def delete_page(self, card_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+    def delete_page(self, card_id: str, now: Optional[datetime] = None, force: bool = False) -> Dict[str, Any]:
+        """Only an empty card (R8's guard), unless ``force`` (the user confirmed deleting it). Not undoable."""
         with _LOCK:
             raw = self.load(now)
             self._require_card(raw, card_id)
-            if not self.is_empty(card_id):
+            if not force and not self.is_empty(card_id):
                 raise DeskConflict("not_empty")
-            shutil.rmtree(self.pages.dir / card_id, ignore_errors=True)
-            raw["cards"] = [c for c in raw["cards"] if c["id"] != card_id]
-            if raw.get("goals_card_id") == card_id:
-                raw["goals_card_id"] = None
-            if (raw.get("last") or {}).get("card_id") == card_id:
-                raw["last"] = None
+            self._drop_card(raw, card_id)
             self._write(raw)
         return {"deleted": True}
 

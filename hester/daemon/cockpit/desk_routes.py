@@ -90,7 +90,8 @@ def create_desk_router() -> APIRouter:
 
     @router.delete("/desk/areas/{area_id}")
     async def desk_area_delete(area_id: str, request: Request):
-        return await _op(request, lambda ctx, desk, b: desk.delete_area(area_id))
+        """An empty Area; ``{"with_cards": true}`` deletes its cards too (the user confirmed)."""
+        return await _op(request, lambda ctx, desk, b: desk.delete_area(area_id, with_cards=b.get("with_cards") is True))
 
     @router.post("/desk/areas/{area_id}/put-away")
     async def desk_area_put_away(area_id: str, request: Request):
@@ -150,8 +151,9 @@ def create_desk_router() -> APIRouter:
 
     @router.delete("/desk/pages/{card_id}")
     async def desk_page_delete(card_id: str, request: Request):
-        """Deep next R8's guard on a card: only an empty, still-Untitled one goes; else 409 not_empty."""
-        return await _op(request, lambda ctx, desk, b: desk.delete_page(card_id))
+        """Deep next R8's guard on a card: only an empty, still-Untitled one goes; else 409 not_empty.
+        ``{"force": true}`` deletes it anyway (the user confirmed)."""
+        return await _op(request, lambda ctx, desk, b: desk.delete_page(card_id, force=b.get("force") is True))
 
     # ------------------------------------------------------------ a Page card's records (deep.py)
 

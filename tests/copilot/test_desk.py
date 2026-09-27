@@ -62,7 +62,7 @@ def test_areas_create_patch_place_and_delete(cockpit_env):
     new_page(c, h, area_id=main["id"], text="words")
     r = c.delete(f"/desk/areas/{main['id']}", headers=h)
     assert r.status_code == 409 and r.json() == {"success": False, "error": "not_empty"}
-    assert c.delete(f"/desk/areas/{placed['id']}", headers=h).json()["data"] == {"deleted": True}
+    assert c.delete(f"/desk/areas/{placed['id']}", headers=h).json()["data"] == {"deleted": True, "cards": 0}
     assert c.delete(f"/desk/areas/{placed['id']}", headers=h).status_code == 404
 
 
@@ -293,3 +293,26 @@ def test_ask_on_the_palette_about_a_page(cockpit_env, monkeypatch):
     assert "Page card" in req.steward_context and "The vector clock idea." in req.steward_context
     r = c.post("/cockpit/ask", headers=h, json={"question": "q", "about": {"kind": "page", "id": "pg-00000000"}})
     assert r.status_code == 404
+
+
+def test_confirmed_deletes_take_cards_with_them(cockpit_env):
+    c, h = cockpit_env.client, hdr(cockpit_env.a)
+    area = c.post("/desk/areas", headers=h, json={"name": "Doomed"}).json()["data"]
+    one = new_page(c, h, area_id=area["id"], text="words")
+    two = new_page(c, h, area_id=area["id"], text="more", title="Named")
+    c.put("/desk/last", headers=h, json={"card_id": one["id"]})
+    assert c.delete(f"/desk/areas/{area['id']}", headers=h).status_code == 409, "unconfirmed: not_empty"
+    r = c.request("DELETE", f"/desk/areas/{area['id']}", headers=h, json={"with_cards": True})
+    assert r.status_code == 200 and r.json()["data"] == {"deleted": True, "cards": 2}
+    desk = c.get("/desk", headers=h).json()["data"]
+    assert all(x["id"] != area["id"] for x in desk["areas"])
+    assert all(x["id"] not in (one["id"], two["id"]) for x in desk["cards"])
+    assert not (cockpit_env.a / ".hester" / "desk" / "pages" / one["id"]).exists()
+    assert (desk.get("last") or {}).get("card_id") != one["id"]
+
+    keep = main_area(c, h)["id"]
+    written = new_page(c, h, area_id=keep, text="not empty", title="Written")
+    assert c.delete(f"/desk/pages/{written['id']}", headers=h).status_code == 409
+    r = c.request("DELETE", f"/desk/pages/{written['id']}", headers=h, json={"force": True})
+    assert r.status_code == 200 and r.json()["data"] == {"deleted": True}
+    assert c.get(f"/desk/pages/{written['id']}/page", headers=h).status_code == 404

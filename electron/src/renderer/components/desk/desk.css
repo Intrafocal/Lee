@@ -375,62 +375,66 @@
   font-size: 12px;
 }
 
-/* One column at the side, not a scrim: ideas drag onto Areas behind it. */
-.desk-drawer {
+/* The Drawer: a menu above its button, not a panel; ideas drag out of it onto Areas. */
+.desk-drawer-anchor {
+  position: relative;
+}
+
+.desk-drawer-menu {
   position: absolute;
-  top: 44px;
-  right: 0;
-  bottom: 40px;
-  z-index: 4;
-  width: min(380px, 90%);
-  display: flex;
-  flex-direction: column;
-  background: var(--ground-1);
-  border-left: 1px solid var(--ground-3);
-  box-shadow: -8px 0 24px rgba(var(--ground-0-rgb), 0.5);
-}
-
-.desk-drawer-head {
-  display: flex;
-  align-items: baseline;
-  padding: var(--space-4);
-  font-size: 15px;
-  color: var(--text-1);
-}
-
-.desk-drawer-list {
-  flex: 1;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  width: 340px;
+  max-height: min(60vh, 520px);
   overflow: auto;
-  padding: 0 var(--space-4) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  padding: var(--space-2) 0;
 }
 
-.desk-idea {
-  padding: var(--space-3);
-  border: 1px solid var(--ground-3);
-  border-radius: var(--radius-card);
-  background: var(--ground-2);
+.desk-drawer-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.desk-drawer-empty {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: 12px;
+}
+
+.desk-drawer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.desk-drawer-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.desk-drawer-row .desk-idea-actions {
+  display: none;
+}
+
+.desk-drawer-row:hover .desk-idea-actions,
+.desk-drawer-row:focus-within .desk-idea-actions {
+  display: inline-flex;
 }
 
 .desk-idea[draggable='true'] {
   cursor: grab;
 }
 
-.desk-idea-text {
+/* An idea is your own words. */
+.desk-idea .desk-drawer-text {
   font-family: var(--font-write);
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 14px;
   color: var(--text-1);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.desk-idea-actions {
-  display: flex;
-  gap: var(--space-1);
-  margin-top: var(--space-2);
 }
 
 /* ---- the zoomed card (the Page editor, unchanged) ---- */
@@ -498,4 +502,41 @@
   font-family: var(--font-ui);
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* ---- delete: a card's menu and the confirm ---- */
+
+.desk-card-menu {
+  position: absolute;
+  z-index: 4;
+  min-width: 160px;
+}
+
+.desk-danger {
+  color: var(--error);
+}
+
+.desk-confirm {
+  position: absolute;
+  z-index: 5;
+  top: 30%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(360px, 90%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.desk-confirm-text {
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.desk-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
 }

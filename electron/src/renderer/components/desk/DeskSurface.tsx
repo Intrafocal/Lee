@@ -16,9 +16,9 @@
  *   at every zoom: GOALS.md's goals, else the Goals Page's first line, else
  *   "What is this project for?", where typing creates it.
  * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Put away.
- * - Drawers are a strip along the bottom of the overview: Ideas (Someday)
- *   and Put away (Areas). Each opens a one-column panel at the side, so an
- *   idea can be dragged onto an Area.
+ * - The Drawer is a button in the strip along the bottom of the overview: a
+ *   menu of put-away Areas (click to take one out) and Ideas (Someday; click
+ *   to start a Page, or drag one onto an Area).
  * - Esc: closes the innermost thing (a Drawer, the preview), then from an
  *   Area goes to the overview. From a zoomed card it's DeepHost's.
  * - No `next` button anywhere here: the Desk is a place, not a flow.
@@ -32,9 +32,9 @@ import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
-import { Btn, IconAction } from '../cockpit/ui';
+import { IconAction } from '../cockpit/ui';
 import { fetchGoalsStatus, listSomeday, triageSomeday, type SomedayItem } from '../../lib/hesterCockpit';
-import { createArea, ideaToPage, patchArea, putAwayArea, takeOutArea } from '../../lib/hesterDesk';
+import { createArea, deleteArea, deleteDeskPage, ideaToPage, patchArea, putAwayArea, takeOutArea } from '../../lib/hesterDesk';
 import { newDraft } from '../../lib/hesterDeep';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
 import {
@@ -73,7 +73,6 @@ interface DeskSurfaceProps {
 const HOVER_MS = 300;
 const GOALS_SHOWN = 5;
 const IDEA_MIME = 'application/x-lee-idea';
-type Drawer = 'ideas' | 'put-away';
 
 export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceProps): JSX.Element {
   const ctx = useDeskContext();
@@ -124,8 +123,10 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     const t = e.target as Element;
-    if (menuFor && !t.closest('.desk-area-menu')) {
+    if ((menuFor && !t.closest('.desk-area-menu')) || drawer || cardMenu) {
       setMenuFor(null);
+      setDrawer(false);
+      setCardMenu(null);
       return;
     }
     if (t.closest('.desk-card, .desk-goals, button, input, textarea, .desk-area-menu')) return;
@@ -237,14 +238,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   };
 
   // ---- Drawers ----
-  const [drawer, setDrawer] = useState<Drawer | null>(null);
+  const [drawer, setDrawer] = useState(false);
   const [ideas, setIdeas] = useState<SomedayItem[] | null>(null);
   const loadIdeas = useCallback(async () => {
     const r = await listSomeday(workspace, 'open');
     setIdeas(r.ok && Array.isArray(r.data) ? r.data : []);
   }, [workspace]);
   useEffect(() => {
-    if (drawer === 'ideas') void loadIdeas();
+    if (drawer) void loadIdeas();
   }, [drawer, loadIdeas]);
   const ideaPage = async (id: string, where?: { area: DeskArea; rel: Point }) => {
     const at = where && desk ? placeNewCard(where.area, cardsIn(desk, where.area.id), where.rel) : null;
@@ -252,7 +253,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     if (!r.ok) return say(r.status === 409 ? 'That idea isn’t open any more' : r.error);
     setIdeas((l) => (l ? l.filter((i) => i.id !== id) : l));
     await ctx?.refresh();
-    setDrawer(null);
+    setDrawer(false);
     void zoomIntoCard({ card_id: r.data.card.id, title: r.data.card.title, area_id: r.data.area.id }, 'click');
   };
   const triage = async (id: string, action: 'keep' | 'drop') => {
@@ -262,11 +263,37 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     void ctx?.refresh();
   };
   const takeOut = async (a: DeskArea) => {
+    setDrawer(false);
     const r = await takeOutArea(workspace, a.id);
     if (!r.ok) return say(r.error);
     await ctx?.refresh();
     zoomToArea(a.id, 'click');
   };
+  // ---- delete (confirmed; not undoable) ----
+  const [confirm, setConfirm] = useState<{ kind: 'area'; area: DeskArea; cards: number } | { kind: 'page'; card: DeskCard } | null>(null);
+  const [cardMenu, setCardMenu] = useState<{ card: DeskCard; x: number; y: number } | null>(null);
+  const askDeleteArea = (a: DeskArea) => {
+    setMenuFor(null);
+    setDrawer(false);
+    setConfirm({ kind: 'area', area: a, cards: desk ? cardsIn(desk, a.id).length : 0 });
+  };
+  const doDelete = async () => {
+    const c = confirm;
+    setConfirm(null);
+    if (!c) return;
+    if (c.kind === 'area') {
+      const r = await deleteArea(workspace, c.area.id, true);
+      if (!r.ok) return say(r.error);
+      if (nav.area_id === c.area.id) zoomOut('overview', 'click');
+      say(`Deleted: ${c.area.name}`);
+    } else {
+      const r = await deleteDeskPage(workspace, c.card.id, true);
+      if (!r.ok) return say(r.error);
+      say(`Deleted: ${c.card.title || 'Untitled'}`);
+    }
+    void ctx?.refresh();
+  };
+
   const onAreaDrop = (e: React.DragEvent, area: DeskArea) => {
     const id = e.dataTransfer.getData(IDEA_MIME);
     if (!id) return;
@@ -285,7 +312,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       const t = e.target instanceof HTMLElement ? e.target : null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) open.push('input');
       if (preview) open.push('preview');
-      if (drawer || menuFor) open.push('drawer');
+      if (drawer || menuFor || confirm || cardMenu) open.push('drawer');
       const step = escapeStep(open, zoom === 'card' ? 'overview' : zoom);
       if (step.kind === 'none') return;
       e.preventDefault();
@@ -296,13 +323,15 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
         t?.blur();
       } else if (step.layer === 'preview') setPreview(null);
       else {
-        setDrawer(null);
+        setDrawer(false);
         setMenuFor(null);
+        setConfirm(null);
+        setCardMenu(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [visible, preview, drawer, menuFor, zoom]);
+  }, [visible, preview, drawer, menuFor, confirm, cardMenu, zoom]);
 
   // Keys land somewhere when the Desk shows (not on a hidden Page).
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -370,9 +399,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               }}
             />
           ) : (
-            <button className="deep-quiet" onClick={() => setNewArea('')}>
-              New Area
-            </button>
+            <IconAction icon="plus" label="New Area" onClick={() => setNewArea('')} />
           ))}
         <span className="deep-window-actions">
           <IconAction icon="minimize" label="Back to Cockpit" kbd="⇧⌘0" onClick={() => onHop('cockpit')} />
@@ -465,6 +492,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)} title="Into the Put away Drawer; take it out from there">
                             Put away in a Drawer
                           </button>
+                          <button className="deep-pop-row desk-danger" role="menuitem" onClick={() => askDeleteArea(area)}>
+                            Delete…
+                          </button>
                         </div>
                       )}
                     </span>
@@ -479,6 +509,12 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                       onZoom={(via) => zoomCard(c, area, via)}
                       onHover={(el) => hoverIn(c, el)}
                       onLeave={hoverOut}
+                      onMenu={(e) => {
+                        hoverOut();
+                        setMenuFor(null);
+                        const p = localPoint(e.clientX, e.clientY);
+                        setCardMenu({ card: c, x: p.x, y: p.y });
+                      }}
                     />
                   ))}
                 </section>
@@ -494,6 +530,33 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             onHover={(el) => goalsCard && hoverIn(goalsCard, el)}
             onLeave={hoverOut}
           />
+
+          {cardMenu && (
+            <div className="deep-popover desk-card-menu" role="menu" style={{ left: cardMenu.x, top: cardMenu.y }}>
+              <button
+                className="deep-pop-row"
+                role="menuitem"
+                onClick={() => {
+                  const c = cardMenu.card;
+                  setCardMenu(null);
+                  zoomCard(c, onDesk.find((a) => a.id === c.area_id) ?? null, 'click');
+                }}
+              >
+                Open
+              </button>
+              <button
+                className="deep-pop-row desk-danger"
+                role="menuitem"
+                onClick={() => {
+                  const c = cardMenu.card;
+                  setCardMenu(null);
+                  setConfirm({ kind: 'page', card: c });
+                }}
+              >
+                Delete Page…
+              </button>
+            </div>
+          )}
 
           {preview && (
             <div className="desk-preview" style={{ left: preview.x, top: preview.y }} role="tooltip">
@@ -511,75 +574,81 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       )}
 
       {desk && status !== 'old' && zoom === 'overview' && (
-        <footer className="desk-drawers" aria-label="Drawers">
-          <button className={`desk-drawer-btn${drawer === 'ideas' ? ' is-open' : ''}`} onClick={() => setDrawer((d) => (d === 'ideas' ? null : 'ideas'))} aria-expanded={drawer === 'ideas'}>
-            Ideas <span className="deep-muted">{counts.ideas}</span>
-          </button>
-          <button className={`desk-drawer-btn${drawer === 'put-away' ? ' is-open' : ''}`} onClick={() => setDrawer((d) => (d === 'put-away' ? null : 'put-away'))} aria-expanded={drawer === 'put-away'}>
-            Put away <span className="deep-muted">{counts.putAway}</span>
-          </button>
+        <footer className="desk-drawers">
+          <span className="desk-drawer-anchor">
+            <button className={`desk-drawer-btn${drawer ? ' is-open' : ''}`} onClick={() => setDrawer((d) => !d)} aria-expanded={drawer} aria-haspopup="menu">
+              Drawer {counts.ideas + counts.putAway > 0 && <span className="deep-muted">{counts.ideas + counts.putAway}</span>}
+            </button>
+            {drawer && desk && (
+              <div className="deep-popover desk-drawer-menu" role="menu" aria-label="Drawer">
+                <div className="desk-drawer-group">Put away</div>
+                {putAwayAreas(desk).length === 0 && <div className="desk-drawer-empty deep-muted">Nothing put away. An Area’s ⋯ has Put away.</div>}
+                {putAwayAreas(desk).map((a) => (
+                  <button key={a.id} className="deep-pop-row desk-drawer-row" role="menuitem" onClick={() => void takeOut(a)} title="Take it out onto the Desk">
+                    <span className="desk-drawer-text">{a.name}</span>
+                    <span className="deep-muted">{cardsIn(desk, a.id).length} cards</span>
+                    <span className="desk-idea-actions" onClick={(e) => e.stopPropagation()}>
+                      <IconAction icon="trash" label="Delete…" tone="danger" onClick={() => askDeleteArea(a)} />
+                    </span>
+                  </button>
+                ))}
+                <div className="desk-drawer-group">Ideas</div>
+                {ideas == null && <div className="desk-drawer-empty deep-muted">Opening…</div>}
+                {ideas != null && ideas.length === 0 && <div className="desk-drawer-empty deep-muted">No ideas waiting. Captures from the phone and the T-Deck land here.</div>}
+                {ideas?.map((i) => (
+                  <div
+                    key={i.id}
+                    className="deep-pop-row desk-drawer-row desk-idea"
+                    role="menuitem"
+                    tabIndex={0}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(IDEA_MIME, i.id);
+                      e.dataTransfer.effectAllowed = 'copy';
+                    }}
+                    onClick={() => void ideaPage(i.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void ideaPage(i.id);
+                      }
+                    }}
+                    title="Start a Page from it, or drag it onto an Area"
+                  >
+                    <span className="desk-drawer-text">{i.text}</span>
+                    <span className="desk-idea-actions" onClick={(e) => e.stopPropagation()}>
+                      <IconAction icon="check" label="Keep" onClick={() => void triage(i.id, 'keep')} />
+                      <IconAction icon="trash" label="Drop" onClick={() => void triage(i.id, 'drop')} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </span>
           <span className="deep-spacer" />
           <span className="deep-muted desk-hint">Click an empty spot in an Area to start a Page</span>
         </footer>
       )}
 
-      {drawer && desk && (
-        <aside className="desk-drawer" aria-label={drawer === 'ideas' ? 'Ideas' : 'Put away'}>
-          <header className="desk-drawer-head">
-            <span>{drawer === 'ideas' ? 'Ideas' : 'Put away'}</span>
-            <span className="deep-spacer" />
-            <button className="deep-icon-btn" onClick={() => setDrawer(null)} aria-label="Close (Esc)" title="Close (Esc)">
-              ×
+      {confirm && (
+        <div className="deep-popover desk-confirm" role="alertdialog" aria-label="Delete">
+          <div className="desk-confirm-text">
+            {confirm.kind === 'area'
+              ? `Delete ${confirm.area.name}${confirm.cards ? ` and its ${confirm.cards} ${confirm.cards === 1 ? 'card' : 'cards'}` : ''}?`
+              : `Delete ${confirm.card.title || 'Untitled'}?`}
+          </div>
+          <div className="deep-muted">This can’t be undone. Put away keeps it instead.</div>
+          <div className="desk-confirm-actions">
+            <button className="deep-quiet" onClick={() => setConfirm(null)} autoFocus>
+              Cancel
             </button>
-          </header>
-          {drawer === 'ideas' ? (
-            <div className="desk-drawer-list">
-              {ideas == null && <div className="deep-muted">Opening…</div>}
-              {ideas != null && ideas.length === 0 && <div className="deep-muted">No ideas waiting. Captures from the phone and the T-Deck land here.</div>}
-              {ideas?.map((i) => (
-                <div
-                  key={i.id}
-                  className="desk-idea"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(IDEA_MIME, i.id);
-                    e.dataTransfer.effectAllowed = 'copy';
-                  }}
-                  title="Drag onto an Area to start a Page there"
-                >
-                  <div className="desk-idea-text">{i.text}</div>
-                  <div className="desk-idea-actions">
-                    <Btn kind="quiet" onClick={() => void ideaPage(i.id)}>
-                      Start a Page
-                    </Btn>
-                    <Btn kind="quiet" onClick={() => void triage(i.id, 'keep')}>
-                      Keep
-                    </Btn>
-                    <Btn kind="quiet" onClick={() => void triage(i.id, 'drop')}>
-                      Drop
-                    </Btn>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="desk-drawer-list">
-              {putAwayAreas(desk).length === 0 && <div className="deep-muted">Nothing put away. An Area’s ⋯ has Put away.</div>}
-              {putAwayAreas(desk).map((a) => (
-                <div key={a.id} className="desk-idea">
-                  <div className="desk-idea-text">{a.name}</div>
-                  <div className="deep-muted">{cardsIn(desk, a.id).length} cards</div>
-                  <div className="desk-idea-actions">
-                    <Btn kind="quiet" onClick={() => void takeOut(a)}>
-                      Take out
-                    </Btn>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </aside>
+            <button className="deep-quiet desk-danger" onClick={() => void doDelete()}>
+              Delete
+            </button>
+          </div>
+        </div>
       )}
+
     </div>
   );
 }
@@ -595,6 +664,7 @@ function DeskCardView({
   onZoom,
   onHover,
   onLeave,
+  onMenu,
 }: {
   card: DeskCard;
   style: React.CSSProperties;
@@ -602,6 +672,7 @@ function DeskCardView({
   onZoom: (via: 'click' | 'key') => void;
   onHover: (el: HTMLElement) => void;
   onLeave: () => void;
+  onMenu: (e: React.MouseEvent) => void;
 }): JSX.Element {
   const line = cardCountLine(card.summary);
   return (
@@ -620,6 +691,11 @@ function DeskCardView({
       }}
       onMouseEnter={(e) => onHover(e.currentTarget)}
       onMouseLeave={onLeave}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onMenu(e);
+      }}
     >
       <div className="desk-card-title">{card.title || 'Untitled'}</div>
       {line && <div className="desk-card-count">{line}</div>}

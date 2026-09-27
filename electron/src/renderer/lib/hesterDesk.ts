@@ -65,9 +65,9 @@ export function patchArea(workspace: string, id: string, body: DeskAreaPatch): P
   return call<DeskArea>(workspace, 'PATCH', `/desk/areas/${seg(id)}`, body);
 }
 
-/** Only an empty Area; 409 `not_empty` otherwise (put it away instead). */
-export function deleteArea(workspace: string, id: string): Promise<DeepResult<{ deleted: true }>> {
-  return call<{ deleted: true }>(workspace, 'DELETE', `/desk/areas/${seg(id)}`);
+/** An empty Area, else 409 `not_empty`; `withCards` (the user confirmed) deletes its cards too. Not undoable. */
+export function deleteArea(workspace: string, id: string, withCards = false): Promise<DeepResult<{ deleted: true; cards: number }>> {
+  return call<{ deleted: true; cards: number }>(workspace, 'DELETE', `/desk/areas/${seg(id)}`, withCards ? { with_cards: true } : undefined);
 }
 
 export function putAwayArea(workspace: string, id: string, drawerId?: string): Promise<DeepResult<DeskArea>> {
@@ -107,9 +107,9 @@ export function patchDeskPage(workspace: string, id: string, body: { title: stri
   return call<DeskCard>(workspace, 'PATCH', `/desk/pages/${seg(id)}`, body);
 }
 
-/** Only an empty Untitled Page (Deep next R8's guard); 409 `not_empty` otherwise. */
-export function deleteDeskPage(workspace: string, id: string): Promise<DeepResult<{ deleted: true }>> {
-  return call<{ deleted: true }>(workspace, 'DELETE', `/desk/pages/${seg(id)}`);
+/** Only an empty Untitled Page (Deep next R8's guard), else 409 `not_empty`; `force` (the user confirmed) deletes it anyway. Not undoable. */
+export function deleteDeskPage(workspace: string, id: string, force = false): Promise<DeepResult<{ deleted: true }>> {
+  return call<{ deleted: true }>(workspace, 'DELETE', `/desk/pages/${seg(id)}`, force ? { force: true } : undefined);
 }
 
 // ---- sessions ----
