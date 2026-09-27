@@ -23,6 +23,7 @@ import { saveDebugTrace, DebugTrace } from './debug-trace';
 import { MachineManager } from './machine-manager';
 import { MdnsAdvertiser, resolveInstanceName } from './mdns-advertiser';
 import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
+import { UserNameResolver } from './user-name';
 import { fsWatcher } from './fs-watcher';
 import { initCockpitLint, shutdownCockpitLint } from './cockpit/lint-main';
 import {
@@ -166,6 +167,7 @@ function createWindow(workspace?: string): BrowserWindow {
           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
           "img-src 'self' data: blob:; " +
           "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; " +
+          // Lee's own fonts (Newsreader) are bundled; gstatic serves KiCanvas's remote icon font only
           "font-src 'self' data: https://fonts.gstatic.com; " +
           "frame-src 'self'"
         ],
@@ -1066,6 +1068,21 @@ function setupIPC(): void {
       return app.getPath('home');
     }
     return cwd;
+  });
+
+  // Cockpit design §7.2: the user's first name for Home's greeting. The
+  // config is read per call (it can change); the macOS full name once.
+  const userNames = new UserNameResolver();
+  ipcMain.handle('app:user-name', async (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const workspace = (bw && windowRegistry.get(bw.id)?.workspace) || app.getPath('home');
+    let config: unknown = null;
+    try {
+      config = (await loadMergedConfig(workspace)).config;
+    } catch (error) {
+      console.error('Failed to load config for app:user-name:', error);
+    }
+    return userNames.resolve(config);
   });
 
   // Dialog operations

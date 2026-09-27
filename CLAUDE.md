@@ -339,6 +339,7 @@ Create `~/.config/lee/config.yaml` or `.lee/config.yaml` in your workspace:
 app:
   name: "Lee"
   theme: "dracula"
+  user_name: "Ben"  # Home's greeting; defaults to the first word of your macOS full name
 
 hester:
   enabled: true

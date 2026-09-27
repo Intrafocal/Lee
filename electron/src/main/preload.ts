@@ -106,8 +106,8 @@ const api: LeeAPI = {
   app: {
     getWorkspace: () => ipcRenderer.invoke('app:get-workspace'),
     quit: (reason) => ipcRenderer.send(COPILOT_IPC.appQuit, { reason }),
-    // Cockpit design §7.2: stub until M wires app:user-name.
-    userName: () => Promise.resolve(null),
+    // Cockpit design §7.2: app.user_name, else the macOS full name's first word, else null.
+    userName: () => ipcRenderer.invoke('app:user-name'),
   },
 
   dialog: {
