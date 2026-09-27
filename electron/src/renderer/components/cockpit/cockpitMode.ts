@@ -519,6 +519,20 @@ export function goDeep(api: CopilotAPI | null | undefined, workspace: string): v
   void openExplorationInDeep(api, workspace, d.exploration_id, d.title);
 }
 
+/** Where openDesk lands (Desk D2 §7.2). */
+export type DeskTarget =
+  | { kind: 'last' }                                            // your last card at its stopped-at line (GET /desk/last)
+  | { kind: 'card'; card_id: string; line?: number | null }
+  | { kind: 'goals'; first_line?: string }                      // the Goals card; creates it (POST /desk/pages purpose goals)
+  | { kind: 'overview' };
+
+/** Switch to Deep (the Desk) and land on `target`; starts or retargets the Deep session. */
+export async function openDesk(api: CopilotAPI | null | undefined, workspace: string, target: DeskTarget): Promise<void> {
+  // Z stub: D replaces the body. Keeps today's behaviour so the app builds and runs.
+  void target;
+  goDeep(api, workspace);
+}
+
 let blankPending = false;
 
 /**

@@ -7,6 +7,7 @@
  */
 
 import type { AgentActivity, AgentNow, AgentUpdate, AgentUsage, DeepAnswerEvent, DepthRating, LeeMode, Quadrant, UsageLimits } from './cockpit';
+import type { DeskCardKind } from './desk';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -199,13 +200,14 @@ export type AttentionKind =
   | 'decision' // agent reported lee-status: waiting (a question for you)
   | 'failure' // agent process exited non-zero
   | 'review' // agent finished a turn (ambient)
-  | 'summary'; // away-policy summary (v1)
+  | 'summary' // away-policy summary (v1)
+  | 'deep_idle'; // Desk D2: the one idle-end push (§9.2); devices only, never shown in the Cockpit
 
 export type AttentionSeverity = 'ambient' | 'needs-you' | 'blocking';
 
 export type AttentionState = 'open' | 'snoozed' | 'resolved' | 'dismissed';
 
-export type AttentionActionName = 'approve' | 'deny' | 'choose' | 'reply' | 'open' | 'snooze' | 'dismiss' | 'wake';
+export type AttentionActionName = 'approve' | 'deny' | 'choose' | 'reply' | 'open' | 'snooze' | 'dismiss' | 'wake' | 'extend' | 'end_rate' | 'capture';
 
 export interface LeeStatusBlock {
   status: 'done' | 'in-progress' | 'blocked' | 'waiting' | null;
@@ -281,6 +283,8 @@ export interface AttentionItem {
   snoozed_until?: string | null;
   /** The source task's quadrant (v4 §7.2), for display; absent when unknown. */
   quadrant?: Quadrant | null;
+  /** kind 'deep_idle' only. */
+  deep_idle?: { session_id: string; ends_at: string; card: { card_id: string; title: string } | null } | null;
 }
 
 export type FocusItem =
@@ -290,7 +294,9 @@ export type FocusItem =
   /** v4 §7.4: focus on a Cockpit task; related to attention items from its agent pty. */
   | { kind: 'task'; workspace: string; task_id: string; label: string }
   /** Deep D1 §2.1: a Deep session; exploration_id null = Deep with nothing open yet. */
-  | { kind: 'exploration'; workspace: string; exploration_id: string | null; title: string };
+  | { kind: 'exploration'; workspace: string; exploration_id: string | null; title: string }
+  /** Desk D2: a Deep session at the Desk; card_id null = at the overview with no card yet. */
+  | { kind: 'card'; workspace: string; card_id: string | null; card_kind: DeskCardKind | null; title: string };
 
 export type FocusSource = 'manual' | 'inferred' | 'deep';
 
@@ -304,11 +310,19 @@ export interface FocusState {
   quiet_count: number;
   /** 'none' iff source === 'deep' (Deep D1 §2.3). */
   policy: 'normal' | 'none';
-  deep: { exploration_id: string | null; title: string; workspace: string } | null;
+  deep: { exploration_id: string | null; title: string; workspace: string; card_id?: string | null; card_kind?: DeskCardKind | null } | null;
 }
 
 export type FocusEndReason = 'manual' | 'away' | 'switch' | 'handoff' | 'quit' | 'deep_end';
-export interface DeepStartRequest { workspace: string; exploration_id: string | null; title?: string; surface?: string }
+export interface DeepStartRequest {
+  workspace: string;
+  /** Legacy (D1); ignored when card_id is present. */
+  exploration_id: string | null;
+  title?: string;
+  surface?: string;
+  card_id?: string | null;
+  card_kind?: DeskCardKind | null;
+}
 export interface DeepEndRequest { reason: 'ritual' | 'esc'; rating?: DepthRating | null; stopped_at_chars?: number }
 
 /** window.lee.deep (Deep D1 §6): main forwards Hester's ingested deep.answer events. */
@@ -377,7 +391,7 @@ export interface AttentionSnapshot {
   /** Deep D1 §2.5: the focused window's mode. Lee main always sets it; optional for older builds. */
   mode?: LeeMode;
   /** Deep D1 §2.5: the Deep session, if one is active (focus.active stays true during it). */
-  deep?: { exploration_id: string | null; title: string } | null;
+  deep?: { exploration_id: string | null; title: string; card_id?: string | null; card_kind?: DeskCardKind | null } | null;
   /** docs/15-Usage.md §6.1: the latest Claude subscription limits seen by any Lee-launched session; null when none. */
   limits?: UsageLimits | null;
   generated_at: string;
@@ -539,3 +553,8 @@ export interface CopilotAPI {
   deepStart: (req: DeepStartRequest) => Promise<FocusState>;
   deepEnd: (req: DeepEndRequest) => Promise<FocusState>;
 }
+
+/** POST /deep/idle-end (§9.2). */
+export type DeepIdleEndRequest =
+  | { item_id: string; version: number; action: 'extend' }
+  | { item_id: string; version: number; action: 'end_rate'; rating: DepthRating | null; stopped_at?: string | null };

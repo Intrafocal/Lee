@@ -50,6 +50,7 @@ const KIND_TITLE_TEMPLATES: Record<TitledKind, string> = {
   decision: '{agent} needs a decision',
   review: '{agent} finished a turn',
   summary: 'While you were away',
+  deep_idle: 'Still thinking?',
 };
 
 /** An item title naming the agent's provider ("Pi finished a turn"). */
@@ -66,6 +67,7 @@ const KIND_ACTIONS: Record<AttentionKind, AttentionActionName[]> = {
   failure: ['open', 'dismiss'],
   review: ['reply', 'open', 'dismiss'],
   summary: ['open', 'dismiss'],
+  deep_idle: ['extend', 'end_rate', 'capture', 'dismiss'],
 };
 
 const PTY_ACTIONS = new Set<AttentionActionName>(['approve', 'deny', 'choose', 'reply', 'open']);
