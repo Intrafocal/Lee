@@ -627,62 +627,6 @@
   color: var(--text-2);
 }
 
-/* Legacy brief cards (Goals' tensions and balance until they move to the primitives) */
-
-.cockpit-brief-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg-secondary);
-  padding: var(--space-2) var(--space-3);
-  margin-bottom: var(--space-2);
-  max-width: 860px;
-}
-
-.cockpit-brief-card.is-selected {
-  border-color: var(--accent);
-}
-
-.cockpit-brief-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-1);
-}
-
-.cockpit-brief-topline {
-  color: var(--text-secondary);
-  margin-bottom: var(--space-2);
-}
-
-.cockpit-brief-group {
-  margin-bottom: var(--space-2);
-}
-
-.cockpit-brief-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin-bottom: var(--space-1);
-}
-
-.cockpit-brief-line {
-  color: var(--text-secondary);
-  margin-bottom: 3px;
-  line-height: 1.4;
-}
-
-.cockpit-brief-about {
-  color: var(--text-muted);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-bottom: var(--space-1);
-}
-
 .cockpit-tile-actions,
 .cockpit-row-actions,
 .cockpit-popover-actions {
@@ -1227,14 +1171,6 @@ button.cockpit-tag.is-goal:hover {
 
 .cockpit-steer {
   margin-top: var(--space-2);
-}
-
-.cockpit-steward-line {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: 11px;
 }
 
 /* Goals, Ops and History (cockpit-design §6.3): a centred column in the
