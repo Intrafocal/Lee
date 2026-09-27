@@ -791,6 +791,7 @@ const App: React.FC = () => {
     }
 
     // Reset session restore gate so the restore effect re-triggers for the new workspace
+    restoreStartedFor.current = null;
     setSessionRestored(false);
 
     // Set new workspace
@@ -1936,9 +1937,15 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Restore session when workspace is set
+  // Restore session when workspace is set. The restore is async and
+  // createTab (a dependency) changes as soon as the first tab opens, so the
+  // effect re-runs before sessionRestored flips; this ref makes sure one
+  // restore per workspace runs (a second one opened every tab twice).
+  const restoreStartedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!workspace || !workspaceInitialized || sessionRestored || !isElectron) return;
+    if (restoreStartedFor.current === workspace) return;
+    restoreStartedFor.current = workspace;
 
     const savedSession = loadSession(workspace);
     if (savedSession && savedSession.length > 0) {
@@ -1951,6 +1958,8 @@ const App: React.FC = () => {
         // setSessionRestored(true) below, silently disabling autosave for
         // the rest of the session. Isolate each tab and always flip the gate.
         try {
+          // Two saved tabs on one Claude session (an earlier double restore) open once.
+          const resumed = new Set<string>();
           for (const sessionTab of savedSession) {
             try {
               // Skip tabs that require runtime state not persisted in sessions
@@ -1998,6 +2007,8 @@ const App: React.FC = () => {
                 // workspace root (and say so).
                 const plan = await restorePlan(sessionTab, provider, (dir) => lee.fs.exists(dir));
                 if (plan.kind === 'resume') {
+                  if (resumed.has(plan.session_id)) continue;
+                  resumed.add(plan.session_id);
                   await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider, {
                     args: resumeArgs(plan.session_id),
                     cwd: plan.cwd,
