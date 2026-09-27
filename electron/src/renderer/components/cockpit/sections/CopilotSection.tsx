@@ -3,6 +3,8 @@
  * nav. Replaces the old right rail so the center keeps the width.
  *
  * Holds what exists today, nothing invented:
+ * - The opener (Deep D1 §8.2) first: "What's on your mind?", Pick up, Or
+ *   start from. Deterministic; see deep/OpenerCard.
  * - The steward line (v4 §8.2): "Steward on · Not today" (a toggle), or
  *   "Steward off (config)".
  * - Ask Hester (v4): POST /cockpit/ask with `about` (the last item you
@@ -244,7 +246,14 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
         )}
       </header>
 
-      <OpenerCard workspace={workspace} returnNonce={returnNonce} />
+      <OpenerCard
+        workspace={workspace}
+        returnNonce={returnNonce}
+        onQ2={(c) => {
+          if (c.kind === 'exploration-quiet') void openItem(ctx, 'exploration', c.ref);
+          else void openItem(ctx, 'goal', c.goal_id || c.ref);
+        }}
+      />
 
       <div
         className={`cockpit-brief-card${selected(ASK_ROW)}`}

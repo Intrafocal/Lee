@@ -1,0 +1,794 @@
+/*
+ * deep.css - the Deep surface (Deep D1 §4, §5, §7, §8.2, §9): the overlay,
+ * header, Page column and margin, selection row, affordances, the ending
+ * ritual sheet and the opener card. Themed from the Phosphor tokens
+ * (styles/tokens.css); no new tokens.
+ */
+
+/* ---- overlay ---- */
+
+.deep-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 901;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground-1);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+/* Hidden, not display:none: scroll, cursor, selection and undo survive a hop. */
+.deep-overlay.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.deep-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.deep-overlay kbd,
+.deep-sheet kbd,
+.deep-opener kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--ground-5);
+  border-radius: var(--radius-tdeck);
+  color: var(--text-3);
+  background: var(--ground-2);
+}
+
+.deep-muted {
+  color: var(--text-3);
+}
+
+.deep-spacer {
+  flex: 1;
+}
+
+.deep-loading {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+/* ---- controls ---- */
+
+.deep-btn,
+.deep-chip,
+.deep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  color: var(--text-2);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.deep-btn:hover:not(:disabled),
+.deep-chip:hover:not(:disabled),
+.deep-toggle:hover {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+}
+
+.deep-btn:disabled,
+.deep-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.deep-btn.is-primary {
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  color: var(--on-phosphor);
+}
+
+.deep-btn.is-primary kbd {
+  background: transparent;
+  border-color: rgba(var(--on-phosphor-rgb), 0.4);
+  color: var(--on-phosphor);
+}
+
+.deep-chip.is-on,
+.deep-toggle.is-on {
+  color: var(--text-1);
+  border-color: var(--phosphor);
+  background: rgba(var(--phosphor-rgb), 0.14);
+}
+
+.deep-chip.is-unread {
+  color: var(--lit);
+  border-color: rgba(var(--lit-rgb), 0.45);
+}
+
+.deep-link {
+  font: inherit;
+  color: var(--phosphor-hi);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.deep-link:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.deep-icon-btn {
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+}
+
+.deep-icon-btn:hover {
+  color: var(--text-1);
+}
+
+.deep-ask-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: var(--space-1);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ground-2);
+  border: 1px solid var(--phosphor-deep);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  outline: none;
+}
+
+.deep-ask-input:focus {
+  border-color: var(--phosphor);
+}
+
+/* ---- header ---- */
+
+.deep-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--ground-3);
+  background: var(--ground-1);
+  min-height: 36px;
+  flex-shrink: 0;
+}
+
+.deep-title {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: text;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-title:hover {
+  border-color: var(--ground-4);
+}
+
+.deep-title-input {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--ground-2);
+  border: 1px solid var(--phosphor);
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  outline: none;
+  width: 32ch;
+}
+
+.deep-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.deep-dirty.is-retrying {
+  background: var(--ember);
+}
+
+.deep-views {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+}
+
+.deep-view {
+  font: inherit;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 2px var(--space-1);
+  cursor: default;
+}
+
+.deep-view.is-active {
+  color: var(--text-1);
+  border-bottom-color: var(--phosphor);
+}
+
+.deep-flash {
+  color: var(--text-2);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-flash.is-warn {
+  color: var(--ember);
+}
+
+.deep-wake {
+  font: inherit;
+  color: var(--ember);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  max-width: 36ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-wake::before {
+  content: '● ';
+}
+
+.deep-hint {
+  font: inherit;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.deep-hint:hover {
+  color: var(--text-2);
+}
+
+.deep-pop-anchor {
+  position: relative;
+}
+
+.deep-popover {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 5;
+  min-width: 260px;
+  max-width: 420px;
+  max-height: 50vh;
+  overflow: auto;
+  padding: var(--space-1);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.6);
+}
+
+.deep-popover > .deep-muted {
+  padding: var(--space-2);
+}
+
+.deep-pop-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.deep-pop-row:hover:not(:disabled) {
+  background: var(--ground-3);
+}
+
+.deep-conflict {
+  padding: var(--space-1) var(--space-4);
+  color: var(--ember);
+  background: rgba(var(--ember-rgb), 0.08);
+  border-bottom: 1px solid rgba(var(--ember-rgb), 0.3);
+  flex-shrink: 0;
+}
+
+/* ---- the Page ---- */
+
+.deep-page-scroller {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.deep-page-inner {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(var(--space-5), 1fr) minmax(0, 72ch) 260px minmax(var(--space-4), 1fr);
+  align-items: start;
+  min-height: 100%;
+}
+
+.deep-page-column {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h {
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h1 {
+  font-size: 1.5em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h2 {
+  font-size: 1.25em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h3 {
+  font-size: 1.1em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-quote {
+  color: var(--text-2);
+}
+
+.deep-page-preview {
+  padding: var(--space-5) 0 40vh;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.deep-preview-hint {
+  color: var(--text-3);
+  margin-bottom: var(--space-3);
+}
+
+/* ---- the margin ---- */
+
+.deep-margin {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  align-self: stretch;
+  margin-left: var(--space-4);
+}
+
+.deep-marker-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+}
+
+.deep-marker-slot.is-open {
+  z-index: 3;
+}
+
+.deep-marker {
+  display: inline-block;
+  position: relative;
+  width: 10px;
+  height: 10px;
+  margin-top: 8px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--phosphor);
+  background: transparent;
+  cursor: pointer;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.deep-marker.is-unread {
+  background: var(--phosphor);
+}
+
+.deep-marker.is-read {
+  border-color: var(--text-3);
+}
+
+.deep-marker.is-error {
+  border-color: var(--ember);
+}
+
+.deep-marker.is-pending {
+  border-color: transparent;
+}
+
+.deep-pop-row .deep-marker {
+  margin-top: 0;
+  cursor: inherit;
+}
+
+.deep-marker-spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid rgba(var(--phosphor-rgb), 0.25);
+  border-top-color: var(--phosphor);
+  border-radius: 50%;
+  animation: deep-spin 0.9s linear infinite;
+}
+
+.deep-marker .deep-marker-spin {
+  position: absolute;
+  inset: -2px;
+}
+
+@keyframes deep-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.deep-card {
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 6px 18px rgba(var(--ground-0-rgb), 0.5);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.deep-card-q {
+  color: var(--text-2);
+  font-style: italic;
+  margin-bottom: var(--space-1);
+}
+
+.deep-card-a {
+  color: var(--text-1);
+}
+
+.deep-card-err {
+  color: var(--ember);
+}
+
+.deep-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.deep-card-model {
+  margin-top: var(--space-1);
+  font-size: 10px;
+}
+
+/* ---- selection row (§5) ---- */
+
+.deep-row-slot {
+  position: absolute;
+  z-index: 4;
+  width: 280px;
+}
+
+.deep-row {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  box-shadow: 0 4px 12px rgba(var(--ground-0-rgb), 0.5);
+}
+
+.deep-row-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-tdeck);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+}
+
+.deep-row-btn:hover,
+.deep-row-btn:focus {
+  color: var(--text-1);
+  background: var(--ground-4);
+  outline: none;
+}
+
+.deep-row-key {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.deep-row-btn:focus .deep-row-key {
+  color: var(--phosphor-hi);
+}
+
+/* ---- typing affordances (§7): dim, inline, never a popup ---- */
+
+.deep-aff {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+  vertical-align: baseline;
+  animation: deep-aff-in 0.2s ease-out;
+}
+
+.deep-aff-btn {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  background: none;
+  border: 1px dashed var(--ground-5);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+
+.deep-aff-btn:hover {
+  color: var(--phosphor-hi);
+  border-color: var(--phosphor-deep);
+}
+
+@keyframes deep-aff-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- ending ritual (§9) ---- */
+
+.deep-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-1);
+}
+
+.deep-sheet {
+  width: min(480px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-5));
+  overflow: auto;
+  padding: var(--space-4);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-modal);
+  box-shadow: 0 16px 48px rgba(var(--ground-0-rgb), 0.7);
+}
+
+.deep-sheet-head {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.deep-sheet-label {
+  display: block;
+  margin: var(--space-3) 0 var(--space-1);
+  color: var(--text-2);
+}
+
+.deep-sheet-field {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: var(--space-2);
+  outline: none;
+}
+
+.deep-sheet-field:focus {
+  border-color: var(--phosphor);
+}
+
+.deep-sheet-questions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 160px;
+  overflow: auto;
+}
+
+.deep-sheet-q {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.deep-sheet-q input {
+  accent-color: var(--phosphor);
+}
+
+.deep-sheet-note {
+  margin-top: var(--space-1);
+  font-size: 11px;
+}
+
+.deep-sheet-ratings {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.deep-sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* ---- the opener (§8.2) ---- */
+
+.deep-opener {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+}
+
+.deep-opener-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.deep-opener-label {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.deep-opener-field .deep-opener-label {
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.deep-opener-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  outline: none;
+}
+
+.deep-opener-input:focus {
+  border-color: var(--phosphor);
+}
+
+.deep-opener-error {
+  margin-top: var(--space-1);
+  color: var(--text-3);
+}
+
+.deep-opener-group {
+  margin-top: var(--space-3);
+}
+
+.deep-opener-group > .deep-opener-label {
+  margin-bottom: var(--space-1);
+}
+
+.deep-opener-pickup {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text-1);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.deep-opener-pickup:hover:not(:disabled) {
+  border-color: var(--ground-4);
+  background: var(--ground-3);
+}
+
+.deep-opener-pickup-title {
+  font-weight: 600;
+}
+
+.deep-opener-pickup-title::before {
+  content: '▸ ';
+  color: var(--phosphor);
+}
+
+.deep-opener-arrived {
+  padding-left: calc(var(--space-2) + 1em);
+}
+
+.deep-opener-surfaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.deep-opener-list {
+  margin-top: var(--space-1);
+  padding: var(--space-1);
+  max-height: 220px;
+  overflow: auto;
+  background: var(--ground-1);
+  border: 1px solid var(--ground-3);
+  border-radius: var(--radius-control);
+}
