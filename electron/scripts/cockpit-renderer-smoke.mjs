@@ -1153,6 +1153,7 @@ const leeRows = [
     greeting,
     homeQuestion,
     meanwhileSentence,
+    quietLine,
     homeNeeds,
     homeFeedNeeds,
     workNeedsCount,
@@ -1193,16 +1194,19 @@ const leeRows = [
 
   test('meanwhileSentence: nothing, only wins, waiting only, both', () => {
     const d = (wins, sessions) => ({ wins: Array.from({ length: wins }, (_, i) => ({ title: `w${i}` })), agent_claims: sessions.map((s) => ({ session_id: s })) });
-    assert.equal(meanwhileSentence(null, { waiting: 0 }), 'Quiet while you were away. Nothing needs you.');
-    assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), 'Quiet while you were away. Nothing needs you.');
-    assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), 'Three things shipped while you were away. Nothing needs you.');
-    assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), 'One thing shipped while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(null, { waiting: 0 }), 'Quiet while you were away. All clear.');
+    assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), 'Quiet while you were away. All clear.');
+    assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), 'Three things shipped while you were away. All clear.');
+    assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), 'One thing shipped while you were away. All clear.');
     assert.equal(meanwhileSentence(d(0, []), { waiting: 1 }), 'One thing is waiting on you.');
     assert.equal(meanwhileSentence(null, { waiting: 2 }), 'Two things are waiting on you.');
     assert.equal(meanwhileSentence(d(2, []), { waiting: 1 }), 'Two things shipped while you were away. One thing is waiting on you.');
     // The contract's example: finished turns count once per agent session.
     assert.equal(meanwhileSentence(d(0, ['a', 'b', 'a']), { waiting: 1 }), 'Two agents finished while you were away. One is waiting on you.');
-    assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), 'One agent finished while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), 'One agent finished while you were away. All clear.');
+    assert.equal(meanwhileSentence(null, { waiting: 0, working: 2 }), 'Quiet while you were away. Working on it.');
+    assert.equal(quietLine(0), 'All clear.');
+    assert.equal(quietLine(1), 'Working on it.');
     assert.equal(
       meanwhileSentence(d(4, ['a', 'b']), { waiting: 3 }),
       'Two agents finished while you were away, and four things shipped. Three are waiting on you.',

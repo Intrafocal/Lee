@@ -532,7 +532,7 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
         {digestError && !digest ? (
           <p className="home-sentence is-muted">{digestError}</p>
         ) : (
-          <p className="home-sentence">{digest ? meanwhileSentence(digest, { waiting: waiting + feedNeeds.length }) : 'Loading…'}</p>
+          <p className="home-sentence">{digest ? meanwhileSentence(digest, { waiting: waiting + feedNeeds.length, working: ctx.tiles.filter((t) => t.working).length }) : 'Loading…'}</p>
         )}
 
         {needs.length > 0 && (

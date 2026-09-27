@@ -50,7 +50,7 @@ export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
   return ReactDOM.createPortal(
     <div className="copilot-flyout" style={style} ref={ref}>
       <div className="copilot-flyout-scroll">
-        {empty && <div className="copilot-flyout-empty">Nothing needs you right now.</div>}
+        {empty && <div className="copilot-flyout-empty">All clear.</div>}
         {blocking.length > 0 && (
           <div className="copilot-flyout-section">
             <div className="copilot-flyout-section-title">Blocking</div>

@@ -1377,7 +1377,19 @@ export interface MeanwhileDigest {
  * is waiting on you."). Finished turns count once per agent session; wins
  * are the digest's verified progress; `waiting` is what needs you now.
  */
-export function meanwhileSentence(digest: MeanwhileDigest | null | undefined, attention: { waiting: number }): string {
+/**
+ * The line for "nothing is waiting on you": "Working on it." while agents are
+ * busy, else "All clear." Shared by Work's empty state, Home's Meanwhile and
+ * the attention flyout so they always agree.
+ */
+export function quietLine(working: number): string {
+  return working > 0 ? 'Working on it.' : 'All clear.';
+}
+
+export function meanwhileSentence(
+  digest: MeanwhileDigest | null | undefined,
+  attention: { waiting: number; working?: number },
+): string {
   const finished = new Set((digest?.agent_claims ?? []).map((c) => c.session_id)).size;
   const shipped = digest?.wins.length ?? 0;
   const waiting = Math.max(0, attention.waiting);
@@ -1400,7 +1412,8 @@ export function meanwhileSentence(digest: MeanwhileDigest | null | undefined, at
         : `${numberWord(waiting, true)} ${plural(waiting, 'thing is', 'things are')} waiting on you.`,
     );
   } else {
-    parts.push(parts.length ? 'Nothing needs you.' : 'Quiet while you were away. Nothing needs you.');
+    const quiet = quietLine(attention.working ?? 0);
+    parts.push(parts.length ? quiet : `Quiet while you were away. ${quiet}`);
   }
   return parts.join(' ');
 }

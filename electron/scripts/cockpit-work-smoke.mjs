@@ -482,9 +482,9 @@ test('render: a raised text card has no next step; an approval below it is plain
   assert.equal(nextCount(html), 0);
 });
 
-test('render: nothing waiting shows "Nothing needs you." with Continue as the next step', () => {
+test('render: nothing waiting and an agent busy shows "Working on it." with Continue as the next step', () => {
   const html = render.work(fixtureCtx({ tiles: [tile(5, { working: true })] }));
-  assert.match(html, /Nothing needs you\./);
+  assert.match(html, /Working on it\./);
   assert.equal(nextCount(html), 1);
   assert.match(html, /Continue/);
 });

@@ -6,7 +6,7 @@
  * its Allow the view's one next step), then "In flight" rows (busy agents
  * with what they're doing now, then ready to review, then idle; idle over
  * 2h folds into "n earlier today"; running and failed operations), else
- * "Nothing needs you." with Continue. Clicking a card or row replaces the
+ * "All clear." (or "Working on it." while agents are busy) with Continue. Clicking a card or row replaces the
  * list with its detail view (WorkDetail) in place.
  *
  * Keys ride the Cockpit keymap (CockpitHost): ↑/↓ move the selection over
@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AttentionItem } from '../../../../shared/copilot';
 import type { AboutRef } from '../../../../shared/cockpit';
-import { taskTitle, type TileModel } from '../../../lib/cockpitModel';
+import { quietLine, taskTitle, type TileModel } from '../../../lib/cockpitModel';
 import {
   SWIPE_UNDO_MS,
   agentTimes,
@@ -380,7 +380,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         </>
       ) : (
         <div className="work-empty">
-          <p className="work-empty-words">Nothing needs you.</p>
+          <p className="work-empty-words">{quietLine(flight.rows.filter((r) => r.group === 'busy').length)}</p>
           <Btn kind="next" kbd="⇧⌘0" onClick={() => goDeep(ctx.copilotApi, ctx.workspace)}>
             Continue
           </Btn>
