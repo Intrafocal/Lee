@@ -14,7 +14,7 @@
  * waiting an ember dot (the one ember in Deep); done a hollow agent mark.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import type { DeepAnswer } from '../../../../shared/cockpit';
 import type { SectionMark, SectionMarkState } from '../../../lib/deepModel';
 
@@ -50,64 +50,6 @@ interface SectionMarkViewProps {
   onReplyHandoff?: (answerId: string, text: string) => void;
 }
 
-function HandoffExtras({
-  item,
-  onOpenInWork,
-  onReplyHandoff,
-}: {
-  item: MarkItem;
-  onOpenInWork?: (answerId: string) => void;
-  onReplyHandoff?: (answerId: string, text: string) => void;
-}) {
-  const [reply, setReply] = useState<string | null>(null);
-  const a = item.answer;
-  if (!a || !(a.kind === 'handoff' || a.handoff)) return null;
-  const waiting = a.handoff?.state === 'waiting';
-  const canOpen = !!onOpenInWork && !!a.handoff?.task_id;
-  const canReply = waiting && !!onReplyHandoff;
-  return (
-    <>
-      {/* renderCard shows a finished answer; a result still in review shows here. */}
-      {a.answer && a.status !== 'done' && <div className="deep-card-a deep-handoff-result">{a.answer}</div>}
-      {(canOpen || canReply) && (
-        <div className="deep-card-actions">
-          {canOpen && (
-            <button type="button" className="deep-quiet" onClick={() => onOpenInWork!(a.id)}>
-              Open in Work
-            </button>
-          )}
-          {canReply && reply == null && (
-            <button type="button" className="deep-quiet" onClick={() => setReply('')}>
-              Reply
-            </button>
-          )}
-        </div>
-      )}
-      {canReply && reply != null && (
-        <input
-          className="deep-ask-input"
-          autoFocus
-          value={reply}
-          placeholder="Reply to the agent… (Enter sends)"
-          onChange={(e) => setReply(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              const text = reply.trim();
-              if (!text) return;
-              onReplyHandoff!(a.id, text);
-              setReply(null);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              setReply(null);
-            }
-          }}
-        />
-      )}
-    </>
-  );
-}
 
 function Note({ item, count, open, onClick }: { item: MarkItem; count?: number; open: boolean; onClick: () => void }) {
   return (
@@ -129,14 +71,13 @@ function Note({ item, count, open, onClick }: { item: MarkItem; count?: number; 
   );
 }
 
-export function SectionMarkView({ mark, items, listOpen, onToggleList, openMarker, onItemClick, renderCard, onOpenInWork, onReplyHandoff }: SectionMarkViewProps) {
+export function SectionMarkView({ mark, items, listOpen, onToggleList, openMarker, onItemClick, renderCard }: SectionMarkViewProps) {
   const list = mark.ids.map((id) => items.get(id)).filter((x): x is MarkItem => !!x);
   if (!list.length) return null;
   const top = list[0];
   const card = (it: MarkItem) => (
     <div className="deep-card">
       {renderCard(it.id)}
-      <HandoffExtras item={it} onOpenInWork={onOpenInWork} onReplyHandoff={onReplyHandoff} />
     </div>
   );
   if (list.length === 1) {

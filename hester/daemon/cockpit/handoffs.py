@@ -95,6 +95,12 @@ def sync(ctx, task: Dict[str, Any], turn_end: bool = False, now: Optional[dateti
         if handoff.get("task_id") and handoff["task_id"] != task.get("id"):
             return None
         new = STATE_MAP.get(task.get("status"))
+        # A hand-off's agent that finished a turn and went idle has its result
+        # ready even though its session is still open (a research agent answers
+        # and waits): that's review, with the answer filled in, not "running".
+        # A reply that starts another turn moves it back to running.
+        if task.get("status") == "idle" and (task.get("turns") or 0) >= 1 and task_answer(task):
+            new = "review"
         prev = handoff.get("state")
         if new is None or (prev == "done" and new != "done"):
             return row

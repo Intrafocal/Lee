@@ -266,6 +266,23 @@ def test_another_tasks_origin_is_ignored(tmp_path):
     assert handoffs.sync(ctx, task) is None, "only hand-off records follow tasks"
 
 
+def test_idle_agent_with_an_answer_is_review(tmp_path):
+    """A research agent answers and waits (task idle, session open): the result is ready."""
+    store, exp = seeded(tmp_path)
+    rec = deep.new_handoff(store, exp["id"], handoff_body())
+    deep.patch_answer(store, exp["id"], rec["id"], {"task_id": "task-0000abcd"})
+    ctx = WorkspaceRegistry(boot=tmp_path).get(tmp_path)
+    task = {"id": "task-0000abcd", "status": "idle", "turns": 1, "summary": "Workbook vs Machine: …",
+            "origin": {"kind": "exploration", "ref": f"{exp['id']}#{rec['id']}"}}
+    row = handoffs.sync(ctx, task)
+    assert row["handoff"]["state"] == "review" and row["answer"].startswith("Workbook vs Machine")
+    task.update(status="running")
+    assert handoffs.sync(ctx, task)["handoff"]["state"] == "running", "a reply that starts a turn"
+    fresh = {"id": "task-0000abcd", "status": "idle", "turns": 0, "summary": None,
+             "origin": task["origin"]}
+    assert handoffs.sync(ctx, fresh)["handoff"]["state"] == "running", "idle before any turn is still running"
+
+
 # ---------------------------------------------------------------- delete empty explorations (R8)
 
 
