@@ -208,6 +208,10 @@ provisioned device stays paired.
 
 | Screen | What it does |
 |--------|--------------|
+| **Work** | The attention queue as a pager (`screen_waiting.cpp`): one item that needs you per page, with lettered buttons. Approvals take **Y** / **N**; items that take text take the quick replies **G** Go, **W** Wait, **E** Why and **F** Show me the diff (Desk D2: a key, not a button, since the bar holds four; `d` is already Dismiss here), and **R** opens the reply box. **D** dismisses, **S** snoozes, **C** captures. The header says Work's line, "In deep work" during a Deep session at the Mac, or "Still thinking?  x" while the idle-end push is open. |
+| **In flight** | The running agents (`screen_inflight.cpp`), waiting first, then busy, then idle. Agents idle for more than two hours fold into one **Earlier (n)** row, the Mac's rule; pressing it shows them while the view stays open. A press opens an agent's words; **C** checks in. |
+| **Library** | Carry (`screen_carry.cpp`): your last Desk card first (its title, its Area on the eyebrow, "You stopped at" in italic), then each other card an open question names (**J** / **K**). **C** adds a thought into the card, **O** makes it the Mac's Open next. Against a Lee from before the Desk the cards are explorations. |
+| **Still thinking?** | The Desk's idle-end push (`screen_deep_idle.cpp`, Desk D2 §9.2): a Deep session at the Mac has been idle for 40 of its 45 minutes. **X** opens it from Work, In flight or Library while it's open. **E** extends by 45 minutes from now; **D** / **M** / **S** end the session rated deep / mixed / shallow, after an optional "where did you stop?" line; **C** captures a thought into the card and leaves the push open. Its own page, so `d` here is a rating, not Dismiss. |
 | **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; a tab that owns a PTY also opens the terminal on it, a `files` tab opens **Files**, and an editor-like tab (`editor`, `editor-panel`, `file`) opens the **Viewer** on its file. The right-hand hint says which: `pty`, `tree`, `file`. |
 | **Files** | The workspace tree over `GET /fs/list` — also on the menu, so it works with no `files` tab open. |
 | **Viewer** | One file over `GET /fs/read`, read-only. |
@@ -372,6 +376,13 @@ Everything is authenticated with Lee's persistent API token
 | device → Lee | `GET http://host:9001/health` | open (used for the 15 s liveness ping) |
 | device → Lee | `GET http://host:9001/fs/list?path=…` | `Authorization: Bearer …` |
 | device → Lee | `GET http://host:9001/fs/read?path=…[&stat=1]` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/attention?compact=1`, `GET /attention/:id` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/attention/:id/{reply,dismiss,snooze,open}` | `Authorization: Bearer …` (paired device) |
+| device → Lee | `POST http://host:9001/capture` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/carry?workspace=…` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/carry/capture` `{text, card_id?, workspace?}` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/carry/open-next` `{card_id \| someday_id, workspace?}` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/deep/idle-end` `{item_id, version, action: extend \| end_rate, rating?, stopped_at?}` | `Authorization: Bearer …` (paired device) |
 | device → Lee | `POST http://host:9001/pair/request` | **open** — pairing, pre-token (E19) |
 | device → Lee | `GET http://host:9001/pair/poll?nonce=…` | **open** — pairing, pre-token (E19) |
 | device → Hester | `POST http://host:9000/context/stream` | `Authorization: Bearer …` |
@@ -382,8 +393,26 @@ anything the device sends that isn't JSON is written to the PTY verbatim, and
 `{"type":"resize","cols":C,"rows":R}` resizes it.
 
 Commands follow Lee's unified API: `{"domain","action","params"}`. Dirigible
-uses `system.focus_tab`, `system.close_tab`, `editor.open`, `editor.save` and
-`tui.<type>`.
+uses `system.focus_tab`, `system.close_tab`, `editor.open`, `editor.save`,
+`tui.<type>` and `tab.checkin`.
+
+The attention queue also arrives as `{"type":"attention_snapshot","data":{…}}`
+on the context stream. Desk D2 adds two things to it: the snapshot's `deep`
+carries `card_id` (and `exploration_id`, the same id, for older builds), and
+an item of kind `deep_idle` (the "Still thinking?" push) carries
+`deep_idle: {session_id, ends_at, card: {card_id, title} | null}` with the
+actions `extend`, `end_rate`, `capture` and `dismiss`. It is answered with
+`POST /deep/idle-end` (the only new route, 409 when the push was answered or
+the session moved on) or captured into with `/carry/capture`.
+
+Carry (`GET /carry`) is your last Desk card: `pick_up: {card_id, card_kind,
+title, area_name, stopped_at, stopped_line, last_touched_at, exploration_id}`,
+`open_questions[]` with `card_id`, `open_next: {card_id?, someday_id?,
+set_at}` and `spooled`, the count of captures Lee holds while Hester is
+offline. `/carry/capture` never fails for an offline Hester: Lee spools the
+thought and answers `200 {spooled: true}`. A Lee from before the Desk sends
+`exploration_id` only; the firmware reads it as the card id, and Lee main
+sends a non-page id on to Hester as an `exploration_id`.
 
 Hester's SSE stream emits `event: phase` (`{"phase","iteration","tool_name"}`),
 `event: response` (`{"text","session_id"}`), `event: error` and `event: done`.
@@ -495,8 +524,9 @@ nothing used it.
 and health pings, and NVS stores a list. The UI only ever drives machine 0. A
 machine picker in the menu is a small job whenever a second machine exists.
 
-### Desk mode
+### Dashboard mode
 
-A 720×720 dashboard layout — git status, running services, recent Hester
+(Called "Desk mode" before the Desk, docs/16-Desk.md, took the name.) A
+720×720 dashboard layout — git status, running services, recent Hester
 answers, a clock — as opposed to the handheld list-and-terminal layout. Tied to
 the Linux tier above.
