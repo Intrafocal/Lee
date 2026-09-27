@@ -1,34 +1,56 @@
 /**
- * CockpitNav - section list with badges (contracts §3.4). Ember when the
- * section has something that needs you; a neutral dot when there is only
- * something new to read (Copilot's fresh brief).
+ * CockpitNav - the icon rail (cockpit-design §2.1): a 56px column of 36px
+ * icon buttons, one per section, each with an aria-label and a tooltip
+ * carrying its name. The active one gets a --ground-3 fill. The only badge
+ * is a 6px ember dot when the section holds something that needs you
+ * (railDots); there are no counts.
  */
 
 import React from 'react';
-import { SECTIONS, SECTION_LABELS, type SectionBadge, type SectionId } from '../../lib/cockpitModel';
+import { Icon, type IconName } from '../Icon';
+import { SECTIONS, SECTION_LABELS, type SectionId } from '../../lib/cockpitModel';
 
-export type NavBadges = Record<SectionId, SectionBadge>;
+/** Which sections hold something that needs you (the ember dot). */
+export type NavDots = Record<SectionId, boolean>;
+
+/**
+ * Rail icons. §2.2 asks for house, tray, target, books, play and clock;
+ * the icon set has no tray or target yet, so Work and Goals use the
+ * closest existing glyphs until design/icons.json gains them.
+ */
+const SECTION_ICONS: Record<SectionId, IconName> = {
+  home: 'home',
+  work: 'list',
+  goals: 'circle',
+  library: 'book',
+  ops: 'play',
+  history: 'clock',
+};
 
 interface CockpitNavProps {
   section: SectionId;
-  badges: NavBadges;
+  dots: NavDots;
   onSelect: (section: SectionId) => void;
 }
 
-export const CockpitNav: React.FC<CockpitNavProps> = ({ section, badges, onSelect }) => (
-  <nav className="cockpit-nav" aria-label="Cockpit sections">
+export const CockpitNav: React.FC<CockpitNavProps> = ({ section, dots, onSelect }) => (
+  <nav className="cockpit-rail" aria-label="Cockpit sections">
     {SECTIONS.map((id) => {
-      const b = badges[id];
+      const label = SECTION_LABELS[id];
+      const active = section === id;
       return (
         <button
           key={id}
-          className={`cockpit-nav-item${section === id ? ' is-active' : ''}`}
+          type="button"
+          className={`cockpit-rail-item${active ? ' is-active' : ''}`}
           onClick={() => onSelect(id)}
-          aria-current={section === id ? 'page' : undefined}
+          aria-label={dots[id] ? `${label}, needs you` : label}
+          aria-current={active ? 'page' : undefined}
+          title={label}
         >
-          <span className="cockpit-nav-label">{SECTION_LABELS[id]}</span>
-          {b.count > 0 && <span className={`cockpit-badge${b.ember ? ' is-ember' : ''}`}>{b.count}</span>}
-          {b.count === 0 && b.dot && <span className="cockpit-badge-dot" aria-label="new" />}        </button>
+          <Icon name={SECTION_ICONS[id]} size={18} />
+          {dots[id] && <span className="cockpit-rail-dot" aria-hidden="true" />}
+        </button>
       );
     })}
   </nav>

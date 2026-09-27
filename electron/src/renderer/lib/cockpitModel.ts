@@ -686,7 +686,6 @@ export function feedNeedsCount(rows: readonly FeedRow[]): number {
 
 export type CockpitKeyAction =
   | { kind: 'row'; delta: 1 | -1 }
-  | { kind: 'tile'; delta: 1 | -1 }
   | { kind: 'enter' }
   | { kind: 'approve' }
   | { kind: 'deny' }
@@ -695,8 +694,7 @@ export type CockpitKeyAction =
   | { kind: 'rename' }
   | { kind: 'run' }
   | { kind: 'dismiss' }
-  | { kind: 'drawer' }
-  | { kind: 'drawer-move'; delta: 1 | -1 }
+  | { kind: 'manual' }
   | { kind: 'escape' };
 
 export interface KeyContext {
@@ -713,8 +711,6 @@ export interface KeyContext {
    * (⌘< ⌘> ⌘{) match on it, since `key` under ⌘⇧ varies by layout and OS.
    */
   code?: string;
-  /** The drawer has keyboard focus: ←/→ move within it. */
-  drawer?: boolean;
 }
 
 /**
@@ -727,17 +723,16 @@ export interface KeyContext {
 export const COCKPIT_KEYS: ReadonlyArray<readonly [string, string]> = [
   ['⌘0', 'Switch mode: tap for the last one, hold for Cockpit / Deep / Manual'],
   ['⇧⌘0 / ⌥⌘0', 'Cockpit ↔ Deep / Cockpit ↔ Manual'],
-  ['⌘N', 'New task (the Launcher)'],
+  ['⌘N', 'New: a task, an exploration or a run (the Launcher)'],
   ['↓ / ↑', 'Next / previous row'],
-  ['← / →', 'Previous / next agent tile'],
-  ['Enter', 'Peek at the selected agent, or open the row'],
+  ['Enter', 'Open the selected row'],
   ['⌘⏎ / ⌘D', 'Approve / deny the selected approval'],
   ['⌘<', 'Reply to the selected item'],
   ['⌘>', 'Check in on the selected agent (shows the prompt first; queued if it is busy)'],
   ['⌘E', 'Rename the selected agent or task'],
   ['⌘{', 'Run ▾ operations'],
   ['⌘⌫', 'Dismiss the selected Feed entry'],
-  ['⌘T', 'Focus your tabs (the drawer)'],
+  ['⌘T', 'Manual, on your last tab'],
   ['Esc', 'Close popovers, clear selection'],
 ];
 
@@ -760,26 +755,18 @@ export function keyAction(key: string, ctx: KeyContext): CockpitKeyAction | null
       case 'Backspace':
         return { kind: 'dismiss' };
       case 't':
-        return { kind: 'drawer' };
+        return { kind: 'manual' };
       default:
         return null;
     }
   }
   if (ctx.shift) return null;
   if (ctx.onControl && (key === 'Enter' || key === ' ')) return null;
-  if (ctx.drawer) {
-    if (key === 'ArrowLeft') return { kind: 'drawer-move', delta: -1 };
-    if (key === 'ArrowRight') return { kind: 'drawer-move', delta: 1 };
-  }
   switch (key) {
     case 'ArrowDown':
       return { kind: 'row', delta: 1 };
     case 'ArrowUp':
       return { kind: 'row', delta: -1 };
-    case 'ArrowLeft':
-      return { kind: 'tile', delta: -1 };
-    case 'ArrowRight':
-      return { kind: 'tile', delta: 1 };
     case 'Enter':
       return { kind: 'enter' };
     case 'Escape':
@@ -1341,4 +1328,240 @@ export function rendererAction(res: unknown): { action: 'link-goal' | 'what-next
   const d = data as { renderer_action?: unknown; task_id?: unknown };
   if (d.renderer_action !== 'link-goal' && d.renderer_action !== 'what-next') return null;
   return { action: d.renderer_action, taskId: typeof d.task_id === 'string' && d.task_id ? d.task_id : null };
+}
+
+// ---------------------------------------------------------------------------
+// Cockpit design, the shell and Home (cockpit-design §2, §3, §6.3; R1)
+// ---------------------------------------------------------------------------
+
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+
+/** A count in words ("two"), digits past twelve; `capital` for the start of a sentence. */
+export function numberWord(n: number, capital = false): string {
+  const w = n >= 0 && n < NUMBER_WORDS.length ? NUMBER_WORDS[n] : String(n);
+  return capital ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * Home's greeting above the question (§3.1): "<weekday> <part of day>" in
+ * local time. 05:00-11:59 morning, 12:00-16:59 afternoon, 17:00-21:59
+ * evening, otherwise night (a night past midnight keeps its own weekday).
+ */
+export function greeting(now: Date): string {
+  const h = now.getHours();
+  const part = h >= 5 && h < 12 ? 'morning' : h >= 12 && h < 17 ? 'afternoon' : h >= 17 && h < 22 ? 'evening' : 'night';
+  return `${WEEKDAYS[now.getDay()]} ${part}`;
+}
+
+/** Home's question (§3.2): with your first name when Lee knows it (§7.2). */
+export function homeQuestion(name: string | null | undefined): string {
+  const n = (name ?? '').trim();
+  return n ? `What's on your mind, ${n}?` : "What's on your mind?";
+}
+
+/** The digest fields Meanwhile reads (a structural subset of DigestResponse). */
+export interface MeanwhileDigest {
+  wins: readonly unknown[];
+  agent_claims: readonly { session_id: string }[];
+}
+
+/**
+ * Meanwhile's one sentence (§3.6): what finished, what shipped and what's
+ * waiting on you, in words ("Two agents finished while you were away. One
+ * is waiting on you."). Finished turns count once per agent session; wins
+ * are the digest's verified progress; `waiting` is what needs you now.
+ */
+export function meanwhileSentence(digest: MeanwhileDigest | null | undefined, attention: { waiting: number }): string {
+  const finished = new Set((digest?.agent_claims ?? []).map((c) => c.session_id)).size;
+  const shipped = digest?.wins.length ?? 0;
+  const waiting = Math.max(0, attention.waiting);
+  const parts: string[] = [];
+  if (finished > 0) {
+    const agents = `${numberWord(finished, true)} ${plural(finished, 'agent', 'agents')} finished`;
+    parts.push(
+      shipped > 0
+        ? `${agents} while you were away, and ${numberWord(shipped)} ${plural(shipped, 'thing', 'things')} shipped.`
+        : `${agents} while you were away.`,
+    );
+  } else if (shipped > 0) {
+    parts.push(`${numberWord(shipped, true)} ${plural(shipped, 'thing', 'things')} shipped while you were away.`);
+  }
+  if (waiting > 0) {
+    // After "N agents finished", "One is waiting" reads as one of them; otherwise say what.
+    parts.push(
+      finished > 0
+        ? `${numberWord(waiting, true)} ${plural(waiting, 'is', 'are')} waiting on you.`
+        : `${numberWord(waiting, true)} ${plural(waiting, 'thing is', 'things are')} waiting on you.`,
+    );
+  } else {
+    parts.push(parts.length ? 'Nothing needs you.' : 'Quiet while you were away. Nothing needs you.');
+  }
+  return parts.join(' ');
+}
+
+/** A Feed row from the attention queue (an agent waiting on you). */
+export type AttentionFeedRow = Extract<FeedRow, { source: 'attention' }>;
+
+/**
+ * Home's needs-you rows (§3.6): attention items that need you, in the
+ * queue's order (blocking, then needs-you, oldest first), at most `limit`.
+ */
+export function homeNeeds(rows: readonly FeedRow[], limit = 3): AttentionFeedRow[] {
+  const rank = (r: AttentionFeedRow) => (r.severity === 'blocking' ? 0 : 1);
+  return rows
+    .filter((r): r is AttentionFeedRow => r.source === 'attention' && r.severity !== 'ambient' && r.item.kind !== 'summary')
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => rank(a.row) - rank(b.row) || ts(a.row.item.created_at) - ts(b.row.item.created_at) || a.i - b.i)
+    .slice(0, limit)
+    .map((x) => x.row);
+}
+
+/** The Q2 candidate fields a sentence needs (lib/hesterCockpit Q2Candidate). */
+export interface Q2Like {
+  kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+  goal_id?: string | null;
+  title: string;
+  detail: string;
+}
+
+/**
+ * A Q2 item written out as a sentence for "Or start from" (§3.5), from the
+ * candidate's own text: "G1 has nothing open serving it", "Onboarding
+ * notes: untouched for 9 days", "G2 was last evaluated 20 days ago".
+ */
+export function q2Sentence(c: Q2Like): string {
+  const who = c.goal_id || c.title;
+  const detail = (c.detail ?? '').trim().replace(/\.$/, '');
+  const lower = detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : '';
+  switch (c.kind) {
+    case 'goal-unserved':
+      return `${who} has nothing open serving it`;
+    case 'evaluation-due':
+      if (/^never evaluated/i.test(detail)) return `${who} has never been evaluated`;
+      return lower ? `${who} was ${lower}` : `${who} is due an evaluation`;
+    case 'exploration-quiet':
+      return lower ? `${c.title}: ${lower}` : `${c.title} has gone quiet`;
+  }
+  return c.title;
+}
+
+/** An "Or start from" surface (shared OpenerSurface), structurally. */
+export type StartSurface =
+  | { kind: 'blank' }
+  | { kind: 'open_questions' | 'reading_list' | 'quiet'; count?: number; items: readonly unknown[] }
+  | { kind: 'captured_away'; count?: number; items: readonly { surface: string }[] }
+  | { kind: 'q2'; items: readonly unknown[] };
+
+/**
+ * One "Or start from" surface as a sentence (§3.5), or null when it has
+ * nothing. Q2 is written per item (q2Sentence), so it returns null here.
+ * Captured away says "from your phone" when every item came from Aeronaut,
+ * "from your devices" otherwise (the T-Deck counts too).
+ */
+export function startSentence(s: StartSurface): string | null {
+  if (s.kind === 'blank') return 'A blank page';
+  if (s.kind === 'q2') return null;
+  const n = typeof s.count === 'number' ? s.count : s.items.length;
+  if (n <= 0 || !s.items.length) return null;
+  switch (s.kind) {
+    case 'open_questions':
+      return `${n} open ${plural(n, 'question', 'questions')}`;
+    case 'captured_away': {
+      const phone = s.items.every((i) => i.surface === 'aeronaut');
+      return `${n} ${plural(n, 'thought', 'thoughts')} from your ${phone ? 'phone' : 'devices'}`;
+    }
+    case 'reading_list':
+      return `${n} ${plural(n, 'thing', 'things')} to read`;
+    case 'quiet':
+      return `${n} quiet ${plural(n, 'exploration', 'explorations')}`;
+  }
+  return null;
+}
+
+/** Pick up's arrivals line (§3.4): "2 answers came back · 1 open question". Empty when nothing arrived. */
+export function arrivedLine(arrived: { answers: number; open_questions: number }): string {
+  return [
+    arrived.answers ? `${arrived.answers} ${plural(arrived.answers, 'answer', 'answers')} came back` : null,
+    arrived.open_questions ? `${arrived.open_questions} open ${plural(arrived.open_questions, 'question', 'questions')}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** The Launcher's three choices at the top (§2.1): Task (Enter launches), Explore, Run… (⌘{). */
+export type LauncherChoice = 'task' | 'explore' | 'run';
+export const LAUNCHER_CHOICES: ReadonlyArray<{ id: LauncherChoice; label: string; kbd?: string }> = [
+  { id: 'task', label: 'Task', kbd: '⏎' },
+  { id: 'explore', label: 'Explore' },
+  { id: 'run', label: 'Run…', kbd: '⌘{' },
+];
+
+/** Days after which a goal's evaluation is due (hester/daemon/cockpit/goal_status.py EVALUATION_DUE_DAYS). */
+export const EVALUATION_DUE_DAYS = 14;
+
+/** Never evaluated, or last evaluated more than EVALUATION_DUE_DAYS ago (the daemon's evaluation-due rule). */
+export function evaluationDue(lastEvaluatedAt: string | null | undefined, now: number): boolean {
+  if (!lastEvaluatedAt) return true;
+  const t = Date.parse(lastEvaluatedAt);
+  if (Number.isNaN(t)) return true;
+  return now - t > EVALUATION_DUE_DAYS * 86400000;
+}
+
+export interface RailInput {
+  /** Needs-you Work items (feedNeedsCount) plus tasks that need you. */
+  work: number;
+  goals: readonly { flagged: boolean; last_evaluated_at: string | null }[] | null | undefined;
+  opsFailing: number;
+  opsProposals: number;
+  now: number;
+}
+
+/**
+ * The rail's ember dots (§2.1): a section gets one when it holds something
+ * that needs you. No counts anywhere. Home, Library and History never do:
+ * Home's needs-you rows are Work's items, and ideas are never urgent.
+ */
+export function railDots(input: RailInput): Record<SectionId, boolean> {
+  const goals = input.goals ?? [];
+  return {
+    home: false,
+    work: input.work > 0,
+    goals: goals.some((g) => g.flagged || evaluationDue(g.last_evaluated_at, input.now)),
+    library: false,
+    ops: input.opsFailing + input.opsProposals > 0,
+    history: false,
+  };
+}
+
+/**
+ * The Cockpit's status-bar counts (§2.1), for this window's workspace:
+ * busy agents, and open items that need you (shown in neutral text, never
+ * ember).
+ */
+export function cockpitStatusCounts(input: {
+  workspace: string;
+  agents?: readonly Pick<AgentSummary, 'state' | 'workspace'>[] | null;
+  items?: readonly Pick<AttentionItem, 'state' | 'severity' | 'kind' | 'source'>[] | null;
+}): { working: number; waiting: number } {
+  const ws = input.workspace;
+  const mine = (w: string | null | undefined) => !w || !ws || sameWorkspace(w, ws);
+  const working = (input.agents ?? []).filter((a) => a.state === 'busy' && mine(a.workspace)).length;
+  const waiting = (input.items ?? []).filter(
+    (i) => i.state === 'open' && i.severity !== 'ambient' && i.kind !== 'summary' && mine(i.source.workspace),
+  ).length;
+  return { working, waiting };
+}
+
+/** "2 agents working" and "1 waiting" (each null when zero). */
+export function cockpitStatusParts(c: { working: number; waiting: number }): { working: string | null; waiting: string | null } {
+  return {
+    working: c.working > 0 ? `${c.working} ${plural(c.working, 'agent', 'agents')} working` : null,
+    waiting: c.waiting > 0 ? `${c.waiting} waiting` : null,
+  };
 }

@@ -685,11 +685,12 @@ test('keyAction: map of §3.7 (⌘ chords for actions, bare keys only navigate)'
   const cmd = (key, ctx = {}) => k(key, { meta: true, ...ctx });
   assert.deepEqual(k('ArrowDown'), { kind: 'row', delta: 1 });
   assert.deepEqual(k('ArrowUp'), { kind: 'row', delta: -1 });
-  assert.deepEqual(k('ArrowLeft'), { kind: 'tile', delta: -1 });
-  assert.deepEqual(k('ArrowRight'), { kind: 'tile', delta: 1 });
+  // The agent dock is gone from the Cockpit (cockpit-design §2.1): ←/→ do nothing.
+  assert.equal(k('ArrowLeft'), null);
+  assert.equal(k('ArrowRight'), null);
   assert.deepEqual(k('Enter'), { kind: 'enter' });
   assert.deepEqual(k('Escape'), { kind: 'escape' });
-  for (const [key, kind] of [['Enter', 'approve'], ['d', 'deny'], ['e', 'rename'], ['Backspace', 'dismiss'], ['t', 'drawer']]) {
+  for (const [key, kind] of [['Enter', 'approve'], ['d', 'deny'], ['e', 'rename'], ['Backspace', 'dismiss'], ['t', 'manual']]) {
     assert.deepEqual(cmd(key), { kind }, `⌘${key}`);
   }
   assert.deepEqual(cmd('D'), { kind: 'deny' }, 'caps lock does not matter');
@@ -698,8 +699,6 @@ test('keyAction: map of §3.7 (⌘ chords for actions, bare keys only navigate)'
     assert.deepEqual(cmd(',', { shift: true, code }), { kind }, code);
     assert.deepEqual(cmd(key, { shift: true }), { kind }, key);
   }
-  assert.deepEqual(k('ArrowLeft', { drawer: true }), { kind: 'drawer-move', delta: -1 });
-  assert.deepEqual(k('ArrowRight', { drawer: true }), { kind: 'drawer-move', delta: 1 });
 });
 
 test('keyAction: no bare letter, digit or symbol does anything', () => {

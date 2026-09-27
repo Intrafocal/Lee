@@ -22,17 +22,14 @@ import { focusManager } from '../../hooks/useFocusManager';
 import type { AttentionItem, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 import type { AboutRef, CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from '../../../shared/cockpit';
 import {
-  copilotBadge,
   feedNeedsCount,
-  goalsBadge,
-  somedayBadge,
   keyAction,
   mergeFeed,
+  railDots,
   runtimeAgentPtys,
   tabDisplayFromRuntime,
   checkinToasts,
-  opsBadge,
-  tasksBadge,
+  taskNeedsYou,
   tileModel,
   type FeedRow,
   type ModelTab,
@@ -47,11 +44,9 @@ import {
   type CockpitModeState,
   type StewardRequest,
 } from './cockpitMode';
-import { CockpitHeader } from './CockpitHeader';
-import { CockpitNav, type NavBadges } from './CockpitNav';
-import { AgentTiles } from './AgentTiles';
-import { TabDrawer } from './TabDrawer';
+import { CockpitNav, type NavDots } from './CockpitNav';
 import { Launcher, type LauncherPrefill } from './Launcher';
+import { Icon } from '../Icon';
 import { RunMenu } from './RunMenu';
 import { KeyHelp } from './KeyHelp';
 import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './AgentTile';
@@ -167,7 +162,8 @@ interface CockpitHostProps {
   onOpenLibrary?: (expId: string) => void;
   /** Open a workstream tab (App.handleWorkstreamSelect). */
   onOpenWorkstream?: (id: string, title: string) => void;
-  onAskHester: (prompt: string) => void;
+  /** Unused since Home dropped its Ask card (asking is ⌘/, cockpit-design §3.7); App still passes it. */
+  onAskHester?: (prompt: string) => void;
   /** App-level toast, for results that arrive while the Cockpit is hidden (async check-ins). */
   onNotify?: (message: string, level: 'info' | 'error') => void;
 }
@@ -191,6 +187,18 @@ interface KeyLike {
   shiftKey: boolean;
   code: string;
   preventDefault: () => void;
+}
+
+/** The selected Cockpit item as an item ref, while the Cockpit shows (null otherwise). */
+let currentAbout: AboutRef | null = null;
+
+/**
+ * What the ⌘/ palette is "about" (cockpit-design §6.2): the Cockpit's
+ * selected item (a Work card or row, a Library exploration, a Goals row),
+ * else null. Read when the palette opens; it's not a subscription.
+ */
+export function currentCockpitAbout(): AboutRef | null {
+  return currentAbout;
 }
 
 function useNow(intervalMs: number, active: boolean): number {
@@ -217,7 +225,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onOpenFile,
   onOpenLibrary,
   onOpenWorkstream,
-  onAskHester,
   onNotify,
 }) => {
   const state = useCockpitModeState();
@@ -331,7 +338,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       }),
     [workspace, tabs, mode, snapshot, runtime, hesterTasks, now],
   );
-  const ownTabs = useMemo(() => tabs.filter((t) => !mode.isAgentTab(t)), [tabs, mode]);
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
 
@@ -570,13 +576,12 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   // ---- popovers, rows, keyboard ----
   const [popover, setPopover] = useState<Popover>(null);
-  // "+ Explore" in the header: go to Library's Explore and focus its new-exploration field.
+  // New ⌘N → Explore: go to the Library and focus its new-exploration field.
   const [exploreNonce, setExploreNonce] = useState(0);
   const startExplore = useCallback(() => {
     cockpitModeStore.setSection('library');
     setExploreNonce((n) => n + 1);
   }, []);
-  const [drawerFocus, setDrawerFocus] = useState(false);
   const rowsRef = useRef<RowHandle[]>([]);
   const registerRows = useCallback((rows: RowHandle[]) => {
     rowsRef.current = rows;
@@ -630,16 +635,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       ? { kind: 'task', id: selectedTile.task.id, label: selectedTile.title }
       : { kind: 'tile', id: String(selectedTile.ptyId), label: selectedTile.title, record: { pty_id: selectedTile.ptyId, title: selectedTile.title, provider: selectedTile.provider } }
     : selectedRow?.about ?? null;
-  const aboutKey = aboutRef ? `${aboutRef.kind}:${aboutRef.id}:${aboutRef.label}` : '';
-  const aboutRefLatest = useRef(aboutRef);
-  aboutRefLatest.current = aboutRef;
-  // "about:" for Ask Hester survives switching to the Copilot section (which
-  // clears the selection): the last tile or non-Copilot row you selected.
-  const [lastAbout, setLastAbout] = useState<AboutRef | null>(null);
-  const selectedIsCopilotRow = state.selected?.kind === 'row' && state.selected.id.startsWith('copilot:');
-  useEffect(() => {
-    if (aboutKey && !selectedIsCopilotRow) setLastAbout(aboutRefLatest.current);
-  }, [aboutKey, selectedIsCopilotRow]);
+  // The palette's "about" (§6.2) reads the Cockpit's selected item here.
+  currentAbout = shown ? aboutRef : null;
 
   // ---- v4: goal status (badge + Goals section), steward requests ----
   const [goalsData, setGoalsData] = useState<GoalsStatusResponse | null>(null);
@@ -678,7 +675,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   useEffect(
     () =>
       cockpitModeStore.onStewardRequest((req) => {
-        if (req.kind === 'ask') setLastAbout(req.about);
         setPendingSteward((p) => ({ req, nonce: (p?.nonce ?? 0) + 1 }));
       }),
     [],
@@ -689,12 +685,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     },
     [notify],
   );
-  // A fresh brief after an absence: a neutral dot on Home until you look.
-  const [seenNonce, setSeenNonce] = useState(0);
-  useEffect(() => {
-    if (shown && state.section === 'home') setSeenNonce(returnNonce);
-  }, [shown, state.section, returnNonce]);
-
   const copilotApi = copilot.api;
   const approve = (item: AttentionItem | null | undefined, action: 'approve' | 'deny') => {
     if (!item || !copilotApi) return;
@@ -726,7 +716,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       alt: e.altKey,
       shift: e.shiftKey,
       code: e.code,
-      drawer: drawerFocus,
     });
     if (!act) return;
     e.preventDefault();
@@ -735,7 +724,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     const row = selectedRow;
     switch (act.kind) {
       case 'row': {
-        setDrawerFocus(false);
         const rows = rowsRef.current;
         if (!rows.length) break;
         const idx = sel?.kind === 'row' ? rows.findIndex((r) => r.id === sel.id) : -1;
@@ -744,18 +732,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         document.querySelector(`[data-cockpit-row="${CSS.escape(rows[next].id)}"]`)?.scrollIntoView({ block: 'nearest' });
         break;
       }
-      case 'tile': {
-        setDrawerFocus(false);
-        if (!tiles.length) break;
-        const idx = tile ? tiles.indexOf(tile) : -1;
-        const next = idx < 0 ? (act.delta > 0 ? 0 : tiles.length - 1) : Math.min(tiles.length - 1, Math.max(0, idx + act.delta));
-        cockpitModeStore.select({ kind: 'tile', id: String(tiles[next].ptyId) });
-        break;
-      }
       case 'enter':
         if (tile) goInto(tile.ptyId, 'tile');
         else if (row?.open) row.open();
-        else if (sel?.kind === 'drawer') openOwnTab(Number(sel.id));
         break;
       case 'approve':
         approve(tile?.approval ?? row?.approval, 'approve');
@@ -781,19 +760,11 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       case 'dismiss':
         row?.dismiss?.();
         break;
-      case 'drawer':
-        setDrawerFocus(true);
-        if (sel?.kind !== 'drawer' && ownTabs.length) cockpitModeStore.select({ kind: 'drawer', id: String(ownTabs[0].id) });
+      case 'manual':
+        // ⌘T: your own tabs live in Manual, which keeps its last active tab (§2.1).
+        cockpitModeStore.toggleManual();
         break;
-      case 'drawer-move': {
-        if (!ownTabs.length) break;
-        const idx = sel?.kind === 'drawer' ? ownTabs.findIndex((t) => t.id === Number(sel.id)) : -1;
-        const next = idx < 0 ? 0 : Math.min(ownTabs.length - 1, Math.max(0, idx + act.delta));
-        cockpitModeStore.select({ kind: 'drawer', id: String(ownTabs[next].id) });
-        break;
-      }
       case 'escape':
-        setDrawerFocus(false);
         cockpitModeStore.select(null);
         break;
     }
@@ -852,21 +823,14 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   if (!state.enabled || !available || state.mode !== 'cockpit') return null;
 
-  // Scaffold: the old per-section badges folded onto the six sections until
-  // R1's rail (one ember dot, no counts, cockpit-design §2.1).
-  const tasksNav = tasksBadge(hester.snapshot?.tasks.open ?? []);
-  const badges: NavBadges = {
-    home: copilotBadge({ returnNonce, seenNonce }),
-    work: needsCount > 0 ? { count: needsCount, ember: true } : tasksNav,
-    goals: goalsBadge(goalsData?.goals),
-    library: somedayBadge({ open: hester.snapshot?.someday.open ?? 0, untriagedOver7d: hester.snapshot?.someday.untriaged_over_7d ?? 0 }),
-    ops: opsBadge({
-      failing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
-      proposals: ops?.proposals.length ?? 0,
-      suggestions: ops?.suggestions.length ?? 0,
-    }),
-    history: { count: 0, ember: false },
-  };
+  // One ember dot per section that holds something needing you; no counts (§2.1).
+  const dots: NavDots = railDots({
+    work: needsCount + (hester.snapshot?.tasks.open ?? []).filter(taskNeedsYou).length,
+    goals: goalsData?.goals,
+    opsFailing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
+    opsProposals: ops?.proposals.length ?? 0,
+    now,
+  });
 
   const section = state.section;
 
@@ -880,50 +844,45 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       role="region"
       aria-label="Cockpit"
     >
-      <CockpitHeader
-        workspace={workspace}
-        deepActive={state.deepActive}
-        copilotApi={copilotApi}
-        toast={toast}
-        onLaunch={() => openLauncher()}
-        onExplore={startExplore}
-        onRun={() => setPopover({ kind: 'run' })}
-        onHelp={() => setPopover({ kind: 'help' })}
-      />
       <div className="cockpit-body">
-        <CockpitNav section={section} badges={badges} onSelect={setSection} />
-        <div className="cockpit-center">
-          {/* A view root for nextGuard: one phosphor next step per section (cockpit-design §1.3). */}
-          <div className="cockpit-section" data-view-root="section">
-            {section === 'home' && (
-              <HomeSection
-                ctx={ctx}
-                about={lastAbout}
-                onClearAbout={() => setLastAbout(null)}
-                onAsk={onAskHester}
-                returnNonce={returnNonce}
-              />
-            )}
-            {section === 'work' && <WorkSection ctx={ctx} />}
-            {section === 'goals' && <GoalsSection ctx={ctx} />}
-            {section === 'library' && <LibrarySection ctx={ctx} focusCreateNonce={exploreNonce} />}
-            {section === 'ops' && <OperationsSection ctx={ctx} />}
-            {section === 'history' && <HistorySection ctx={ctx} />}
-          </div>
-          {/* The selected section reads first; the agent tiles sit below it. */}
-          <AgentTiles ctx={ctx} />
+        <div className="cockpit-rail-col">
+          <CockpitNav section={section} dots={dots} onSelect={setSection} />
+          <button
+            type="button"
+            className="cockpit-rail-item cockpit-rail-keys"
+            onClick={() => setPopover({ kind: 'help' })}
+            aria-label="Keys"
+            title="Keys"
+          >
+            <Icon name="keyboard" size={16} />
+          </button>
+        </div>
+        {/* A view root for nextGuard: one phosphor next step per section (cockpit-design §1.3). */}
+        <div className="cockpit-section" data-view-root="section">
+          {section === 'home' && <HomeSection ctx={ctx} returnNonce={returnNonce} />}
+          {section === 'work' && <WorkSection ctx={ctx} />}
+          {section === 'goals' && <GoalsSection ctx={ctx} />}
+          {section === 'library' && <LibrarySection ctx={ctx} focusCreateNonce={exploreNonce} />}
+          {section === 'ops' && <OperationsSection ctx={ctx} />}
+          {section === 'history' && <HistorySection ctx={ctx} />}
         </div>
       </div>
-      <TabDrawer
-        tabs={ownTabs}
-        focused={drawerFocus}
-        selectedId={state.selected?.kind === 'drawer' ? Number(state.selected.id) : null}
-        onFocusChange={setDrawerFocus}
-        onSelect={(id) => cockpitModeStore.select({ kind: 'drawer', id: String(id) })}
-        onOpen={openOwnTab}
-      />
+      {toast && (
+        <div className={`cockpit-toast is-${toast.level}`} role="status">
+          {toast.message}
+        </div>
+      )}
       {popover?.kind === 'launcher' && (
-        <Launcher ctx={ctx} prefill={popover.prefill} onClose={() => setPopover(null)} />
+        <Launcher
+          ctx={ctx}
+          prefill={popover.prefill}
+          onClose={() => setPopover(null)}
+          onExplore={() => {
+            setPopover(null);
+            startExplore();
+          }}
+          onRun={() => setPopover({ kind: 'run' })}
+        />
       )}
       {popover?.kind === 'run' && <RunMenu ctx={ctx} onClose={() => setPopover(null)} />}
       {popover?.kind === 'help' && <KeyHelp onClose={() => setPopover(null)} />}
