@@ -13,6 +13,7 @@ import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../widgets/attention_tile.dart';
+import '../widgets/deep_idle_card.dart';
 import '../widgets/in_flight_section.dart';
 import '../widgets/machine_switcher.dart';
 import '../widgets/now_header_actions.dart';
@@ -22,12 +23,14 @@ import '../widgets/workspace_switcher.dart';
 import 'agent_screen.dart';
 
 /// Items that need you: what Work's headline counts (cockpit design §4.1;
-/// summaries and ambient items don't).
+/// summaries and ambient items don't, and the Desk's "Still thinking?"
+/// push has its own card, [DeepIdleCard]).
 List<AttentionItem> waitingOnYou(AttentionSnapshot snapshot) => snapshot.items
     .where((i) =>
         (i.state == AttentionItemState.open || i.state == AttentionItemState.snoozed) &&
         i.severity != AttentionSeverity.ambient &&
-        i.kind != AttentionKind.summary)
+        i.kind != AttentionKind.summary &&
+        i.kind != AttentionKind.deepIdle)
     .toList();
 
 /// Work (cockpit design §4, §8.1): the Now screen, renamed. One serif line
@@ -75,6 +78,7 @@ class WorkScreen extends ConsumerWidget {
           padding: const EdgeInsets.only(bottom: AeronautTheme.spacingXl),
           children: const [
             _AwayBanner(),
+            _DeepIdleSection(),
             _Headline(),
             _WaitingSection(),
             InFlightSection(),
@@ -103,6 +107,17 @@ class _InDeepWork extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Desk D2 §9.2: the "Still thinking?" push, first on Work while it's open.
+class _DeepIdleSection extends ConsumerWidget {
+  const _DeepIdleSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final item = ref.watch(attentionProvider.select((s) => openDeepIdle(s.snapshot)));
+    return item == null ? const SizedBox.shrink() : DeepIdleCard(item: item);
   }
 }
 
@@ -183,8 +198,9 @@ class _AwayBanner extends ConsumerWidget {
 /// ([waitingOnYou], as the headline counts them), blocking first, then
 /// needs-you, longest-waiting first within each. Ambient and summary items
 /// stay off it, as on the Mac: they aren't waiting on you. The first
-/// card is raised, so its Allow is the view's one phosphor control. A card
-/// opens the one-agent screen.
+/// card is raised, so its Allow is the view's one phosphor control, unless
+/// the "Still thinking?" push is showing: its Extend is then the one. A
+/// card opens the one-agent screen.
 class _WaitingSection extends ConsumerWidget {
   const _WaitingSection();
 
@@ -198,6 +214,7 @@ class _WaitingSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final attention = ref.watch(attentionProvider);
     final snapshot = attention.snapshot;
+    final idle = openDeepIdle(snapshot) != null;
     final items = waitingOnYou(snapshot)
       ..sort((a, b) {
         final cmp = _severityOrder[a.severity]!.compareTo(_severityOrder[b.severity]!);
@@ -239,7 +256,7 @@ class _WaitingSection extends ConsumerWidget {
             key: ValueKey('waiting-${items[i].id}'),
             item: items[i],
             awayActive: snapshot.away.active,
-            raised: i == 0,
+            raised: i == 0 && !idle,
             tokenLabel: tokensFor(items[i]),
             onOpen: () => open(items[i]),
             onWriteReply: () => open(items[i], focusReply: true),

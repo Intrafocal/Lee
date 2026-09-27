@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import '../models/carry.dart';
 import '../models/hester_models.dart';
 import '../models/machine.dart';
 import 'api_auth.dart';
@@ -329,37 +328,6 @@ class HesterApi {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final data = json['data'];
         if (data is Map<String, dynamic>) return SomedayItem.fromJson(data);
-      }
-    } catch (_) {
-      // Connection failed
-    }
-    return null;
-  }
-
-  /// `GET /cockpit/explorations?workspace=` — active explorations for
-  /// Library's Explorations tab, newest touched first. Null on any failure
-  /// ("Hester offline"), same convention as [getSomeday].
-  Future<List<ExplorationSummary>?> getExplorations({String? workspace}) async {
-    if (_baseUrl == null) return null;
-    try {
-      final uri = Uri.parse('$_baseUrl/cockpit/explorations')
-          .replace(queryParameters: {if (workspace != null) 'workspace': workspace, 'status': 'active'});
-      final response =
-          await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
-      _isUnauthorized(response);
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final data = json['data'];
-        if (data is List) {
-          final items = data
-              .whereType<Map<String, dynamic>>()
-              .map(ExplorationSummary.fromJson)
-              .where((e) => e.id.isNotEmpty)
-              .toList();
-          final far = DateTime.fromMillisecondsSinceEpoch(0);
-          items.sort((a, b) => (b.lastTouchedAt ?? far).compareTo(a.lastTouchedAt ?? far));
-          return items;
-        }
       }
     } catch (_) {
       // Connection failed
