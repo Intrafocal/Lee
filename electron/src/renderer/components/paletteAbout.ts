@@ -13,6 +13,9 @@
  * The Cockpit view that owns the selection resolves it to an AboutRef and
  * publishes it here (publishPaletteAbout). Without a published ref, an agent
  * tile is named from the store's tabDisplay; anything else is not guessed.
+ *
+ * Desk D2 (§7.2): from a zoomed Page card the palette is about that Page:
+ * `{ kind: 'page', id }` (deskAboutFor), so the steward reads it.
  */
 
 import type { AboutKind, AboutRef } from '../../shared/cockpit';
@@ -87,6 +90,16 @@ export function paletteAboutFor(
     return { kind: 'tile', id: sel.id, label: title, record: { pty_id: ptyId, title, provider: shown?.provider ?? null } };
   }
   return null;
+}
+
+/**
+ * The palette's about at the Desk: the Page card zoomed in (a real card, not
+ * an in-memory Page); null at the overview, in an Area, or outside Deep.
+ */
+export function deskAboutFor(state: { mode: string; deep: { zoom?: string; card_id?: string | null; title: string } }): AboutRef | null {
+  const d = state.deep;
+  if (state.mode !== 'deep' || d.zoom !== 'card' || !d.card_id || !/^pg-[0-9a-f]{8}$/.test(d.card_id)) return null;
+  return { kind: 'page', id: d.card_id, label: d.title || 'Untitled' };
 }
 
 // ---------------------------------------------------------------------------

@@ -126,7 +126,10 @@ function writeDeepMemory(workspace: string, m: DeepMemory): void {
   try {
     const ids = Object.keys(m.cursors);
     if (ids.length > CURSORS_MAX) for (const id of ids.slice(0, ids.length - CURSORS_MAX)) delete m.cursors[id];
-    window.localStorage.setItem(deepMemoryKey(workspace), JSON.stringify(m));
+    // The record also holds the Desk's nav (cockpitMode's card_id, zoom, area_id): keep what else is there.
+    const raw = window.localStorage.getItem(deepMemoryKey(workspace));
+    const prev = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    window.localStorage.setItem(deepMemoryKey(workspace), JSON.stringify({ ...prev, ...m }));
   } catch {
     /* storage unavailable */
   }
