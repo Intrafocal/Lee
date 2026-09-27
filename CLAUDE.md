@@ -518,7 +518,8 @@ lee --workspace ./myproject
 | `Cmd+Shift+0` | Cockpit ↔ Deep |
 | `Cmd+Option+0` | Cockpit ↔ Manual |
 | `Cmd+.` | Deep: selection actions (Capture, Keep, Ask, Explore) |
-| `Cmd+1-9` | Pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (1 Home … 6 History), views in Deep (1 Page) |
+| `Cmd+1-9` | Pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (1 Home, 2 Work, 3 Goals, 4 Ops) |
+| `Esc` | Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first) |
 | `Cmd+W` | **Watch** - Toggle idle detection on current tab |
 | `Cmd+I` | **Idle tabs** - Cycle through tabs marked as idle |
 | `Cmd+Esc` | Close current tab |
