@@ -40,7 +40,7 @@ const { CopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
 const { copilotBus } = require(path.join(dist, 'copilot', 'bus.js'));
 const { windowRegistry } = require(path.join(dist, 'window-registry.js'));
 const { installClaudeHooks, STATUSLINE_SCRIPT } = require(path.join(dist, 'copilot', 'hook-install.js'));
-const { registerCarryRoutes, buildCarry } = require(path.join(dist, 'copilot', 'carry.js'));
+const { registerCarryRoutes, buildCarry, parseOpenNext } = require(path.join(dist, 'copilot', 'carry.js'));
 const { setHesterPortProvider } = require(path.join(dist, 'copilot', 'capture.js'));
 const express = require('express');
 
@@ -447,14 +447,14 @@ const OPENER = {
   ],
 };
 
-async function withCarryApp(principal, fn) {
+async function withCarryApp(principal, fn, deps = {}) {
   const app = express();
   app.use(express.json());
   app.use((_req, res, next) => {
     res.locals.principal = principal;
     next();
   });
-  registerCarryRoutes(app);
+  registerCarryRoutes(app, deps);
   const server = await new Promise((r) => {
     const s = app.listen(0, '127.0.0.1', () => r(s));
   });
@@ -490,13 +490,50 @@ async function withFakeHester(handler, fn) {
 
 const device = { kind: 'device', device_id: 'dev-1', device_kind: 'aeronaut', name: 'Phone' };
 
-test('buildCarry: the picked-up exploration’s questions first, at most 5', () => {
+test('buildCarry: a pre-Desk opener (no card): its exploration stands in as the card; its questions first, at most 5', () => {
   const c = buildCarry(OPENER, null, null);
-  assert.deepStrictEqual(c.pick_up, { exploration_id: 'exp-2', title: 'Sync engine', stopped_at: 'Was weighing CRDT vs OT', last_touched_at: '2026-09-26T18:00:00Z' });
+  assert.deepStrictEqual(c.pick_up, {
+    card_id: 'exp-2', card_kind: 'page', title: 'Sync engine', area_name: null,
+    stopped_at: 'Was weighing CRDT vs OT', stopped_line: null, last_touched_at: '2026-09-26T18:00:00Z', exploration_id: 'exp-2',
+  });
   assert.deepStrictEqual(c.open_questions.map((q) => q.question_id), ['q2', 'q5', 'q1', 'q3', 'q4']);
+  assert.deepStrictEqual(c.open_questions[0], { card_id: 'exp-2', exploration_id: 'exp-2', question_id: 'q2', text: 'two?' });
   assert.strictEqual(c.captured_count, 3);
   assert.strictEqual(c.reading_count, 2);
+  assert.strictEqual(c.spooled, 0);
   assert.strictEqual(buildCarry({ ...OPENER, pick_up: null, surfaces: [] }, null, '/w').pick_up, null);
+});
+
+test('buildCarry: the Desk opener picks up your last card, its area and stopped-at line; spooled counts', () => {
+  const card = { id: 'pg-0000abcd', kind: 'page', title: 'Mesh sync', area_id: 'area-0000abcd', area_name: 'Mesh', purpose: null, last_touched_at: '2026-09-27T08:00:00Z' };
+  const desk = {
+    ...OPENER,
+    pick_up: {
+      card,
+      exploration: { id: 'pg-0000abcd', title: 'Mesh sync', last_touched_at: '2026-09-27T08:00:00Z' },
+      open_next: null,
+      stopped_at: '…where the clocks disagree',
+      stopped_line: 12,
+      arrived: { answers: 0, open_questions: 1 },
+    },
+    surfaces: [
+      { kind: 'open_questions', count: 2, items: [
+        { exploration_id: 'pg-00000001', exploration_title: 'A', card_id: 'pg-00000001', card_title: 'A', question_id: 'q1', text: 'one?' },
+        { exploration_id: 'pg-0000abcd', exploration_title: 'Mesh sync', card_id: 'pg-0000abcd', card_title: 'Mesh sync', question_id: 'q2', text: 'two?' },
+      ] },
+    ],
+  };
+  const c = buildCarry(desk, { card_id: 'pg-0000abcd', exploration_id: 'pg-0000abcd', set_at: '2026-09-27T09:00:00Z' }, null, 2);
+  assert.deepStrictEqual(c.pick_up, {
+    card_id: 'pg-0000abcd', card_kind: 'page', title: 'Mesh sync', area_name: 'Mesh',
+    stopped_at: '…where the clocks disagree', stopped_line: 12, last_touched_at: '2026-09-27T08:00:00Z', exploration_id: 'pg-0000abcd',
+  });
+  assert.deepStrictEqual(c.open_questions.map((q) => q.card_id), ['pg-0000abcd', 'pg-00000001']);
+  assert.strictEqual(c.spooled, 2);
+  assert.strictEqual(buildCarry({ ...desk, pick_up: { ...desk.pick_up, stopped_line: 0 } }, null, null).pick_up.stopped_line, null, 'lines are 1-based');
+  // Open next: card_id with exploration_id as its alias; a legacy record keeps its exploration_id.
+  assert.deepStrictEqual(parseOpenNext({ card_id: 'pg-0000abcd', set_at: 't' }), { card_id: 'pg-0000abcd', exploration_id: 'pg-0000abcd', set_at: 't' });
+  assert.deepStrictEqual(parseOpenNext({ exploration_id: 'exp-1', set_at: 't' }), { exploration_id: 'exp-1', set_at: 't' });
 });
 
 test('GET /carry forwards to opener + open-next with the workspace header', async () => {
@@ -577,8 +614,21 @@ test('POST /carry/capture and /carry/open-next forward with the device surface',
           assert.deepStrictEqual((await res.json()).data.open_next, { someday_id: 'sd-9', set_at: '2026-09-27T11:00:00Z' });
           const on = calls.find((c) => c.url === '/copilot/open-next');
           assert.deepStrictEqual(on.body, { someday_id: 'sd-9', surface: 'aeronaut', workspace: '/work/api' });
-          assert.strictEqual((await post('/carry/open-next', {})).status, 400, 'one of the two');
+          assert.strictEqual((await post('/carry/open-next', {})).status, 400, 'one of the three');
           assert.strictEqual((await post('/carry/open-next', { someday_id: 'a', exploration_id: 'b' })).status, 400, 'not both');
+          assert.strictEqual((await post('/carry/open-next', { someday_id: 'a', card_id: 'pg-00000001' })).status, 400, 'not both');
+
+          // Desk D2 §9.3: a card id goes to Hester as card_id; a pre-Desk id as exploration_id.
+          calls.length = 0;
+          assert.strictEqual((await post('/carry/open-next', { card_id: 'pg-0000abcd' })).status, 200);
+          assert.deepStrictEqual(calls.pop().body, { card_id: 'pg-0000abcd', surface: 'aeronaut', workspace: '/work/api' });
+          assert.strictEqual((await post('/carry/open-next', { card_id: 'exp-2' })).status, 200);
+          assert.deepStrictEqual(calls.pop().body, { exploration_id: 'exp-2', surface: 'aeronaut', workspace: '/work/api' });
+          assert.strictEqual((await post('/carry/open-next', { exploration_id: 'exp-2' })).status, 200);
+          assert.deepStrictEqual(calls.pop().body, { exploration_id: 'exp-2', surface: 'aeronaut', workspace: '/work/api' });
+          assert.strictEqual((await post('/carry/capture', { text: 'into the card', card_id: 'pg-0000abcd' })).status, 200);
+          assert.deepStrictEqual(calls.pop().body.source, { surface: 'aeronaut', device_id: 'dev-1', card_id: 'pg-0000abcd' });
+          assert.strictEqual((await post('/carry/capture', { text: 'x', card_id: '../etc' })).status, 400);
         });
         // The renderer (shared loopback) is 'lee'.
         await withCarryApp({ kind: 'shared', loopback: true, ip: '127.0.0.1' }, async (base) => {
@@ -592,7 +642,7 @@ test('POST /carry/capture and /carry/open-next forward with the device surface',
   }
 });
 
-test('Hester offline: 503 hester_offline on every Carry route', async () => {
+test('Hester offline: GET /carry and open-next answer 503 hester_offline; a capture spools (200 spooled: true)', async () => {
   const unregister = withWindow([], 8, '/work/api');
   try {
     // A port nothing listens on.
@@ -601,10 +651,10 @@ test('Hester offline: 503 hester_offline on every Carry route', async () => {
     const port = dead.address().port;
     await new Promise((r) => dead.close(r));
     setHesterPortProvider(() => port);
+    const spooled = [];
     await withCarryApp(device, async (base) => {
       for (const [method, route, body] of [
         ['GET', '/carry', null],
-        ['POST', '/carry/capture', { text: 'x' }],
         ['POST', '/carry/open-next', { exploration_id: 'exp-1' }],
       ]) {
         const res = await fetch(`${base}${route}`, {
@@ -614,7 +664,37 @@ test('Hester offline: 503 hester_offline on every Carry route', async () => {
         assert.strictEqual(res.status, 503, route);
         assert.strictEqual((await res.json()).error, 'hester_offline');
       }
-    });
+      const events = [];
+      const onEv = (e) => events.push(e);
+      copilotBus.on('event', onEv);
+      const res = await fetch(`${base}/carry/capture`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: ' on the train ', card_id: 'pg-0000abcd' }),
+      });
+      copilotBus.off('event', onEv);
+      assert.strictEqual(res.status, 200);
+      assert.deepStrictEqual((await res.json()).data, { success: true, someday_id: null, spooled: true });
+      assert.deepStrictEqual(spooled, [
+        { text: 'on the train', as: 'someday', source: { surface: 'aeronaut', device_id: 'dev-1', card_id: 'pg-0000abcd' }, workspace: '/work/api' },
+      ]);
+      const cap = events.find((e) => e.type === 'capture');
+      assert.strictEqual(cap.data.spooled, true);
+      assert.ok(!JSON.stringify(cap).includes('train'), 'never the text');
+    }, { spool: (p) => (spooled.push(p), true), spooledCount: () => spooled.length });
+    // No spool to write to: 503 rather than losing the thought silently.
+    await withCarryApp(device, async (base) => {
+      const res = await fetch(`${base}/carry/capture`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'x' }) });
+      assert.strictEqual(res.status, 503);
+    }, { spool: () => false });
+    // The real capture relay's spool: the source (card) is kept for the retry.
+    const { CaptureRelay } = require(path.join(dist, 'copilot', 'capture.js'));
+    const spoolFile = path.join(tmpHome, '.lee', 'spool', 'carry-test.jsonl');
+    const relay = new CaptureRelay({ spoolFile, getHesterPort: () => port, getSharedToken: () => 't' });
+    assert.strictEqual(relay.spool({ text: 'y', as: 'someday', source: { surface: 'tdeck', card_id: 'pg-0000abcd' } }), true);
+    assert.strictEqual(relay.pending(), 1);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(spoolFile, 'utf8')).source, { surface: 'tdeck', card_id: 'pg-0000abcd' });
+    relay.stop();
   } finally {
     unregister();
   }

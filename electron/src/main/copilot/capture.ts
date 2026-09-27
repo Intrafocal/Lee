@@ -20,9 +20,12 @@ const REQUEST_TIMEOUT_MS = 5000;
 export interface CaptureSource {
   surface: string;
   device_id?: string;
+  /** Carry (Desk D2 §9.3): the card the thought is about; exploration_id for a pre-Desk Hester. */
+  card_id?: string;
+  exploration_id?: string;
 }
 
-interface SomedayPayload {
+export interface SomedayPayload {
   text: string;
   workspace?: string;
   as: 'someday' | 'explore';
@@ -93,6 +96,30 @@ export class CaptureRelay {
       },
     });
     return result;
+  }
+
+  /**
+   * Spool a capture another route already failed to deliver (Carry, Desk D2
+   * §9.3); it goes out with the next retry. False when the spool can't be written.
+   */
+  spool(payload: SomedayPayload): boolean {
+    try {
+      this.appendSpool(payload);
+    } catch (err) {
+      this.opts.log?.('ERROR', 'Capture spool write failed', { error: String(err) });
+      return false;
+    }
+    this.ensureRetry();
+    return true;
+  }
+
+  /** Captures waiting in the spool. */
+  pending(): number {
+    try {
+      return fs.readFileSync(this.opts.spoolFile, 'utf8').split('\n').filter((l) => l.trim()).length;
+    } catch {
+      return 0;
+    }
   }
 
   /** Retry spooled captures in order; stops at the first one Hester still can't take. */
