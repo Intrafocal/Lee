@@ -1,7 +1,8 @@
 # The Desk: a direction for Deep's next phase
 
-> **Status:** Direction (not yet a spec), 2026-09-27. Named **Desk** (not Desktop) on 2026-09-27: the modes are Desk (deep work), Cockpit (orchestration) and Manual (hands on). Captures decisions made in conversation after the first real Deep sessions; D2 will be specified from this.
-> **Replaces, when specified:** 14 §4's four separate views (Page, Board, Browse, Workbench) and the "exploration" as Deep's unit.
+> **Status:** Spec (D2 foundations), 2026-09-27. Named **Desk** (not Desktop) on 2026-09-27: the modes are Desk (deep work), Cockpit (orchestration) and Manual (hands on). Captures decisions made in conversation after the first real Deep sessions, and the six scope decisions of 2026-09-27 (§2–§6).
+> **Contract:** [`plans/2026-09-27-desk-foundation-contract.md`](plans/2026-09-27-desk-foundation-contract.md) (packages H, D, C, V; the store, routes, events and seams).
+> **Replaces:** 14 §4's four separate views (Page, Board, Browse, Workbench) and the "exploration" as Deep's unit. D2 in 14 §12 is now the Desk.
 > **Origin:** the Deep Canvas Page (`.hester/explore/exp-30e56c7e`, 2026-09-27): "Canvas becomes the container for all Deep work… These all get arranged visually on the canvas…"
 
 ## 1. Why
@@ -26,6 +27,15 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 - **Drawers** hold whole Areas you've put away (archived or parked). Cards always travel with their Area. You can take an Area back out.
 - **Goals** are pinned to every Area: a small Goals card fixed in a corner of whichever Area you're in. Zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything. Revisit when there's a reason.
+- **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
+- **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Put away** (Areas). An Area's cards go with it.
+
+**D2 foundations scope** (*decided 2026-09-27*):
+- Hester's `.hester/desk/` store (§5) and the migration from explorations;
+- sessions that belong to the Desk (§4);
+- a zoomable Desk surface with Areas, Page cards (read-only hover preview, zoom to full screen to edit in the existing Page editor), the pinned Goals card in every Area, and the Ideas Drawer.
+
+Board, Browser, Workbench and Workbook cards come later. Every card has a `kind`, so they slot in.
 
 ## 3. Cards
 
@@ -40,7 +50,9 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | **Workbook** | Jupyter-like: cells of code, output and notes | New; separate from Workbench |
 | **Machine** (maybe, later) | A lightweight VM inside the Lee window | Probably not worth it; the browser, Board renders and a mirrored simulator cover most testing |
 
-**Starting something:** on an empty part of an Area, typing starts a Page, pasting an image starts a Board, and choosing a file starts a Workbench (from the origin notes).
+**Starting something:** on an empty part of an Area, typing starts a Page, pasting an image starts a Board, and choosing a file starts a Workbench (from the origin notes). While Page is the only kind (D2 foundations), typing always starts a Page.
+
+**Hand-off results** (*decided 2026-09-27*) stay in the Page's margin and in Work for now, not as separate cards. A hand-off's origin is `page#answer`; old `exp#answer` refs are still accepted.
 
 ## 4. Sessions
 
@@ -49,6 +61,8 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 - **A Deep session belongs to the Desk**, not to one card or Area: it's time at the Desk across whatever cards you touch.
 - The ending ritual lists the cards you touched.
 - "Pick up where you left off" is your last card and the last sentence you wrote in it.
+- **Events** keep G0's metrics working: `focus.start` and `focus.item` carry `item: { kind: 'card', card_id, card_kind, … }`, with a `focus.item` each time you zoom into a different card. `deep.input` is only emitted inside a card, and `desk.zoom` records zooming in and out (contract §5).
+- **The idle-end push** (*decided 2026-09-27*, 14 §8.1). Just before Deep's 45-minute idle end, and only while Lee is open, the devices get one push: **Extend**, **End and rate**, or **Capture**.
 
 ## 5. What happens to "exploration"
 
@@ -59,12 +73,17 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | The session unit | The Desk (§4) |
 | The v3 node tree and "Dive in" Hester chat | **Retired** (*decided 2026-09-27*); old ones aren't kept. Spikes became hand-offs, evidence became hand-off results, decisions became Page sections |
 | The verb "Explore" | **New Page from this** (a Page placed next to the one you're in); Someday triage "Start a Page"; tasks "Think it through on a Page" |
-| Library › Explorations | Library › the Desk's cards by Area, and Drawers |
+| Library › Explorations | The Desk: its cards by Area, and Drawers (Library is gone, §6) |
 | Hand-off origin `exp#answer` | `page#answer` |
 | The Goals Page (`purpose: goals`) | The pinned Goals card (§2) |
-| Carry on devices | Your last card and its stopped-at line |
+| Carry on devices | Your last card and its stopped-at line (*decided 2026-09-27*; Carry only, no Desk view on devices this round) |
 
-**Migration:** each existing exploration becomes a Page card in an Area named after it. Its node tree and chat log are dropped.
+**Migration** (*decided 2026-09-27*):
+- It **copies**. Each existing exploration becomes a Page card in an Area named after it, with its Page, answers, references, questions and sessions.
+- `.hester/explore/` is left untouched as a backup.
+- Node trees and chats aren't carried over.
+- It's idempotent: running it again changes nothing.
+- The v3 node tree and "Dive in" chat UI are retired from the renderer. The old Hester code may stay, but nothing new depends on it.
 
 ## 6. Cockpit and Desk
 
@@ -83,13 +102,20 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | Library: files | The Desk (Workbench) and Manual |
 | Home's opener ("What's on your mind?", start-from links) | The Desk's front: typing on an empty Area starts a Page |
 
-**The Cockpit becomes Home, Work, Goals and Ops** (`⌘1`–`⌘4`). **Home** is one reassuring sentence ("Everything's handled. Two agents working, one needs you."), the one or two things that need you (answerable there), what shipped, and one big door, **Back to your Desk**, showing your last card and your stopped-at line. You check the Cockpit and then leave it; the Desk is where you stay.
+**The Cockpit becomes Home, Work, Goals and Ops** (`⌘1`–`⌘4`; *decided 2026-09-27* that this restructure happens now, with D2 foundations). Library is gone: explorations go to Desk Areas and Drawers, ideas to the Ideas Drawer, and files to Manual (and later Workbench). Usage moves to Ops. **Home** is one reassuring sentence ("Everything's handled. Two agents working, one needs you."), the one or two things that need you (answerable there), what shipped, and one big door, **Back to your Desk**, showing your last card and your stopped-at line. You check the Cockpit and then leave it; the Desk is where you stay.
 
-## 6. Still open
+**Devices** (*decided 2026-09-27*; 13 v6, second pass) get Cockpit and Carry, never Deep. This round:
+- the idle-end push (§4);
+- Dirigible's key for the fourth quick reply, "Show me the diff";
+- Dirigible's In flight folds agents older than 2h;
+- Aeronaut's one-agent screen gets Check in, Rename, Accept and Assign;
+- "Snoozed · Undo" collapses on the phone;
+- Carry becomes your last Desk card and its stopped-at line;
+- `/carry/capture` spools offline instead of returning 503.
+
+## 7. Still open
 
 - **The action row's vocabulary** (Capture vs Explore vs Keep), to settle after the current Deep round ships. The working proposal: drop Capture from the Page row; "New Page from this"; "Keep as reference".
-- **Hand-off results:** do they appear as cards next to the Page that asked, or stay in the Page's margin and in Work?
-- **Opening Deep:** the overview of the whole Desk, or zoomed into your last card? Does typing on an empty region always start a Page?
 - **Workbook:** which languages (the project's Python, JS/TS, shell, SQL through the configured `sql:` connections)? Can its output become a Board card?
 - **Browser and Hester:** only watching (pages as context for Asks), or also acting (navigating, filling in forms) when asked?
-- **Devices:** a read-only view of the Desk on the phone or T-Deck, or Carry only?
+- **Devices:** a read-only view of the Desk on the phone or T-Deck, or Carry only? (This round is Carry only.)
