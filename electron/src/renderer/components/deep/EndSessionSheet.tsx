@@ -16,6 +16,10 @@
  * this window to the Cockpit; Close Lee then quits. Esc ends the session
  * unrated (reason 'esc'). The × means "never mind" and keeps the session.
  * No timers, no reminders.
+ *
+ * Look (cockpit-design §6.1): the Cockpit primitives. "Where did you stop?"
+ * and the questions are your words, in Newsreader; the default action is the
+ * sheet's one `Btn next`, the other `plain`.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -24,6 +28,7 @@ import type { DepthRating } from '../../../shared/cockpit';
 import type { CopilotAPI, FocusState } from '../../../shared/copilot';
 import { cockpitModeStore } from '../cockpit/cockpitMode';
 import { HandoffDialog } from '../copilot/HandoffDialog';
+import { Btn } from '../cockpit/ui';
 import { patchAnswer, patchQuestion, postSession } from '../../lib/hesterDeep';
 import { deepEnd, quitLee } from './deepBridge';
 import './deep.css';
@@ -158,7 +163,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
 
   return ReactDOM.createPortal(
     <div className="deep-sheet-scrim">
-      <div ref={sheetRef} className="deep-sheet" role="dialog" aria-modal="true" aria-label="End session" tabIndex={-1}>
+      <div ref={sheetRef} className="deep-sheet" role="dialog" aria-modal="true" aria-label="End session" tabIndex={-1} data-view-root="">
         <div className="deep-sheet-head">
           <span>End session</span>
           <span className="deep-spacer" />
@@ -177,7 +182,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           rows={2}
           maxLength={1000}
           value={stoppedAt}
-          placeholder="Optional"
+          placeholder="Optional. A sentence to pick up from."
           onChange={(e) => setStoppedAt(e.target.value)}
         />
 
@@ -199,7 +204,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
                       })
                     }
                   />
-                  <span>{q.text}</span>
+                  <span className="deep-sheet-q-text">{q.text}</span>
                   {q.kind === 'answer' && <span className="deep-muted"> · unread answer</span>}
                 </label>
               ))}
@@ -214,7 +219,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
             <button
               key={r.value}
               type="button"
-              className={`deep-toggle${rating === r.value ? ' is-on' : ''}`}
+              className={`deep-rating${rating === r.value ? ' is-on' : ''}`}
               aria-pressed={rating === r.value}
               onClick={() => setRating((cur) => (cur === r.value ? null : r.value))}
             >
@@ -224,9 +229,9 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
         </div>
 
         <div className="deep-sheet-label">Anything for agents while you're away?</div>
-        <button className="deep-link" type="button" disabled={!copilotApi} onClick={() => setHandoff(true)}>
+        <Btn kind="quiet" disabled={!copilotApi} onClick={() => setHandoff(true)}>
           Hand off…
-        </button>
+        </Btn>
 
         {running > 0 && (
           <div className="deep-muted">
@@ -237,12 +242,12 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
         <div className="deep-sheet-actions">
           <span className="deep-muted">Esc ends without the sheet</span>
           <span className="deep-spacer" />
-          <button className={`deep-btn${closeByDefault ? '' : ' is-primary'}`} type="button" disabled={busy} onClick={() => void finish('ritual', false)}>
-            Stay open{!closeByDefault && <kbd>↵</kbd>}
-          </button>
-          <button className={`deep-btn${closeByDefault ? ' is-primary' : ''}`} type="button" disabled={busy} onClick={() => void finish('ritual', true)}>
-            Close Lee{closeByDefault && <kbd>↵</kbd>}
-          </button>
+          <Btn kind={closeByDefault ? 'plain' : 'next'} kbd={closeByDefault ? undefined : '↵'} disabled={busy} onClick={() => void finish('ritual', false)}>
+            Stay open
+          </Btn>
+          <Btn kind={closeByDefault ? 'next' : 'plain'} kbd={closeByDefault ? '↵' : undefined} disabled={busy} onClick={() => void finish('ritual', true)}>
+            Close Lee
+          </Btn>
         </div>
       </div>
       {handoff && copilotApi && (

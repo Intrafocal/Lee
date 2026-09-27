@@ -6,9 +6,12 @@
  * - markdown(), line wrapping, history, drawSelection, highlightSpecialChars
  *   and the default/history/search keymaps. No line numbers, fold or
  *   active-line gutter, autocompletion or crosshair cursor.
- * - A centred column (~72ch) themed from the design tokens, and a margin
- *   column outside it with one marker per answer at its re-anchored line.
- *   Nothing in the margin moves the text or takes focus unless clicked.
+ * - A centred column (72ch) in Newsreader at 20/1.65 on --ground-0
+ *   (cockpit-design §6.1), and a margin column outside it with one note per
+ *   answer at its re-anchored line: a dot, "Hester answered" or "asking…",
+ *   and the question, with no border or card. Notes that would overlap are
+ *   pushed down. Nothing in the margin moves the text or takes focus unless
+ *   clicked.
  * - The selection action row (§5) beside a non-empty selection; ⌘. moves
  *   focus into it, c/k/a/e pick, Esc returns with the selection intact.
  * - Typing affordances (§7): a dim inline widget at the end of the cursor's
@@ -48,6 +51,7 @@ import {
 } from '../../lib/deepModel';
 import { MarkdownPreview } from '../MarkdownPreview';
 import { onDeepActions } from './deepBridge';
+import { marginNoteLabel } from './deepView';
 
 /** Marks a transaction that replaces the buffer from outside (Load theirs): not your edit. */
 const remote = Annotation.define<boolean>();
@@ -145,12 +149,12 @@ const lineClasses = ViewPlugin.fromClass(
 const pageTheme = EditorView.theme({
   '&': { backgroundColor: 'transparent', color: 'var(--text-1)', height: 'auto' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { overflow: 'visible', fontFamily: 'var(--font-ui)', lineHeight: '1.7' },
-  '.cm-content': { padding: 'var(--space-5) 0 40vh', caretColor: 'var(--phosphor-hi)', fontSize: '15px' },
+  '.cm-scroller': { overflow: 'visible', fontFamily: 'var(--font-write)', lineHeight: '1.65' },
+  '.cm-content': { padding: 'var(--space-5) 0 40vh', caretColor: 'var(--caret)', fontSize: '20px' },
   '.cm-line': { padding: '0' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--phosphor-hi)', borderLeftWidth: '2px' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--caret)', borderLeftWidth: '2px' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: 'rgba(var(--phosphor-rgb), 0.28)',
+    backgroundColor: 'var(--selection)',
   },
   '.cm-panels': { backgroundColor: 'var(--ground-2)', color: 'var(--text-1)' },
   '.cm-searchMatch': { backgroundColor: 'rgba(var(--ember-rgb), 0.25)' },
@@ -166,6 +170,10 @@ export interface PageMarker {
   id: string;
   anchor: Anchor;
   state: MarkerState;
+  /** The question asked, shown under the note's label. */
+  question: string;
+  /** Made while Hester was offline, not sent yet. */
+  queued?: boolean;
 }
 
 export interface PageSelection {
@@ -205,6 +213,9 @@ interface PageEditorProps {
   onAffordance: (opt: AffordanceOption, aff: Affordance, line: { from: number; to: number; text: string }) => void;
   onAffordanceShown: (aff: Affordance, outcome: 'accepted' | 'ignored') => void;
 }
+
+/** The action row slot's width (deep.css .deep-row-slot). */
+const ROW_WIDTH = 380;
 
 const ROW_ACTIONS: Array<{ action: DeepRowAction; key: string; label: string; title: string }> = [
   { action: 'capture', key: 'c', label: 'Capture', title: 'Save to Someday with where it came from' },
@@ -504,12 +515,28 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
       const hostRect = hostRef.current?.getBoundingClientRect();
       const innerRect = inner.getBoundingClientRect();
       if (c && hostRect) {
-        const maxLeft = hostRect.right - innerRect.left - 280;
+        const maxLeft = hostRect.right - innerRect.left - ROW_WIDTH;
         row = { top: Math.round(c.bottom - innerRect.top + 6), left: Math.round(Math.max(hostRect.left - innerRect.left, Math.min(c.left - innerRect.left, maxLeft))) };
       }
     }
     setGeo((g) => (JSON.stringify(g) === JSON.stringify({ markers: tops, row }) ? g : { markers: tops, row }));
   }, [layout, anchorPos, markers, sel, visible, preview]);
+
+  // Notes stack: one that would overlap the note above it moves down (the
+  // open one is taller). Set on the DOM after layout, so it never loops.
+  const slotRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  useLayoutEffect(() => {
+    const placed = markers
+      .filter((m) => geo.markers[m.id] != null && slotRefs.current.has(m.id))
+      .sort((a, b) => geo.markers[a.id] - geo.markers[b.id]);
+    let floor = -Infinity;
+    for (const m of placed) {
+      const el = slotRefs.current.get(m.id)!;
+      const top = Math.max(geo.markers[m.id], floor);
+      el.style.top = `${top}px`;
+      floor = top + el.offsetHeight + 8;
+    }
+  });
 
   // The row goes when the selection empties; so does its Ask field.
   useEffect(() => {
@@ -588,17 +615,30 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
               if (top == null) return null;
               const open = openMarker === m.id;
               return (
-                <div key={m.id} className={`deep-marker-slot${open ? ' is-open' : ''}`} style={{ top }}>
+                <div
+                  key={m.id}
+                  ref={(el) => {
+                    if (el) slotRefs.current.set(m.id, el);
+                    else slotRefs.current.delete(m.id);
+                  }}
+                  className={`deep-marker-slot${open ? ' is-open' : ''}`}
+                  style={{ top }}
+                >
                   <button
                     type="button"
-                    className={`deep-marker is-${m.state}`}
+                    className={`deep-note is-${m.state}`}
                     tabIndex={-1}
-                    title={m.state === 'pending' ? 'Asking…' : m.state === 'unread' ? 'An answer arrived' : m.state === 'error' ? 'The ask failed' : 'Answer'}
-                    aria-label="Answer"
+                    aria-expanded={open}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => onMarkerClick(m.id)}
                   >
-                    {m.state === 'pending' && <span className="deep-marker-spin" />}
+                    <span className="deep-note-head">
+                      <span className={`deep-marker is-${m.state}`} aria-hidden="true">
+                        {m.state === 'pending' && <span className="deep-marker-spin" />}
+                      </span>
+                      {marginNoteLabel(m.state, m.queued)}
+                    </span>
+                    <span className="deep-note-q">{m.question}</span>
                   </button>
                   {open && <div className="deep-card">{renderCard(m.id)}</div>}
                 </div>
@@ -618,8 +658,8 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => runAction(a.action)}
                 >
-                  <span className="deep-row-key">{a.key}</span>
                   {a.label}
+                  <span className="deep-row-key">{a.key}</span>
                 </button>
               ))}
             </div>

@@ -7,11 +7,21 @@
  * In Deep (Deep D1 §5), `exploration` is passed and the footer offers
  * **Keep** (⌘K): the last response becomes a `quote` reference in that
  * exploration, source `palette`.
+ *
+ * About (cockpit-design §6.2): opened while the Cockpit has a selected item,
+ * the palette shows "about: <kind> <title> ×" above the field and asks
+ * through POST /cockpit/ask (the steward); × makes the question general
+ * again, and a general question streams through /context/stream. The input
+ * has no ring (the §1.4 rule): its rule brightens and the caret shows.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 import { addReference } from '../lib/hesterDeep';
+import { askSteward } from '../lib/hesterCockpit';
+import type { AboutRef } from '../../shared/cockpit';
+import { cockpitModeStore } from './cockpit/cockpitMode';
+import { aboutLine, paletteAboutFor, paletteRoute, publishedPaletteAbout } from './paletteAbout';
 
 const HESTER_DAEMON_PORT = 9000;
 
@@ -90,6 +100,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isDaemonHealthy, setIsDaemonHealthy] = useState<boolean | null>(null);
   const [kept, setKept] = useState<'idle' | 'saving' | 'kept' | 'error'>('idle');
+  const [about, setAbout] = useState<AboutRef | null>(null);
+  const askSeq = useRef(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -98,6 +110,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Check daemon health on mount
   useEffect(() => {
     if (isOpen) {
+      // The Cockpit's selected item, if any, is what this question is about.
+      setAbout(paletteAboutFor(cockpitModeStore.get(), publishedPaletteAbout()));
       checkDaemonHealth();
       // Focus input when opened
       setTimeout(() => inputRef.current?.focus(), 50);
@@ -131,6 +145,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      askSeq.current++;
       // Reset after animation
       setTimeout(() => {
         setQuery('');
@@ -140,6 +155,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         setError(null);
         setIsProcessing(false);
         setKept('idle');
+        setAbout(null);
         sessionIdRef.current = `palette-${Date.now()}`;
       }, 200);
     }
@@ -171,6 +187,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     setResponse(null);
     setError(null);
     setIsProcessing(true);
+
+    // About an item: the steward answers in one piece (no phases, no session).
+    const route = paletteRoute(about);
+    if (route.kind === 'steward') {
+      const seq = ++askSeq.current;
+      const r = await askSteward(workspace, queryText.trim(), route.about);
+      if (seq !== askSeq.current) return;
+      if (r.ok) setResponse({ session_id: '', status: 'done', text: r.data.text });
+      else setError(r.error || 'Hester could not answer');
+      setIsProcessing(false);
+      return;
+    }
 
     // Create new abort controller
     abortControllerRef.current = new AbortController();
@@ -293,7 +321,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     } finally {
       setIsProcessing(false);
     }
-  }, [isProcessing, workspace, tabs, activeTabId, focusedPanel]);
+  }, [isProcessing, workspace, tabs, activeTabId, focusedPanel, about]);
 
   // Form submit handler - uses current query state
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -345,8 +373,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         return;
       }
 
-      // Cmd+Enter to open as Hester tab (when response is available)
-      if (e.key === 'Enter' && e.metaKey && response && !error) {
+      // Cmd+Enter to open as Hester tab (a streamed response has a session)
+      if (e.key === 'Enter' && e.metaKey && response?.session_id && !error) {
         e.preventDefault();
         e.stopPropagation();
         handleOpenAsTab();
@@ -364,6 +392,25 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   return (
     <div className="command-palette-overlay" onClick={onClose}>
       <div className="command-palette" onClick={(e) => e.stopPropagation()}>
+        {about && (
+          <div className="command-palette-about" title={about.label}>
+            <span className="command-palette-about-text">
+              about: {aboutLine(about).kind} <span className="command-palette-about-title">{aboutLine(about).title}</span>
+            </span>
+            <button
+              type="button"
+              className="command-palette-about-clear"
+              onClick={() => {
+                setAbout(null);
+                inputRef.current?.focus();
+              }}
+              aria-label="Clear about: ask a general question"
+              title="Ask a general question"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {/* Header with input */}
         <form onSubmit={handleSubmit} className="command-palette-header">
           <span className="command-palette-icon"><HesterGlyph size={16} /></span>
@@ -374,13 +421,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             placeholder={
               isDaemonHealthy === false
                 ? 'Hester daemon not running...'
-                : 'Ask Hester anything...'
+                : about
+                  ? `Ask about ${aboutLine(about).title}…`
+                  : 'Ask Hester anything...'
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             disabled={isProcessing || isDaemonHealthy === false}
           />
-          <kbd className="command-palette-shortcut">⌘/</kbd>
+          <span className="command-palette-shortcut">⌘/</span>
         </form>
 
         {/* Daemon status warning */}
@@ -498,7 +547,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 <kbd>⌘K</kbd>
               </button>
             )}
-            {response && !error && (
+            {response?.session_id && !error && (
               <button className="command-palette-btn primary" onClick={handleOpenAsTab}>
                 Open as Hester Tab
                 <kbd>⌘⏎</kbd>

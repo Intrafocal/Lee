@@ -7,8 +7,11 @@
  * cursor, selection and undo history survive hops exactly (§4.4); switching
  * exploration remounts the surface.
  *
- * Header: the title (click to rename), the Page view tab, the Answers tray,
- * the wake line (§2.3), open questions, End session and a dim ⇧⌘0 hint.
+ * Header (cockpit-design §6.1): one quiet 44px line with no fill: the title
+ * (click to rename), the view name "Page", the wake line (§2.3), then
+ * "n answers" and "n questions" as quiet buttons and End session as a plain
+ * outline button. The way back (⇧⌘0 Cockpit, n waiting) is the status
+ * bar's (deepStatusLine).
  * No chat panel, no feed, no toasts; a one-line status in the header is the
  * only feedback. The Page saves through PUT /page with a version check
  * (§4.3); Hester offline, it keeps writing locally and saves when Hester is
@@ -50,7 +53,6 @@ import {
   markerState,
   saveBackoffMs,
   sectionAt,
-  waitingCount,
   wokenItem,
   type Affordance,
   type AffordanceOption,
@@ -58,6 +60,7 @@ import {
 } from '../../lib/deepModel';
 import { PageEditor, type PageEditorHandle, type PageMarker, type PageSelection } from './PageEditor';
 import { EndSessionSheet, type RitualQuestion } from './EndSessionSheet';
+import { countLabel } from './deepView';
 import {
   logDeep,
   onDeepAnswer,
@@ -533,8 +536,8 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
 
   const markers: PageMarker[] = useMemo(
     () => [
-      ...answers.filter((a) => !a.dismissed_at).map((a) => ({ id: a.id, anchor: a.anchor, state: markerState(a) })),
-      ...localAsks.map((q) => ({ id: q.id, anchor: q.anchor, state: 'pending' as const })),
+      ...answers.filter((a) => !a.dismissed_at).map((a) => ({ id: a.id, anchor: a.anchor, state: markerState(a), question: a.question })),
+      ...localAsks.map((q) => ({ id: q.id, anchor: q.anchor, state: 'pending' as const, question: q.question, queued: true })),
     ],
     [answers, localAsks],
   );
@@ -543,18 +546,13 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     const local = localAsks.find((q) => q.id === mid);
     if (local) {
       return (
-        <>
-          <div className="deep-card-q">{local.question}</div>
-          <div className="deep-muted">Hester offline · queued</div>
-        </>
+        <div className="deep-muted">Hester offline · queued</div>
       );
     }
     const a = answers.find((x) => x.id === mid);
     if (!a) return null;
     return (
       <>
-        <div className="deep-card-q">{a.question}</div>
-        {isPending(a) && <div className="deep-muted">Asking…</div>}
         {(a.status === 'error' || a.status === 'interrupted') && (
           <div className="deep-card-err">
             {a.status === 'interrupted' ? 'Interrupted when Hester restarted.' : a.error || 'The ask failed.'}{' '}
@@ -569,16 +567,16 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
               <AgentMarkdown text={a.answer} />
             </div>
             <div className="deep-card-actions">
-              <button className="deep-btn" onClick={() => insertAnswer(a)} disabled={!!a.inserted_at} title="Insert into the Page as a quote">
+              <button className="deep-quiet" onClick={() => insertAnswer(a)} disabled={!!a.inserted_at} title="Insert into the Page as a quote">
                 {a.inserted_at ? 'Inserted' : 'Insert'}
               </button>
-              <button className="deep-btn" onClick={() => void keepAnswer(a)} disabled={!!a.kept_at} title="Keep as a reference">
+              <button className="deep-quiet" onClick={() => void keepAnswer(a)} disabled={!!a.kept_at} title="Keep as a reference">
                 {a.kept_at ? 'Kept' : 'Keep'}
               </button>
-              <button className="deep-btn" onClick={() => setFollowUp({ id: a.id, text: '' })}>
+              <button className="deep-quiet" onClick={() => setFollowUp({ id: a.id, text: '' })}>
                 Follow up
               </button>
-              <button className="deep-btn" onClick={() => dismissAnswer(a)}>
+              <button className="deep-quiet" onClick={() => dismissAnswer(a)}>
                 Dismiss
               </button>
             </div>
@@ -778,7 +776,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
 
   const tray = answersTray([...answers, ...localAsks.map(() => ({ status: 'queued' as const }))]);
   const woken = wokenItem(copilot.snapshot);
-  const waiting = waitingCount(copilot.snapshot);
+  const liveAnswers = answers.filter((a) => !a.dismissed_at).length + localAsks.length;
 
   return (
     <div
@@ -819,27 +817,27 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           </button>
         )}
         {dirty && <span className={`deep-dirty${saveState === 'retrying' ? ' is-retrying' : ''}`} title={offline ? 'Unsaved: Hester offline, saving when it’s back' : 'Unsaved changes'} />}
-        <nav className="deep-views" aria-label="Views">
-          <button className="deep-view is-active" title="Page (⌥⌘1)" aria-current="page">
-            Page
-          </button>
-        </nav>
+        <span className="deep-view-name" title="Page (⌥⌘1)" aria-current="page">
+          Page
+        </span>
         <span className="deep-spacer" />
         {flash && <span className={`deep-flash is-${flash.tone}`}>{flash.text}</span>}
         {offline && !flash && <span className="deep-muted">Hester offline · writing locally</span>}
         {woken && (
           <button className="deep-wake" onClick={() => onHop('cockpit')} title="You asked to be woken for this. Opens the Cockpit">
+            <span className="deep-wake-dot" aria-label="Needs you" />
             {woken.title}
           </button>
         )}
         <div className="deep-pop-anchor">
           <button
-            className={`deep-chip${tray.unread ? ' is-unread' : ''}`}
+            className="deep-quiet"
             onClick={() => setPopover((p) => (p === 'answers' ? null : 'answers'))}
-            title="Answers"
+            title={tray.label === 'Answers' ? 'Answers' : `Answers: ${tray.label}`}
+            aria-expanded={popover === 'answers'}
           >
-            {tray.pending > 0 && <span className="deep-marker-spin" />}
-            {tray.label}
+            {tray.pending > 0 ? <span className="deep-marker-spin" /> : tray.unread > 0 && <span className="deep-new-dot" aria-label="New answer" />}
+            {countLabel(liveAnswers, 'answer')}
           </button>
           {popover === 'answers' && (
             <div className="deep-popover" role="menu">
@@ -861,8 +859,13 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           )}
         </div>
         <div className="deep-pop-anchor">
-          <button className="deep-chip" onClick={() => setPopover((p) => (p === 'questions' ? null : 'questions'))} title="Open questions">
-            ? {openQuestions.length}
+          <button
+            className="deep-quiet"
+            onClick={() => setPopover((p) => (p === 'questions' ? null : 'questions'))}
+            title="Open questions"
+            aria-expanded={popover === 'questions'}
+          >
+            {countLabel(openQuestions.length, 'question')}
           </button>
           {popover === 'questions' && (
             <div className="deep-popover" role="menu">
@@ -875,11 +878,8 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
             </div>
           )}
         </div>
-        <button className="deep-btn" onClick={openSheet}>
+        <button className="deep-btn deep-end" onClick={openSheet}>
           End session
-        </button>
-        <button className="deep-hint" onClick={() => onHop('cockpit')} title={waiting ? `${waiting} waiting in the Cockpit` : 'Cockpit'}>
-          <kbd>⇧⌘0</kbd> Cockpit{waiting ? ` · ${waiting} waiting` : ''}
         </button>
       </header>
 
