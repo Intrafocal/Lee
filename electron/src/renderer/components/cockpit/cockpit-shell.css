@@ -1258,6 +1258,187 @@ button.cockpit-tag.is-goal:hover {
   font-size: 14px;
 }
 
+/* History › Usage (docs/15-Usage.md §6.3): the subscription dials, then today against the 7-day average. */
+
+.cockpit-usage > .ui-eyebrow:first-child {
+  margin-top: var(--space-4);
+}
+
+.cockpit-usage-dials {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+}
+
+.cockpit-usage-dial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.cockpit-usage-dial svg {
+  width: 150px;
+  height: 125px;
+  overflow: visible;
+}
+
+.cockpit-usage-seg {
+  fill: none;
+  stroke: var(--ground-4);
+  stroke-width: 11;
+}
+
+.cockpit-usage-seg.is-lit {
+  stroke: var(--phosphor);
+}
+
+.cockpit-usage-dial.is-near .cockpit-usage-seg.is-lit {
+  stroke: var(--ember);
+}
+
+.cockpit-usage-pace {
+  stroke: var(--text-2);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.cockpit-usage-dial-pct {
+  fill: var(--text-1);
+  font-size: 24px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.cockpit-usage-dial-unit {
+  fill: var(--text-3);
+  font-size: 11px;
+}
+
+.cockpit-usage-dial-label {
+  margin-top: calc(-1 * var(--space-4));
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.cockpit-usage-dial-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.cockpit-usage-dial.is-near .cockpit-usage-dial-sub {
+  color: var(--needs-you);
+}
+
+.cockpit-usage-total {
+  margin: 0 0 var(--space-2);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.cockpit-usage-metrics {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.cockpit-usage-metric {
+  display: grid;
+  /* Fixed tracks so every row's bar and numbers line up down the card. */
+  grid-template-columns: 112px minmax(48px, 1fr) 76px 108px 76px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.cockpit-usage-metric + .cockpit-usage-metric {
+  border-top: 1px solid var(--ground-3);
+}
+
+.cockpit-usage-metric-name {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cockpit-usage-metric-note {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* Bullet bar: today's fill; the tick is the 7-day average. */
+.cockpit-usage-bullet {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ground-3);
+}
+
+.cockpit-usage-bullet-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--phosphor-deep);
+}
+
+.cockpit-usage-bullet-avg {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-2);
+  box-shadow: 0 0 0 2px var(--ground-2);
+}
+
+.cockpit-usage-metric-value {
+  text-align: right;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cockpit-usage-metric-cmp {
+  display: contents;
+}
+
+.cockpit-usage-delta,
+.cockpit-usage-avg {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.cockpit-usage-delta {
+  color: var(--text-2);
+}
+
+.cockpit-usage-avg {
+  color: var(--text-3);
+}
+
+.cockpit-usage-note {
+  margin-top: var(--space-4);
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .cockpit-usage-metric {
+    grid-template-columns: 1fr auto auto;
+  }
+  .cockpit-usage-bullet {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+  .cockpit-usage-avg {
+    display: none;
+  }
+}
+
 /* Ops and History: a Card per operation, lint findings and closed tasks as blocks in a Card. */
 
 .cockpit-op-list {

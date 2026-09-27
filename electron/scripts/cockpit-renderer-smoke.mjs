@@ -1500,6 +1500,19 @@ const leeRows = [
       user: { calls: 9, spend_usd: 0.3, shown_tokens: 80000 },
       automatic: { calls: 35, spend_usd: 0.12, local_tokens: 240000, shown_tokens: 280000 },
     },
+    baseline: {
+      days: 7,
+      days_with_data: 5,
+      totals: {
+        by_source: {
+          claude: { subscription_tokens: 2000000, shown_tokens: 2000000, count: 3 },
+          pi: { spend_usd: 0.5, shown_tokens: 90000, count: 1 },
+          hester_cloud: { spend_usd: 0.4, shown_tokens: 100000, count: 7 },
+          hester_local: { local_tokens: 0, shown_tokens: 0, count: 0 },
+        },
+      },
+      hester: { user: { calls: 9 }, automatic: { calls: 10 } },
+    },
     top_items: [
       { task_id: 't1', title: 'Fix the parser', shown_tokens: 2400000, cost_basis: 'subscription', cost_usd: 31 },
       { task_id: 't2', title: 'Pi refactor', shown_tokens: 90000, cost_basis: 'billed', cost_usd: 1.25 },
@@ -1598,19 +1611,25 @@ const leeRows = [
     assert.match(html['history (usage)'], /aria-selected="true" class="library-tabs-item is-on">Usage</);
   });
 
-  test('History › Usage: spend and subscription tokens apart, per source, Hester split, top items; no next step', () => {
+  test('History › Usage: dials for the windows, today against the 7-day average, spend apart from subscription tokens; no next step', () => {
     const s = html['history (usage)'];
     assert.equal(nextCount(s), 0);
     assert.ok(!/is-needs/.test(s), 'no ember');
-    for (const t of ['Today', 'Week', 'Month', 'By source', 'Hester', 'Top work items']) assert.ok(s.includes(t), t);
-    assert.ok(s.includes('$1.67 spent · 3.1M tok on the subscription · 240k tok local today.'), 'the total line: $1.25 + $0.42, never the subscription list price');
+    assert.ok(!/>Week<|>Month</.test(s), 'today only');
+    for (const t of ['Claude subscription', 'Today', 'vs 7-day avg', 'Hester calls', 'Top work items']) assert.ok(s.includes(t), t);
+    assert.ok(s.includes('$1.67 spent · 3.1M tok on the subscription · 240k tok local.'), 'the total line: $1.25 + $0.42, never the subscription list price');
     assert.ok(!s.includes('$50') && !s.includes('$31'), 'subscription dollars never show');
-    for (const t of ['Claude', 'Pi', 'Hester cloud', 'Hester local', 'Cloud', 'Local', 'You asked', 'On its own']) assert.ok(s.includes(`ui-row-title">${t}<`), t);
-    assert.ok(s.includes('14 calls · $0.42 spent'));
+    assert.equal((s.match(/class="cockpit-usage-dial( is-near)?"/g) ?? []).length, 2, 'a dial per window');
+    assert.equal((s.match(/cockpit-usage-seg is-lit/g) ?? []).length, 6 + 8, '58% and 82% left of ten segments');
+    assert.match(s, /resets \d{1,2}:\d{2}(am|pm)/);
+    for (const t of ['Claude', 'Pi', 'Hester cloud', 'Hester local', 'Cloud', 'Local', 'You asked', 'On its own']) assert.ok(s.includes(`cockpit-usage-metric-name">${t}<`), t);
+    assert.ok(s.includes('↑ 55%') && s.includes('avg 2.0M tok'), 'Claude: 3.1M against 2.0M');
+    assert.ok(s.includes('↑ 2.5×'), 'Pi spend: $1.25 against $0.50');
+    assert.ok(s.includes('↑ 2.0×') && s.includes('avg 7<'), 'Hester cloud calls: 14 against 7');
+    assert.ok(s.includes('↑ new today'), 'Hester local: nothing on average');
     assert.ok(s.includes('Fix the parser') && s.includes('2.4M tok<'), 'a subscription item is tokens only');
     assert.ok(s.includes('90k tok · $1.25'), 'a billed item shows dollars');
     assert.ok(s.indexOf('Pi refactor') < s.indexOf('Fix the parser'), 'dollars first');
-    assert.match(s, /Claude subscription: 5h 42%, resets \d{1,2}:\d{2}(am|pm) · 7d 18%/);
   });
 
   test('Launcher: the 5-hour window at 85% or more is one neutral line, no extra step', () => {

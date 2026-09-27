@@ -203,6 +203,19 @@ export interface UsageViewModel {
   hester: Array<{ id: string; label: string } & UsageBucket>;
   top: UsageItemRow[];
   limits: UsageLimits | null;
+  /** The per-day average of the 7 full days before today (range=today only); null from an older Hester. */
+  baseline: UsageBaseline | null;
+}
+
+export interface UsageBaseline {
+  days: number;
+  /** How many of those days saw any usage: 0 means there is nothing to compare with yet. */
+  daysWithData: number;
+  totals: UsageBucket;
+  /** By source id (claude, pi, hester_cloud, hester_local). */
+  sources: Record<string, UsageBucket>;
+  /** By Hester slice id (cloud, local, user, automatic), as UsageViewModel.hester. */
+  hester: Record<string, UsageBucket>;
 }
 
 /** input + output + cache_write (as AgentUsage.shown_tokens). */
@@ -346,7 +359,125 @@ export function usageView(raw: unknown): UsageViewModel {
 
   const lim = obj(o.limits);
   const limits = lim && typeof lim.as_of === 'string' ? (lim as unknown as UsageLimits) : null;
-  return { sources, totals: sum(sources), hester, top: top.slice(0, 10), limits };
+  return { sources, totals: sum(sources), hester, top: top.slice(0, 10), limits, baseline: baselineOf(o.baseline) };
+}
+
+function baselineOf(raw: unknown): UsageBaseline | null {
+  const b = obj(raw);
+  if (!b) return null;
+  const totalsObj = obj(b.totals);
+  const bySource = sourceMap(obj(totalsObj?.by_source) ?? {});
+  const sources: Record<string, UsageBucket> = {};
+  for (const [id, v] of bySource) sources[id] = usageBucket(v);
+  const hesterRaw = obj(b.hester) ?? {};
+  const hester: Record<string, UsageBucket> = {};
+  for (const s of HESTER_SLICES) {
+    const v = hesterRaw[s.id] ?? (s.id === 'cloud' || s.id === 'local' ? bySource.get(`hester_${s.id}`) : undefined);
+    if (v !== undefined) hester[s.id] = usageBucket(v);
+  }
+  return {
+    days: num(b.days) ?? 7,
+    daysWithData: num(b.days_with_data) ?? 0,
+    totals: sum(Object.values(sources)),
+    sources,
+    hester,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Today against the 7-day average (§6.3)
+// ---------------------------------------------------------------------------
+
+export interface Comparison {
+  /** "30%" (direction says which way), "2.4×", "about the same", "new today", "none today"; '' with nothing on either side. */
+  delta: string;
+  direction: 'up' | 'down' | 'flat' | 'none';
+  /** The average, already formatted: "41k tok", "$0.40", "12". */
+  avg: string;
+  /** today / max(today, avg): the bullet bar's fill, 0..1. */
+  todayFrac: number;
+  /** avg / max(today, avg): where the bullet bar's average tick sits, 0..1. */
+  avgFrac: number;
+}
+
+/** Within this share of the average, today reads as "about the same". */
+const SAME_BAND = 0.1;
+
+/** today against the average, with `fmt` formatting the average. */
+export function compare(today: number, avg: number, fmt: (n: number) => string): Comparison {
+  const t = Math.max(0, today);
+  const a = Math.max(0, avg);
+  const top = Math.max(t, a);
+  const fracs = { todayFrac: top > 0 ? t / top : 0, avgFrac: top > 0 ? a / top : 0 };
+  if (t === 0 && a === 0) return { delta: '', direction: 'none', avg: '', ...fracs };
+  const avgLabel = a > 0 ? fmt(a) : '0';
+  if (a === 0) return { delta: 'new today', direction: 'up', avg: avgLabel, ...fracs };
+  if (t === 0) return { delta: 'none today', direction: 'down', avg: avgLabel, ...fracs };
+  const ratio = t / a;
+  if (Math.abs(ratio - 1) <= SAME_BAND) return { delta: 'about the same', direction: 'flat', avg: avgLabel, ...fracs };
+  if (ratio >= 2) return { delta: `${ratio.toFixed(ratio < 10 ? 1 : 0)}×`, direction: 'up', avg: avgLabel, ...fracs };
+  const pct = Math.round((ratio - 1) * 100);
+  return { delta: `${Math.abs(pct)}%`, direction: pct > 0 ? 'up' : 'down', avg: avgLabel, ...fracs };
+}
+
+/** A calls count: "12", "0.4" under ten. */
+export function formatCalls(n: number): string {
+  return n < 10 && n % 1 !== 0 ? n.toFixed(1) : String(Math.round(n));
+}
+
+// ---------------------------------------------------------------------------
+// The limits gauge (§6.3): a segmented dial per subscription window
+// ---------------------------------------------------------------------------
+
+export const GAUGE_SEGMENTS = 10;
+const WINDOW_MS = { five_hour: 5 * 3600000, seven_day: 7 * 86400000 } as const;
+
+export interface LimitGauge {
+  id: 'five_hour' | 'seven_day';
+  label: string;
+  /** Rounded percent used; 0 once the window has reset since the reading. */
+  pct: number;
+  /** Percent left (100 - pct): what the dial shows, like a fuel gauge. */
+  left: number;
+  /** Segments still lit, 0..GAUGE_SEGMENTS: they go dark as the window is used; any left keeps the first lit. */
+  lit: number;
+  /** At or past LAUNCH_NOTE_PCT: the dial and its line say so. */
+  near: boolean;
+  /** "resets 4:30pm" / "reset since the last reading" / ''. */
+  resets: string;
+  /** How much of the window has gone by (0..1), for the even-pace tick; null without a reset time. */
+  elapsed: number | null;
+}
+
+/** The two windows as dials, or [] without a reading. */
+export function limitGauges(limits: UsageLimits | null | undefined, now: number): LimitGauge[] {
+  if (!limits) return [];
+  const out: LimitGauge[] = [];
+  for (const id of ['five_hour', 'seven_day'] as const) {
+    const w = limits[id];
+    if (!w || num(w.used_pct) == null) continue;
+    const live = liveWindow(w, now);
+    const pct = live ? Math.max(0, Math.min(100, Math.round(live.used_pct))) : 0;
+    const r = at(w.resets_at);
+    const elapsed = live && !Number.isNaN(r) ? Math.max(0, Math.min(1, 1 - (r - now) / WINDOW_MS[id])) : null;
+    out.push({
+      id,
+      label: id === 'five_hour' ? '5-hour window' : 'Weekly',
+      pct,
+      left: 100 - pct,
+      lit: pct < 100 ? Math.max(1, Math.round(((100 - pct) / 100) * GAUGE_SEGMENTS)) : 0,
+      near: pct >= LAUNCH_NOTE_PCT,
+      resets: !live ? 'reset since the last reading' : w.resets_at ? `resets ${resetLabel(w.resets_at, now)}` : '',
+      elapsed,
+    });
+  }
+  return out;
+}
+
+/** "as of 2h ago" past 10 minutes, else ''. */
+export function limitsAge(limits: UsageLimits | null | undefined, now: number): string {
+  const age = now - at(limits?.as_of);
+  return !Number.isNaN(age) && age > LIMITS_STALE_MS ? `as of ${agoLabel(age)}` : '';
 }
 
 /** "$4.20 spent · 3.1M tok on the subscription · 240k tok local"; parts at zero are left out. */

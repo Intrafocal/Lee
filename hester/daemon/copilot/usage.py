@@ -35,6 +35,8 @@ BASIS_PRECEDENCE = ("subscription", "billed", "estimate", "local")
 TOKEN_KEYS = ("input", "output", "cache_read", "cache_write", "thinking")
 LIMITS_LOOKBACK = timedelta(days=8)
 USAGE_TYPES = ("agent.usage", "model.call", "limits.snapshot")
+# Today is compared with the average of the full local days before it.
+BASELINE_DAYS = 7
 MAX_TOP_TASKS = 10
 
 
@@ -239,8 +241,9 @@ def compute_usage(
     rng: str,
     now: datetime,
     tasks: Optional[List[Dict[str, Any]]] = None,
+    bounds: Optional[tuple] = None,
 ) -> Dict[str, Any]:
-    start, end = range_bounds(rng, now)
+    start, end = bounds or range_bounds(rng, now)
     by_source = {s: _bucket() for s in SOURCES}
     by_day: Dict[str, Dict[str, Dict[str, Any]]] = defaultdict(lambda: {s: _bucket() for s in SOURCES})
     hester = {k: {"calls": 0, "cloud_calls": 0, "local_calls": 0, **_bucket()} for k in ("user", "automatic")}
@@ -340,6 +343,38 @@ def compute_usage(
     }
 
 
+_AVG_KEYS = ("shown_tokens", "spend_usd", "subscription_tokens", "local_tokens", "local_ms", "count",
+             "unpriced_tokens", "calls", "cloud_calls", "local_calls")
+
+
+def _avg(bucket: Dict[str, Any], days: int) -> Dict[str, Any]:
+    out = {k: round(bucket[k] / days, 6 if k == "spend_usd" else 1) for k in _AVG_KEYS if k in bucket}
+    return out
+
+
+def compute_baseline(events: List[Dict[str, Any]], now: datetime, days: int = BASELINE_DAYS) -> Dict[str, Any]:
+    """
+    The per-day average of the ``days`` full local days before today (§6.3's
+    comparison): totals, by source and Hester by trigger, each divided by
+    ``days``. ``days_with_data`` says how many of them saw any usage, so a new
+    install can say it has no baseline yet rather than compare with zeros.
+    """
+    midnight = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (midnight - timedelta(days=days)).astimezone(timezone.utc)
+    end = midnight.astimezone(timezone.utc) - timedelta(seconds=1)
+    data = compute_usage(events, "week", now, bounds=(start, end))
+    active = sum(1 for d in data["by_day"] if d["count"] or d["shown_tokens"])
+    return {
+        "days": days,
+        "days_with_data": active,
+        "from": iso(start),
+        "to": iso(midnight.astimezone(timezone.utc)),
+        "totals": {**_avg(data["totals"], days),
+                   "by_source": {s: _avg(b, days) for s, b in data["totals"]["by_source"].items()}},
+        "hester": {k: _avg(data["hester"][k], days) for k in ("user", "automatic")},
+    }
+
+
 def run(
     rng: str = "today",
     workspace: Optional[str] = None,
@@ -351,7 +386,7 @@ def run(
         raise ValueError(f"range must be one of {', '.join(RANGES)}")
     now = now or datetime.now(timezone.utc)
     start, _ = range_bounds(rng, now)
-    since = min(start, now - LIMITS_LOOKBACK)
+    since = min(start, now - LIMITS_LOOKBACK, range_bounds("today", now)[0] - timedelta(days=BASELINE_DAYS))
     events = read_events(since=since, until=now + timedelta(seconds=1), directory=events_dir, types=USAGE_TYPES)
     limits = latest_limits(events, now)  # account-wide: never filtered by workspace
     events = _filter_workspace(events, workspace)
@@ -363,5 +398,7 @@ def run(
 
     data = compute_usage(events, rng, now, tasks=load_tasks(task_ws))
     data["limits"] = limits
+    if rng == "today":
+        data["baseline"] = compute_baseline(events, now)
     data["workspace"] = os.path.normpath(workspace) if workspace else None
     return data

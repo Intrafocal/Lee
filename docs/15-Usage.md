@@ -161,10 +161,11 @@ Numbers are tokens for subscription usage and dollars only for billed or estimat
 
 ### 6.3 Usage view (History)
 
-*Decided 2026-09-27:* a **Usage** tab inside History ("what happened" and "what it cost" together), not a rail entry. Pull-only, with today / week / month:
+*Decided 2026-09-27:* a **Usage** tab inside History ("what happened" and "what it cost" together), not a rail entry. Pull-only. *Revised 2026-09-27:* **today only** (the week / month ranges are gone from the view; the endpoint still takes them), and every metric is compared with the **average of the 7 full days before today** (`baseline` in the `range=today` response: per-day averages of totals, by source and Hester by trigger, plus `days_with_data` so a new install says "no 7-day average yet" instead of comparing with zeros).
 
-- Spend vs subscription value, per source;
-- Hester cloud vs local, and user-triggered vs automatic;
+- The Claude subscription windows (5-hour, weekly) as segmented dials, like a Mini's fuel gauge: ten segments, lit for what's left so the dial empties as you use it (ember from 85% used, with "Near the limit" in words), a tick where it would be at even pace through the window, and the reset time;
+- Spend vs subscription tokens, per source, each as today's value, a bullet bar (today's fill, a tick at the average) and the change ("↑ 30%", "↑ 2.4×", "about the same", "new today");
+- Hester calls: cloud vs local, and user-triggered vs automatic, compared the same way;
 - Top work items by cost.
 
 

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
+import re
 import pytest
 
 from hester.daemon.cockpit.tasks import CockpitTaskStore
@@ -106,7 +107,9 @@ def test_totals_split_by_basis_and_source(events_dir):
     assert src["hester_cloud"]["count"] == 3 and src["hester_cloud"]["spend_usd"] == pytest.approx(0.02)
     assert src["hester_local"]["local_tokens"] == 33
     # subscription dollars never appear anywhere in the response
-    assert "6.0" not in repr(data) and "4.0" not in repr(data)
+    # (timestamps left out: "…:56.000Z" would match)
+    r = re.sub(r"\d{4}-\d\d-\d\dT[\d:.]+Z", "", repr(data))
+    assert "6.0" not in r and "4.0" not in r
     h = data["hester"]
     assert h["user"]["calls"] == 1 and h["user"]["spend_usd"] == pytest.approx(0.02)
     assert h["automatic"]["calls"] == 3 and h["automatic"]["cloud_calls"] == 2 and h["automatic"]["local_calls"] == 1
@@ -120,6 +123,26 @@ def test_totals_split_by_basis_and_source(events_dir):
     assert next(d for d in week["by_day"] if d["day"] == old_day)["spend_usd"] == pytest.approx(5.0)
     with pytest.raises(ValueError):
         usage.run("year", events_dir=events_dir, now=NOW)
+
+
+def test_today_carries_a_seven_day_baseline(events_dir):
+    midnight = NOW.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    write_events(events_dir, [
+        claude_turn(NOW, "s-today", u("claude-opus-5", "subscription", input=10)),
+        # two of the previous seven days
+        claude_turn(midnight - timedelta(hours=2), "s-a", u("claude-opus-5", "subscription", output=700)),
+        claude_turn(midnight - timedelta(days=6, hours=-1), "s-b", u("claude-opus-5", "billed", 0.7, output=700)),
+        hester_call(midnight - timedelta(days=3), "user", "cloud"),
+        # outside the baseline
+        claude_turn(midnight - timedelta(days=8), "s-old", u("claude-opus-5", "subscription", output=9999)),
+    ])
+    b = usage.run("today", events_dir=events_dir, now=NOW)["baseline"]
+    assert b["days"] == 7 and b["days_with_data"] == 3
+    assert b["totals"]["shown_tokens"] == 200.0
+    assert b["totals"]["by_source"]["claude"]["subscription_tokens"] == 100.0
+    assert b["totals"]["spend_usd"] == pytest.approx(0.1)
+    assert b["hester"]["user"]["calls"] == pytest.approx(1 / 7, abs=0.05)
+    assert "baseline" not in usage.run("week", events_dir=events_dir, now=NOW)
 
 
 def test_limits_latest_with_age(events_dir):

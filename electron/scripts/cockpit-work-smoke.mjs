@@ -879,4 +879,33 @@ test('usage: the Usage tab reads Hester\'s GET /cockpit/usage shape (totals.by_s
   assert.equal(u.itemCostLabel(view.top[1]), '2.4M tok', 'subscription work shows tokens only');
 });
 
+test('usage: today against the average', () => {
+  const t = (n) => u.compare(n, 100, String);
+  assert.deepEqual([t(130).delta, t(130).direction], ['30%', 'up']);
+  assert.deepEqual([t(70).delta, t(70).direction], ['30%', 'down']);
+  assert.equal(t(105).delta, 'about the same');
+  assert.equal(t(240).delta, '2.4×');
+  assert.equal(t(0).delta, 'none today');
+  assert.equal(u.compare(5, 0, String).delta, 'new today');
+  assert.equal(u.compare(0, 0, String).direction, 'none');
+  assert.deepEqual([t(50).todayFrac, t(50).avgFrac], [0.5, 1]);
+});
+
+test('usage: a dial per window that empties as it is used; even-pace tick, reset since the reading', () => {
+  const now = Date.parse('2026-09-27T12:00:00Z');
+  const g = u.limitGauges({
+    five_hour: { used_pct: 91, resets_at: '2026-09-27T13:00:00Z' },
+    seven_day: { used_pct: 3, resets_at: null },
+    as_of: '2026-09-27T11:58:00Z',
+  }, now);
+  assert.deepEqual(g.map((x) => [x.id, x.pct, x.left, x.lit, x.near]), [['five_hour', 91, 9, 1, true], ['seven_day', 3, 97, 10, false]]);
+  assert.equal(g[0].elapsed, 0.8, '4 of 5 hours gone');
+  assert.equal(g[1].elapsed, null);
+  const reset = u.limitGauges({ five_hour: { used_pct: 60, resets_at: '2026-09-27T11:00:00Z' }, as_of: '2026-09-27T10:00:00Z' }, now);
+  assert.deepEqual([reset[0].pct, reset[0].left, reset[0].lit, reset[0].resets], [0, 100, 10, 'reset since the last reading']);
+  assert.equal(u.limitGauges({ five_hour: { used_pct: 100, resets_at: null }, as_of: '2026-09-27T11:58:00Z' }, now)[0].lit, 0, 'empty at the limit');
+  assert.equal(u.limitsAge({ as_of: '2026-09-27T10:00:00Z' }, now), 'as of 2h ago');
+  assert.deepEqual(u.limitGauges(null, now), []);
+});
+
 console.log(`cockpit-work-smoke: ${passed} tests passed`);
