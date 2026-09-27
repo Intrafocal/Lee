@@ -6,6 +6,15 @@
  *
  * Cockpit and Deep are overlays that never show an agent terminal; Manual is
  * the full tab layout with nothing hidden (D1 §1.4: the wall is gone).
+ *
+ * Desk D2 (contract §7.2): Deep is the Desk. DeepNav says which card this
+ * window has and at which zoom (overview, Area, card); `exploration_id`
+ * stays as an alias of `card_id` until the merge step. openDesk lands a
+ * target; entering Deep any other way lands your last card at its stopped-at
+ * line, unless this window was already at the Desk (a hop back is exact).
+ * zoomIntoCard / zoomOutOfCard are the one place a zoom starts or retargets
+ * the Deep session, logs desk.zoom, records the touched card and PUTs
+ * /desk/last.
  */
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
@@ -29,7 +38,9 @@ import {
   type SwitcherState,
 } from '../../lib/cockpitModel';
 import { untitledTitle } from '../../lib/deepModel';
-import { isDraftId, newDraft } from '../../lib/hesterDeep';
+import { isDraftId, newDraft, setPendingFirstLine } from '../../lib/hesterDeep';
+import { createDeskPage, getDesk, getDeskLast, putDeskLast } from '../../lib/hesterDesk';
+import { asCardId, isPageId, landingFor, migrateDeepMemory, mirrorKeyMoves, parseTouched, renameTouched, touchCard, NO_TOUCHED, type DeskZoom, type Touched } from '../../lib/deskModel';
 
 export type { SectionId };
 
@@ -60,19 +71,36 @@ export interface CockpitModeState {
   tabCount: number;
   /** A Deep focus session is active in this window's workspace (fed by useCockpitMode). */
   deepActive: boolean;
-  /** The exploration that session is on (null: Deep with nothing open yet). */
+  /** The card that session is on (null: at the Desk with no card yet). Named for D1; holds a card id. */
   deepSessionExploration: string | null;
+  /** The running Deep session's focus session id (touched cards are kept per session). */
+  deepSessionId: string | null;
+  /** A landing for the Desk surface to carry out: zoom into the card and put the cursor at the end of `line`. */
+  deskLand: DeskLand | null;
   /** This window's Deep memory (Deep D1 §14): the open exploration and view. */
   deep: DeepNav;
   /** The ⌘0 switcher (D1 §1.3). */
   switcher: SwitcherState;
 }
 
-/** What Deep shows in this window (Deep D1 §4.4). */
+/** What Deep shows in this window (Deep D1 §4.4; Desk D2 §7.2). */
 export interface DeepNav {
+  /** Alias of card_id until the merge step (App.tsx and older callers read it). */
   exploration_id: string | null;
+  /** The card this window has (zoomed into, or last zoomed into when zoomed out); a `draft-` id for an in-memory Page. */
+  card_id: string | null;
   title: string;
   view: DeepView;
+  zoom: DeskZoom;
+  /** The Area in view (or the one the card is in). */
+  area_id: string | null;
+}
+
+/** A landing (openDesk): the card, and the 1-based line to put the cursor at the end of. */
+export interface DeskLand {
+  card_id: string;
+  line: number | null;
+  nonce: number;
 }
 
 /** What the tab strip shows for an agent pty: its provider (icon) and session name (label). */
@@ -83,7 +111,7 @@ export interface TabDisplayInfo {
 
 type Listener = () => void;
 
-const NO_DEEP: DeepNav = { exploration_id: null, title: '', view: 'page' };
+const NO_DEEP: DeepNav = { exploration_id: null, card_id: null, title: '', view: 'page', zoom: 'overview', area_id: null };
 
 let state: CockpitModeState = {
   enabled: false,
@@ -100,6 +128,8 @@ let state: CockpitModeState = {
   tabCount: 0,
   deepActive: false,
   deepSessionExploration: null,
+  deepSessionId: null,
+  deskLand: null,
   deep: NO_DEEP,
   switcher: SWITCHER_IDLE,
 };
@@ -164,14 +194,57 @@ function deepKey(workspace: string): string {
   return `lee:deep:${workspace}`;
 }
 
+/**
+ * The one-time exp-<hex> → pg-<hex> pass over this workspace's local Deep
+ * memory (§7.2): the Deep record's ids and cursors, and the Page mirrors
+ * (copied; the old keys are left as they were).
+ */
+function migrateLocalDeep(workspace: string): void {
+  try {
+    const ls = window.localStorage;
+    const flag = `lee:desk:migrated:${workspace}`;
+    if (ls.getItem(flag)) return;
+    const raw = ls.getItem(deepKey(workspace));
+    if (raw) {
+      const m = migrateDeepMemory(JSON.parse(raw));
+      if (m.changed) ls.setItem(deepKey(workspace), JSON.stringify(m.next));
+    }
+    const keys: string[] = [];
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k) keys.push(k);
+    }
+    for (const mv of mirrorKeyMoves(keys, workspace)) {
+      const v = ls.getItem(mv.from);
+      if (v != null) ls.setItem(mv.to, v);
+    }
+    ls.setItem(flag, new Date().toISOString());
+  } catch {
+    /* storage unavailable: nothing to migrate */
+  }
+}
+
+const ZOOMS: readonly DeskZoom[] = ['overview', 'area', 'card'];
+
 /** This window's Deep memory for a workspace, restored on app restart (D1 §4.4). */
 function readDeep(workspace: string): DeepNav {
+  migrateLocalDeep(workspace);
   try {
     const raw = window.localStorage.getItem(deepKey(workspace));
     if (!raw) return NO_DEEP;
     const v = JSON.parse(raw) as Partial<DeepNav>;
-    if (typeof v.exploration_id !== 'string' || !v.exploration_id) return NO_DEEP;
-    return { exploration_id: v.exploration_id, title: typeof v.title === 'string' ? v.title : '', view: 'page' };
+    const id = typeof v.card_id === 'string' && v.card_id ? v.card_id : typeof v.exploration_id === 'string' && v.exploration_id ? asCardId(v.exploration_id) : null;
+    // A draft id doesn't outlive the window: back to the overview.
+    const card = id && !isDraftId(id) ? id : null;
+    const zoom = ZOOMS.includes(v.zoom as DeskZoom) ? (v.zoom as DeskZoom) : card ? 'card' : 'overview';
+    return {
+      exploration_id: card,
+      card_id: card,
+      title: card && typeof v.title === 'string' ? v.title : '',
+      view: 'page',
+      zoom: zoom === 'card' && !card ? 'overview' : zoom,
+      area_id: typeof v.area_id === 'string' ? v.area_id : null,
+    };
   } catch {
     return NO_DEEP;
   }
@@ -234,25 +307,183 @@ function flushOpener(): void {
   for (const fn of focusOpenerListeners) fn();
 }
 
-/**
- * Deep was entered on the remembered exploration (⇧⌘0, the switcher, ⌘1)
- * with no Deep session running (after "Stay open" or a restart): start one,
- * so the Page never shows without attention policy 'none' behind it (D1 §0,
- * §2). A session started elsewhere arrives through the snapshot as usual.
- */
-function startDeepIfNone(): void {
-  const d = state.deep;
-  if (state.deepActive || !d.exploration_id) return;
-  let api: CopilotAPI | undefined;
+// ---------------------------------------------------------------------------
+// The Desk's nav, landing and zooms (Desk D2 §7.2)
+// ---------------------------------------------------------------------------
+
+/** This window has been at the Desk since it last landed (a hop back is exact, not a new landing). */
+let landedThisRun = false;
+let landSeq = 0;
+let touched: Touched = NO_TOUCHED;
+let lastPutTimer: ReturnType<typeof setTimeout> | null = null;
+
+function copilotApi(): CopilotAPI | null {
   try {
-    api = window.lee?.copilot;
+    return window.lee?.copilot ?? null;
   } catch {
-    /* no Electron */
+    return null;
   }
-  if (!api) return;
-  void api
-    .deepStart({ workspace: workspaceKey, exploration_id: d.exploration_id, title: d.title, surface: 'lee' })
-    .catch(() => {});
+}
+
+function setNav(patch: Partial<Omit<DeepNav, 'exploration_id' | 'view'>>): void {
+  const d = state.deep;
+  const next: DeepNav = { ...d, ...patch, view: 'page' };
+  next.exploration_id = next.card_id;
+  if (next.card_id === d.card_id && next.title === d.title && next.zoom === d.zoom && next.area_id === d.area_id) return;
+  emit({ deep: next });
+  // A draft id isn't remembered (it doesn't outlive the window).
+  if (!isDraftId(next.card_id)) writeDeep(workspaceKey, next);
+}
+
+function touchedKey(workspace: string): string {
+  return `lee:desk:touched:${workspace}`;
+}
+
+function readTouched(workspace: string): Touched {
+  try {
+    const raw = window.localStorage.getItem(touchedKey(workspace));
+    return raw ? parseTouched(JSON.parse(raw)) : NO_TOUCHED;
+  } catch {
+    return NO_TOUCHED;
+  }
+}
+
+function saveTouched(t: Touched): void {
+  if (t === touched) return;
+  touched = t;
+  try {
+    window.localStorage.setItem(touchedKey(workspaceKey), JSON.stringify(t));
+  } catch {
+    /* in memory only */
+  }
+}
+
+/** Cards zoomed into during the running (or `sessionId`'s) Deep session, first touched first. */
+export function touchedCards(sessionId: string | null = state.deepSessionId): string[] {
+  return touched.session_id === sessionId ? touched.cards : [];
+}
+
+function logZoom(cardId: string | null, via: 'land' | 'key' | 'click' | 'link'): void {
+  const card = cardId && isPageId(cardId) ? cardId : null;
+  try {
+    window.lee?.cockpit?.logEvent({ type: 'desk.zoom', data: { card_id: card, card_kind: card ? 'page' : null, via } });
+  } catch {
+    /* cockpit IPC not available */
+  }
+}
+
+/** PUT /desk/last, debounced 2 s (§7.2). */
+function rememberLast(cardId: string): void {
+  if (!isPageId(cardId)) return;
+  if (lastPutTimer) clearTimeout(lastPutTimer);
+  const ws = workspaceKey;
+  lastPutTimer = setTimeout(() => {
+    lastPutTimer = null;
+    void putDeskLast(ws, cardId);
+  }, 2000);
+}
+
+/**
+ * Start or retarget the Deep session on a card (on landing, and on every
+ * zoom into a different card; never on zooming out). An in-memory Page
+ * starts it with no card yet. Resolves to the focus session id when known.
+ */
+async function startOnCard(cardId: string | null, title: string): Promise<string | null> {
+  const card = cardId && isPageId(cardId) ? cardId : null;
+  if (card && state.deepActive && state.deepSessionExploration === card) return state.deepSessionId;
+  const api = copilotApi();
+  if (!api) return state.deepSessionId;
+  try {
+    const f = await api.deepStart({ workspace: workspaceKey, exploration_id: null, card_id: card, card_kind: card ? 'page' : null, title, surface: 'lee' });
+    if (f?.session_id) {
+      emit({ deepSessionId: f.session_id, deepActive: !!f.active, deepSessionExploration: card });
+      return f.session_id;
+    }
+  } catch {
+    /* the Page still opens; main logs the failure */
+  }
+  return state.deepSessionId;
+}
+
+/**
+ * Zoom into a card (the one place a zoom-in happens): nav, desk.zoom, the
+ * session, the touched list and /desk/last. `line`: land with the cursor at
+ * the end of that line.
+ */
+export async function zoomIntoCard(
+  card: { card_id: string; title: string; area_id?: string | null },
+  via: 'land' | 'key' | 'click' | 'link',
+  line: number | null = null,
+): Promise<void> {
+  const prev = state.deep;
+  setNav({ card_id: card.card_id, title: card.title || (prev.card_id === card.card_id ? prev.title : ''), zoom: 'card', area_id: card.area_id ?? prev.area_id });
+  if (line != null || via === 'land') emit({ deskLand: { card_id: card.card_id, line, nonce: ++landSeq } });
+  logZoom(card.card_id, via);
+  const sid = await startOnCard(card.card_id, card.title);
+  if (isPageId(card.card_id)) {
+    saveTouched(touchCard(touched, sid, card.card_id));
+    rememberLast(card.card_id);
+  }
+}
+
+/** Esc (or the header's way out): to the overview (or the Area). Doesn't touch the session. */
+export function zoomOut(to: 'overview' | 'area' = 'overview', via: 'key' | 'click' = 'key'): void {
+  if (state.deep.zoom === to) return;
+  setNav({ zoom: to });
+  logZoom(null, via);
+}
+
+/** Zoom to an Area (it fills the view). Doesn't touch the session. */
+export function zoomToArea(areaId: string, via: 'key' | 'click' = 'click'): void {
+  const d = state.deep;
+  if (d.zoom === 'area' && d.area_id === areaId) return;
+  setNav({ zoom: 'area', area_id: areaId });
+  logZoom(null, via);
+}
+
+/** An in-memory Page became a card: this window, the session and the touched list follow it. */
+export function promoteCard(draftId: string, cardId: string, title: string, areaId: string | null): void {
+  if (state.deep.card_id === draftId || state.deep.card_id === cardId) setNav({ card_id: cardId, title, area_id: areaId ?? state.deep.area_id });
+  void startOnCard(cardId, title).then((sid) => {
+    saveTouched(touchCard(renameTouched(touched, draftId, cardId), sid, cardId));
+  });
+  rememberLast(cardId);
+}
+
+/**
+ * Entering Deep (⌘0, ⇧⌘0, Go deep, the switcher, a session started
+ * elsewhere): the first time since this window last landed, your last card
+ * at its stopped-at line; after that, exactly what the Desk had, with a
+ * session started on it if none is running.
+ */
+function enteredDesk(): void {
+  if (!landedThisRun) {
+    landedThisRun = true;
+    void landLast(workspaceKey);
+    return;
+  }
+  if (!state.deepActive) {
+    const d = state.deep;
+    void startOnCard(d.zoom === 'card' ? d.card_id : null, d.title);
+  }
+}
+
+async function landLast(workspace: string): Promise<void> {
+  const r = await getDeskLast(workspace);
+  if (workspace !== workspaceKey) return;
+  const land = r.ok ? landingFor(r.data) : null;
+  if (land && land.kind === 'card') {
+    await zoomIntoCard({ card_id: land.card_id, title: land.title, area_id: land.area_id }, 'land', land.line);
+    return;
+  }
+  if (!r.ok && !r.status && state.deep.card_id && state.deep.zoom === 'card') {
+    // Hester offline: what this window had (the Page writes locally).
+    void startOnCard(state.deep.card_id, state.deep.title);
+    return;
+  }
+  setNav({ zoom: 'overview' });
+  logZoom(null, 'land');
+  void startOnCard(null, '');
 }
 
 const launcherListeners = new Set<() => void>();
@@ -325,6 +556,7 @@ export const cockpitModeStore = {
     if (mode !== 'manual') blurActive();
     emit({ mode, reason, since: Date.now(), lastMode: from });
     logMode(from, mode, reason);
+    if (mode === 'deep') enteredDesk();
   },
   /** ⇧⌘0: Cockpit ↔ Deep (from Manual, to Deep). */
   toggleDeep(): void {
@@ -347,7 +579,9 @@ export const cockpitModeStore = {
   useWorkspace(workspace: string): void {
     if (workspace === workspaceKey) return;
     workspaceKey = workspace;
-    emit({ deep: readDeep(workspace) });
+    landedThisRun = false;
+    touched = readTouched(workspace);
+    emit({ deep: readDeep(workspace), deskLand: null });
   },
   /** First call lands the window (Cockpit, or Manual when the Cockpit is off); later calls react only to enabled flipping. */
   configure(enabled: boolean): void {
@@ -388,13 +622,11 @@ export const cockpitModeStore = {
     if (d.reason) cockpitModeStore.set(d.mode, d.reason);
     if (d.opener) cockpitModeStore.focusOpener();
     if (d.blank) void openBlankDeep();
-    if (from !== 'deep' && state.mode === 'deep') startDeepIfNone();
+    void from;
   },
   decide(trigger: ModeTrigger): ModeDecision | null {
-    return nextMode(
-      { enabled: state.enabled, mode: state.mode, deepActive: state.deepActive, hasExploration: !!state.deep.exploration_id },
-      trigger,
-    );
+    // The Desk always has somewhere to land (your last card, else the overview): never the opener or a blank Page.
+    return nextMode({ enabled: state.enabled, mode: state.mode, deepActive: state.deepActive, hasExploration: true }, trigger);
   },
   /**
    * Feed the ⌘0 switcher (D1 §1.3). Keydown/keyup wiring lives in App and
@@ -421,16 +653,28 @@ export const cockpitModeStore = {
       if (state.mode !== from) logSwitcher(from, state.mode, step.commit.via);
     }
   },
-  /** Remember the exploration and show it in Deep (reason 'hop' when a Deep session is already active). */
+  /**
+   * Remember the card and show it zoomed in, in Deep (reason 'hop' when a
+   * Deep session is already active). Older callers pass exploration ids; they
+   * map to their card (pg-<hex>).
+   */
   openDeep(exploration_id: string, title: string): void {
+    const id = asCardId(exploration_id);
     const d = state.deep;
-    if (d.exploration_id !== exploration_id || d.title !== title) {
-      const next: DeepNav = { exploration_id, title, view: d.exploration_id === exploration_id ? d.view : 'page' };
-      emit({ deep: next });
-      writeDeep(workspaceKey, next);
+    if (d.card_id !== id || d.title !== title || d.zoom !== 'card') {
+      setNav({ card_id: id, title, zoom: 'card' });
     }
     if (!state.enabled) return;
+    landedThisRun = true;
     cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
+  },
+  /** Change what the Desk shows in this window (no session calls; see zoomIntoCard). */
+  setDeskNav(patch: Partial<Omit<DeepNav, 'exploration_id' | 'view'>>): void {
+    setNav(patch);
+  },
+  /** The Desk surface carried out a landing. */
+  clearDeskLand(nonce: number): void {
+    if (state.deskLand && state.deskLand.nonce === nonce) emit({ deskLand: null });
   },
   /** ⌘1 in Deep (D1: the Page is the only view): show Deep on that view. */
   showDeepView(v: DeepView): void {
@@ -447,7 +691,10 @@ export const cockpitModeStore = {
    * Deep shows first, since the ritual's sheet lives there.
    */
   requestEndSession(): void {
-    if (state.mode !== 'deep' && state.deep.exploration_id) cockpitModeStore.set('deep', 'hop');
+    if (state.mode !== 'deep') {
+      landedThisRun = true; // the ritual shows over what the Desk had
+      cockpitModeStore.set('deep', 'hop');
+    }
     for (const fn of endSessionListeners) fn();
   },
   onEndSessionRequest(cb: () => void): () => void {
@@ -458,7 +705,7 @@ export const cockpitModeStore = {
   },
   /** Anyone listening for End session (the Deep surface is mounted). */
   canRequestEndSession(): boolean {
-    return endSessionListeners.size > 0 && !!state.deep.exploration_id;
+    return endSessionListeners.size > 0 && state.enabled;
   },
   /** Show the Cockpit on Home and focus the opener's field (Go deep with nothing open). */
   focusOpener(): void {
@@ -479,44 +726,33 @@ export const cockpitModeStore = {
 };
 
 // ---------------------------------------------------------------------------
-// Go deep, Dive in, End session (Deep D1 §2.1, §8.3, §14)
+// Go deep, openDesk, End session (Deep D1 §2.1, §8.3, §14; Desk D2 §7.2)
 // ---------------------------------------------------------------------------
 
 /**
- * Open an exploration in Deep: start (or move) the Deep session on it, then
- * show it in this window. The Page opens even when the session call fails.
+ * Open an exploration (or a card) in Deep, zoomed in. Older callers pass
+ * exploration ids; they map to their card. The Page opens even when the
+ * session call fails.
  */
 export async function openExplorationInDeep(
-  api: CopilotAPI | null | undefined,
+  _api: CopilotAPI | null | undefined,
   workspace: string,
   exploration_id: string,
   title: string,
 ): Promise<void> {
-  const s = state;
-  const onIt = s.deepActive && s.deepSessionExploration === exploration_id;
-  if (api && !onIt) {
-    try {
-      // An in-memory Page (Deep next R8) has no exploration yet: start the session without one.
-      await api.deepStart({ workspace, exploration_id: isDraftId(exploration_id) ? null : exploration_id, title, surface: 'lee' });
-    } catch {
-      /* the Page still opens; M logs the failure */
-    }
-  }
-  cockpitModeStore.openDeep(exploration_id, title);
+  if (workspace && workspace !== workspaceKey) cockpitModeStore.useWorkspace(workspace);
+  landedThisRun = true;
+  await zoomIntoCard({ card_id: asCardId(exploration_id), title }, 'link');
+  if (!state.enabled) return;
+  if (state.mode !== 'deep') cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
 }
 
-/**
- * Go deep (retired manual Focus): the exploration this window has open, else
- * the opener on Home.
- */
-export function goDeep(api: CopilotAPI | null | undefined, workspace: string): void {
+/** Go deep: the Desk, landing as entering Deep always does (your last card, or where this window was). */
+export function goDeep(_api: CopilotAPI | null | undefined, workspace: string): void {
   if (!state.enabled) return;
-  const d = state.deep;
-  if (!d.exploration_id) {
-    void openBlankDeep(api, workspace);
-    return;
-  }
-  void openExplorationInDeep(api, workspace, d.exploration_id, d.title);
+  if (workspace && workspace !== workspaceKey) cockpitModeStore.useWorkspace(workspace);
+  if (state.mode === 'deep') return;
+  cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
 }
 
 /** Where openDesk lands (Desk D2 §7.2). */
@@ -527,40 +763,61 @@ export type DeskTarget =
   | { kind: 'overview' };
 
 /** Switch to Deep (the Desk) and land on `target`; starts or retargets the Deep session. */
-export async function openDesk(api: CopilotAPI | null | undefined, workspace: string, target: DeskTarget): Promise<void> {
-  // Z stub: D replaces the body. Keeps today's behaviour so the app builds and runs.
-  void target;
-  goDeep(api, workspace);
-}
-
-let blankPending = false;
-
-/**
- * Deep with nothing open in this window: the Deep session's exploration if
- * one is running here, else a blank in-memory Page (Deep next R8): nothing
- * is created in Hester until its first save with content.
- */
-export async function openBlankDeep(api?: CopilotAPI | null, workspace: string = workspaceKey): Promise<void> {
-  if (!state.enabled || blankPending || !workspace) return;
-  if (api === undefined) {
-    try {
-      api = window.lee?.copilot ?? null;
-    } catch {
-      api = null;
+export async function openDesk(_api: CopilotAPI | null | undefined, workspace: string, target: DeskTarget): Promise<void> {
+  if (!state.enabled) return;
+  if (workspace && workspace !== workspaceKey) cockpitModeStore.useWorkspace(workspace);
+  landedThisRun = true;
+  const show = () => {
+    if (state.mode !== 'deep') cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
+  };
+  switch (target.kind) {
+    case 'last':
+      show();
+      await landLast(workspaceKey);
+      return;
+    case 'overview':
+      setNav({ zoom: 'overview' });
+      show();
+      logZoom(null, 'link');
+      if (!state.deepActive) void startOnCard(null, '');
+      return;
+    case 'card': {
+      const id = asCardId(target.card_id);
+      show();
+      await zoomIntoCard({ card_id: id, title: '' }, 'link', target.line ?? null);
+      return;
+    }
+    case 'goals': {
+      show();
+      const line = (target.first_line ?? '').trim();
+      const desk = await getDesk(workspaceKey);
+      let goalsId = desk.ok ? desk.data.goals_card_id : null;
+      if (!goalsId && line) {
+        // Typing at "What is this project for?" creates it (Hester returns an existing one).
+        const made = await createDeskPage(workspaceKey, { purpose: 'goals', text: `${line}\n\n` });
+        if (made.ok) goalsId = made.data.card.id;
+      } else if (goalsId && line) setPendingFirstLine(goalsId, line);
+      if (goalsId) {
+        await zoomIntoCard({ card_id: goalsId, title: 'Goals' }, 'link');
+        return;
+      }
+      // No Goals card and nothing typed: an in-memory one, created on its first save with content.
+      const id = newDraft({ workspace: workspaceKey, title: 'Goals', page: '', sendTitle: true, origin: { kind: 'cockpit' }, purpose: 'goals', desk: { area_id: null } });
+      await zoomIntoCard({ card_id: id, title: 'Goals' }, 'link');
+      return;
     }
   }
-  if (state.deepActive && state.deepSessionExploration) {
-    await openExplorationInDeep(api, workspace, state.deepSessionExploration, state.deep.title);
-    return;
-  }
-  blankPending = true;
-  try {
-    const title = untitledTitle(new Date());
-    const id = newDraft({ workspace, title, page: '', sendTitle: true, origin: { kind: 'opener' } });
-    await openExplorationInDeep(api, workspace, id, title);
-  } finally {
-    blankPending = false;
-  }
+}
+
+/**
+ * A blank Page at the Desk (older callers): an in-memory Page card in the
+ * Area in view, created on its first save with content (Deep next R8).
+ */
+export async function openBlankDeep(api?: CopilotAPI | null, workspace: string = workspaceKey): Promise<void> {
+  if (!state.enabled || !workspace) return;
+  const title = untitledTitle(new Date());
+  const id = newDraft({ workspace, title, page: '', sendTitle: true, origin: { kind: 'opener' }, desk: { area_id: state.deep.area_id } });
+  await openExplorationInDeep(api, workspace, id, title);
 }
 
 /**
@@ -624,26 +881,37 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
   // A Deep session in this workspace: Deep when it starts, Cockpit when it ends.
   const session = snapshot ? deepSessionOf(snapshot, workspace) : undefined;
   const deepActive = session === undefined ? null : !!session;
-  const sessionId = session?.exploration_id ?? null;
+  const focus = snapshot?.focus ?? null;
+  const focusItem = focus?.item && focus.item.kind === 'card' ? focus.item : null;
+  // The card the session is on: Lee main's card_id, else the item's, else the legacy exploration id mapped.
+  const rawCard = session ? focus?.deep?.card_id ?? focusItem?.card_id ?? (session.exploration_id ? asCardId(session.exploration_id) : null) : null;
+  const sessionCard = rawCard && isPageId(rawCard) ? rawCard : null;
   const sessionTitle = session?.title ?? '';
+  const focusSessionId = session ? focus?.session_id ?? null : null;
   const prevDeep = useRef<boolean | null>(null);
   useEffect(() => {
     if (deepActive == null) return;
     const st = cockpitModeStore.get();
-    if (st.deepActive !== deepActive || st.deepSessionExploration !== sessionId) {
-      emit({ deepActive, deepSessionExploration: sessionId });
+    if (st.deepActive !== deepActive || st.deepSessionExploration !== sessionCard || st.deepSessionId !== focusSessionId) {
+      emit({ deepActive, deepSessionExploration: sessionCard, deepSessionId: focusSessionId });
     }
     const prev = prevDeep.current;
     prevDeep.current = deepActive;
     if (prev == null || prev === deepActive) return;
-    // Started elsewhere (a device, another window) on an exploration: show that one.
-    if (deepActive && sessionId && st.deep.exploration_id !== sessionId) {
-      const next: DeepNav = { exploration_id: sessionId, title: sessionTitle, view: 'page' };
-      emit({ deep: next });
-      writeDeep(workspaceKey, next);
+    if (deepActive) {
+      // Started elsewhere (a device, another window) on a card: show that one.
+      if (sessionCard && st.mode !== 'deep' && st.deep.card_id !== sessionCard) {
+        setNav({ card_id: sessionCard, title: sessionTitle, zoom: 'card' });
+        landedThisRun = true;
+      }
+    } else {
+      // Ended while the Desk is showing (a device's End and rate, the idle end):
+      // stay at the Desk, no sheet; the next zoom starts a new session (§7.2).
+      if (st.mode === 'deep') return;
+      landedThisRun = false;
     }
     cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'deep_session', active: deepActive }));
-  }, [deepActive, sessionId, sessionTitle]);
+  }, [deepActive, sessionCard, sessionTitle, focusSessionId]);
 
   const awayActive = snapshot ? snapshot.away.active : null;
   const prevAway = useRef<boolean | null>(null);

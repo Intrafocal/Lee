@@ -778,6 +778,9 @@ async function bundle(rel, name) {
 
 {
   const { cockpitModeStore: store } = await bundle('../src/renderer/components/cockpit/cockpitMode.ts', 'cockpit-store');
+  // Desk D2: entering Deep asks GET /desk/last; no Hester here (an old one's 404), so it lands on the overview.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ success: false, error: 'not found' }) });
 
   test('store: Lee opens in the Cockpit on Copilot (D1 §1.2, §8.3)', () => {
     assert.equal(store.get().mode, 'cockpit');
@@ -790,19 +793,25 @@ async function bundle(rel, name) {
     store.setSection('home');
   });
 
-  test('store: ⇧⌘0 with nothing open never shows an empty Deep (it opens a blank Page once one exists)', () => {
+  test('store: ⇧⌘0 with nothing open lands at the Desk (never an empty Page, never the opener)', () => {
     store.setSection('work');
     store.toggleDeep();
-    assert.equal(store.get().mode, 'cockpit', 'no Deep until the blank exploration exists');
+    assert.equal(store.get().mode, 'deep', 'the Desk always has somewhere to land');
     assert.equal(store.get().section, 'work', 'the opener is not forced');
+    store.set('cockpit', 'hop');
     store.setSection('home');
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  test('store: with no last card (an old Hester) the landing is the overview', () => {
+    assert.equal(store.getDeep().zoom, 'overview');
+    assert.equal(store.getDeep().card_id, null);
   });
 
   test('store: openDeep remembers the exploration and shows Deep (deep_start, then hop)', () => {
     store.openDeep('exp-1', 'Vector clocks');
     assert.equal(store.get().mode, 'deep');
     assert.equal(store.get().reason, 'deep_start');
-    assert.deepEqual(store.getDeep(), { exploration_id: 'exp-1', title: 'Vector clocks', view: 'page' });
+    assert.deepEqual(store.getDeep(), { exploration_id: 'exp-1', card_id: 'exp-1', title: 'Vector clocks', view: 'page', zoom: 'card', area_id: null });
     store.toggleDeep();
     assert.equal(store.get().mode, 'cockpit');
     assert.equal(store.get().reason, 'hop');
@@ -862,16 +871,21 @@ async function bundle(rel, name) {
   });
   offOpener();
 
-  test('store: entering Deep on a remembered exploration with no session starts one', () => {
+  test('store: entering Deep on a remembered card with no session starts one on it', () => {
     const calls = [];
     globalThis.window = { lee: { copilot: { deepStart: (req) => (calls.push(req), Promise.resolve({})) } } };
     try {
+      store.openDeep('pg-1a2b3c4d', 'Vector clocks');
+      store.set('cockpit', 'hop');
+      calls.length = 0;
       assert.equal(store.get().mode, 'cockpit');
       assert.equal(store.get().deepActive, false);
       store.toggleDeep();
       assert.equal(store.get().mode, 'deep');
       assert.equal(calls.length, 1);
-      assert.equal(calls[0].exploration_id, 'exp-1');
+      assert.equal(calls[0].card_id, 'pg-1a2b3c4d');
+      assert.equal(calls[0].card_kind, 'page');
+      assert.equal(calls[0].exploration_id, null);
       assert.equal(calls[0].surface, 'lee');
       store.toggleDeep();
       assert.equal(store.get().mode, 'cockpit');
@@ -893,6 +907,7 @@ async function bundle(rel, name) {
     store.openDeep('exp-2', 'x');
     assert.equal(store.get().mode, 'manual');
   });
+  globalThis.fetch = realFetch;
 }
 
 // ---------------------------------------------------------------------------
