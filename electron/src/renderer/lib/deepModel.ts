@@ -791,6 +791,25 @@ export function rankFiles(query: string, files: readonly string[], limit = 50): 
 }
 
 /** The blockquote Quote it inserts: the text, then `> — [[path#La-Lb|label]]`. */
+/**
+ * Rows quoted from the middle of a markdown table aren't a table on their own
+ * (GFM needs the header and the |---| row). When the quoted lines start inside
+ * a table below its header, put the header and delimiter rows back in front.
+ * `lines` is 1-based and inclusive, as the source panel reports it.
+ */
+export function withTableHeader(source: string, lines: [number, number], text: string): string {
+  const all = source.split('\n');
+  const start = lines[0] - 1;
+  const isRow = (l: string | undefined) => !!l && l.trim().startsWith('|');
+  if (!isRow(all[start]) || !isRow(text.split('\n')[0])) return text;
+  let top = start;
+  while (top > 0 && isRow(all[top - 1])) top--;
+  const delim = all[top + 1];
+  const isDelim = !!delim && tableCells(delim).length > 0 && tableCells(delim).every((c) => /^:?-+:?$/.test(c));
+  if (!isDelim || start <= top + 1) return text;
+  return `${all[top]}\n${delim}\n${text}`;
+}
+
 export function quoteBlock(text: string, path: string, lines: [number, number], label: string): string {
   const body = text
     .replace(/\s+$/, '')
@@ -969,7 +988,11 @@ function tableCells(line: string): string[] {
 
 /** A GFM table's cells (for rendering it while the cursor is outside), or null. */
 export function parseTable(text: string): ParsedTable | null {
-  const lines = text.split('\n').filter((l) => l.trim());
+  // A table inside a blockquote carries its '> ' markers on every line.
+  const lines = text
+    .split('\n')
+    .map((l) => l.replace(/^\s*(?:>\s?)+/, ''))
+    .filter((l) => l.trim());
   if (lines.length < 2 || !lines[0].includes('|')) return null;
   const delim = tableCells(lines[1]);
   if (!delim.length || !delim.every((c) => /^:?-+:?$/.test(c))) return null;

@@ -120,6 +120,14 @@ import {
 import './deep.css';
 import './HandoffSheet.css';
 
+
+/** Long enough to read in the panel rather than the margin: a table, many lines, or ~600+ chars. */
+export function isLongAnswer(text: string): boolean {
+  if (!text) return false;
+  if (/^\s*\|.*\|\s*$/m.test(text)) return true;
+  return text.length > 600 || text.split('\n').length > 12;
+}
+
 export interface DeepHostProps {
   workspace: string;
   visible: boolean;                 // this window's mode is 'deep'
@@ -658,6 +666,8 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   const [openMarker, setOpenMarker] = useState<string | null>(null);
   const [followUp, setFollowUp] = useState<{ id: string; text: string } | null>(null);
   const [replying, setReplying] = useState<{ id: string; text: string; busy?: boolean } | null>(null);
+  /** The answer open in the reading panel (a long answer or hand-off result). */
+  const [reading, setReading] = useState<string | null>(null);
   const answersRef = useRef(answers);
   answersRef.current = answers;
   const localAsksRef = useRef(localAsks);
@@ -914,6 +924,32 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       </>
     ) : null;
 
+  /**
+   * An answer in the margin: short ones in full; long ones (reports, tables)
+   * as a clamped preview with Read, which opens the reading panel. The margin
+   * is for notes, not reports.
+   */
+  const answerBody = (a: DeepAnswer): React.ReactNode => {
+    const text = a.answer ?? '';
+    if (!isLongAnswer(text)) {
+      return (
+        <div className="deep-card-a">
+          <AgentMarkdown text={text} />
+        </div>
+      );
+    }
+    return (
+      <>
+        <div className="deep-card-a is-preview">
+          <AgentMarkdown text={text} />
+        </div>
+        <button className="deep-quiet deep-read" onClick={() => setReading(a.id)}>
+          Read
+        </button>
+      </>
+    );
+  };
+
   const renderHandoffCard = (a: DeepAnswer): React.ReactNode => {
     const h = a.handoff;
     const provider = HANDOFF_PROVIDERS.find((p) => p.id === h?.provider)?.label ?? h?.provider ?? '';
@@ -925,11 +961,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           {provider ? ` · ${provider}` : ''} · {handoffStateLabel(h?.state)}
         </div>
         {(a.status === 'error' || h?.state === 'error') && <div className="deep-card-err">{a.error || 'The hand-off failed.'}</div>}
-        {a.answer && (
-          <div className="deep-card-a">
-            <AgentMarkdown text={a.answer} />
-          </div>
-        )}
+        {a.answer && answerBody(a)}
         <div className="deep-card-actions">
           {h?.task_id && (
             <button className="deep-quiet" onClick={() => openInWork(h.task_id as string)}>
@@ -1007,9 +1039,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
         )}
         {a.status === 'done' && a.answer && (
           <>
-            <div className="deep-card-a">
-              <AgentMarkdown text={a.answer} />
-            </div>
+            {answerBody(a)}
             <div className="deep-card-actions">
               {answerActions(a)}
               <button className="deep-quiet" onClick={() => setFollowUp({ id: a.id, text: '' })}>
@@ -1478,6 +1508,70 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       ) : (
         <div className="deep-loading deep-muted">Opening the Page…</div>
       )}
+
+      {(() => {
+        const a = reading ? answers.find((x) => x.id === reading) : null;
+        if (!a || !a.answer) return null;
+        const h = a.handoff;
+        const close = () => {
+          setReading(null);
+          editor.current?.focus();
+        };
+        return (
+          <aside
+            className="deep-reader"
+            aria-label="Reading"
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                close();
+              }
+            }}
+          >
+            <header className="deep-reader-head">
+              <span className="deep-muted">
+                {isHandoff(a) ? `${handoffKindLabel(h?.kind)} · ${handoffStateLabel(h?.state)}` : 'Hester answered'}
+              </span>
+              <span className="deep-spacer" />
+              <button className="deep-quiet" onClick={close} aria-label="Close (Esc)" title="Close (Esc)">
+                ×
+              </button>
+            </header>
+            {!isHandoff(a) && <div className="deep-reader-q">{a.question}</div>}
+            <div className="deep-reader-body">
+              <AgentMarkdown text={a.answer} />
+            </div>
+            <div className="deep-card-actions">
+              {h?.task_id && (
+                <button className="deep-quiet" onClick={() => openInWork(h.task_id as string)}>
+                  Open in Work
+                </button>
+              )}
+              {answerActions(a)}
+              <button
+                className="deep-quiet"
+                onClick={() => {
+                  dismissAnswer(a);
+                  close();
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+            {h?.brief && (
+              <details className="deep-muted">
+                <summary>The brief as sent</summary>
+                <div className="deep-card-a">
+                  <AgentMarkdown text={h.brief} />
+                </div>
+              </details>
+            )}
+          </aside>
+        );
+      })()}
 
       {sheet && (
         <EndSessionSheet

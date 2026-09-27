@@ -96,6 +96,7 @@ const {
   tableInsertion,
   TABLE_STARTER,
   parseTable,
+  withTableHeader,
   touchesActive,
   liveHidden,
   promptAnswered,
@@ -695,6 +696,15 @@ test('paletteAboutFor: the Cockpit selection, published ref first, tile fallback
 // ---------------------------------------------------------------------------
 // cockpit-design §1.4: --lit is the terminal's bright green, never UI
 // ---------------------------------------------------------------------------
+
+test('quoting table rows brings the header back; tables parse inside blockquotes', () => {
+  const src = '# T\n\n| Card | What |\n|---|---|\n| Page | writing |\n| Board | visuals |\n| Machine | a VM |\n';
+  assert.equal(withTableHeader(src, [6, 7], '| Board | visuals |\n| Machine | a VM |'), '| Card | What |\n|---|---|\n| Board | visuals |\n| Machine | a VM |');
+  assert.equal(withTableHeader(src, [3, 5], '| Card | What |\n|---|---|\n| Page | writing |'), '| Card | What |\n|---|---|\n| Page | writing |', 'header already there');
+  assert.equal(withTableHeader(src, [1, 1], '# T'), '# T', 'not a table');
+  const t = parseTable('> | A | B |\n> |---|---|\n> | 1 | 2 |');
+  assert.deepEqual([t.head, t.rows], [['A', 'B'], [['1', '2']]]);
+});
 
 test('no var(--lit) in renderer CSS outside the terminal', () => {
   const root = join(__dirname, '../src/renderer');

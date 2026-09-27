@@ -67,6 +67,7 @@ import {
   mentionSlug,
   promptAnswered,
   quoteBlock,
+  withTableHeader,
   quoteLabel,
   rankFiles,
   sectionAtPos,
@@ -610,8 +611,9 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
     const src = source;
     if (!src || typeof src.text !== 'string') return;
     const label = quoteLabel(src.path, src.text, s.lines[0]);
-    insertFromSource(quoteBlock(s.text, src.path, s.lines, label), true);
-    cb.current.onQuote?.({ file: src.path, lines: s.lines, text: s.text, label });
+    const text = withTableHeader(src.text, s.lines, s.text);
+    insertFromSource(quoteBlock(text, src.path, s.lines, label), true);
+    cb.current.onQuote?.({ file: src.path, lines: s.lines, text, label });
     closeSource();
   };
 
