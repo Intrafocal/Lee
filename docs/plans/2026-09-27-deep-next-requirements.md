@@ -132,6 +132,28 @@ Mentions reach three kinds of target (*decided 2026-09-27*):
 - **Agents that weren't started from this exploration can't be mentioned.** They stay in Work, which keeps the Cockpit's babysitting out of Deep.
 - A sent mention's line gets the matching margin mark (R5).
 
+### R12. Goals start on a Page
+
+Today a project without `GOALS.md` gets "No goals in GOALS.md. Open GOALS.md". That's an empty file, in Manual, in a strict format. The format is right for where goals end up (IDs, metrics with kind, signal, guard; tensions with arbiters), but it's the wrong place to start. Working out what a project is for is deep work.
+
+- **Entry points** (*decided 2026-09-27*). When the workspace has no `GOALS.md`, or it has no `### G…` goals:
+  - **Home's "Or start from"** leads with "**This project doesn't have goals yet**" (first in the list, above the other links).
+  - **The Goals section's empty state** asks, in the writing face, "**What is this project for?**", with the same field as Home's question. Writing and pressing Enter opens the Goals Page with your text as its first line.
+- **The Goals Page** is an ordinary exploration titled "Goals", flagged `purpose: 'goals'` in its frontmatter so that Lee can find it again (one per workspace; the entry points reopen it if it exists). It starts **blank** (*decided 2026-09-27*). Four prompts sit quietly in the margin, never in your text:
+  - *What is this for, and who is it for?*
+  - *How will you know it's working?*
+  - *What won't you trade away?* (constraints)
+  - *What pulls against what?* (tensions)
+
+  The prompts fade once the Page has text under a matching idea, or can be dismissed. Everything else (Ask, Hand off, the margin marks, the ritual) works as on any Page.
+- **Draft goals.** On a goals Page, the Deep header shows **Draft goals**. It runs the existing goal-edit steward (`POST /cockpit/goals/draft`) with the Page as the instruction, and shows the proposed `GOALS.md` as a diff. **Apply** (`/cockpit/goals/draft/{id}/apply`) writes the file and doesn't commit it. Draft goals can be run again as the Page changes; each draft is a diff against the current file.
+- **Draft from README** (*decided 2026-09-27*), on click only (C2). In the Goals Page's margin, when the repo has a README or `CLAUDE.md`: Hester reads them and **inserts** a first guess under the four prompts, attributed, as an Insert you then rewrite. It's never automatic, and it's offered only while the Page is nearly empty.
+- **Starting small.** A first `GOALS.md` can be just `### G1 <title>` and a paragraph.
+  - The goal parser, goal status and the Goals section treat a goal with no metrics as **"not measured yet"**: shown neutrally, never as a problem or a lint.
+  - **Evaluate** and **Guided edit…** offer "Suggest a metric" for such goals, one at a time.
+  - Constraints and tensions are optional.
+- **Existing projects** with a `GOALS.md` see none of this. Their Goals section can still open the Goals Page ("Think it through on a Page") next to Guided edit….
+
 ## Open questions
 
 - **Ask routing for Page Asks:** keep hybrid routing (`gemini-3-flash-preview` answered all three today), or send Page Asks to the thinking tier by default? R2's section context may be enough to fix thin answers.
