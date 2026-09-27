@@ -1493,7 +1493,7 @@ const leeRows = [
     const s = html.home;
     assert.match(s, /class="home-greeting">[A-Z][a-z]+day (morning|afternoon|evening|night)</);
     assert.match(s, /class="home-question"[^>]*>What&#x27;s on your mind, Ben\?</);
-    assert.match(s, /placeholder="Start writing\. Enter opens a Page\."/);
+    assert.match(s, /placeholder="Just start writing…"/);
     assert.match(s, /Pick up where you left off/);
     assert.match(s, /“whether the merge needs a tiebreak”/);
     assert.match(s, /2 answers came back · 1 open question/);

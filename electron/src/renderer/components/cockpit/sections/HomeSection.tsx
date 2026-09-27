@@ -477,7 +477,7 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
           className="home-input"
           value={text}
           disabled={busy}
-          placeholder="Start writing. Enter opens a Page."
+          placeholder="Just start writing…"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
