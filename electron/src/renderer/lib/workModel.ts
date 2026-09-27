@@ -12,7 +12,7 @@
 import type { AgentSummary, AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 import type { CockpitTask, OperationInfo, TabRuntimeInfo } from '../../shared/cockpit';
 import { QUICK_REPLIES, describeActivity, type AgentActivity } from '../../shared/cockpit';
-import { formatDuration, plainLine, type TileModel } from './cockpitModel';
+import { formatDuration, plainLine, taskTitle, type TileModel } from './cockpitModel';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -279,7 +279,7 @@ export function inFlight(input: FlightInput): FlightGroups {
       kind: 'task',
       group: review ? 'review' : 'idle',
       dot: review ? 'done' : 'idle',
-      title: task.name || task.title,
+      title: taskTitle(task) || task.title,
       sub: review ? 'done · ready to review' : task.status === 'queued' ? 'queued' : `${task.status} · no agent`,
       meta: Number.isNaN(t) ? '' : formatDuration(now - t),
       ptyId: null,
