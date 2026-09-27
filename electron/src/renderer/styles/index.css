@@ -1940,12 +1940,57 @@ textarea:focus {
   }
 }
 
+/* cockpit-design §6.2: the about line (quiet), then the field. No ring on
+   the input: the header's rule brightens and the caret shows (§1.4). */
+.command-palette-about {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 16px 0;
+  font-size: 13px;
+  color: var(--text-3);
+  min-width: 0;
+}
+
+.command-palette-about-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.command-palette-about-title {
+  color: var(--text-2);
+}
+
+.command-palette-about-clear {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.command-palette-about-clear:hover {
+  color: var(--text-1);
+}
+
 .command-palette-header {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--ground-4);
+  transition: border-color 0.15s;
+}
+
+.command-palette-header:focus-within {
+  border-bottom-color: var(--ground-5);
 }
 
 .command-palette-icon {
@@ -1961,6 +2006,13 @@ textarea:focus {
   font-size: 16px;
   color: var(--text-primary);
   font-family: inherit;
+  caret-color: var(--caret);
+}
+
+.command-palette-input:focus,
+.command-palette-input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .command-palette-input::placeholder {
@@ -1972,12 +2024,10 @@ textarea:focus {
 }
 
 .command-palette-shortcut {
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-control);
+  flex-shrink: 0;
   font-family: var(--font-ui);
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 /* Daemon warning */
@@ -2167,8 +2217,7 @@ textarea:focus {
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
-  background: var(--bg-tertiary);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--ground-3);
 }
 
 .command-palette-btn {
@@ -2185,26 +2234,28 @@ textarea:focus {
 }
 
 .command-palette-btn kbd {
-  padding: 2px 5px;
-  border-radius: 3px;
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 400;
 }
 
+/* Dismiss and Keep: plain buttons (the primitives' Btn plain). */
 .command-palette-btn.secondary {
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
+  background: var(--ground-4);
+  color: var(--text-1);
 }
 
 .command-palette-btn.secondary kbd {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-3);
 }
 
-.command-palette-btn.secondary:hover {
-  background: var(--bg-primary);
-  color: var(--text-primary);
+.command-palette-btn.secondary:hover:not(:disabled) {
+  background: var(--ground-5);
+}
+
+.command-palette-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .command-palette-btn.primary {
@@ -2213,8 +2264,8 @@ textarea:focus {
 }
 
 .command-palette-btn.primary kbd {
-  background: rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.9);
+  color: inherit;
+  opacity: 0.7;
 }
 
 .command-palette-btn.primary:hover {
