@@ -63,6 +63,8 @@ import type { CockpitCtx, RowHandle } from '../CockpitHost';
 interface HomeSectionProps {
   ctx: CockpitCtx;
   returnNonce: number;
+  /** First-render data before the fetches land (the renderer smoke renders Home from fixtures; the app passes none). */
+  seed?: { opener?: Opener | null; digest?: DigestResponse | null; name?: string | null };
 }
 
 const REFRESH_MS = 10 * 60000;
@@ -100,12 +102,12 @@ function userName(): Promise<string | null> {
 type Expanded = 'open_questions' | 'captured_away' | 'reading_list' | 'quiet' | null;
 type AskState = { phase: 'idle' } | { phase: 'loading'; label: string } | { phase: 'done'; answer: StewardAnswer; label: string } | { phase: 'error'; error: string };
 
-export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce }) => {
+export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed }) => {
   const workspace = ctx.workspace;
-  const [name, setName] = useState<string | null>(null);
-  const [opener, setOpener] = useState<Opener | null>(null);
+  const [name, setName] = useState<string | null>(seed?.name ?? null);
+  const [opener, setOpener] = useState<Opener | null>(seed?.opener ?? null);
   const [openerError, setOpenerError] = useState<string | null>(null);
-  const [digest, setDigest] = useState<DigestResponse | null>(null);
+  const [digest, setDigest] = useState<DigestResponse | null>(seed?.digest ?? null);
   const [digestError, setDigestError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
