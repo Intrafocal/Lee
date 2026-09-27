@@ -30,7 +30,8 @@ function fromInnerControl(e: React.SyntheticEvent): boolean {
 
 export interface SectionHeadProps {
   title: string;
-  summary?: string;
+  /** Neutral text; a node when part of it carries its own tooltip (Work's limits). */
+  summary?: React.ReactNode;
   right?: React.ReactNode;
   className?: string;
 }

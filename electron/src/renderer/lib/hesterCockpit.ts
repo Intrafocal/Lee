@@ -237,6 +237,18 @@ export function fetchHistory(workspace: string, days = 7): Promise<HesterResult<
   return call<HistoryResponse>(workspace, 'GET', `/cockpit/history?days=${days}`);
 }
 
+/**
+ * docs/15-Usage.md §5, §6.3: usage over a range (pull-only; History's Usage
+ * tab). The body is read tolerantly by usageModel.usageView(); expected:
+ * `{ range, limits, totals: {claude, pi, hester_cloud, hester_local: bucket},
+ * by_day, hester: {cloud, local, user, automatic: bucket}, top_items: [{task_id,
+ * title, shown_tokens, cost_basis, cost_usd}] }`, a bucket being
+ * `{spend_usd, subscription_tokens, local_tokens, shown_tokens, calls}`.
+ */
+export function fetchUsage(workspace: string, range: 'today' | 'week' | 'month'): Promise<HesterResult<unknown>> {
+  return call<unknown>(workspace, 'GET', `/cockpit/usage?range=${range}`);
+}
+
 export function listSomeday(workspace: string, status: 'open' | 'all'): Promise<HesterResult<SomedayItem[]>> {
   return call<SomedayItem[]>(workspace, 'GET', `/someday?status=${status}`);
 }

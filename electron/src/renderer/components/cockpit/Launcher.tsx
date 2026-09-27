@@ -19,12 +19,17 @@
  * form; Enter still launches), Explore (a new exploration in the Library)
  * and Run… (the operations menu, also ⌘{), replacing the old header's
  * + Task, + Explore and Run ▾.
+ *
+ * docs/15-Usage.md §6.1: starting a Claude run with the 5-hour window at 85%
+ * or more shows one quiet line ("5h window at 91%, resets 3:40pm"); no
+ * confirm, no extra step.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { LaunchRequest, TaskKind, TaskLead, TaskOrigin } from '../../../shared/cockpit';
 import { fuzzyFilter, kindPrefix, q4NoteVisible, LAUNCHER_CHOICES } from '../../lib/cockpitModel';
 import { fetchBundles, fetchGoals, type ContextBundleRef, type GoalRef } from '../../lib/hesterCockpit';
+import { launcherLimitNote } from '../../lib/usageModel';
 import type { CockpitCtx } from './CockpitHost';
 import { Btn } from './ui';
 
@@ -277,6 +282,8 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExp
   };
 
   const canLaunch = !!text.trim() || (contextSupported && picked.length > 0);
+  // docs/15-Usage.md §6.1: the one proactive signal, as you start a Claude run. Informational only.
+  const limitNote = lead !== 'human' && effectiveProvider === 'claude' ? launcherLimitNote(ctx.snapshot?.limits, ctx.now) : null;
 
   return (
     <div className="cockpit-popover-backdrop" onClick={onClose}>
@@ -339,6 +346,7 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExp
             }
           }}
         />
+        {limitNote && <div className="cockpit-launch-limit">{limitNote}</div>}
         {showQ4 && (
           <div className="cockpit-q4-note">
             <span>No goal and nothing waiting. Park it, link a goal, or go.</span>

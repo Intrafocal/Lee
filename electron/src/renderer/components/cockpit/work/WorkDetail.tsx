@@ -41,6 +41,7 @@ import {
   workspaceName,
   type DetailActionId,
 } from '../../../lib/workModel';
+import { agentUsageDetail } from '../../../lib/usageModel';
 import type { IconName } from '../../Icon';
 import { Btn, Chip, Dot, Eyebrow, IconAction, type DotKind } from '../ui';
 import { AgentMarkdown } from '../AgentMarkdown';
@@ -181,6 +182,7 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
     providerLabel(subject.provider),
     workspaceName(subject.workspace),
     started ? `started ${shortAge(started, ctx.now)} ago` : null,
+    agentUsageDetail(agent?.usage) || null,
     item ? `waiting on you ${shortAge(item.created_at, ctx.now)}` : null,
     task?.serves.length ? `serves ${task.serves.join(', ')}` : null,
   ].filter(Boolean);

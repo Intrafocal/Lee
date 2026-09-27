@@ -13,6 +13,7 @@ import type { AgentSummary, AttentionItem, AttentionSnapshot } from '../../share
 import type { CockpitTask, OperationInfo, TabRuntimeInfo } from '../../shared/cockpit';
 import { QUICK_REPLIES, describeActivity, type AgentActivity, type AgentUpdate } from '../../shared/cockpit';
 import { formatDuration, plainLine, taskTitle, type TileModel } from './cockpitModel';
+import { agentTokensLabel } from './usageModel';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -65,6 +66,8 @@ export interface WaitingItem {
   ptyId: number | null;
   /** When it started waiting on you. */
   since: string;
+  /** docs/15-Usage.md §6.2: the agent's "412k tok", '' before its first turn ends. */
+  tokens: string;
 }
 
 export interface WaitingInput {
@@ -74,6 +77,8 @@ export interface WaitingInput {
   tiles?: readonly Pick<TileModel, 'ptyId' | 'title'>[] | null;
   /** Items hidden here for now (a swipe waiting out its Undo). */
   hidden?: ReadonlySet<string> | null;
+  /** The queue's agents, for each one's usage (§6.2). */
+  agents?: readonly Pick<AgentSummary, 'pty_id' | 'usage'>[] | null;
 }
 
 const SEVERITY_RANK: Record<string, number> = { blocking: 0, 'needs-you': 1 };
@@ -92,6 +97,8 @@ export function waitingKind(item: Pick<AttentionItem, 'kind'>): WaitingKind {
 export function waitingItems(input: WaitingInput): WaitingItem[] {
   const names = new Map<number, string>();
   for (const t of input.tiles ?? []) names.set(t.ptyId, t.title);
+  const usage = new Map<number, AgentSummary['usage']>();
+  for (const a of input.agents ?? []) usage.set(a.pty_id, a.usage);
   const out: Array<WaitingItem & { rank: number; t: number }> = [];
   for (const item of input.items ?? []) {
     if (item.state !== 'open' || item.severity === 'ambient') continue;
@@ -108,6 +115,7 @@ export function waitingItems(input: WaitingInput): WaitingItem[] {
       workspace: item.source.workspace,
       ptyId: pty,
       since,
+      tokens: pty != null ? agentTokensLabel(usage.get(pty)) : '',
       rank: SEVERITY_RANK[item.severity] ?? 2,
       t: at(since),
     });
@@ -246,6 +254,9 @@ export function inFlight(input: FlightInput): FlightGroups {
     const agent = agents.get(tile.ptyId) ?? null;
     const times = input.times?.get(tile.ptyId) ?? null;
     const review = tile.task?.status === 'review' || !!input.reviewPtys?.has(tile.ptyId);
+    // §6.2: the agent's tokens, a quiet meta item after the time.
+    const tokens = agentTokensLabel(agent?.usage);
+    const withTokens = (time: string) => [time, tokens].filter(Boolean).join(' · ');
     const base = {
       id: `work:agent:${tile.ptyId}`,
       kind: 'agent' as const,
@@ -256,15 +267,15 @@ export function inFlight(input: FlightInput): FlightGroups {
     };
     if (tile.working) {
       const t = at(times?.busySince);
-      rows.push({ ...base, group: 'busy', dot: 'working', sub: doingNow(agent, tile), meta: Number.isNaN(t) ? '' : formatDuration(now - t), t: Number.isNaN(t) ? now : t });
+      rows.push({ ...base, group: 'busy', dot: 'working', sub: doingNow(agent, tile), meta: withTokens(Number.isNaN(t) ? '' : formatDuration(now - t)), t: Number.isNaN(t) ? now : t });
     } else if (tile.needsYou) {
-      rows.push({ ...base, group: 'waiting', dot: 'needs', sub: 'waiting on you', meta: '', t: 0 });
+      rows.push({ ...base, group: 'waiting', dot: 'needs', sub: 'waiting on you', meta: withTokens(''), t: 0 });
     } else if (review) {
       const t = at(times?.idleSince);
-      rows.push({ ...base, group: 'review', dot: 'done', sub: 'done · ready to review', meta: Number.isNaN(t) ? '' : formatDuration(now - t), t: Number.isNaN(t) ? 0 : t });
+      rows.push({ ...base, group: 'review', dot: 'done', sub: 'done · ready to review', meta: withTokens(Number.isNaN(t) ? '' : formatDuration(now - t)), t: Number.isNaN(t) ? 0 : t });
     } else {
       const t = at(times?.idleSince);
-      const row: FlightRow = { ...base, group: 'idle', dot: 'idle', sub: tile.chip.label, meta: '', t: Number.isNaN(t) ? 0 : t };
+      const row: FlightRow = { ...base, group: 'idle', dot: 'idle', sub: tile.chip.label, meta: withTokens(''), t: Number.isNaN(t) ? 0 : t };
       if (!Number.isNaN(t) && now - t > EARLIER_AFTER_MS) earlier.push(row);
       else rows.push(row);
     }
