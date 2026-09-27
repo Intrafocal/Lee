@@ -1,6 +1,6 @@
 /**
  * AttentionFlyout - items grouped Blocking / Needs you / Recent (ambient),
- * with a footer for Focus, Capture… and Hand off… (contracts §9.1).
+ * with a footer for Go deep, Capture… and Hand off… (contracts §9.1; Deep D1 §14).
  */
 
 import React, { useEffect, useRef } from 'react';
@@ -13,6 +13,7 @@ import type { AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 interface AttentionFlyoutProps {
   snapshot: AttentionSnapshot;
   api: CopilotAPI;
+  workspace: string;
   anchorRect: DOMRect;
   onClose: () => void;
   onOpenCapture: () => void;
@@ -22,6 +23,7 @@ interface AttentionFlyoutProps {
 export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
   snapshot,
   api,
+  workspace,
   anchorRect,
   onClose,
   onOpenCapture,
@@ -75,7 +77,7 @@ export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
         )}
       </div>
       <div className="copilot-flyout-footer">
-        <FocusControl focus={snapshot.focus} api={api} onStopAndHandoff={onOpenHandoff} />
+        <FocusControl focus={snapshot.focus} api={api} workspace={workspace} onDone={onClose} />
         <button className="copilot-flyout-footer-btn" onClick={onOpenCapture}>
           Capture…
         </button>

@@ -19,6 +19,7 @@ import type { UseCopilotResult } from '../hooks/useCopilot';
 import { offscreenNeeds } from '../lib/copilotAttention';
 import './copilot/copilot.css';
 import { CockpitModeChip } from './cockpit/CockpitModeChip';
+import { endDeepSession, goDeep } from './cockpit/cockpitMode';
 
 
 export interface StatusMessage {
@@ -79,6 +80,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const daemonMenuRef = useRef<HTMLDivElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const isFocused = !!copilot.focus?.active;
+  const isDeep = isFocused && copilot.focus?.source === 'deep';
   const offscreenCount = copilot.api ? offscreenNeeds(copilot.snapshot?.items, visiblePtyIds).length : 0;
 
   // Get the most recent message
@@ -309,7 +311,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 </span>
               );
             })()}
-            {isFocused ? (
+            {isDeep ? (
+              <>
+                <span className="status-icon"><Icon name="eye" size={14} /></span>
+                <span className="status-text">Deep · {copilot.focus?.quiet_count ?? 0} waiting</span>
+              </>
+            ) : isFocused ? (
               <>
                 <span className="status-icon"><Icon name="eye" size={14} /></span>
                 <span className="status-text">
@@ -353,8 +360,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                   <button onClick={() => { setDaemonMenuOpen(false); setAttentionOpen(true); }}>
                     Waiting items…
                   </button>
-                  <button onClick={() => { setDaemonMenuOpen(false); void copilot.api?.focusStart(); }}>
-                    Start focus
+                  <button onClick={() => { setDaemonMenuOpen(false); goDeep(copilot.api, workspace); }}>
+                    Go deep
                   </button>
                   <button onClick={() => { setDaemonMenuOpen(false); setCaptureOpen(true); }}>
                     Capture idea…
@@ -382,8 +389,25 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             </div>
           )}
 
-          {/* Focus menu (replaces the daemon menu while focus is active) */}
-          {focusMenuOpen && isFocused && (
+          {/* Deep menu (replaces the daemon menu during a Deep session) */}
+          {focusMenuOpen && isDeep && (
+            <div className="daemon-context-menu">
+              <button onClick={() => { setFocusMenuOpen(false); setAttentionOpen(true); }}>
+                Waiting items…
+              </button>
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  endDeepSession(copilot.api);
+                }}
+              >
+                End session…
+              </button>
+            </div>
+          )}
+
+          {/* Focus menu (replaces the daemon menu while an inferred focus is active) */}
+          {focusMenuOpen && isFocused && !isDeep && (
             <div className="daemon-context-menu">
               <button
                 onClick={() => {

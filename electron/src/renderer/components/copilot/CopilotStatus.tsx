@@ -1,6 +1,8 @@
 /**
  * CopilotStatus - mounted in StatusBar's right section. Owns the flyout, the
  * blocking banner and the capture/digest/retro overlays (contracts §9.1).
+ * Manual Focus is retired into Go deep (Deep D1 §14): a focus start opens no
+ * digest, and a Deep session raises nothing here.
  * There is no pill: an agent's state shows on its own tab (lib/copilotAttention.ts),
  * and StatusBar's centre slot replaces "Ask Hester" with "N need you" only
  * for items not on a tab in this window; it opens the flyout from there.
@@ -12,6 +14,7 @@ import { BlockingBanner } from './BlockingBanner';
 import { CapturePopover } from './CapturePopover';
 import { DigestPanel } from './DigestPanel';
 import { fetchRetro } from '../../lib/hesterCopilot';
+import { cockpitModeStore } from '../cockpit/cockpitMode';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { FocusItem } from '../../../shared/copilot';
 
@@ -50,19 +53,23 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({
   const { api, snapshot, focus, lastReturn } = copilot;
   const isFocused = !!focus?.active;
 
-  // Open the digest on return (handoff end, or presence returning from away).
+  // Open the digest on return (handoff end, or presence returning from away),
+  // unless you came back to a Deep session: that return keeps you in Deep,
+  // and Deep has no interruptions (D1 §0, §8.3); the brief waits on Copilot.
   useEffect(() => {
     if (!lastReturn || lastReturn.nonce === lastReturnNonce.current) return;
     lastReturnNonce.current = lastReturn.nonce;
+    const st = cockpitModeStore.get();
+    if (st.deepActive && st.mode === 'deep') return;
     setDigestRequest({ since: lastReturn.info.away_since, focus: null });
   }, [lastReturn]);
 
-  // Open the digest on a manual focus start; show only a chip on an inferred one.
+  // Show a chip on an inferred focus start. A Deep session opens nothing: no
+  // interruptions during Deep (D1 §0). Manual Focus is retired into Go deep.
   useEffect(() => {
     const prev = prevFocusRef.current;
     if (focus && focus.active && !prev.active) {
-      if (focus.source === 'manual') setDigestRequest({ since: null, focus: focus.item ?? null });
-      else if (focus.source === 'inferred') setDigestReady(true);
+      if (focus.source === 'inferred') setDigestReady(true);
     }
     if (focus) prevFocusRef.current = { active: focus.active, source: focus.source };
   }, [focus]);
@@ -114,6 +121,7 @@ export const CopilotStatus: React.FC<CopilotStatusProps> = ({
         <AttentionFlyout
           snapshot={snapshot}
           api={api}
+          workspace={workspace}
           anchorRect={anchorRef.current.getBoundingClientRect()}
           onClose={onAttentionClose}
           onOpenCapture={() => {

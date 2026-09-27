@@ -1,12 +1,12 @@
 /**
  * FilesSection - the workspace's files as a first-class Cockpit section.
  *
- * Same data sources as the Workbench's FileTreePane (window.lee.fs.readdir,
+ * Same data sources as Manual's FileTreePane (window.lee.fs.readdir,
  * and the main-process directory watch: watchDir/unwatchDir/onDirChanged),
  * rendered as flat rows so the Cockpit keymap drives it: j/k move, Enter
  * opens a file or expands/collapses a directory. Opening a file goes through
- * the Workbench's own open-file path (App.handleFileOpen, so viewers such as
- * KiCad/PDF/model tabs route the same way) and switches to the Workbench.
+ * Manual's own open-file path (App.handleFileOpen, so viewers such as
+ * KiCad/PDF/model tabs route the same way) and switches to Manual.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -124,7 +124,7 @@ export const FilesSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     <section className="cockpit-sec">
       <header className="cockpit-sec-head">
         <h2>Files</h2>
-        <span className="cockpit-muted">Enter opens in the Workbench</span>
+        <span className="cockpit-muted">Enter opens in Manual</span>
         <span className="cockpit-header-spacer" />
         <button className="cockpit-btn is-icon" onClick={() => void loadRoot()} title="Refresh" aria-label="Refresh files">
           <Icon name="refresh" size={12} />

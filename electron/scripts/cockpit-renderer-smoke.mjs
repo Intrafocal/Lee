@@ -2,12 +2,13 @@
 /**
  * Smoke test for the pure Cockpit renderer model
  * (src/renderer/lib/cockpitModel.ts): mergeFeed order, tileModel with and
- * without snapshot.agents, stripTabs, every row of contracts §3.2 through
- * nextMode, and keyAction ignoring keys while an input is focused. Compiles
- * the real source with esbuild, no React, no DOM. Also: Hester chat / DevOps
- * outside the wall, side-dock strips, close fallbacks, strip navigation,
- * wallRepair, and the cockpitMode store's quiet()/hold-end (bundled with
- * react external).
+ * without snapshot.agents, every row of the Deep D1 §1.2 table through
+ * nextMode, the ⌘0 switcher state machine (tap, hold, cycle, Esc, chip), and
+ * keyAction ignoring keys while an input is focused. Compiles the real source
+ * with esbuild, no React, no DOM. Also: Hester chat / DevOps are own tabs,
+ * useHotkeys' chord builder matching ⇧⌘0 / ⌥⌘0 / ⌘. on e.code (D1 §1.3),
+ * and the cockpitMode store's landing, Deep memory and switcher (bundled
+ * with react external).
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -37,14 +38,16 @@ try {
 const {
   mergeFeed,
   tileModel,
-  stripTabs,
   isAgentTab,
-  isWallExempt,
+  isOwnTab,
   runtimeAgentPtys,
-  fallbackTab,
-  stripNeighbor,
-  wallRepair,
   nextMode,
+  deepSessionOf,
+  switcherStep,
+  SWITCHER_IDLE,
+  SWITCHER_HOLD_MS,
+  MODES,
+  MODE_LABELS,
   keyAction,
   feedNeedsCount,
   formatDuration,
@@ -369,7 +372,7 @@ test('stripMarkdown / plainTitle / plainPreview / looksLikeCode', () => {
 });
 
 // ---------------------------------------------------------------------------
-// isAgentTab / stripTabs
+// isAgentTab / own tabs
 // ---------------------------------------------------------------------------
 
 test('isAgentTab: type agent, snapshot agents, runtime agents; own tabs otherwise', () => {
@@ -390,7 +393,7 @@ test('tabDisplayFromRuntime: a terminal running a hand-started claude is an agen
   const m = tabDisplayFromRuntime(rts);
   assert.deepEqual([...m.keys()], [13]);
   assert.deepEqual(m.get(13), { provider: 'claude', name: 'Fix login' });
-  // The same runtime set walls the terminal (A reports kind 'agent').
+  // The same runtime set makes the terminal an agent tab (A reports kind 'agent').
   assert.equal(isAgentTab(shellTab, { snapshotAgents: new Set(), runtimeAgents: runtimeAgentPtys(rts) }), true);
 });
 
@@ -435,29 +438,18 @@ test('fuzzy: subsequence match, basename and boundary matches first, non-matches
   assert.ok(fuzzyScore('cop', 'docs/13-Copilot.md') > fuzzyScore('cop', 'electron/src/main/cockpit/launcher.ts'));
 });
 
-test('stripTabs: hides agents you did not go into; identity when disabled or nothing hidden', () => {
-  const other = { ...agentTab, id: 6, ptyId: 20 };
-  const tabs = [agentTab, shellTab, other];
-  assert.deepEqual(stripTabs(tabs, { enabled: true, enteredPtys: new Set([12]), sets: noSets }).map((t) => t.id), [3, 4]);
-  assert.deepEqual(stripTabs(tabs, { enabled: true, enteredPtys: new Set(), sets: noSets }).map((t) => t.id), [4]);
-  assert.equal(stripTabs(tabs, { enabled: false, enteredPtys: new Set(), sets: noSets }), tabs);
-  const own = [shellTab];
-  assert.equal(stripTabs(own, { enabled: true, enteredPtys: new Set(), sets: noSets }), own);
-});
-
-test('Hester chat and DevOps tabs stay outside the wall (user decision): never agents, never tiles', () => {
+test('Hester chat and DevOps tabs are own tabs (user decision): never agents, never tiles', () => {
   const hester = { id: 7, type: 'agent', label: 'Hester', ptyId: 70, dockPosition: 'center', provider: 'hester' };
   const legacyHester = { id: 8, type: 'hester', label: 'Hester', ptyId: 80, dockPosition: 'center' };
   const devops = { id: 9, type: 'devops', label: 'DevOps', ptyId: 90, dockPosition: 'center' };
   const all = new Set([70, 80, 90]);
   const loud = { snapshotAgents: all, runtimeAgents: all };
   for (const t of [hester, legacyHester, devops]) {
-    assert.equal(isWallExempt(t), true, t.type);
+    assert.equal(isOwnTab(t), true, t.type);
     assert.equal(isAgentTab(t, loud), false, `${t.type} is never an agent`);
   }
-  assert.equal(isWallExempt(agentTab), false);
+  assert.equal(isOwnTab(agentTab), false);
   const tabs = [agentTab, hester, legacyHester, devops];
-  assert.deepEqual(stripTabs(tabs, { enabled: true, enteredPtys: new Set(), sets: loud }).map((t) => t.id), [7, 8, 9]);
   assert.deepEqual(
     [...runtimeAgentPtys([runtime({ pty_id: 70, provider: 'hester' }), runtime({ pty_id: 30 })])],
     [30],
@@ -480,129 +472,186 @@ test('Hester chat and DevOps tabs stay outside the wall (user decision): never a
   assert.deepEqual(tiles.map((t) => t.ptyId), [12], 'only the real agent is a tile');
 });
 
-test('stripTabs works per dock: side-panel agents are walled too', () => {
-  const right = [
-    { id: 20, type: 'agent', label: 'Claude', ptyId: 200, dockPosition: 'right', provider: 'claude' },
-    { id: 21, type: 'files', label: 'Files', ptyId: null, dockPosition: 'right' },
-  ];
-  assert.deepEqual(stripTabs(right, { enabled: true, enteredPtys: new Set(), sets: noSets }).map((t) => t.id), [21]);
-  assert.deepEqual(stripTabs(right, { enabled: true, enteredPtys: new Set([200]), sets: noSets }).map((t) => t.id), [20, 21]);
-});
-
-test('fallbackTab: a closing tab falls back to a visible tab, never a hidden agent', () => {
-  const file = { id: 1, type: 'file', label: 'main.py', ptyId: null, dockPosition: 'center' };
-  const center = [file, shellTab, agentTab]; // agent created last
-  const strip = stripTabs(center, { enabled: true, enteredPtys: new Set(), sets: noSets });
-  assert.equal(fallbackTab(strip, 1, 'last').id, 4, 'not the hidden agent 3');
-  assert.equal(fallbackTab(strip, 4, 'first').id, 1);
-  assert.equal(fallbackTab([file], 1), null, 'nothing visible left: no active tab');
-});
-
-test('stripNeighbor: next/prev cycle the visible strip only', () => {
-  const file = { id: 1, type: 'file', label: 'main.py', ptyId: null, dockPosition: 'center' };
-  const center = [file, agentTab, shellTab];
-  const strip = stripTabs(center, { enabled: true, enteredPtys: new Set(), sets: noSets });
-  assert.deepEqual(strip.map((t) => t.id), [1, 4], 'strip badges: main.py ⌘1, Terminal ⌘2');
-  assert.equal(strip[1].id, 4, '⌘2 opens Terminal, not the hidden Claude');
-  assert.equal(stripNeighbor(strip, 1, 1).id, 4);
-  assert.equal(stripNeighbor(strip, 4, 1).id, 1);
-  assert.equal(stripNeighbor(strip, 1, -1).id, 4);
-  assert.equal(stripNeighbor(strip, 3, 1).id, 1, 'from a hidden active tab, start of the strip');
-  assert.equal(stripNeighbor([file], 1, 1), null);
-  assert.equal(stripNeighbor(strip, null, 1), null);
-});
-
-test('wallRepair: enter a terminal that became an agent; redirect off a restored hidden agent', () => {
-  const base = { enabled: true, mode: 'manual', isAgent: true, entered: false, ptyId: 13, becameAgent: false, holdEnded: false };
-  assert.equal(wallRepair({ ...base, becameAgent: true }), 'enter', 'you ran claude where you work');
-  assert.equal(wallRepair({ ...base, becameAgent: true, mode: 'cockpit' }), 'enter');
-  assert.equal(wallRepair({ ...base, holdEnded: true }), 'redirect', 'restore left a hidden agent active');
-  assert.equal(wallRepair({ ...base, holdEnded: true, mode: 'cockpit' }), null, 'the cockpit→workbench repair handles that');
-  assert.equal(wallRepair({ ...base, holdEnded: true, entered: true }), null);
-  assert.equal(wallRepair({ ...base, holdEnded: true, isAgent: false }), null);
-  assert.equal(wallRepair({ ...base, holdEnded: true, enabled: false }), null);
-  assert.equal(wallRepair({ ...base, becameAgent: true, ptyId: null }), null);
-  assert.equal(wallRepair(base), null, 'nothing changed');
+test('D1 §1.4: the wall is gone (no strip, fallback or repair helpers left)', () => {
+  for (const name of ['stripTabs', 'fallbackTab', 'stripNeighbor', 'wallRepair', 'isWallExempt']) {
+    assert.equal(mod[name], undefined, name);
+  }
 });
 
 // ---------------------------------------------------------------------------
-// nextMode: every row of §3.2
+// nextMode: every row of Deep D1 §1.2
 // ---------------------------------------------------------------------------
 
 const C = { enabled: true, mode: 'cockpit' };
-const W = { enabled: true, mode: 'manual' };
+const D = { enabled: true, mode: 'deep', hasExploration: true };
+const M = { enabled: true, mode: 'manual' };
 const OFF = { enabled: false, mode: 'manual' };
+const withExp = (s, deepActive = false) => ({ ...s, hasExploration: true, deepActive });
 
-test('§3.2 window load → default_mode (workbench when disabled)', () => {
-  assert.deepEqual(nextMode(W, { kind: 'load', enabled: true, defaultMode: 'cockpit' }), { mode: 'cockpit', reason: 'default' });
-  assert.deepEqual(nextMode(W, { kind: 'load', enabled: true, defaultMode: 'manual' }), { mode: 'manual', reason: 'default' });
-  assert.deepEqual(nextMode(C, { kind: 'load', enabled: false, defaultMode: 'cockpit' }), { mode: 'manual', reason: 'default' });
+test('D1 §1.2 load → cockpit always (Manual only when the Cockpit is off)', () => {
+  assert.deepEqual(nextMode(M, { kind: 'load', enabled: true }), { mode: 'cockpit', reason: 'default' });
+  assert.deepEqual(nextMode(C, { kind: 'load', enabled: false }), { mode: 'manual', reason: 'default' });
+  assert.equal(MODES.length, 3);
+  assert.deepEqual([...MODES], ['cockpit', 'deep', 'manual']);
+  assert.equal(MODE_LABELS.manual, 'Manual');
+  assert.equal(Object.values(MODE_LABELS).includes('Workbench'), false);
 });
 
-test('§3.2 ⌘0 / mode chip toggles (manual); nothing when disabled', () => {
-  assert.deepEqual(nextMode(C, { kind: 'toggle' }), { mode: 'manual', reason: 'manual' });
-  assert.deepEqual(nextMode(W, { kind: 'toggle' }), { mode: 'cockpit', reason: 'manual' });
-  assert.equal(nextMode(OFF, { kind: 'toggle' }), null);
+test('D1 §1.2 switcher {to} → to, reason switcher; Deep with nothing open → the opener', () => {
+  assert.deepEqual(nextMode(C, { kind: 'switcher', to: 'manual' }), { mode: 'manual', reason: 'switcher' });
+  assert.deepEqual(nextMode(M, { kind: 'switcher', to: 'cockpit' }), { mode: 'cockpit', reason: 'switcher' });
+  assert.deepEqual(nextMode(withExp(C), { kind: 'switcher', to: 'deep' }), { mode: 'deep', reason: 'switcher' });
+  assert.equal(nextMode(C, { kind: 'switcher', to: 'cockpit' }), null);
+  assert.deepEqual(nextMode(M, { kind: 'switcher', to: 'deep' }), { mode: 'cockpit', reason: 'switcher', opener: true });
+  assert.deepEqual(nextMode(C, { kind: 'switcher', to: 'deep' }), { mode: 'cockpit', reason: null, opener: true });
 });
 
-test('§3.2 focus start → workbench, focus end → cockpit', () => {
-  assert.deepEqual(nextMode(C, { kind: 'focus', active: true }), { mode: 'manual', reason: 'focus_start' });
-  assert.deepEqual(nextMode(W, { kind: 'focus', active: false }), { mode: 'cockpit', reason: 'focus_end' });
-  assert.equal(nextMode(W, { kind: 'focus', active: true }), null);
-  assert.equal(nextMode(OFF, { kind: 'focus', active: false }), null);
+test('D1 §1.2 toggle_deep (⇧⌘0): cockpit ↔ deep, manual → deep; hop when a session is active', () => {
+  assert.deepEqual(nextMode(withExp(C), { kind: 'toggle_deep' }), { mode: 'deep', reason: 'deep_start' });
+  assert.deepEqual(nextMode(withExp(C, true), { kind: 'toggle_deep' }), { mode: 'deep', reason: 'hop' });
+  assert.deepEqual(nextMode(withExp(M, true), { kind: 'toggle_deep' }), { mode: 'deep', reason: 'hop' });
+  assert.deepEqual(nextMode(withExp(D, true), { kind: 'toggle_deep' }), { mode: 'cockpit', reason: 'hop' });
+  assert.deepEqual(nextMode(M, { kind: 'toggle_deep' }), { mode: 'cockpit', reason: 'deep_start', opener: true }, 'nothing open: Copilot, opener focused');
 });
 
-test('§3.2 handoff → cockpit; return → cockpit', () => {
-  assert.deepEqual(nextMode(W, { kind: 'handoff' }), { mode: 'cockpit', reason: 'handoff' });
-  assert.deepEqual(nextMode(W, { kind: 'return' }), { mode: 'cockpit', reason: 'return' });
+test('D1 §1.2 toggle_manual (⌥⌘0): cockpit ↔ manual, deep → manual; reason hop', () => {
+  assert.deepEqual(nextMode(C, { kind: 'toggle_manual' }), { mode: 'manual', reason: 'hop' });
+  assert.deepEqual(nextMode(M, { kind: 'toggle_manual' }), { mode: 'cockpit', reason: 'hop' });
+  assert.deepEqual(nextMode(D, { kind: 'toggle_manual' }), { mode: 'manual', reason: 'hop' });
+});
+
+test('D1 §1.2 deep_session: start → deep (deep_start); end → cockpit only from deep', () => {
+  assert.deepEqual(nextMode(withExp(C, true), { kind: 'deep_session', active: true }), { mode: 'deep', reason: 'deep_start' });
+  assert.deepEqual(nextMode({ ...C, deepActive: true }, { kind: 'deep_session', active: true }), { mode: 'cockpit', reason: null, opener: true }, 'a device Go deep with nothing open');
+  assert.deepEqual(nextMode(D, { kind: 'deep_session', active: false }), { mode: 'cockpit', reason: 'deep_end' });
+  assert.equal(nextMode(M, { kind: 'deep_session', active: false }), null);
+  assert.equal(nextMode(C, { kind: 'deep_session', active: false }), null);
+});
+
+test('D1 §1.2 handoff / return → cockpit, unless deep in an active Deep session', () => {
+  assert.deepEqual(nextMode(M, { kind: 'handoff' }), { mode: 'cockpit', reason: 'handoff' });
+  assert.deepEqual(nextMode(M, { kind: 'return' }), { mode: 'cockpit', reason: 'return' });
   assert.equal(nextMode(C, { kind: 'return' }), null);
+  assert.equal(nextMode(withExp(D, true), { kind: 'return' }), null, 'a short absence keeps you in Deep');
+  assert.equal(nextMode(withExp(D, true), { kind: 'handoff' }), null);
+  assert.deepEqual(nextMode(D, { kind: 'return' }), { mode: 'cockpit', reason: 'return' }, 'no session: back to the Cockpit');
 });
 
-test('§3.2 go into an agent → workbench, enter(pty), logged', () => {
-  assert.deepEqual(nextMode(C, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: 'go_into', enter: 12, goInto: true });
-  assert.deepEqual(nextMode(W, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: null, enter: 12, goInto: true });
-});
-
-test('§3.2 open an own tab from the drawer → workbench (open_tab)', () => {
+test('D1 §1.2 go_into → manual (logged); open_tab → manual; tab_activated never moves', () => {
+  assert.deepEqual(nextMode(C, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: 'go_into', goInto: 12 });
+  assert.deepEqual(nextMode(D, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: 'go_into', goInto: 12 });
+  assert.deepEqual(nextMode(M, { kind: 'go_into', ptyId: 12 }), { mode: 'manual', reason: null, goInto: 12 });
   assert.deepEqual(nextMode(C, { kind: 'open_tab' }), { mode: 'manual', reason: 'open_tab' });
-  assert.equal(nextMode(W, { kind: 'open_tab' }), null);
+  assert.deepEqual(nextMode(D, { kind: 'open_tab' }), { mode: 'manual', reason: 'open_tab' });
+  assert.equal(nextMode(M, { kind: 'open_tab' }), null);
+  for (const s of [C, D, M]) assert.equal(nextMode(s, { kind: 'tab_activated' }), null, s.mode);
 });
 
-test('§3.2 own tab becomes active in cockpit (⌘1–9, Hester opens a file) → workbench', () => {
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: false, ptyId: 13, entered: false }), { mode: 'manual', reason: 'open_tab' });
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: false, isNew: true, ptyId: null, entered: false }), { mode: 'manual', reason: 'open_tab' });
-});
-
-test('§3.2 new agent tab active in cockpit (⇧⌘C) → stay, select its tile', () => {
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: true, isNew: true, ptyId: 12, entered: false }), { mode: 'cockpit', reason: null, selectTile: 12 });
-});
-
-test('§3.2 existing agent tab active in cockpit by another path → workbench, enter, go_into', () => {
-  assert.deepEqual(nextMode(C, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'manual', reason: 'go_into', enter: 12, goInto: true });
-});
-
-test('§3.2 workbench: ⇧⌘C agent is entered (not a peek); ⌘N onto a hidden agent counts as going in', () => {
-  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: true, ptyId: 12, entered: false }), { mode: 'manual', reason: null, enter: 12, goInto: false });
-  assert.deepEqual(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: false }), { mode: 'manual', reason: null, enter: 12, goInto: true });
-  assert.equal(nextMode(W, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 12, entered: true }), null);
-  assert.equal(nextMode(W, { kind: 'tab_activated', isAgent: false, isNew: false, ptyId: 13, entered: false }), null);
-});
-
-test('§3.2 nothing moves while the Cockpit is disabled', () => {
-  for (const t of [{ kind: 'handoff' }, { kind: 'return' }, { kind: 'go_into', ptyId: 1 }, { kind: 'open_tab' }, { kind: 'tab_activated', isAgent: true, isNew: false, ptyId: 1, entered: false }]) {
+test('D1 §1.2 nothing moves while the Cockpit is disabled', () => {
+  for (const t of [
+    { kind: 'switcher', to: 'cockpit' },
+    { kind: 'toggle_deep' },
+    { kind: 'toggle_manual' },
+    { kind: 'deep_session', active: true },
+    { kind: 'handoff' },
+    { kind: 'return' },
+    { kind: 'go_into', ptyId: 1 },
+    { kind: 'open_tab' },
+    { kind: 'tab_activated' },
+  ]) {
     assert.equal(nextMode(OFF, t), null, JSON.stringify(t));
   }
+});
+
+test('deepSessionOf: an active source:deep focus in this workspace', () => {
+  const focus = (o) => snapshot({ focus: { active: true, session_id: 'f1', source: 'deep', started_at: ago(3), item: null, quiet_count: 2, policy: 'none', deep: null, ...o } });
+  assert.deepEqual(deepSessionOf(focus({ deep: { exploration_id: 'exp-1', title: 'Clocks', workspace: WS } }), WS), { exploration_id: 'exp-1', title: 'Clocks' });
+  assert.deepEqual(
+    deepSessionOf(focus({ item: { kind: 'exploration', workspace: WS, exploration_id: null, title: '' } }), WS),
+    { exploration_id: null, title: '' },
+    'from the focus item; nothing open yet',
+  );
+  assert.equal(deepSessionOf(focus({ deep: { exploration_id: 'exp-1', title: 'x', workspace: '/other' } }), WS), null, 'another workspace');
+  assert.equal(deepSessionOf(focus({ source: 'inferred' }), WS), null);
+  assert.equal(deepSessionOf(focus({ active: false }), WS), null);
+  assert.equal(deepSessionOf(snapshot({}), WS), null);
+  assert.deepEqual(deepSessionOf(focus({}), WS), { exploration_id: null, title: '' }, 'no workspace on record: machine-wide');
+});
+
+// ---------------------------------------------------------------------------
+// The ⌘0 switcher (D1 §1.3)
+// ---------------------------------------------------------------------------
+
+test('switcher: a quick tap goes back to the last mode (via tap)', () => {
+  let s = switcherStep(SWITCHER_IDLE, { kind: 'zero', now: 1000, lastMode: 'manual' }).state;
+  assert.equal(s.phase, 'pending');
+  assert.equal(switcherStep(s, { kind: 'tick', now: 1100 }).state, s, 'no overlay before 250 ms');
+  const up = switcherStep(s, { kind: 'meta_up', now: 1000 + SWITCHER_HOLD_MS - 1 });
+  assert.deepEqual(up.commit, { to: 'manual', via: 'tap' });
+  assert.equal(up.state.phase, 'idle');
+});
+
+test('switcher: holding ⌘ shows the cards; each further 0 cycles; release commits (via overlay)', () => {
+  let s = switcherStep(SWITCHER_IDLE, { kind: 'zero', now: 0, lastMode: 'cockpit' }).state;
+  s = switcherStep(s, { kind: 'tick', now: SWITCHER_HOLD_MS }).state;
+  assert.equal(s.phase, 'open');
+  assert.equal(s.highlight, 'cockpit', 'the last mode is highlighted first');
+  s = switcherStep(s, { kind: 'zero', now: 400, lastMode: 'cockpit' }).state;
+  assert.equal(s.highlight, 'deep');
+  s = switcherStep(s, { kind: 'zero', now: 500, lastMode: 'cockpit' }).state;
+  assert.equal(s.highlight, 'manual');
+  s = switcherStep(s, { kind: 'zero', now: 600, lastMode: 'cockpit' }).state;
+  assert.equal(s.highlight, 'cockpit', 'wraps');
+  s = switcherStep(s, { kind: 'move', delta: -1 }).state;
+  assert.equal(s.highlight, 'manual');
+  const up = switcherStep(s, { kind: 'meta_up', now: 700 });
+  assert.deepEqual(up.commit, { to: 'manual', via: 'overlay' });
+});
+
+test('switcher: a second 0 while held opens at once', () => {
+  let s = switcherStep(SWITCHER_IDLE, { kind: 'zero', now: 0, lastMode: 'deep' }).state;
+  s = switcherStep(s, { kind: 'zero', now: 50, lastMode: 'deep' }).state;
+  assert.equal(s.phase, 'open');
+  assert.equal(s.highlight, 'deep');
+});
+
+test('switcher: a slow release with no tick still counts as the overlay', () => {
+  const s = switcherStep(SWITCHER_IDLE, { kind: 'zero', now: 0, lastMode: 'deep' }).state;
+  assert.deepEqual(switcherStep(s, { kind: 'meta_up', now: 600 }).commit, { to: 'deep', via: 'overlay' });
+});
+
+test('switcher: Esc cancels (pending or open), with no commit', () => {
+  let s = switcherStep(SWITCHER_IDLE, { kind: 'zero', now: 0, lastMode: 'manual' }).state;
+  let e = switcherStep(s, { kind: 'escape' });
+  assert.equal(e.state.phase, 'idle');
+  assert.equal(e.commit, undefined);
+  s = switcherStep(switcherStep(s, { kind: 'tick', now: 300 }).state, { kind: 'zero', now: 310, lastMode: 'manual' }).state;
+  e = switcherStep(s, { kind: 'escape' });
+  assert.equal(e.state.phase, 'idle');
+  assert.equal(e.commit, undefined);
+  assert.equal(switcherStep(e.state, { kind: 'meta_up', now: 400 }).commit, undefined, 'the release after Esc does nothing');
+});
+
+test('switcher: the chip opens the same cards; ⌘ release does not commit; click or Enter does (via chip)', () => {
+  let s = switcherStep(SWITCHER_IDLE, { kind: 'chip', lastMode: 'cockpit' }).state;
+  assert.equal(s.phase, 'open');
+  assert.equal(s.fromChip, true);
+  assert.equal(switcherStep(s, { kind: 'meta_up', now: 0 }).commit, undefined);
+  assert.deepEqual(switcherStep(s, { kind: 'click', to: 'deep' }).commit, { to: 'deep', via: 'chip' });
+  s = switcherStep(s, { kind: 'highlight', to: 'manual' }).state;
+  assert.deepEqual(switcherStep(s, { kind: 'enter' }).commit, { to: 'manual', via: 'chip' });
+  assert.deepEqual(switcherStep(SWITCHER_IDLE, { kind: 'click', to: 'deep' }), { state: SWITCHER_IDLE }, 'nothing open: nothing to click');
 });
 
 // ---------------------------------------------------------------------------
 // keyAction
 // ---------------------------------------------------------------------------
 
-test('nav: Copilot first, every section labelled, landing stays Feed', () => {
+test('nav: Copilot first, every section labelled, landing on Copilot (D1 §8.3)', () => {
   assert.equal(SECTIONS[0], 'copilot');
   assert.equal(new Set(SECTIONS).size, SECTIONS.length);
   for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
-  assert.equal(DEFAULT_SECTION, 'feed');
+  assert.equal(DEFAULT_SECTION, 'copilot');
 });
 
 test('nav: Files sits between Ops and Someday', () => {
@@ -698,43 +747,152 @@ test('formatDuration', () => {
 });
 
 // ---------------------------------------------------------------------------
-// cockpitMode store: quiet() fallbacks and hold-end re-checks
+// cockpitMode store: landing, hops, Deep memory, the switcher, End session
 // ---------------------------------------------------------------------------
 
-{
-  const storePath = join(__dirname, '../src/renderer/components/cockpit/cockpitMode.ts');
+async function bundle(rel, name) {
   const built = await esbuild.build({
-    entryPoints: [storePath],
+    entryPoints: [join(__dirname, rel)],
     bundle: true,
     format: 'esm',
     platform: 'node',
     write: false,
     external: ['react'],
   });
-  const dir = mkdtempSync(join(__dirname, '.cockpit-store-smoke-'));
-  const file = join(dir, 'cockpitMode.mjs');
+  const dir = mkdtempSync(join(__dirname, `.${name}-smoke-`));
+  const file = join(dir, `${name}.mjs`);
   writeFileSync(file, built.outputFiles[0].text);
-  let store;
   try {
-    ({ cockpitModeStore: store } = await import(pathToFileURL(file).href));
+    return await import(pathToFileURL(file).href);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
 
-  test('store: quiet() marks one activation of one tab as not yours', () => {
-    store.quiet(5);
-    assert.equal(store.takeQuiet(6), false);
-    assert.equal(store.takeQuiet(5), true);
-    assert.equal(store.takeQuiet(5), false, 'consumed');
+{
+  const { cockpitModeStore: store } = await bundle('../src/renderer/components/cockpit/cockpitMode.ts', 'cockpit-store');
+
+  test('store: Lee opens in the Cockpit on Copilot (D1 §1.2, §8.3)', () => {
+    assert.equal(store.get().mode, 'cockpit');
+    store.configure(true);
+    assert.equal(store.get().mode, 'cockpit');
+    assert.equal(store.get().section, 'copilot');
+    store.setSection('feed');
+    store.configure(true);
+    assert.equal(store.get().section, 'feed', 'the section is remembered within the session');
+    store.setSection('copilot');
   });
 
-  const before = store.getWall().holdEpoch;
-  store.hold(30);
-  assert.equal(store.holding(), true);
-  await new Promise((r) => setTimeout(r, 120));
-  test('store: a hold that ends bumps holdEpoch so the wall re-checks active tabs', () => {
-    assert.equal(store.holding(), false);
-    assert.equal(store.getWall().holdEpoch, before + 1);
+  test('store: ⇧⌘0 with nothing open lands on Copilot, not an empty Deep', () => {
+    store.setSection('tasks');
+    store.toggleDeep();
+    assert.equal(store.get().mode, 'cockpit');
+    assert.equal(store.get().section, 'copilot');
+  });
+
+  test('store: openDeep remembers the exploration and shows Deep (deep_start, then hop)', () => {
+    store.openDeep('exp-1', 'Vector clocks');
+    assert.equal(store.get().mode, 'deep');
+    assert.equal(store.get().reason, 'deep_start');
+    assert.deepEqual(store.getDeep(), { exploration_id: 'exp-1', title: 'Vector clocks', view: 'page' });
+    store.toggleDeep();
+    assert.equal(store.get().mode, 'cockpit');
+    assert.equal(store.get().reason, 'hop');
+    assert.equal(store.get().lastMode, 'deep');
+    store.toggleManual();
+    assert.equal(store.get().mode, 'manual');
+    store.toggleDeep();
+    assert.equal(store.get().mode, 'deep', 'Manual → Deep keeps the open exploration');
+    store.toggleManual();
+    assert.equal(store.get().mode, 'manual');
+    store.toggleManual();
+    assert.equal(store.get().mode, 'cockpit');
+  });
+
+  test('store: a ⌘0 tap goes back to the last mode', () => {
+    assert.equal(store.get().lastMode, 'manual');
+    const now = Date.now();
+    store.switcher({ kind: 'zero', now, lastMode: store.get().lastMode });
+    assert.equal(store.get().switcher.phase, 'pending');
+    store.switcher({ kind: 'meta_up', now: now + 10 });
+    assert.equal(store.get().switcher.phase, 'idle');
+    assert.equal(store.get().mode, 'manual');
+    assert.equal(store.get().reason, 'switcher');
+  });
+
+  test('store: the chip opens the cards; a click commits; Esc cancels', () => {
+    store.switcher({ kind: 'chip', lastMode: store.get().lastMode });
+    assert.equal(store.get().switcher.phase, 'open');
+    store.switcher({ kind: 'escape' });
+    assert.equal(store.get().switcher.phase, 'idle');
+    assert.equal(store.get().mode, 'manual');
+    store.switcher({ kind: 'chip', lastMode: store.get().lastMode });
+    store.switcher({ kind: 'click', to: 'deep' });
+    assert.equal(store.get().mode, 'deep');
+  });
+
+  test('store: End session reaches the Deep surface', () => {
+    let asked = 0;
+    const off = store.onEndSessionRequest(() => (asked += 1));
+    assert.equal(store.canRequestEndSession(), true);
+    store.set('cockpit', 'hop');
+    store.requestEndSession();
+    assert.equal(asked, 1);
+    assert.equal(store.get().mode, 'deep', 'Deep shows first: the sheet lives there');
+    off();
+    assert.equal(store.canRequestEndSession(), false);
+  });
+
+  let openerFocused = 0;
+  const offOpener = store.onFocusOpener(() => (openerFocused += 1));
+  store.focusOpener();
+  await new Promise((r) => setTimeout(r, 80));
+  test('store: focusOpener shows the Cockpit on Copilot and focuses the opener once', () => {
+    assert.equal(store.get().mode, 'cockpit');
+    assert.equal(store.get().section, 'copilot');
+    assert.equal(openerFocused, 1);
+  });
+  offOpener();
+
+  test('store: with the Cockpit off, Manual only (Deep unavailable)', () => {
+    store.configure(false);
+    assert.equal(store.get().mode, 'manual');
+    store.set('deep', 'switcher');
+    store.set('cockpit', 'switcher');
+    store.openDeep('exp-2', 'x');
+    assert.equal(store.get().mode, 'manual');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// useHotkeys' chord builder: e.code for digits and punctuation (D1 §1.3)
+// ---------------------------------------------------------------------------
+
+{
+  const { hotkeyCombos } = await bundle('../src/renderer/hooks/useHotkeys.ts', 'hotkeys');
+  const ev = (o) => ({ metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...o });
+
+  test('hotkeys: ⇧⌘0 (key ")"), ⌥⌘0 (key "º") and ⌥⌘1 (key "¡") match on e.code', () => {
+    assert.ok(hotkeyCombos(ev({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }), true).includes('meta+shift+0'));
+    assert.ok(hotkeyCombos(ev({ key: 'º', code: 'Digit0', metaKey: true, altKey: true }), true).includes('meta+alt+0'));
+    assert.ok(hotkeyCombos(ev({ key: '¡', code: 'Digit1', metaKey: true, altKey: true }), true).includes('meta+alt+1'));
+  });
+
+  test('hotkeys: ⌘. matches on e.code; ⇧⌘. keeps its own chord', () => {
+    assert.ok(hotkeyCombos(ev({ key: '.', code: 'Period', metaKey: true }), true).includes('meta+.'));
+    const shifted = hotkeyCombos(ev({ key: '>', code: 'Period', metaKey: true, shiftKey: true }), true);
+    assert.ok(shifted.includes('meta+shift+.'));
+    assert.equal(shifted.includes('meta+.'), false);
+  });
+
+  test('hotkeys: existing key-based chords are unchanged and tried first', () => {
+    assert.deepEqual(hotkeyCombos(ev({ key: '0', code: 'Digit0', metaKey: true }), true), ['meta+0']);
+    assert.deepEqual(hotkeyCombos(ev({ key: 'T', code: 'KeyT', metaKey: true, shiftKey: true }), true), ['meta+shift+t']);
+    assert.deepEqual(hotkeyCombos(ev({ key: '{', code: 'BracketLeft', metaKey: true, shiftKey: true }), true), ['meta+shift+{', 'meta+shift+[']);
+    assert.deepEqual(hotkeyCombos(ev({ key: 'Escape', code: 'Escape', metaKey: true }), true), ['meta+esc']);
+    assert.deepEqual(hotkeyCombos(ev({ key: 'w', code: 'KeyW', metaKey: true }), false), ['meta+w', 'ctrl+w'], 'non-mac ctrl fallback');
+    assert.deepEqual(hotkeyCombos(ev({ key: 'c', code: 'KeyC', ctrlKey: true }), true), ['ctrl+c'], 'mac: ⌃ is not ⌘');
+    assert.deepEqual(hotkeyCombos(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true }), true), ['meta'], 'a bare modifier');
   });
 }
 

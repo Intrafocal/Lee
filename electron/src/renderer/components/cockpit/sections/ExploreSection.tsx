@@ -3,11 +3,11 @@
  * Library). Someday is quick capture; Explore is where an idea gets a
  * durable, open-ended investigation with Hester.
  *
- * Each exploration is a file in the workspace's .hester/explore/ (Hester's
- * ExplorationStore) holding a node tree: the root (Seed + Log), branches
- * (the Library's nodes), decisions, spikes and their evidence. "Dive in"
- * asks Hester to seed the chat session explore-<id> from the file, then opens
- * it as a Hester tab; "Open tree" opens the Library tab on the same file.
+ * Each exploration is a directory in the workspace's .hester/explore/
+ * (Hester's ExplorationStore): exploration.md holds the node tree (the root's
+ * Seed + Log, branches (the Library's nodes), decisions, spikes and their
+ * evidence), page.md is the Page. "Dive in" opens the Page in Deep (Deep D1
+ * §8.3); "Open tree" opens the Library tab on the same exploration (Manual).
  * Decisions, spikes, promotes and archive are deterministic (no model), and
  * no action needs a reason.
  */
@@ -290,7 +290,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
     ctx.registerRows(handles);
   });
   const sel = ctx.mode.selected;
-  const filePath = (id: string) => workspacePath(workspace, `.hester/explore/${id}.md`);
+  const filePath = (id: string) => workspacePath(workspace, `.hester/explore/${id}/page.md`);
 
   const renderNode = (exp: Exploration, node: ExploreNode, depth: number) => {
     const isRoot = node.id === 'root' || node.parent == null;
@@ -577,7 +577,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
               </div>
               <div className="cockpit-row-actions" onClick={(e) => e.stopPropagation()}>
                 <button className="cockpit-btn is-primary" disabled={busy === exp.id} onClick={() => void dive(exp)}>
-                  <Icon name="chat" size={11} /> {exp.turns > 0 ? 'Continue' : 'Dive in'}
+                  <Icon name="eye" size={11} /> {exp.turns > 0 ? 'Continue' : 'Dive in'}
                 </button>
                 <button className="cockpit-btn" onClick={() => ctx.openLibrary(exp.id)} title="Open this exploration's tree in the Library">
                   <Icon name="list" size={11} /> Open tree
@@ -608,7 +608,7 @@ export const ExploreSection: React.FC<ExploreSectionProps> = ({ ctx, focusCreate
                     </button>
                   </>
                 )}
-                <button className="cockpit-btn" onClick={() => ctx.openFile(filePath(exp.id))} title="Open the exploration file in the Workbench">
+                <button className="cockpit-btn" onClick={() => ctx.openFile(filePath(exp.id))} title="Open the Page (page.md) in Manual">
                   <Icon name="file-code" size={11} /> File
                 </button>
                 {archived ? (

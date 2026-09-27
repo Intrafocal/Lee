@@ -1,7 +1,7 @@
 /**
- * Pure Cockpit model (contracts §3, §4): mode transitions, the tab-strip wall,
- * agent tiles, the merged Feed and the Cockpit keyboard map. No React, no
- * DOM, type-only imports, so scripts/cockpit-renderer-smoke.mjs can compile
+ * Pure Cockpit model (contracts §3, §4; Deep D1 §1): mode transitions, the
+ * ⌘0 switcher, agent tiles, the merged Feed and the Cockpit keyboard map. No
+ * React, no DOM, type-only imports, so scripts/cockpit-renderer-smoke.mjs can compile
  * it with esbuild and run it under plain node.
  */
 
@@ -31,8 +31,8 @@ export type SectionId = 'copilot' | 'feed' | 'goals' | 'tasks' | 'ops' | 'files'
 /** Nav order (sections have no keys: click only). Copilot (Hester) is always first; Goals third (v4 §8.1). */
 export const SECTIONS: readonly SectionId[] = ['copilot', 'feed', 'goals', 'tasks', 'ops', 'files', 'someday', 'explore', 'tabs', 'history'];
 
-/** Where the Cockpit lands when nothing is remembered for the workspace. */
-export const DEFAULT_SECTION: SectionId = 'feed';
+/** Where the Cockpit lands on app start and on return (Deep D1 §8.3). */
+export const DEFAULT_SECTION: SectionId = 'copilot';
 
 export const SECTION_LABELS: Record<SectionId, string> = {
   copilot: 'Copilot',
@@ -58,7 +58,7 @@ export interface ModelTab {
 }
 
 // ---------------------------------------------------------------------------
-// Agent tabs and the strip (§3.1)
+// Agent tabs (§3.1)
 // ---------------------------------------------------------------------------
 
 export interface AgentSets {
@@ -72,13 +72,13 @@ export function agentPtysFromSnapshot(snapshot: AttentionSnapshot | null | undef
   return new Set((snapshot?.agents ?? []).map((a) => a.pty_id));
 }
 
-/** Providers that are the user's own tools, not agents: Hester chat stays outside the wall (user decision 2026-09-25). */
+/** Providers that are the user's own tools, not agents: Hester chat is never a tile (user decision 2026-09-25). */
 const OWN_PROVIDERS = new Set(['hester']);
-/** Tab types that are never walled, whatever A or the snapshot report: Hester chat, Hester QA, DevOps. */
+/** Tab types that are never agents, whatever A or the snapshot report: Hester chat, Hester QA, DevOps. */
 const OWN_TAB_TYPES = new Set(['hester', 'hester-qa', 'devops']);
 
-/** Hester chat and DevOps tabs stay visible like the user's own tabs, even when typed 'agent'. */
-export function isWallExempt(tab: Pick<ModelTab, 'type' | 'provider'>): boolean {
+/** Hester chat and DevOps tabs are the user's own tabs (the drawer lists them), even when typed 'agent'. */
+export function isOwnTab(tab: Pick<ModelTab, 'type' | 'provider'>): boolean {
   return OWN_TAB_TYPES.has(tab.type) || (!!tab.provider && OWN_PROVIDERS.has(tab.provider));
 }
 
@@ -107,132 +107,200 @@ export function tabDisplayFromRuntime(
 }
 
 export function isAgentTab(tab: ModelTab, sets: AgentSets): boolean {
-  if (isWallExempt(tab)) return false;
+  if (isOwnTab(tab)) return false;
   if (tab.type === 'agent' || tab.type === 'claude') return true;
   if (tab.ptyId == null) return false;
   return sets.snapshotAgents.has(tab.ptyId) || sets.runtimeAgents.has(tab.ptyId);
 }
 
-/**
- * Workbench strip for one dock (center, or a side panel): own tabs plus the
- * agent terminals you went into. Identity when the Cockpit is disabled.
- */
-export function stripTabs<T extends ModelTab>(
-  tabs: T[],
-  opts: { enabled: boolean; enteredPtys: ReadonlySet<number>; sets: AgentSets },
-): T[] {
-  if (!opts.enabled) return tabs;
-  const out = tabs.filter((t) => !isAgentTab(t, opts.sets) || (t.ptyId != null && opts.enteredPtys.has(t.ptyId)));
-  return out.length === tabs.length ? tabs : out;
-}
-
-/**
- * Where the active tab of a dock goes when that tab closes or moves away:
- * the last visible (strip) tab other than it, never a hidden agent.
- */
-export function fallbackTab<T extends ModelTab>(visible: readonly T[], leavingId: number, pick: 'first' | 'last' = 'last'): T | null {
-  const rest = visible.filter((t) => t.id !== leavingId);
-  if (!rest.length) return null;
-  return pick === 'first' ? rest[0] : rest[rest.length - 1];
-}
-
-/** Tab navigation (⌘1-9, next/prev) walks the strip you can see, not hidden agents. */
-export function stripNeighbor<T extends ModelTab>(strip: readonly T[], activeId: number | null, delta: 1 | -1): T | null {
-  if (strip.length < 2 || activeId == null) return null;
-  const i = strip.findIndex((t) => t.id === activeId);
-  if (i < 0) return delta > 0 ? strip[0] : strip[strip.length - 1];
-  return strip[(i + delta + strip.length) % strip.length];
-}
-
-export interface WallRepairInput {
-  enabled: boolean;
-  mode: LeeMode;
-  isAgent: boolean;
-  entered: boolean;
-  ptyId: number | null;
-  /** The tab was an own tab when last seen active and is an agent now (you ran `claude` in it). */
-  becameAgent: boolean;
-  /** A hold (session restore, create-tab bridge) just ended with this tab active. */
-  holdEnded: boolean;
-}
-
-/**
- * What to do with an active tab that is an agent you never went into, outside
- * a user activation: 'enter' it (you started it where you work, contracts §3.6),
- * 'redirect' to an own tab (it only got active through restore or a background
- * launch), or nothing.
- */
-export function wallRepair(input: WallRepairInput): 'enter' | 'redirect' | null {
-  if (!input.enabled || !input.isAgent || input.ptyId == null || input.entered) return null;
-  if (input.becameAgent) return 'enter';
-  if (input.holdEnded && input.mode === 'manual') return 'redirect';
-  return null;
-}
-
 // ---------------------------------------------------------------------------
-// Mode transitions (§3.2)
+// Mode transitions (Deep D1 §1.2)
 // ---------------------------------------------------------------------------
+
+/** The switcher's card order; each further ⌘0 moves the highlight along it. */
+export const MODES: readonly LeeMode[] = ['cockpit', 'deep', 'manual'];
+
+export const MODE_LABELS: Record<LeeMode, string> = {
+  cockpit: 'Cockpit',
+  deep: 'Deep',
+  manual: 'Manual',
+};
 
 export interface ModeInput {
   enabled: boolean;
   mode: LeeMode;
+  /** A Deep focus session is active in this window's workspace. */
+  deepActive?: boolean;
+  /** This window has an exploration to show in Deep (its Deep memory). */
+  hasExploration?: boolean;
 }
 
 export type ModeTrigger =
-  | { kind: 'load'; enabled: boolean; defaultMode: LeeMode }
-  | { kind: 'toggle' }
-  | { kind: 'focus'; active: boolean }
+  | { kind: 'load'; enabled: boolean }
+  | { kind: 'switcher'; to: LeeMode }
+  | { kind: 'toggle_deep' }
+  | { kind: 'toggle_manual' }
+  | { kind: 'deep_session'; active: boolean }
   | { kind: 'handoff' }
   | { kind: 'return' }
   | { kind: 'go_into'; ptyId: number }
   | { kind: 'open_tab' }
-  | { kind: 'tab_activated'; isAgent: boolean; isNew: boolean; ptyId: number | null; entered: boolean };
+  | { kind: 'tab_activated' };
 
 export interface ModeDecision {
   mode: LeeMode;
   reason: ModeReason | null;
-  /** Add this pty to enteredPtys. */
-  enter?: number;
-  /** Select this agent's tile (stay in the cockpit). */
-  selectTile?: number;
-  /** Log cockpit.go_into for `enter`. */
-  goInto?: boolean;
+  /** Log cockpit.go_into for this pty. */
+  goInto?: number;
+  /**
+   * Deep was asked for with nothing open (D1 §1.2): show the Cockpit on
+   * Copilot and focus the opener's field instead of an empty Deep.
+   */
+  opener?: true;
+}
+
+export interface DeepSessionInfo {
+  exploration_id: string | null;
+  title: string;
+}
+
+/**
+ * The active Deep focus session in this workspace, from the attention
+ * snapshot (`focus.deep`, falling back to an `exploration` focus item), or
+ * null when there is none here.
+ */
+export function deepSessionOf(snapshot: AttentionSnapshot | null | undefined, workspace: string): DeepSessionInfo | null {
+  const f = snapshot?.focus;
+  if (!f || !f.active || f.source !== 'deep') return null;
+  const item = f.item && f.item.kind === 'exploration' ? f.item : null;
+  const ws = f.deep?.workspace ?? item?.workspace ?? null;
+  // A session with no workspace on record is machine-wide: every window sees it.
+  if (ws && workspace && !sameWorkspace(ws, workspace)) return null;
+  return {
+    exploration_id: f.deep?.exploration_id ?? item?.exploration_id ?? null,
+    title: f.deep?.title ?? item?.title ?? '',
+  };
 }
 
 /** Decide what a trigger does. null = nothing changes. */
 export function nextMode(state: ModeInput, trigger: ModeTrigger): ModeDecision | null {
-  if (trigger.kind === 'load') {
-    const mode: LeeMode = trigger.enabled ? trigger.defaultMode : 'manual';
-    return { mode, reason: 'default' };
-  }
+  // Lee always opens in the Cockpit (14 §3); with the Cockpit off, Manual only.
+  if (trigger.kind === 'load') return { mode: trigger.enabled ? 'cockpit' : 'manual', reason: 'default' };
   if (!state.enabled) return null;
   const to = (mode: LeeMode, reason: ModeReason): ModeDecision | null =>
     mode === state.mode ? null : { mode, reason };
+  // Entering Deep: the open exploration, else the opener on Copilot.
+  const toDeep = (reason: ModeReason): ModeDecision | null => {
+    if (state.hasExploration) return to('deep', reason);
+    return { mode: 'cockpit', reason: state.mode === 'cockpit' ? null : reason, opener: true };
+  };
+  const deepReason: ModeReason = state.deepActive ? 'hop' : 'deep_start';
 
   switch (trigger.kind) {
-    case 'toggle':
-      return { mode: state.mode === 'cockpit' ? 'manual' : 'cockpit', reason: 'manual' };
-    case 'focus':
-      return trigger.active ? to('manual', 'focus_start') : to('cockpit', 'focus_end');
+    case 'switcher':
+      return trigger.to === 'deep' ? toDeep('switcher') : to(trigger.to, 'switcher');
+    case 'toggle_deep':
+      return state.mode === 'deep' ? to('cockpit', 'hop') : toDeep(deepReason);
+    case 'toggle_manual':
+      return to(state.mode === 'manual' ? 'cockpit' : 'manual', 'hop');
+    case 'deep_session':
+      if (trigger.active) return toDeep('deep_start');
+      return state.mode === 'deep' ? to('cockpit', 'deep_end') : null;
     case 'handoff':
-      return to('cockpit', 'handoff');
     case 'return':
-      return to('cockpit', 'return');
+      // A return after a short absence keeps you in Deep.
+      if (state.deepActive && state.mode === 'deep') return null;
+      return to('cockpit', trigger.kind);
     case 'go_into':
-      return { mode: 'manual', reason: state.mode === 'manual' ? null : 'go_into', enter: trigger.ptyId, goInto: true };
+      return { mode: 'manual', reason: state.mode === 'manual' ? null : 'go_into', goInto: trigger.ptyId };
     case 'open_tab':
       return to('manual', 'open_tab');
-    case 'tab_activated': {
-      const { isAgent, isNew, ptyId, entered } = trigger;
-      if (state.mode === 'cockpit') {
-        if (!isAgent) return { mode: 'manual', reason: 'open_tab' };
-        if (ptyId == null) return null;
-        if (isNew) return { mode: 'cockpit', reason: null, selectTile: ptyId };
-        return { mode: 'manual', reason: 'go_into', enter: ptyId, goInto: true };
-      }
-      if (!isAgent || ptyId == null || entered) return null;
-      return { mode: 'manual', reason: null, enter: ptyId, goInto: !isNew };
-    }
+    case 'tab_activated':
+      // The wall is gone (D1 §1.4): a tab becoming active never changes the mode.
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The ⌘0 switcher (Deep D1 §1.3)
+// ---------------------------------------------------------------------------
+
+/** Holding ⌘ this long after ⌘0 shows the overlay; a quicker release is a tap. */
+export const SWITCHER_HOLD_MS = 250;
+
+export type SwitcherVia = 'tap' | 'overlay' | 'chip';
+
+export interface SwitcherState {
+  phase: 'idle' | 'pending' | 'open';
+  /** When ⌘0 went down (pending). */
+  downAt: number;
+  highlight: LeeMode;
+  /** The overlay was opened from the mode chip: ⌘ isn't held, so click or Enter commits. */
+  fromChip: boolean;
+}
+
+export const SWITCHER_IDLE: SwitcherState = { phase: 'idle', downAt: 0, highlight: 'cockpit', fromChip: false };
+
+export type SwitcherEvent =
+  /** ⌘0 keydown (not a key repeat). */
+  | { kind: 'zero'; now: number; lastMode: LeeMode }
+  /** ⌘ released. */
+  | { kind: 'meta_up'; now: number }
+  /** The hold timer fired. */
+  | { kind: 'tick'; now: number }
+  | { kind: 'chip'; lastMode: LeeMode }
+  | { kind: 'move'; delta: 1 | -1 }
+  /** The pointer is over a card. */
+  | { kind: 'highlight'; to: LeeMode }
+  | { kind: 'enter' }
+  | { kind: 'click'; to: LeeMode }
+  | { kind: 'escape' };
+
+export interface SwitcherStep {
+  state: SwitcherState;
+  /** Switch to this mode (the caller skips it when it already is the mode). */
+  commit?: { to: LeeMode; via: SwitcherVia };
+}
+
+function cycleMode(m: LeeMode, delta: 1 | -1): LeeMode {
+  const i = MODES.indexOf(m);
+  return MODES[(i + delta + MODES.length) % MODES.length];
+}
+
+/**
+ * The switcher's state machine. A tap (⌘ released within 250 ms, no second
+ * 0) goes back to the last mode; holding ⌘, or a second 0, shows the three
+ * cards with the last mode highlighted; each further 0 moves the highlight;
+ * releasing ⌘ commits; Esc cancels. The chip opens the same cards,
+ * committed by a click or Enter.
+ */
+export function switcherStep(s: SwitcherState, ev: SwitcherEvent): SwitcherStep {
+  const done = (to: LeeMode, via: SwitcherVia): SwitcherStep => ({ state: SWITCHER_IDLE, commit: { to, via } });
+  switch (ev.kind) {
+    case 'zero':
+      if (s.phase === 'idle') return { state: { phase: 'pending', downAt: ev.now, highlight: ev.lastMode, fromChip: false } };
+      if (s.phase === 'pending') return { state: { ...s, phase: 'open' } };
+      return { state: { ...s, highlight: cycleMode(s.highlight, 1) } };
+    case 'tick':
+      if (s.phase === 'pending' && ev.now - s.downAt >= SWITCHER_HOLD_MS) return { state: { ...s, phase: 'open' } };
+      return { state: s };
+    case 'meta_up':
+      if (s.phase === 'pending') return done(s.highlight, ev.now - s.downAt < SWITCHER_HOLD_MS ? 'tap' : 'overlay');
+      if (s.phase === 'open' && !s.fromChip) return done(s.highlight, 'overlay');
+      return { state: s };
+    case 'chip':
+      if (s.phase !== 'idle') return { state: s };
+      return { state: { phase: 'open', downAt: 0, highlight: ev.lastMode, fromChip: true } };
+    case 'move':
+      return s.phase === 'open' ? { state: { ...s, highlight: cycleMode(s.highlight, ev.delta) } } : { state: s };
+    case 'highlight':
+      return s.phase === 'open' && s.highlight !== ev.to ? { state: { ...s, highlight: ev.to } } : { state: s };
+    case 'enter':
+      return s.phase === 'open' ? done(s.highlight, s.fromChip ? 'chip' : 'overlay') : { state: s };
+    case 'click':
+      return s.phase === 'open' ? done(ev.to, s.fromChip ? 'chip' : 'overlay') : { state: s };
+    case 'escape':
+      return { state: SWITCHER_IDLE };
   }
 }
 
@@ -371,7 +439,7 @@ export function tileModel(input: TileInput): TileModel[] {
   // Hester chat / DevOps tabs are never tiles, whatever A or the snapshot report about their pty.
   const exempt = (id: number) => {
     const t = localTabs.get(id);
-    return !!t && isWallExempt(t);
+    return !!t && isOwnTab(t);
   };
   for (const t of input.tabs) if (t.ptyId != null && isAgentTab(t, input.sets)) add(t.ptyId);
   for (const [id, a] of agents) if (!exempt(id) && !isOwnProvider(a.provider)) add(id);
@@ -639,7 +707,8 @@ export interface KeyContext {
  * to the Launcher while the Cockpit is showing.
  */
 export const COCKPIT_KEYS: ReadonlyArray<readonly [string, string]> = [
-  ['⌘0', 'Cockpit ↔ Workbench (⇧⌘0 resets zoom)'],
+  ['⌘0', 'Switch mode: tap for the last one, hold for Cockpit / Deep / Manual'],
+  ['⇧⌘0 / ⌥⌘0', 'Cockpit ↔ Deep / Cockpit ↔ Manual'],
   ['⌘N', 'New task (the Launcher)'],
   ['↓ / ↑', 'Next / previous row'],
   ['← / →', 'Previous / next agent tile'],

@@ -6,8 +6,9 @@
  *
  * v4 §8.5: open tasks order by status, then quadrant (Q1, Q2, Q3,
  * unclassified, Q4), then importance. Each row has a quadrant chip (click:
- * Important / Urgent on/off/auto overrides), Hester's view (/suggest, shown
- * inline with proposals) and Focus on this (a task focus item).
+ * Important / Urgent on/off/auto overrides) and Hester's view (/suggest,
+ * shown inline with proposals). Focus on a task is retired (Deep D1 §8.3);
+ * human-lead tasks get their Workbench view in D2.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -210,18 +211,6 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
     });
   };
 
-  const focusOn = () => {
-    const api = ctx.copilotApi;
-    if (!api) {
-      ctx.notify('Focus is not available here', 'error');
-      return;
-    }
-    const label = taskTitle(task) || task.title;
-    api
-      .focusStart({ kind: 'task', workspace: ctx.workspace, task_id: task.id, label })
-      .then(() => ctx.notify(`Focusing on ${label}`))
-      .catch(() => ctx.notify('Could not start focus', 'error'));
-  };
   const chip = quadrantChip(task);
   const tile = task.agent?.pty_id != null ? ctx.tiles.find((t) => t.ptyId === task.agent?.pty_id) ?? null : null;
   const closed = task.status === 'done' || task.status === 'discarded';
@@ -374,9 +363,6 @@ const TaskRow: React.FC<{ ctx: CockpitCtx; task: CockpitTask; selected: boolean;
               onClick={hesterView}
             >
               {view.phase === 'loading' ? 'Asking…' : "Hester's view"}
-            </button>
-            <button className="cockpit-btn" title="Start focus on this task: its agent's items count as related" onClick={focusOn}>
-              Focus on this
             </button>
           </div>
         )

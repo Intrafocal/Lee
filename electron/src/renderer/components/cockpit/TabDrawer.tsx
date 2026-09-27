@@ -1,6 +1,6 @@
 /**
  * TabDrawer - your own tabs (every dock), names and icons only (contracts
- * §3.6). ` focuses it, ←/→ select, Enter or a click opens (→ workbench).
+ * §3.6). ` focuses it, ←/→ select, Enter or a click opens (→ Manual).
  */
 
 import React from 'react';
