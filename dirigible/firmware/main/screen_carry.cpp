@@ -1,18 +1,19 @@
 /*
  * screen_carry.cpp — Library, which on the T-Deck is Carry (Cockpit design
- * §8.2; docs/14-Deep-Work.md §8.1): the devices carry an exploration out of a
- * Deep session and bring thoughts back into the next one.  No Deep mode here.
+ * §8.2; docs/14-Deep-Work.md §8.1; Desk D2 §9.4): the devices carry your
+ * last Desk card out of a Deep session and bring thoughts back into the next
+ * one.  No Desk here.
  *
  * Data: Lee's GET /carry for the followed window's workspace (fetched when
  * the view opens, after a write, and on r):
  *
- *   pick_up         the last session's exploration and your stopped-at note
- *   open_questions  up to five, each naming its exploration
+ *   pick_up         your last Desk card, its Area and your stopped-at note
+ *   open_questions  up to five, each naming its card
  *   open_next       what the next session opens first
  *
- * One exploration per page, the pick-up first, then each other exploration an
- * open question names; j / k (or a sideways flick) page when there is more
- * than one:
+ * One card per page, the pick-up first, then each other card an open
+ * question names; j / k (or a sideways flick) page when there is more than
+ * one.  Against a Lee from before the Desk the "cards" are explorations:
  *
  *   +------------------------------------------------------------+
  *   | Carry on the T-Deck                                   1/2  |  title
@@ -29,15 +30,16 @@
  * stand-in for the Newsreader Lee and Aeronaut use (design rule 3).
  *
  *   Add a thought (C)  a text box; Enter sends POST /carry/capture with the
- *                      page's exploration, so it lands under Pick up with it.
- *                      With nothing to carry it is a plain Someday capture
- *                      (POST /capture, which Lee spools while Hester is down).
+ *                      page's card, so it lands under Pick up with it.  With
+ *                      nothing to carry it is a plain Someday capture (POST
+ *                      /capture).  Lee spools either while Hester is down.
  *   Open next (O)      POST /carry/open-next: the next Deep session opens
- *                      this exploration first.  Replaces the old f (Focus)
- *                      key: Deep can't start from here.
+ *                      this card first.  Replaces the old f (Focus) key:
+ *                      Deep can't start from here.
  */
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -110,7 +112,7 @@ struct State {
     lv_obj_t* c_ta     = nullptr;
     lv_obj_t* c_status = nullptr;
     bool      composing = false;
-    std::string compose_for;     // exploration the box writes into ("" = Someday)
+    std::string compose_for;     // card the box writes into ("" = Someday)
     std::string draft;           // kept across Cancel
     std::string draft_for;
     lv_timer_t* compose_close = nullptr;
@@ -118,7 +120,7 @@ struct State {
     // ---- data
     CarryState carry;
     Load       load = Load::Idle;
-    std::vector<std::string> ids;   // explorations, in page order
+    std::vector<std::string> ids;   // cards, in page order
     int        at = 0;
     std::string cur_id;            // keeps the page across refetches
     bool       busy = false;
@@ -166,7 +168,7 @@ void footer()
     auto& s = st();
     if (app().view != View::Library) return;
     if (s.composing) { chrome_set_footer("Enter sends  hold: cancel", "thought"); return; }
-    if (s.ids.size() > 1) chrome_set_footer("j/k explorations  r reload  w i", "carry");
+    if (s.ids.size() > 1) chrome_set_footer("j/k cards  r reload  w i", "carry");
     else                  chrome_set_footer("r reload  w Work  i In flight", "carry");
 }
 
@@ -205,7 +207,7 @@ void render()
 {
     auto& s = st();
     s.ids = s.carry.explorations();
-    // Stay on the same exploration across a refetch.
+    // Stay on the same card across a refetch.
     s.at = 0;
     for (int i = 0; i < (int)s.ids.size(); i++) {
         if (s.ids[i] == s.cur_id) s.at = i;
@@ -227,7 +229,7 @@ void render()
             snprintf(sub, sizeof(sub), "%s captured away for next time.\nc adds another.",
                      dirigible::number_word(s.carry.captured_count, true).c_str());
         } else {
-            snprintf(sub, sizeof(sub), "No Deep session to pick up yet.\nc captures a thought for next time.");
+            snprintf(sub, sizeof(sub), "No Desk card to pick up yet.\nc captures a thought for next time.");
         }
         show_empty("Nothing to carry", sub);
     } else {
@@ -245,6 +247,15 @@ void render()
         lv_obj_update_layout(s.pos);
         lv_obj_set_width(s.title, SCREEN_W - 2 * PAD - lv_obj_get_width(s.pos) - 8);
 
+        // The Area, when Lee knows it, rides on the eyebrow: "MESH  YOU STOPPED AT".
+        std::string eb = "YOU STOPPED AT";
+        if (pick && !s.carry.area_name.empty()) {
+            std::string area = s.carry.area_name;
+            if (area.size() > 24) area = area.substr(0, 24);
+            for (auto& ch : area) ch = (char)toupper((unsigned char)ch);
+            eb = area + "  " LV_SYMBOL_BULLET "  " + eb;
+        }
+        ui_set_text(s.stop_eb, eb);
         const bool has_stop = pick && !s.carry.stopped_at.empty();
         if (has_stop) {
             ui_set_text(s.stopped, s.carry.stopped_at);
@@ -276,6 +287,10 @@ void render()
             if (!counts.empty()) counts += "  " LV_SYMBOL_BULLET "  ";
             counts += std::to_string(s.carry.reading_count) + (s.carry.reading_count == 1 ? " thing" : " things") + " to read";
         }
+        if (s.carry.spooled > 0) {
+            if (!counts.empty()) counts += "  " LV_SYMBOL_BULLET "  ";
+            counts += std::to_string(s.carry.spooled) + " waiting for Hester";
+        }
         lv_label_set_text(s.counts, counts.c_str());
         set_next_button();
     }
@@ -293,12 +308,14 @@ void demo_fill(CarryState& c)
     c = CarryState();
     c.workspace = "/ws/lee";
     c.has_pick_up = true;
-    c.pick_up_id = "exp-carry";
+    c.pick_up_id = "pg-0000ca77";
     c.pick_up_title = "Carry on the T-Deck";
+    c.area_name = "Devices";
+    c.stopped_line = 12;
     c.stopped_at = "The pager should hold one thought, not three. Next: what the "
                    "Library page says when there's nothing to carry.";
-    c.questions.push_back({ "exp-carry", "q1", "Does Open next replace the f key, or should f just go?" });
-    c.questions.push_back({ "exp-voice", "q2", "Would a voice capture on the walk be better than typing?" });
+    c.questions.push_back({ "pg-0000ca77", "q1", "Does Open next replace the f key, or should f just go?" });
+    c.questions.push_back({ "pg-00000b0e", "q2", "Would a voice capture on the walk be better than typing?" });
     c.captured_count = 2;
     c.reading_count = 1;
 }
@@ -421,7 +438,7 @@ void open_compose()
 {
     auto& s = st();
     if (s.composing) return;
-    // Into the page's exploration; with nothing to carry, into Someday.
+    // Into the page's card; with nothing to carry, into Someday.
     const bool page = !lv_obj_has_flag(s.page, LV_OBJ_FLAG_HIDDEN);
     s.compose_for = page ? cur() : std::string();
     std::string head;
@@ -430,7 +447,7 @@ void open_compose()
     } else {
         const bool pick = s.carry.has_pick_up && s.compose_for == s.carry.pick_up_id;
         head = "A thought into " + (pick && !s.carry.pick_up_title.empty() ? s.carry.pick_up_title
-                                                                          : std::string("this exploration"));
+                                                                          : std::string("this card"));
     }
     ui_set_text(s.c_head, head);
     lv_textarea_set_text(s.c_ta, s.draft_for == s.compose_for ? s.draft.c_str() : "");
@@ -474,7 +491,7 @@ void submit()
         if (!s.composing) return;
         lv_textarea_set_text(s.c_ta, "");
         set_status(r.spooled ? "Saved - reaches Lee's Library when Hester is back"
-                             : into.empty() ? "Captured for next time" : "Added to the exploration",
+                             : into.empty() ? "Captured for next time" : "Added to the card",
                    r.spooled ? dg::ember() : dg::phosphor());
         s.carry.captured_count++;
         if (!s.compose_close) s.compose_close = lv_timer_create(compose_close_cb, 1400, nullptr);
@@ -504,7 +521,7 @@ void go(int delta)
     auto& s = st();
     if (s.composing || s.ids.size() < 2) return;
     const int p = std::max(0, std::min((int)s.ids.size() - 1, s.at + delta));
-    if (p == s.at) { flash(delta > 0 ? "last exploration" : "first exploration"); return; }
+    if (p == s.at) { flash(delta > 0 ? "last card" : "first card"); return; }
     s.at = p;
     s.cur_id = s.ids[p];
     render();

@@ -265,6 +265,34 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
     }
   }
 
+  /// Desk D2 §9.2: Extend, or End and rate, the "Still thinking?" push.
+  Future<ActionResult> deepIdleEnd(AttentionItem item, {required String action, String? rating, String? stoppedAt}) async {
+    final machine = _ref.read(machinesProvider).activeMachine;
+    if (machine == null) {
+      return const ActionResult(success: false, error: 'No active machine');
+    }
+    final api = _apiFactory(machine);
+    try {
+      return await api.deepIdleEnd(item.id, version: item.version, action: action, rating: rating, stoppedAt: stoppedAt);
+    } finally {
+      api.dispose();
+    }
+  }
+
+  /// Desk D2 §9.2: a thought captured into the card the idle push is about.
+  Future<CaptureResult> captureIntoCard(String text, {String? workspace, String? cardId}) async {
+    final machine = _ref.read(machinesProvider).activeMachine;
+    if (machine == null) {
+      return const CaptureResult(success: false, error: 'No active machine');
+    }
+    final api = _apiFactory(machine);
+    try {
+      return await api.carryCapture(text, workspace: workspace, cardId: cardId);
+    } finally {
+      api.dispose();
+    }
+  }
+
   Future<CaptureResult> capture(
     String text, {
     String? workspace,

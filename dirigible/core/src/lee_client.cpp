@@ -544,7 +544,7 @@ void LeeConnection::fetchCarry(std::function<void(int, const CarryState*)> cb) {
     });
 }
 
-void LeeConnection::carryCapture(const std::string& text, const std::string& exploration_id,
+void LeeConnection::carryCapture(const std::string& text, const std::string& card_id,
                                  std::function<void(const CaptureOutcome&)> cb) {
     if (!http_) {
         CaptureOutcome r;
@@ -554,7 +554,7 @@ void LeeConnection::carryCapture(const std::string& text, const std::string& exp
     }
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "text", text.c_str());
-    if (!exploration_id.empty()) cJSON_AddStringToObject(body, "exploration_id", exploration_id.c_str());
+    if (!card_id.empty()) cJSON_AddStringToObject(body, "card_id", card_id.c_str());
     const std::string ws = followedWorkspace();
     if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
     http_->post(buildHttpUrl("/carry/capture"), body, [cb](int status, cJSON* resp) {
@@ -564,13 +564,28 @@ void LeeConnection::carryCapture(const std::string& text, const std::string& exp
     });
 }
 
-void LeeConnection::carryOpenNext(const std::string& exploration_id,
+void LeeConnection::carryOpenNext(const std::string& card_id,
                                   std::function<void(const ReplyResult&)> cb) {
     cJSON* body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "exploration_id", exploration_id.c_str());
+    cJSON_AddStringToObject(body, "card_id", card_id.c_str());
     const std::string ws = followedWorkspace();
     if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
     postAction("/carry/open-next", body, std::move(cb));
+}
+
+void LeeConnection::deepIdleEnd(const std::string& item_id, int version, const char* action,
+                                const char* rating, const std::string& stopped_at,
+                                std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "item_id", item_id.c_str());
+    cJSON_AddNumberToObject(body, "version", version);
+    cJSON_AddStringToObject(body, "action", action);
+    if (strcmp(action, "end_rate") == 0) {
+        if (rating) cJSON_AddStringToObject(body, "rating", rating);
+        else cJSON_AddNullToObject(body, "rating");
+        if (!stopped_at.empty()) cJSON_AddStringToObject(body, "stopped_at", stopped_at.c_str());
+    }
+    postAction("/deep/idle-end", body, std::move(cb));
 }
 
 void LeeConnection::agentCheckin(int pty_id, std::function<void(const ReplyResult&)> cb) {

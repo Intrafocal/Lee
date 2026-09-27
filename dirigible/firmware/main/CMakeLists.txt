@@ -7,6 +7,7 @@ idf_component_register(
         "screen_waiting.cpp"
         "screen_inflight.cpp"
         "screen_carry.cpp"
+        "screen_deep_idle.cpp"
         "screen_tabs.cpp"
         "screen_terminal.cpp"
         "screen_hester.cpp"

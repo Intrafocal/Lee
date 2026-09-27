@@ -17,7 +17,11 @@ enum AttentionKind {
   failure,
   review,
   summary,
-  question;
+  question,
+
+  /// Desk D2 §9.2: "Still thinking?", the one push before an idle Deep
+  /// session ends. Devices only; answered with Extend or End and rate.
+  deepIdle;
 
   static AttentionKind fromWire(String? value) => switch (value) {
         'approval' => AttentionKind.approval,
@@ -28,6 +32,7 @@ enum AttentionKind {
         'review' => AttentionKind.review,
         'summary' => AttentionKind.summary,
         'question' => AttentionKind.question,
+        'deep_idle' => AttentionKind.deepIdle,
         _ => AttentionKind.waiting,
       };
 }
@@ -67,7 +72,10 @@ enum AttentionActionName {
   snooze,
   dismiss,
   wake,
-  choose;
+  choose,
+  extend,
+  endRate,
+  capture;
 
   static AttentionActionName? fromWire(String value) => switch (value) {
         'approve' => AttentionActionName.approve,
@@ -78,8 +86,35 @@ enum AttentionActionName {
         'dismiss' => AttentionActionName.dismiss,
         'wake' => AttentionActionName.wake,
         'choose' => AttentionActionName.choose,
+        'extend' => AttentionActionName.extend,
+        'end_rate' => AttentionActionName.endRate,
+        'capture' => AttentionActionName.capture,
         _ => null,
       };
+}
+
+/// A `deep_idle` item's session: when it ends if you stay away, and the
+/// card you were in (Desk D2 §9.2).
+class DeepIdleInfo extends Equatable {
+  final String sessionId;
+  final DateTime? endsAt;
+  final String? cardId;
+  final String? cardTitle;
+
+  const DeepIdleInfo({required this.sessionId, this.endsAt, this.cardId, this.cardTitle});
+
+  factory DeepIdleInfo.fromJson(Map<String, dynamic> json) {
+    final card = json['card'];
+    return DeepIdleInfo(
+      sessionId: json['session_id'] as String? ?? '',
+      endsAt: _parseDate(json['ends_at']),
+      cardId: card is Map<String, dynamic> ? card['card_id'] as String? : null,
+      cardTitle: card is Map<String, dynamic> ? card['title'] as String? : null,
+    );
+  }
+
+  @override
+  List<Object?> get props => [sessionId, endsAt, cardId, cardTitle];
 }
 
 /// One option offered by an `AskUserQuestion` sub-question.
@@ -310,6 +345,9 @@ class AttentionItem extends Equatable {
   /// from an older Lee that hasn't caught up yet.
   final QuestionSet? question;
 
+  /// Present on `kind: deep_idle` items only.
+  final DeepIdleInfo? deepIdle;
+
   const AttentionItem({
     required this.id,
     this.version = 0,
@@ -332,6 +370,7 @@ class AttentionItem extends Equatable {
     this.actions = const [],
     this.snoozedUntil,
     this.question,
+    this.deepIdle,
   });
 
   factory AttentionItem.fromJson(Map<String, dynamic> json) {
@@ -370,6 +409,9 @@ class AttentionItem extends Equatable {
       snoozedUntil: _parseDate(json['snoozed_until']),
       question: json['question'] != null
           ? QuestionSet.fromJson(json['question'] as Map<String, dynamic>)
+          : null,
+      deepIdle: json['deep_idle'] is Map<String, dynamic>
+          ? DeepIdleInfo.fromJson(json['deep_idle'] as Map<String, dynamic>)
           : null,
     );
   }
@@ -421,6 +463,7 @@ class AttentionItem extends Equatable {
         actions,
         snoozedUntil,
         question,
+        deepIdle,
       ];
 }
 
@@ -734,6 +777,10 @@ class AgentSummary extends Equatable {
   /// first turn ends, or from an older Lee.
   final AgentUsage? usage;
 
+  /// The agent's session id, in full snapshots only (compact ones omit it):
+  /// what Rename names when the agent has no task.
+  final String? sessionId;
+
   const AgentSummary({
     required this.ptyId,
     this.windowId,
@@ -751,6 +798,7 @@ class AgentSummary extends Equatable {
     this.recent = const [],
     this.updates = const [],
     this.usage,
+    this.sessionId,
   });
 
   factory AgentSummary.fromJson(Map<String, dynamic> json) {
@@ -782,6 +830,7 @@ class AgentSummary extends Equatable {
       usage: json['usage'] is Map<String, dynamic>
           ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>)
           : null,
+      sessionId: json['session_id'] as String?,
     );
   }
 
@@ -805,6 +854,7 @@ class AgentSummary extends Equatable {
         lastTool,
         lastSummary,
         filesTouchedCount,
+        sessionId,
         now,
         recent,
         updates,
@@ -983,20 +1033,25 @@ class UsageLimits extends Equatable {
 
 /// The running Deep session (Deep D1 §2.5): devices show "In deep work".
 class DeepSession extends Equatable {
+  /// Legacy alias of [cardId] (Desk D2); the exploration on an older Lee.
   final String? explorationId;
   final String title;
 
-  const DeepSession({this.explorationId, this.title = ''});
+  /// The Desk card the session is in; null at the Desk overview (or an older Lee).
+  final String? cardId;
+
+  const DeepSession({this.explorationId, this.title = '', this.cardId});
 
   factory DeepSession.fromJson(Map<String, dynamic> json) {
     return DeepSession(
       explorationId: json['exploration_id'] as String?,
       title: json['title'] as String? ?? '',
+      cardId: json['card_id'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [explorationId, title];
+  List<Object?> get props => [explorationId, title, cardId];
 }
 
 class AttentionSnapshot extends Equatable {

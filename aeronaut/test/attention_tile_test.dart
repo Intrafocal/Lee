@@ -32,6 +32,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   _RecordingAttentionNotifier(super.ref);
 
   final calls = <_Call>[];
+  String? snoozeUntil;
 
   /// Set by a test to control what [fetchFullItem] resolves to; null means
   /// "not arrived yet" (the caller keeps showing the clipped text).
@@ -59,6 +60,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   @override
   Future<ActionResult> snooze(String itemId, {String? until, int? minutes}) async {
     calls.add(_Call('snooze', itemId));
+    snoozeUntil = until;
     return const ActionResult(success: true);
   }
 
@@ -250,18 +252,34 @@ void main() {
       expect(allow.color, isNot(Phosphor.phosphor));
     });
 
-    testWidgets('swipe right on a snoozable/dismissible tile opens the snooze menu', (tester) async {
-      await _pumpTile(tester, reviewItem);
+    testWidgets('swipe right leaves "Snoozed · Undo" for 5 s; Undo sends nothing', (tester) async {
+      final notifier = await _pumpTile(tester, reviewItem);
 
       expect(find.byType(Dismissible), findsOneWidget);
 
       await tester.drag(find.byType(Dismissible), const Offset(500, 0));
       await tester.pumpAndSettle();
 
-      // Same menu as tapping the Snooze button.
-      expect(find.text('Snooze 15 minutes'), findsOneWidget);
-      expect(find.text('Snooze 1 hour'), findsOneWidget);
-      expect(find.text('Until it changes'), findsOneWidget);
+      expect(find.byKey(const ValueKey('attention-swiped')), findsOneWidget);
+      expect(find.textContaining('Snoozed'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('attention-undo')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('attention-swiped')), findsNothing);
+      expect(find.byType(Dismissible), findsOneWidget, reason: 'the card is back');
+      await tester.pump(const Duration(seconds: 6));
+      expect(notifier.calls.where((c) => c.method == 'snooze'), isEmpty);
+    });
+
+    testWidgets('a swiped snooze is sent (until it changes) once its Undo window ends', (tester) async {
+      final notifier = await _pumpTile(tester, reviewItem);
+      await tester.drag(find.byType(Dismissible), const Offset(500, 0));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 4));
+      expect(notifier.calls.where((c) => c.method == 'snooze'), isEmpty, reason: 'still undoable');
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(notifier.calls.where((c) => c.method == 'snooze').single.itemId, reviewItem.id);
+      expect(notifier.snoozeUntil, 'change');
     });
 
     testWidgets('an item with neither snooze nor dismiss has no Dismissible', (tester) async {

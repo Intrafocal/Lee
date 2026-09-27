@@ -5,7 +5,8 @@
  *
  * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5, §6, §7;
  * Deep sessions, window modes and the device fields:
- * docs/plans/2026-09-26-deep-d1-contracts.md §2.
+ * docs/plans/2026-09-26-deep-d1-contracts.md §2; card sessions at the Desk and
+ * the idle-end push: docs/plans/2026-09-27-desk-foundation-contract.md §9.1, §9.2.
  */
 
 import * as path from 'path';
@@ -24,6 +25,7 @@ import type {
   AttentionSource,
   AwayState,
   DeepEndRequest,
+  DeepIdleEndRequest,
   DeepStartRequest,
   FocusEndReason,
   FocusItem,
@@ -41,8 +43,9 @@ import type {
   ReturnInfo,
   SnoozeRequest,
 } from '../../shared/copilot';
+import type { DeskSessionCreate } from '../../shared/desk';
 import { copilotBus, logEvent } from './bus';
-import { getCopilotConfig, inQuietHours } from './config';
+import { getCopilotConfig, inQuietHours, type CopilotConfig } from './config';
 import {
   AGENT_TEXT_MAX,
   classifyNotification,
@@ -60,7 +63,8 @@ import {
 import type { ParsedQuestion } from './hook-payload';
 import { ACTIVITY_PREVIEW_MAX, AgentSession, AgentSessions } from './agent-sessions';
 import { AttentionQueue, PROMPT_KINDS, isPromptKind, kindTitle, providerLabel, sourceKey } from './attention-queue';
-import { FocusTracker, parseExplorationId, parseFocusItem } from './focus';
+import { FocusTracker, parseCardId, parseExplorationId, parseFocusItem, type PresenceLike } from './focus';
+import { DESK_STOPPED_AT_MAX, getDeskSessionRelay } from './desk-sessions';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
 import { checkReply, sanitizeReplyText, writeReply, writeText } from './reply';
 import { claudeSettingsPath, hookPaths, installClaudeHooks, writeAuthHeader } from './hook-install';
@@ -136,6 +140,8 @@ const WORKSPACE_MAX = 4096;
 const DEEP_TITLE_MAX = 200;
 /** Page length cap (Hester's PUT /page is 1 MB); stopped_at_chars beyond it is dropped. */
 const STOPPED_AT_CHARS_MAX = 1_000_000;
+const MINUTE_MS = 60_000;
+const IDLE_END_ACTIONS = new Set<DeepIdleEndRequest['action']>(['extend', 'end_rate']);
 
 /** Does the agent's last message end by asking the user something? (A trailing lee-status block doesn't count.) */
 function endsOnQuestion(summary: string | null): boolean {
@@ -203,6 +209,20 @@ function pushSignature(snap: AttentionSnapshot): string {
   });
 }
 
+/** The Deep session, as a Desk session record needs it (§5.2). */
+interface DeepSessionInfo {
+  session_id: string;
+  started_at: string;
+  workspace: string;
+  touched: string[];
+  last: string | null;
+}
+
+/** 'lee', or the device's kind, for deep.extend's `surface`. */
+function actorSurface(actor: Actor): string {
+  return typeof actor === 'object' && actor.kind === 'user' && actor.surface === 'device' ? actor.device_kind : 'lee';
+}
+
 function obj(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -233,6 +253,16 @@ export class CopilotQueue {
   private windowModes = new Map<number, LeeMode>();
   /** U0.1: the first status line payload's shape has been logged. */
   private statusShapeLogged = false;
+  /** Desk D2 §9.2: the Deep session the one idle-end push went out for. */
+  private idlePushedFor: string | null = null;
+  /**
+   * Desk D2 §5.2: where a device-ended (or ignored-push) session's record
+   * goes. Defaults to Hester's POST /desk/sessions with the offline spool;
+   * tests replace it.
+   */
+  deskSessionSink: (workspace: string, record: DeskSessionCreate) => void = (workspace, record) => {
+    void getDeskSessionRelay().relay(workspace, record);
+  };
 
   constructor(private ptyManager: PTYManager) {
     this.focus = new FocusTracker({
@@ -325,7 +355,7 @@ export class CopilotQueue {
     try {
       const now = Date.now();
       const cfg = getCopilotConfig();
-      this.focus.tick(now, this.presence(), cfg.focus, { deep: cfg.deep, inferBlocked: this.anyWindowDeep() });
+      this.tickFocus(now, this.presence(), cfg);
       if (this.away.summaryDue(now)) this.deliverSummary(now);
       this.queue.recompute(now);
       this.queue.prune(now);
@@ -345,6 +375,140 @@ export class CopilotQueue {
 
   private presence(): PresenceState | null {
     return copilotBus.getPresence();
+  }
+
+  /**
+   * The focus end rules plus the Desk's idle-end push (§9.2). A Deep session
+   * that ends for being away after its push went unanswered gets a Desk
+   * session record with reason 'away'.
+   */
+  tickFocus(now: number, presence: PresenceLike | null, cfg: CopilotConfig): void {
+    const before = this.focus.source === 'deep' ? this.deepSessionInfo() : null;
+    const ignoredPush = before !== null && this.idlePushedFor === before.session_id && this.liveIdleItem() !== null;
+    this.focus.tick(now, presence, cfg.focus, { deep: cfg.deep, inferBlocked: this.anyWindowDeep() });
+    if (before && this.focus.sessionId !== before.session_id && ignoredPush) {
+      this.writeDeskSession(before, now, 'away', null, null);
+    }
+    this.checkIdlePush(now, presence, cfg);
+  }
+
+  /** The live idle-end item, if any. */
+  private liveIdleItem(): AttentionItem | null {
+    return this.queue.liveItems().find((i) => i.kind === 'deep_idle') ?? null;
+  }
+
+  /** Open the one idle-end push when it's due; resolve it when you're back or the session is gone. */
+  private checkIdlePush(now: number, presence: PresenceLike | null, cfg: CopilotConfig): void {
+    const live = this.liveIdleItem();
+    const sid = this.focus.source === 'deep' ? this.focus.sessionId : null;
+    if (live && (!sid || live.deep_idle?.session_id !== sid)) {
+      this.queue.resolve(live.id, 'expired', now);
+      this.changed();
+      return;
+    }
+    const endsAt = sid ? this.focus.deepIdleEndsAt(presence, cfg.deep) : null;
+    if (live && endsAt === null) {
+      this.queue.resolve(live.id, 'returned', now);
+      this.changed();
+      return;
+    }
+    if (!sid || endsAt === null || live || this.idlePushedFor === sid) return;
+    const warnMs = Math.max(0, cfg.deep.idle_warn_minutes) * MINUTE_MS;
+    if (now < endsAt - warnMs || now >= endsAt || inQuietHours(new Date(now), cfg)) return;
+    const deep = this.focus.deep;
+    const card = deep?.card_id ? { card_id: deep.card_id, title: deep.title } : null;
+    const endsIso = new Date(endsAt).toISOString();
+    this.idlePushedFor = sid;
+    this.queue.open(
+      {
+        kind: 'deep_idle',
+        title: kindTitle('deep_idle', null),
+        text: deep?.title ?? '',
+        source: {
+          kind: 'lee', provider: null, session_id: null, pty_id: null, window_id: null,
+          tab_id: null, tab_label: null, workspace: deep?.workspace ?? null, cwd: null,
+        },
+        deep_idle: { session_id: sid, ends_at: endsIso, card },
+      },
+      now,
+    );
+    this.log({ type: 'deep.idle_push', workspace: deep?.workspace ?? null, data: { session_id: sid, ends_at: endsIso } });
+  }
+
+  /** What a Desk session record needs from the running Deep session. */
+  private deepSessionInfo(): DeepSessionInfo | null {
+    const st = this.focus.state(0);
+    if (st.source !== 'deep' || !st.session_id || !st.started_at || !st.deep) return null;
+    const cards = this.focus.deepCards;
+    return { session_id: st.session_id, started_at: st.started_at, workspace: st.deep.workspace, touched: cards.touched, last: cards.last };
+  }
+
+  private writeDeskSession(info: DeepSessionInfo, now: number, reason: 'device' | 'away', rating: DepthRating | null, stoppedAt: string | null): void {
+    const record: DeskSessionCreate = {
+      focus_session_id: info.session_id,
+      started_at: info.started_at,
+      ended_at: new Date(now).toISOString(),
+      reason,
+      stopped_at: stoppedAt,
+      stopped_card_id: info.last,
+      rating,
+      questions_kept: [],
+      cards_touched: info.touched,
+    };
+    try {
+      this.deskSessionSink(info.workspace, record);
+    } catch (err) {
+      this.ptyManager.log('WARN', 'Copilot: Desk session record failed', { error: String(err) });
+    }
+  }
+
+  /**
+   * POST /deep/idle-end (§9.2): Extend, or End and rate, from a device.
+   * The item must be the open idle-end push at `version` for the running
+   * Deep session; anything else is stale (409).
+   */
+  deepIdleEnd(rawReq: unknown, actor: Actor): Outcome<FocusState> {
+    const now = Date.now();
+    const req = obj(rawReq);
+    if (typeof req.item_id !== 'string' || !req.item_id) return { status: 400, body: this.focusState(), error: 'item_id is required' };
+    if (!Number.isInteger(req.version)) return { status: 400, body: this.focusState(), error: 'version must be an integer' };
+    const action = req.action as DeepIdleEndRequest['action'];
+    if (!IDLE_END_ACTIONS.has(action)) return { status: 400, body: this.focusState(), error: "action must be 'extend' or 'end_rate'" };
+    const rating = req.rating === undefined || req.rating === null ? null : req.rating;
+    if (action === 'end_rate' && rating !== null && !DEPTH_RATINGS.has(rating as DepthRating)) {
+      return { status: 400, body: this.focusState(), error: "rating must be 'deep', 'mixed', 'shallow' or null" };
+    }
+    if (req.stopped_at !== undefined && req.stopped_at !== null && typeof req.stopped_at !== 'string') {
+      return { status: 400, body: this.focusState(), error: 'stopped_at must be a string or null' };
+    }
+    const item = this.queue.get(req.item_id);
+    if (!item || item.kind !== 'deep_idle') return { status: 404, body: this.focusState(), error: 'not found' };
+    const info = this.deepSessionInfo();
+    if (item.state !== 'open' || item.version !== req.version || !info || item.deep_idle?.session_id !== info.session_id) {
+      return { status: 409, body: this.focusState(), error: 'stale' };
+    }
+    if (action === 'extend') {
+      this.focus.extendDeep(now);
+      this.queue.resolve(item.id, 'reply', now, actor);
+      this.log({
+        type: 'deep.extend',
+        workspace: info.workspace,
+        actor,
+        data: { session_id: info.session_id, minutes: getCopilotConfig().deep.idle_end_minutes, surface: actorSurface(actor) },
+      });
+    } else {
+      const stopped = typeof req.stopped_at === 'string' && req.stopped_at.trim() ? req.stopped_at.trim().slice(0, DESK_STOPPED_AT_MAX) : null;
+      this.queue.resolve(item.id, 'reply', now, actor);
+      this.focus.stop('deep_end', now, actor, {
+        deep_rating: rating as DepthRating | null,
+        ...(stopped ? { stopped_at_chars: stopped.length } : {}),
+        ended_via: 'device',
+      });
+      this.writeDeskSession(info, now, 'device', rating as DepthRating | null, stopped);
+    }
+    this.queue.recompute(now);
+    this.changed();
+    return { status: 200, body: this.focusState() };
   }
 
   // ---------------------------------------------------------------------------
@@ -453,7 +617,10 @@ export class CopilotQueue {
     const agents = this.agentSummaries({ compact: opts.compact });
     // Deep D1 §2.5: focus.active stays true during Deep, so devices hold
     // notifications unchanged; mode and deep are for v6 devices.
-    const deep = focus.deep ? { exploration_id: focus.deep.exploration_id, title: focus.deep.title } : null;
+    const d = focus.deep;
+    const deep = d
+      ? { exploration_id: d.exploration_id, title: d.title, ...(d.card_id !== undefined ? { card_id: d.card_id ?? null, card_kind: d.card_kind ?? null } : {}) }
+      : null;
     return { ...snap, agents, mode: this.focusedWindowMode(), deep, limits: this.usage.limits() };
   }
 
@@ -1289,16 +1456,23 @@ export class CopilotQueue {
   // ---------------------------------------------------------------------------
 
   /**
-   * Start a Deep session, or point the active one at another exploration.
-   * `workspace` defaults to the focused window's; `exploration_id: null` is
-   * Deep with nothing open yet (a device's Go deep), which never clears an
-   * exploration the active session already has.
+   * Start a Deep session, or point the active one at another card (Desk D2
+   * §9.1). `workspace` defaults to the focused window's. The item is always a
+   * card: `card_id`, else a legacy `exploration_id` that is already a page id,
+   * else null (Deep at the Desk with no card yet, e.g. a device's Go deep),
+   * which never clears a card the active session already has.
    */
   deepStart(rawReq: unknown, actor: Actor, surface: 'lee' | 'device', windowId: number | null = null): Outcome<FocusState> {
     const now = Date.now();
     const req = obj(rawReq);
     const explorationId = parseExplorationId(req.exploration_id);
     if (explorationId === undefined) return { status: 400, body: this.focusState(), error: 'invalid exploration_id' };
+    const hasCard = req.card_id !== undefined && req.card_id !== null;
+    const cardId = hasCard ? parseCardId(req.card_id) : parseCardId(explorationId) ?? null;
+    if (cardId === undefined) return { status: 400, body: this.focusState(), error: 'invalid card_id' };
+    if (req.card_kind !== undefined && req.card_kind !== null && req.card_kind !== 'page') {
+      return { status: 400, body: this.focusState(), error: "card_kind must be 'page'" };
+    }
     if (req.title !== undefined && req.title !== null && typeof req.title !== 'string') {
       return { status: 400, body: this.focusState(), error: 'title must be a string' };
     }
@@ -1315,14 +1489,15 @@ export class CopilotQueue {
     if (!workspace) return { status: 409, body: this.focusState(), error: 'no window to go deep in' };
 
     const cur = this.focus.deep;
+    const curCard = cur?.card_id ?? null;
     const given = typeof req.title === 'string' ? req.title.trim().slice(0, DEEP_TITLE_MAX) : '';
     let item: FocusItem;
-    if (cur && explorationId === null && cur.exploration_id !== null) {
-      // Go deep while already deep on an exploration: keep it.
-      item = { kind: 'exploration', workspace: cur.workspace, exploration_id: cur.exploration_id, title: given || cur.title };
+    if (cur && cardId === null && curCard !== null) {
+      // Go deep while already on a card: keep it.
+      item = { kind: 'card', workspace: cur.workspace, card_id: curCard, card_kind: cur.card_kind ?? 'page', title: given || cur.title };
     } else {
-      const same = cur !== null && cur.exploration_id === explorationId;
-      item = { kind: 'exploration', workspace, exploration_id: explorationId, title: given || (same && cur ? cur.title : 'Deep') };
+      const same = cur !== null && curCard === cardId;
+      item = { kind: 'card', workspace, card_id: cardId, card_kind: cardId ? 'page' : null, title: given || (same && cur ? cur.title : 'Deep') };
     }
     if (surface === 'lee' && this.away.active) this.endHandoff('return');
     this.focus.start(item, 'deep', surface, actor, now);

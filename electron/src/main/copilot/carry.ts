@@ -1,16 +1,22 @@
 /**
- * Carry for devices (docs/14-Deep-Work.md §8.1; cockpit design contract §8):
- * Lee main routes that read and write a workspace's carried thinking through
- * Hester, so a phone or T-Deck needs only its Lee token.
+ * Carry for devices (docs/14-Deep-Work.md §8.1; cockpit design contract §8;
+ * Desk D2 §9.3): Lee main routes that read and write a workspace's carried
+ * thinking through Hester, so a phone or T-Deck needs only its Lee token.
+ * Carry's pick-up is your last Desk card.
  *
- *   GET  /carry?workspace=<ws>   pick_up, open questions, counts, open_next
+ *   GET  /carry?workspace=<ws>   pick_up, open questions, counts, open_next, spooled
  *                                (Hester GET /copilot/opener + /copilot/open-next)
- *   POST /carry/capture          { workspace?, text, exploration_id? } -> Hester POST /someday
- *   POST /carry/open-next        { workspace?, exploration_id? | someday_id? } -> Hester POST /copilot/open-next
+ *   POST /carry/capture          { workspace?, text, card_id? | exploration_id? } -> Hester POST /someday
+ *   POST /carry/open-next        { workspace?, card_id? | exploration_id? | someday_id? } -> Hester POST /copilot/open-next
  *
  * Any authenticated principal, as for POST /capture. The workspace must be
- * an open window's; default the focused window's. Hester unreachable -> 503
- * { error: 'hester_offline' }.
+ * an open window's; default the focused window's. Hester unreachable: GET
+ * /carry and open-next answer 503 { error: 'hester_offline' }; a capture is
+ * spooled (~/.lee/spool/someday.jsonl) and answers 200 { spooled: true }.
+ *
+ * A pre-Desk Hester's opener has no `card`: its exploration id stands in as
+ * the card id, and ids that aren't page ids go back to Hester as
+ * exploration_id, so captures and Open next still work against it.
  */
 
 import * as fs from 'fs';
@@ -20,9 +26,10 @@ import type { Application, Request, Response } from 'express';
 import { encodeWorkspaceHeader } from '../../shared/cockpit';
 import type { Opener } from '../../shared/cockpit';
 import type { Principal } from '../../shared/copilot';
+import { PAGE_ID_RE, type DeskCardKind } from '../../shared/desk';
 import { actorForPrincipal } from './auth';
 import { logEvent } from './bus';
-import { CAPTURE_MAX_CHARS, getHesterPort, resolveCaptureWorkspace } from './capture';
+import { CAPTURE_MAX_CHARS, getCaptureRelay, getHesterPort, resolveCaptureWorkspace, type SomedayPayload } from './capture';
 import { captureSourceFor } from './core-routes';
 
 const REQUEST_TIMEOUT_MS = 5000;
@@ -31,6 +38,7 @@ const ID_MAX = 128;
 const ID_RE = /^[A-Za-z0-9_.:-]+$/;
 
 export interface CarryOpenNext {
+  card_id?: string;
   exploration_id?: string;
   someday_id?: string;
   set_at: string;
@@ -38,11 +46,23 @@ export interface CarryOpenNext {
 
 export interface Carry {
   workspace: string;
-  pick_up: { exploration_id: string; title: string; stopped_at: string | null; last_touched_at: string | null } | null;
-  open_questions: Array<{ exploration_id: string; question_id: string; text: string }>;
+  pick_up: {
+    card_id: string;
+    card_kind: DeskCardKind;
+    title: string;
+    area_name: string | null;
+    stopped_at: string | null;
+    stopped_line: number | null;
+    last_touched_at: string | null;
+    /** Legacy alias = card_id, for app and firmware builds before the Desk. */
+    exploration_id: string;
+  } | null;
+  open_questions: Array<{ card_id: string; exploration_id: string; question_id: string; text: string }>;
   captured_count: number;
   reading_count: number;
   open_next: CarryOpenNext | null;
+  /** Captures waiting in Lee's spool for Hester. */
+  spooled: number;
 }
 
 /** A Hester call's result: offline (network error or timeout) or an HTTP answer. */
@@ -109,27 +129,48 @@ function validId(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 && v.length <= ID_MAX && ID_RE.test(v) ? v : null;
 }
 
+/** A card id Hester takes as `card_id` when it's a page id, else as the pre-Desk `exploration_id`. */
+export function cardRef(id: string): { card_id: string } | { exploration_id: string } {
+  return PAGE_ID_RE.test(id) ? { card_id: id } : { exploration_id: id };
+}
+
 export function parseOpenNext(raw: unknown): CarryOpenNext | null {
   if (!isRecord(raw)) return null;
-  const exploration_id = str(raw.exploration_id);
+  const card_id = str(raw.card_id);
+  const exploration_id = str(raw.exploration_id) ?? card_id;
   const someday_id = str(raw.someday_id);
   if (!exploration_id && !someday_id) return null;
   return {
+    ...(card_id ? { card_id } : {}),
     ...(exploration_id ? { exploration_id } : {}),
     ...(someday_id ? { someday_id } : {}),
     set_at: str(raw.set_at) ?? new Date(0).toISOString(),
   };
 }
 
-/** The Carry view from Hester's opener (and open-next). The picked-up exploration's questions come first. */
-export function buildCarry(opener: Opener, openNext: CarryOpenNext | null, fallbackWorkspace: string | null): Carry {
+function lineNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null;
+}
+
+/**
+ * The Carry view from Hester's opener (and open-next): your last Desk card,
+ * or (a pre-Desk Hester) the exploration it picks up. That card's open
+ * questions come first.
+ */
+export function buildCarry(opener: Opener, openNext: CarryOpenNext | null, fallbackWorkspace: string | null, spooled = 0): Carry {
   const p = opener.pick_up;
-  const pick_up = p && p.exploration?.id
+  const card = p?.card && typeof p.card.id === 'string' && p.card.id ? p.card : null;
+  const id = card?.id ?? (p?.exploration?.id || null);
+  const pick_up: Carry['pick_up'] = p && id
     ? {
-        exploration_id: p.exploration.id,
-        title: p.exploration.title ?? '',
+        card_id: id,
+        card_kind: 'page',
+        title: card?.title ?? p.exploration?.title ?? '',
+        area_name: card?.area_name ?? null,
         stopped_at: p.stopped_at ?? null,
-        last_touched_at: p.exploration.last_touched_at ?? null,
+        stopped_line: lineNumber(p.stopped_line),
+        last_touched_at: card?.last_touched_at ?? p.exploration?.last_touched_at ?? null,
+        exploration_id: id,
       }
     : null;
   let questions: Carry['open_questions'] = [];
@@ -138,8 +179,11 @@ export function buildCarry(opener: Opener, openNext: CarryOpenNext | null, fallb
   for (const s of opener.surfaces ?? []) {
     if (s.kind === 'open_questions') {
       questions = (s.items ?? [])
-        .filter((q) => q && q.exploration_id && q.question_id && typeof q.text === 'string')
-        .map((q) => ({ exploration_id: q.exploration_id, question_id: q.question_id, text: q.text }));
+        .filter((q) => q && (q.card_id || q.exploration_id) && q.question_id && typeof q.text === 'string')
+        .map((q) => {
+          const qid = (q.card_id || q.exploration_id) as string;
+          return { card_id: qid, exploration_id: qid, question_id: q.question_id, text: q.text };
+        });
     } else if (s.kind === 'captured_away') {
       captured = typeof s.count === 'number' ? s.count : s.items?.length ?? 0;
     } else if (s.kind === 'reading_list') {
@@ -147,8 +191,8 @@ export function buildCarry(opener: Opener, openNext: CarryOpenNext | null, fallb
     }
   }
   if (pick_up) {
-    const mine = questions.filter((q) => q.exploration_id === pick_up.exploration_id);
-    questions = [...mine, ...questions.filter((q) => q.exploration_id !== pick_up.exploration_id)];
+    const mine = questions.filter((q) => q.card_id === pick_up.card_id);
+    questions = [...mine, ...questions.filter((q) => q.card_id !== pick_up.card_id)];
   }
   return {
     workspace: opener.workspace || fallbackWorkspace || '',
@@ -157,6 +201,7 @@ export function buildCarry(opener: Opener, openNext: CarryOpenNext | null, fallb
     captured_count: captured,
     reading_count: reading,
     open_next: openNext,
+    spooled,
   };
 }
 
@@ -176,11 +221,17 @@ function wsQuery(ws: string | null): string {
 export interface CarryRoutesDeps {
   /** Tests inject a fake; defaults to the real Hester. */
   hester?: HesterCall;
+  /** Spool a capture Hester couldn't take; false when it couldn't be written. Defaults to the capture relay's spool. */
+  spool?: (payload: SomedayPayload) => boolean;
+  /** Captures waiting in the spool. Defaults to the capture relay's. */
+  spooledCount?: () => number;
   log?: (level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: Record<string, unknown>) => void;
 }
 
 export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}): void {
   const hester = deps.hester ?? hesterCall;
+  const spool = deps.spool ?? ((payload: SomedayPayload) => getCaptureRelay()?.spool(payload) ?? false);
+  const spooledCount = deps.spooledCount ?? (() => getCaptureRelay()?.pending() ?? 0);
 
   app.get('/carry', async (req: Request, res: Response) => {
     const ws = resolveCaptureWorkspace(req.query.workspace, null);
@@ -209,7 +260,7 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
       }
       // open-next is optional: an older Hester without it still gives a Carry view.
       const openNext = !nx.offline && nx.status >= 200 && nx.status < 300 ? parseOpenNext(dataOf(nx.body)) : null;
-      res.json({ success: true, data: buildCarry(opener as unknown as Opener, openNext, ws.workspace) });
+      res.json({ success: true, data: buildCarry(opener as unknown as Opener, openNext, ws.workspace, spooledCount()) });
     } catch (err) {
       deps.log?.('ERROR', 'Carry read failed', { error: String(err) });
       res.status(500).json({ success: false, error: 'Carry failed' });
@@ -229,11 +280,13 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
       res.status(400).json({ success: false, error: `text must be at most ${CAPTURE_MAX_CHARS} characters` });
       return;
     }
-    let explorationId: string | null = null;
-    if (body.exploration_id !== undefined && body.exploration_id !== null) {
-      explorationId = validId(body.exploration_id);
-      if (!explorationId) {
-        res.status(400).json({ success: false, error: 'exploration_id must be an exploration id' });
+    // card_id, else the legacy exploration_id: the card the thought is about.
+    const rawId = body.card_id ?? body.exploration_id;
+    let cardId: string | null = null;
+    if (rawId !== undefined && rawId !== null) {
+      cardId = validId(rawId);
+      if (!cardId) {
+        res.status(400).json({ success: false, error: 'card_id must be a card id' });
         return;
       }
     }
@@ -242,24 +295,7 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
       res.status(400).json({ success: false, error: ws.error });
       return;
     }
-    try {
-      const source = { ...carrySource(p), ...(explorationId ? { exploration_id: explorationId } : {}) };
-      const r = await hester('POST', '/someday', ws.workspace, {
-        text,
-        as: 'someday',
-        source,
-        ...(ws.workspace ? { workspace: ws.workspace } : {}),
-      });
-      if (r.offline) {
-        offline(res);
-        return;
-      }
-      if (r.status < 200 || r.status >= 300) {
-        res.status(r.status === 400 || r.status === 404 || r.status === 422 ? 400 : 502).json({ success: false, error: errorOf(r.body, r.status) });
-        return;
-      }
-      const item = dataOf(r.body);
-      const someday_id = isRecord(item) ? str(item.id) : null;
+    const logCapture = (someday_id: string | null, spooled: boolean) =>
       logEvent({
         type: 'capture',
         workspace: ws.workspace,
@@ -269,11 +305,36 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
           ...(someday_id ? { someday_id } : {}),
           text_chars: text.length,
           as: 'someday',
-          spooled: false,
+          spooled,
           via: 'carry',
-          ...(explorationId ? { exploration_id: explorationId } : {}),
+          ...(cardId ? cardRef(cardId) : {}),
         },
       });
+    try {
+      const payload: SomedayPayload = {
+        text,
+        as: 'someday',
+        source: { ...carrySource(p), ...(cardId ? cardRef(cardId) : {}) },
+        ...(ws.workspace ? { workspace: ws.workspace } : {}),
+      };
+      const r = await hester('POST', '/someday', ws.workspace, payload);
+      if (r.offline) {
+        // Desk D2 §9.3: never lose a thought to an offline Hester.
+        if (!spool(payload)) {
+          res.status(503).json({ success: false, error: 'Hester is unreachable and the spool could not be written' });
+          return;
+        }
+        logCapture(null, true);
+        res.json({ success: true, data: { success: true, someday_id: null, spooled: true } });
+        return;
+      }
+      if (r.status < 200 || r.status >= 300) {
+        res.status(r.status === 400 || r.status === 404 || r.status === 422 ? 400 : 502).json({ success: false, error: errorOf(r.body, r.status) });
+        return;
+      }
+      const item = dataOf(r.body);
+      const someday_id = isRecord(item) ? str(item.id) : null;
+      logCapture(someday_id, false);
       res.json({ success: true, data: { success: true, someday_id, spooled: false } });
     } catch (err) {
       deps.log?.('ERROR', 'Carry capture failed', { error: String(err) });
@@ -285,16 +346,17 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
     const p = res.locals.principal as Principal | undefined;
     res.locals.deviceCategory = 'start_work';
     const body = isRecord(req.body) ? req.body : {};
-    const explorationId = body.exploration_id == null ? null : validId(body.exploration_id);
-    const somedayId = body.someday_id == null ? null : validId(body.someday_id);
-    if ((body.exploration_id != null && !explorationId) || (body.someday_id != null && !somedayId)) {
-      res.status(400).json({ success: false, error: 'exploration_id and someday_id must be ids' });
+    const given = (['card_id', 'exploration_id', 'someday_id'] as const).filter((k) => body[k] != null);
+    if (given.length !== 1) {
+      res.status(400).json({ success: false, error: 'give exactly one of card_id, exploration_id or someday_id' });
       return;
     }
-    if (!explorationId === !somedayId) {
-      res.status(400).json({ success: false, error: 'give exactly one of exploration_id or someday_id' });
+    const id = validId(body[given[0]]);
+    if (!id) {
+      res.status(400).json({ success: false, error: `${given[0]} must be an id` });
       return;
     }
+    const somedayId = given[0] === 'someday_id' ? id : null;
     const ws = resolveCaptureWorkspace(body.workspace, null);
     if (!ws.ok) {
       res.status(400).json({ success: false, error: ws.error });
@@ -302,8 +364,7 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
     }
     try {
       const r = await hester('POST', '/copilot/open-next', ws.workspace, {
-        ...(explorationId ? { exploration_id: explorationId } : {}),
-        ...(somedayId ? { someday_id: somedayId } : {}),
+        ...(somedayId ? { someday_id: somedayId } : cardRef(id)),
         surface: carrySource(p).surface,
         ...(ws.workspace ? { workspace: ws.workspace } : {}),
       });

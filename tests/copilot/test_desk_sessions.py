@@ -263,3 +263,11 @@ def test_g0_metrics_read_card_focus_items(events_dir):
     assert m["deep_time"]["minutes"] == 30.0 and m["deep_time"]["sessions"] == 1
     assert m["time_to_deep"] == {"value_s": 480.0, "n": 1}
     assert m["session_depth"]["deep"] == 1 and m["session_depth"]["share_deep"] == 1.0
+
+
+def test_one_record_per_deep_session(tmp_path):
+    desk = DeskStore(tmp_path)
+    first = desk.add_session(body(reason="away", stopped_at=None, rating=None))
+    again = desk.add_session(body(reason="away", stopped_at=None, rating=None))
+    assert again["id"] == first["id"], "Lee main and the opener can both write an away session"
+    assert len(desk.list_sessions()) == 1

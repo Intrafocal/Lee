@@ -253,12 +253,74 @@ static void test_carry()
     cJSON_Delete(root);
 }
 
+// Desk D2 §9.3, §9.4: Carry's last Desk card, the idle-end push, In flight's fold.
+static void test_desk()
+{
+    cJSON* root = cJSON_Parse(R"({"success":true,"data":{"workspace":"/ws",
+      "pick_up":{"card_id":"pg-0000abcd","card_kind":"page","title":"Mesh sync","area_name":"Mesh",
+                 "stopped_at":"Where the clocks disagree.","stopped_line":12,"last_touched_at":null,
+                 "exploration_id":"pg-0000abcd"},
+      "open_questions":[{"card_id":"pg-0000abcd","exploration_id":"pg-0000abcd","question_id":"q1","text":"Why?"}],
+      "captured_count":1,"reading_count":0,"spooled":2,
+      "open_next":{"card_id":"pg-0000abcd","exploration_id":"pg-0000abcd","set_at":"2026-09-27T10:00:00Z"}}})");
+    CarryState c;
+    expect_int("desk carry parses", carry_parse(root, c), 1);
+    cJSON_Delete(root);
+    expect("pick-up is the card", c.pick_up_id, "pg-0000abcd");
+    expect("area", c.area_name, "Mesh");
+    expect_int("stopped line", c.stopped_line, 12);
+    expect_int("spooled", c.spooled, 2);
+    expect("question's card", c.questions.empty() ? "" : c.questions[0].exploration_id, "pg-0000abcd");
+    expect("open next card", c.open_next_exploration_id, "pg-0000abcd");
+
+    root = cJSON_Parse(R"({"pick_up":{"exploration_id":"exp-1","title":"Old","stopped_line":0},"open_questions":[]})");
+    CarryState old;
+    expect_int("pre-Desk carry parses", carry_parse(root, old), 1);
+    cJSON_Delete(root);
+    expect("pre-Desk: exploration id stands in", old.pick_up_id, "exp-1");
+    expect_int("pre-Desk: no line", old.stopped_line, -1);
+    expect("pre-Desk: no area", old.area_name, "");
+
+    root = cJSON_Parse(R"({"items":[
+        {"id":"att_idle","version":2,"kind":"deep_idle","severity":"needs-you","title":"Still thinking?","text":"Mesh sync",
+         "notify":true,"actions":["extend","end_rate","capture","dismiss"],"created_at":"2026-09-27T11:55:00.000Z",
+         "deep_idle":{"session_id":"fs_1","ends_at":"2026-09-27T12:04:00.000Z","card":{"card_id":"pg-0000abcd","title":"Mesh sync"}}},
+        {"id":"att_2","version":1,"kind":"approval","severity":"needs-you","title":"Claude wants to run Bash","text":"ls","actions":["approve","deny"]}],
+      "generated_at":"2026-09-27T12:00:00.000Z",
+      "deep":{"exploration_id":"pg-0000abcd","title":"Mesh sync","card_id":"pg-0000abcd","card_kind":"page"}})");
+    AttentionSnapshot s;
+    expect_int("snapshot with a push parses", attention_snapshot_parse(root, s), 1);
+    cJSON_Delete(root);
+    const AttentionItem* idle = s.deep_idle();
+    expect_int("the push is found", idle != nullptr, 1);
+    if (idle) {
+        expect("kind name", attention_kind_name(idle->kind), "deep_idle");
+        expect("session", idle->deep_session_id, "fs_1");
+        expect("card id", idle->deep_card_id, "pg-0000abcd");
+        expect("card title", idle->deep_card_title, "Mesh sync");
+        expect_int("ends in 4m (host clock)", idle->deep_ends_in_ms, 4 * 60000);
+    }
+    expect("deep card", s.deep_card_id, "pg-0000abcd");
+
+    AgentSummary a;
+    a.state = AgentState::Idle;
+    a.idle_ms = 2LL * 60 * 60 * 1000 - 1000;
+    expect_int("idle just under 2h stays", agent_is_earlier(a), 0);
+    expect_int("the time since the snapshot counts", agent_is_earlier(a, 2000), 1);
+    a.idle_ms = -1;
+    expect_int("idle for an unknown time stays", agent_is_earlier(a), 0);
+    a.state = AgentState::Busy;
+    a.idle_ms = 3LL * 60 * 60 * 1000;
+    expect_int("a busy agent never folds", agent_is_earlier(a), 0);
+}
+
 int main()
 {
     test_activity();
     test_tokens_and_line();
     test_snapshot();
     test_carry();
+    test_desk();
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

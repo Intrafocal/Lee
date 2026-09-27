@@ -1,71 +1,88 @@
 import 'package:equatable/equatable.dart';
 
-/// Library's Carry (docs/14-Deep-Work.md §8.1): where you stopped, what's
-/// still open, and what the next session opens first. Mirrors Lee main's
-/// `GET /carry` (built from Hester's opener and open-next).
+/// Library's Carry (docs/14-Deep-Work.md §8.1; Desk D2 §9.3): where you
+/// stopped, what's still open, and what the next session opens first.
+/// Mirrors Lee main's `GET /carry` (built from Hester's opener and
+/// open-next). The pick-up is your last Desk card; against a Lee from
+/// before the Desk the `exploration_id` fields stand in for `card_id`.
 
-/// The exploration to pick up.
+/// The card to pick up: your last Desk card.
 class CarryPickUp extends Equatable {
-  final String explorationId;
+  final String cardId;
   final String title;
+
+  /// The Area the card sits in, when Lee knows it.
+  final String? areaName;
 
   /// Your last sentence from the session's ending ritual; null when none was written.
   final String? stoppedAt;
+
+  /// 1-based line in the card's page where [stoppedAt] is.
+  final int? stoppedLine;
   final DateTime? lastTouchedAt;
 
-  const CarryPickUp({required this.explorationId, this.title = '', this.stoppedAt, this.lastTouchedAt});
+  const CarryPickUp({
+    required this.cardId,
+    this.title = '',
+    this.areaName,
+    this.stoppedAt,
+    this.stoppedLine,
+    this.lastTouchedAt,
+  });
 
   factory CarryPickUp.fromJson(Map<String, dynamic> json) {
     return CarryPickUp(
-      explorationId: json['exploration_id'] as String? ?? '',
+      cardId: _nonEmpty(json['card_id']) ?? json['exploration_id'] as String? ?? '',
       title: json['title'] as String? ?? '',
+      areaName: _nonEmpty(json['area_name']),
       stoppedAt: _nonEmpty(json['stopped_at']),
+      stoppedLine: (json['stopped_line'] as num?)?.toInt(),
       lastTouchedAt: _parseDate(json['last_touched_at']),
     );
   }
 
   @override
-  List<Object?> get props => [explorationId, title, stoppedAt, lastTouchedAt];
+  List<Object?> get props => [cardId, title, areaName, stoppedAt, stoppedLine, lastTouchedAt];
 }
 
 /// One open question, in your words.
 class CarryQuestion extends Equatable {
-  final String explorationId;
+  final String cardId;
   final String questionId;
   final String text;
 
-  const CarryQuestion({required this.explorationId, required this.questionId, required this.text});
+  const CarryQuestion({required this.cardId, required this.questionId, required this.text});
 
   factory CarryQuestion.fromJson(Map<String, dynamic> json) {
     return CarryQuestion(
-      explorationId: json['exploration_id'] as String? ?? '',
+      cardId: _nonEmpty(json['card_id']) ?? json['exploration_id'] as String? ?? '',
       questionId: json['question_id'] as String? ?? '',
       text: json['text'] as String? ?? '',
     );
   }
 
   @override
-  List<Object?> get props => [explorationId, questionId, text];
+  List<Object?> get props => [cardId, questionId, text];
 }
 
-/// What the next Deep session opens first: an exploration or a captured thought.
+/// What the next Deep session opens first: a card or a captured thought.
 class OpenNext extends Equatable {
-  final String? explorationId;
+  final String? cardId;
   final String? somedayId;
   final DateTime? setAt;
 
-  const OpenNext({this.explorationId, this.somedayId, this.setAt});
+  const OpenNext({this.cardId, this.somedayId, this.setAt});
 
   factory OpenNext.fromJson(Map<String, dynamic> json) {
     return OpenNext(
-      explorationId: _nonEmpty(json['exploration_id']),
+      cardId: _nonEmpty(json['card_id']) ?? _nonEmpty(json['exploration_id']),
       somedayId: _nonEmpty(json['someday_id']),
       setAt: _parseDate(json['set_at']),
     );
   }
 
   @override
-  List<Object?> get props => [explorationId, somedayId, setAt];
+  List<Object?> get props => [cardId, somedayId, setAt];
 }
 
 class CarrySnapshot extends Equatable {
@@ -78,6 +95,9 @@ class CarrySnapshot extends Equatable {
   final int readingCount;
   final OpenNext? openNext;
 
+  /// Captures waiting in Lee's spool for Hester.
+  final int spooled;
+
   const CarrySnapshot({
     this.workspace,
     this.pickUp,
@@ -85,6 +105,7 @@ class CarrySnapshot extends Equatable {
     this.capturedCount = 0,
     this.readingCount = 0,
     this.openNext,
+    this.spooled = 0,
   });
 
   factory CarrySnapshot.fromJson(Map<String, dynamic> json) {
@@ -104,14 +125,15 @@ class CarrySnapshot extends Equatable {
       openNext: json['open_next'] is Map<String, dynamic>
           ? OpenNext.fromJson(json['open_next'] as Map<String, dynamic>)
           : null,
+      spooled: (json['spooled'] as num?)?.toInt() ?? 0,
     );
   }
 
-  /// True when the Mac's next session already opens [explorationId] first.
-  bool opensFirst(String explorationId) => openNext?.explorationId == explorationId;
+  /// True when the Mac's next session already opens [cardId] first.
+  bool opensFirst(String cardId) => openNext?.cardId == cardId;
 
   @override
-  List<Object?> get props => [workspace, pickUp, openQuestions, capturedCount, readingCount, openNext];
+  List<Object?> get props => [workspace, pickUp, openQuestions, capturedCount, readingCount, openNext, spooled];
 }
 
 /// Result of a Carry read: the snapshot, or why there isn't one.
@@ -127,46 +149,6 @@ class CarryResult extends Equatable {
 
   @override
   List<Object?> get props => [carry, error];
-}
-
-/// One active exploration for Library's Explorations tab (Hester
-/// `GET /cockpit/explorations`, `to_api`).
-class ExplorationSummary extends Equatable {
-  final String id;
-  final String title;
-  final DateTime? lastTouchedAt;
-  final int pageChars;
-  final int openQuestions;
-
-  /// The last session's stopped-at note, if one was written.
-  final String? stoppedAt;
-
-  const ExplorationSummary({
-    required this.id,
-    this.title = '',
-    this.lastTouchedAt,
-    this.pageChars = 0,
-    this.openQuestions = 0,
-    this.stoppedAt,
-  });
-
-  factory ExplorationSummary.fromJson(Map<String, dynamic> json) {
-    final last = json['last_session'];
-    return ExplorationSummary(
-      id: json['id'] as String? ?? '',
-      title: json['title'] as String? ?? '',
-      lastTouchedAt: _parseDate(json['last_touched_at']) ?? _parseDate(json['updated_at']),
-      pageChars: (json['page_chars'] as num?)?.toInt() ?? 0,
-      openQuestions: (json['open_questions'] as num?)?.toInt() ?? 0,
-      stoppedAt: last is Map<String, dynamic> ? _nonEmpty(last['stopped_at']) : null,
-    );
-  }
-
-  /// Words estimated as chars / 5.7 (cockpit design §5).
-  int get words => (pageChars / 5.7).round();
-
-  @override
-  List<Object?> get props => [id, title, lastTouchedAt, pageChars, openQuestions, stoppedAt];
 }
 
 String? _nonEmpty(dynamic value) => value is String && value.trim().isNotEmpty ? value : null;

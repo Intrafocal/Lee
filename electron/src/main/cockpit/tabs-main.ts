@@ -36,7 +36,7 @@ import { listWorkspaceFiles } from './workspace-files';
 import { copilotBus } from '../copilot/bus';
 import { getCopilotQueue } from '../copilot/queue';
 import { quadrantRank } from '../copilot/attention-queue';
-import { parseExplorationId } from '../copilot/focus';
+import { parseCardId, parseExplorationId } from '../copilot/focus';
 import type { LeeEvent } from '../../shared/copilot';
 import { getHesterCache } from './hester-cache';
 import { registerLintEffects } from './lint-main';
@@ -69,6 +69,8 @@ const DEEP_ACTIONS = new Set(['capture', 'keep', 'ask', 'explore', 'insert', 'fo
 const AFFORDANCE_PATTERNS = new Set(['question', 'url', 'later']);
 const AFFORDANCE_OUTCOMES = new Set(['accepted', 'ignored']);
 const SWITCHER_VIA = new Set(['tap', 'overlay', 'chip']);
+/** Desk D2 §5.1: how a zoom happened. */
+const ZOOM_VIA = new Set(['land', 'key', 'click', 'link']);
 /** Upper bound for a count or span in one deep.input line (a day in ms). */
 const DEEP_COUNT_MAX = 86_400_000;
 
@@ -76,34 +78,50 @@ function count(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= DEEP_COUNT_MAX;
 }
 
-function explorationId(v: unknown): string | null {
-  return parseExplorationId(v) ?? null;
+/**
+ * The card a deep.* event is about (Desk D2 §5.1): `card_id`, or the legacy
+ * `exploration_id` (a page id becomes the card; a pre-Desk exploration id
+ * stays an exploration_id). Null when neither is valid.
+ */
+function deepRef(d: Record<string, unknown>): { card_id: string; card_kind: 'page' } | { exploration_id: string } | null {
+  const card = parseCardId(d.card_id);
+  if (card) return { card_id: card, card_kind: 'page' };
+  if (card === undefined) return null;
+  const exp = parseExplorationId(d.exploration_id) ?? null;
+  if (!exp) return null;
+  return parseCardId(exp) ? { card_id: exp, card_kind: 'page' } : { exploration_id: exp };
 }
 
-/** Validate a deep.* renderer event; null drops it. Only whitelisted fields are kept. */
+/** Validate a deep.* (or desk.zoom) renderer event; null drops it. Only whitelisted fields are kept. */
 function validDeepEvent(type: string, d: Record<string, unknown>): CockpitRendererEvent | null {
   if (type === 'deep.input') {
-    const id = explorationId(d.exploration_id);
-    if (!id || !DEEP_VIEWS.has(d.view as string)) return null;
+    const ref = deepRef(d);
+    if (!ref || !DEEP_VIEWS.has(d.view as string)) return null;
     if (!count(d.keys) || !count(d.clicks) || !count(d.wheels) || !count(d.span_ms)) return null;
     return {
       type,
-      data: { exploration_id: id, view: d.view, keys: d.keys, clicks: d.clicks, wheels: d.wheels, span_ms: d.span_ms },
+      data: { ...ref, view: d.view, keys: d.keys, clicks: d.clicks, wheels: d.wheels, span_ms: d.span_ms },
     } as CockpitRendererEvent;
   }
   if (type === 'deep.view') {
-    const id = explorationId(d.exploration_id);
-    if (!id || !DEEP_VIEWS.has(d.view as string)) return null;
-    return { type, data: { exploration_id: id, view: d.view } } as CockpitRendererEvent;
+    const ref = deepRef(d);
+    if (!ref || !DEEP_VIEWS.has(d.view as string)) return null;
+    return { type, data: { ...ref, view: d.view } } as CockpitRendererEvent;
   }
   if (type === 'deep.action') {
-    const id = explorationId(d.exploration_id);
-    if (!id || !DEEP_ACTIONS.has(d.action as string)) return null;
+    const ref = deepRef(d);
+    if (!ref || !DEEP_ACTIONS.has(d.action as string)) return null;
     if (d.chars !== undefined && !count(d.chars)) return null;
     return {
       type,
-      data: { action: d.action, exploration_id: id, ...(d.chars !== undefined ? { chars: d.chars } : {}) },
+      data: { action: d.action, ...ref, ...(d.chars !== undefined ? { chars: d.chars } : {}) },
     } as CockpitRendererEvent;
+  }
+  if (type === 'desk.zoom') {
+    const card = parseCardId(d.card_id);
+    if (card === undefined || !ZOOM_VIA.has(d.via as string)) return null;
+    if (d.card_kind !== undefined && d.card_kind !== null && d.card_kind !== 'page') return null;
+    return { type, data: { card_id: card, card_kind: card ? 'page' : null, via: d.via } } as CockpitRendererEvent;
   }
   if (type === 'deep.affordance') {
     if (!AFFORDANCE_PATTERNS.has(d.pattern as string) || !AFFORDANCE_OUTCOMES.has(d.outcome as string)) return null;
@@ -134,7 +152,7 @@ export function validRendererEvent(ev: unknown): CockpitRendererEvent | null {
     if (!Number.isInteger(d.pty_id) || !AGENT_STATES.has(d.agent_state as string) || !GO_INTO_FROM.has(d.from as string)) return null;
     return { type: 'cockpit.go_into', data: { pty_id: d.pty_id, agent_state: d.agent_state, from: d.from } } as CockpitRendererEvent;
   }
-  if (typeof e.type === 'string' && e.type.startsWith('deep.')) return validDeepEvent(e.type, d);
+  if (typeof e.type === 'string' && (e.type.startsWith('deep.') || e.type === 'desk.zoom')) return validDeepEvent(e.type, d);
   return null;
 }
 

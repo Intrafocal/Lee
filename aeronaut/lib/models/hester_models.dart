@@ -400,3 +400,36 @@ class HesterChatState extends Equatable {
   List<Object?> get props =>
       [messages, currentPhase, isStreaming, sessionId, error];
 }
+
+/// A Cockpit task as the one-agent screen needs it (Hester's
+/// `GET /cockpit/tasks`, `to_api`): which agent works on it and whether it
+/// waits for review.
+class TaskRef extends Equatable {
+  final String id;
+  final String title;
+
+  /// The session name you gave it, when there is one (shown over [title]).
+  final String? name;
+  final String status;
+  final int? agentPtyId;
+
+  const TaskRef({required this.id, this.title = '', this.name, this.status = 'running', this.agentPtyId});
+
+  factory TaskRef.fromJson(Map<String, dynamic> json) {
+    final agent = json['agent'];
+    final name = json['name'];
+    return TaskRef(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      name: name is String && name.trim().isNotEmpty ? name : null,
+      status: json['status'] as String? ?? 'running',
+      agentPtyId: agent is Map<String, dynamic> ? (agent['pty_id'] as num?)?.toInt() : null,
+    );
+  }
+
+  String get displayTitle => name ?? title;
+  bool get inReview => status == 'review';
+
+  @override
+  List<Object?> get props => [id, title, name, status, agentPtyId];
+}

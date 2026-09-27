@@ -875,8 +875,15 @@ class DeskStore:
 
     def add_session(self, body: Dict[str, Any]) -> Dict[str, Any]:
         record = self.norm_session(body)
-        self.root.mkdir(parents=True, exist_ok=True)
-        deep.append_jsonl(self.sessions_path, record)
+        with _LOCK:
+            # One record per Deep session: Lee main (an ignored idle push) and the opener (the log) can both write it.
+            fsid = record.get("focus_session_id")
+            if fsid:
+                existing = next((r for r in self.list_sessions() if r.get("focus_session_id") == fsid), None)
+                if existing is not None:
+                    return existing
+            self.root.mkdir(parents=True, exist_ok=True)
+            deep.append_jsonl(self.sessions_path, record)
         return record
 
     # ---------------------------------------------------------------- migration (§6.1)

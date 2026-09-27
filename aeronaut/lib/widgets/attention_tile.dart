@@ -42,9 +42,11 @@ bool takesQuickReplies(AttentionItem item) =>
 /// approvals, the quick-reply chips in a sideways scroll for text items, the
 /// options for a question. Snooze, dismiss and wake sit in the `⋯` menu.
 ///
-/// Swipe right snoozes and swipe left dismisses (contracts §5.2). Allow and
-/// Deny are never bound to a swipe — they stay explicit taps only (C3: a
-/// stray gesture must never approve something).
+/// Swipe right snoozes and swipe left dismisses (contracts §5.2). A swiped
+/// snooze leaves a collapsed "Snoozed · Undo" row for [kSwipeUndo] before it
+/// is sent (Desk D2 §9.4, the Mac's rule); leaving Work sends it at once.
+/// Allow and Deny are never bound to a swipe — they stay explicit taps only
+/// (C3: a stray gesture must never approve something).
 class AttentionTile extends ConsumerStatefulWidget {
   final AttentionItem item;
   final bool awayActive;
@@ -75,9 +77,16 @@ class AttentionTile extends ConsumerStatefulWidget {
   @override
   ConsumerState<AttentionTile> createState() => _AttentionTileState();
 }
+/// How long a swiped snooze can be undone (the Mac's SWIPE_UNDO_MS).
+const kSwipeUndo = Duration(seconds: 5);
+
 class _AttentionTileState extends ConsumerState<AttentionTile> {
   bool _replying = false;
   bool _busy = false;
+
+  /// A swiped snooze in its Undo window, and what sends it.
+  Timer? _snoozeTimer;
+  AttentionNotifier? _snoozeNotifier;
   final _replyController = TextEditingController();
 
   /// Expand state for [AttentionItem.text]: while collapsed the card shows
@@ -116,8 +125,31 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
 
   @override
   void dispose() {
+    // Leaving Work sends a swiped snooze still in its Undo window.
+    if (_snoozeTimer?.isActive ?? false) {
+      _snoozeTimer!.cancel();
+      unawaited(_snoozeNotifier?.snooze(widget.item.id, until: 'change'));
+    }
     _replyController.dispose();
     super.dispose();
+  }
+
+  void _swipeSnooze(AttentionNotifier notifier) {
+    if (_snoozeTimer?.isActive ?? false) return;
+    _snoozeNotifier = notifier;
+    setState(() {
+      _snoozeTimer = Timer(kSwipeUndo, () {
+        if (!mounted) return;
+        setState(() => _snoozeTimer = null);
+        // Until it changes, as the Mac's swipe does; the ⋯ menu has the durations.
+        unawaited(_run(() => notifier.snooze(widget.item.id, until: 'change')));
+      });
+    });
+  }
+
+  void _undoSnooze() {
+    _snoozeTimer?.cancel();
+    setState(() => _snoozeTimer = null);
   }
 
   Future<void> _run(Future<ActionResult> Function() action) async {
@@ -200,6 +232,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final notifier = ref.read(attentionProvider.notifier);
+    if (_snoozeTimer?.isActive ?? false) return _SwipedRow(label: 'Snoozed', name: item.title, onUndo: _undoSnooze);
     final isQuestion = item.kind == AttentionKind.question;
     final legacyAskQuestion = item.isLegacyAskQuestionApproval;
     final isApproval = item.canApproveDeny && !legacyAskQuestion;
@@ -428,7 +461,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
               : const SizedBox.shrink(),
           confirmDismiss: (dismissDirection) async {
             if (dismissDirection == DismissDirection.startToEnd) {
-              await _showSnoozeMenu(context, notifier, item);
+              _swipeSnooze(notifier);
             } else {
               await _run(() => notifier.dismiss(item.id));
             }
@@ -483,6 +516,36 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
   }
 }
 
+
+/// A swiped card, collapsed for its Undo window: "Snoozed · <title>  Undo".
+class _SwipedRow extends StatelessWidget {
+  final String label;
+  final String name;
+  final VoidCallback onUndo;
+
+  const _SwipedRow({required this.label, required this.name, required this.onUndo});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      key: const ValueKey('attention-swiped'),
+      padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd, vertical: AeronautTheme.spacingXs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              name.isEmpty ? label : '$label · $name',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AeronautTheme.footnote.copyWith(color: AeronautColors.textTertiary),
+            ),
+          ),
+          WorkButton(key: const ValueKey('attention-undo'), label: 'Undo', kind: BtnKind.quiet, height: 36, onPressed: onUndo),
+        ],
+      ),
+    );
+  }
+}
 
 /// `Xs` / `Xm` / `Xh` / `Xd` — no `intl` dependency for one small label.
 String _age(DateTime? createdAt) {

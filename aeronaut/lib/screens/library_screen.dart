@@ -6,7 +6,6 @@ import '../models/machine.dart';
 import '../providers/machines_provider.dart';
 import '../providers/windows_provider.dart';
 import '../services/copilot_api.dart';
-import '../services/hester_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_tokens.dart';
@@ -15,24 +14,24 @@ import '../widgets/work_ui.dart';
 import 'someday_screen.dart';
 
 typedef CopilotApiBuilder = CopilotApi Function(Machine machine);
-typedef HesterApiBuilder = HesterApi Function(Machine machine);
 
-/// Library (cockpit design §8.1): Carry first, then Explorations and Ideas.
-/// Carry is the other half of the Deep loop (14 §8.1): where you stopped,
-/// what's still open, a thought captured into the exploration, and what
-/// the Mac opens next. Devices have no Deep mode; they carry.
+/// Library (cockpit design §8.1; Desk D2 §9.4): Carry first, then Ideas.
+/// Carry is the other half of the Deep loop (14 §8.1): your last Desk
+/// card, where you stopped in it, what's still open, a thought captured
+/// into it, and what the Mac opens next. Devices have no Desk; they carry.
+/// (The Explorations tab went with the Desk: explorations were copied into
+/// cards, so that list would go stale.)
 class LibraryScreen extends ConsumerWidget {
-  /// Test seams; default to the real clients.
+  /// Test seam; defaults to the real client.
   final CopilotApiBuilder? copilotApi;
-  final HesterApiBuilder? hesterApi;
 
-  const LibraryScreen({this.copilotApi, this.hesterApi, super.key});
+  const LibraryScreen({this.copilotApi, super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final workspace = ref.watch(windowsProvider.select((s) => s.activeWindow?.workspace));
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const MachineSwitcher(),
@@ -42,13 +41,12 @@ class LibraryScreen extends ConsumerWidget {
             labelColor: Phosphor.text1,
             unselectedLabelColor: Phosphor.text3,
             dividerColor: Phosphor.ground4,
-            tabs: [Tab(text: 'Carry'), Tab(text: 'Explorations'), Tab(text: 'Ideas')],
+            tabs: [Tab(text: 'Carry'), Tab(text: 'Ideas')],
           ),
         ),
         body: TabBarView(
           children: [
             CarryView(workspace: workspace, apiBuilder: copilotApi),
-            ExplorationsView(workspace: workspace, apiBuilder: hesterApi, copilotApi: copilotApi),
             SomedayList(workspace: workspace),
           ],
         ),
@@ -70,30 +68,24 @@ String _ago(DateTime? at) {
 /// "3 things to read" / "One thing to read".
 String thingsToRead(int n) => n == 1 ? 'One thing to read' : '$n things to read';
 
-/// Page length in words (§5): "about 340 words" under 1,000.
-String wordsLabel(int words) {
-  if (words < 1000) return 'about $words words';
-  return '${(words / 1000).toStringAsFixed(1)}k words';
-}
-
 CopilotApi _copilot(WidgetRef ref, CopilotApiBuilder? builder) {
   final machine = ref.read(machinesProvider).activeMachine!;
   return (builder ?? (m) => CopilotApi(machine: m))(machine);
 }
 
-/// Captures [text] into [explorationId] (or on its own), then says so.
+/// Captures [text] into the card [cardId] (or on its own), then says so.
 Future<bool> _capture(
   BuildContext context,
   WidgetRef ref,
   CopilotApiBuilder? builder, {
   required String? workspace,
-  required String? explorationId,
+  required String? cardId,
   required String text,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
   final api = _copilot(ref, builder);
   try {
-    final result = await api.carryCapture(text, workspace: workspace, explorationId: explorationId);
+    final result = await api.carryCapture(text, workspace: workspace, cardId: cardId);
     messenger.showSnackBar(SnackBar(
       content: Text(result.success
           ? (result.spooled ? 'Saved; will sync when Hester is back' : 'Captured')
@@ -105,18 +97,18 @@ Future<bool> _capture(
   }
 }
 
-/// Asks the Mac to open [explorationId] first in its next Deep session.
+/// Asks the Mac to open the card [cardId] first in its next Deep session.
 Future<bool> _openNext(
   BuildContext context,
   WidgetRef ref,
   CopilotApiBuilder? builder, {
   required String? workspace,
-  required String explorationId,
+  required String cardId,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
   final api = _copilot(ref, builder);
   try {
-    final result = await api.carryOpenNext(workspace: workspace, explorationId: explorationId);
+    final result = await api.carryOpenNext(workspace: workspace, cardId: cardId);
     messenger.showSnackBar(SnackBar(
       content: Text(result.success ? 'The Mac opens this first next time' : (result.error ?? 'Could not set that')),
     ));
@@ -221,9 +213,10 @@ class _CarryCaptureSheetState extends State<_CarryCaptureSheet> {
   }
 }
 
-/// Carry (14 §8.1): "You stopped at" in Newsreader italic, the open
-/// questions in Newsreader, "Capture a thought into this" (the view's one
-/// phosphor step), "Open this first on the Mac", and the reading count.
+/// Carry (14 §8.1, Desk D2 §9.4): your last Desk card's title and Area,
+/// "You stopped at" in Newsreader italic, the open questions in
+/// Newsreader, "Capture a thought into this" (the view's one phosphor
+/// step), "Open this first on the Mac", and the reading count.
 class CarryView extends ConsumerStatefulWidget {
   final String? workspace;
   final CopilotApiBuilder? apiBuilder;
@@ -301,16 +294,22 @@ class _CarryViewState extends ConsumerState<CarryView> {
 
   List<Widget> _body(CarrySnapshot carry) {
     final pickUp = carry.pickUp;
-    final opensFirst = pickUp != null && carry.opensFirst(pickUp.explorationId);
+    final opensFirst = pickUp != null && carry.opensFirst(pickUp.cardId);
+    final touched = pickUp?.lastTouchedAt == null ? null : _ago(pickUp!.lastTouchedAt);
+    final where = pickUp?.areaName != null
+        ? [pickUp!.areaName!, if (touched != null) 'last touched $touched'].join(' · ')
+        : (touched != null ? 'Last touched $touched' : '');
     return [
       if (pickUp != null) ...[
+        // The card's title is your words: Newsreader.
         Text(
-          pickUp.title.isEmpty ? 'Untitled exploration' : pickUp.title,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: Phosphor.text1),
+          pickUp.title.isEmpty ? 'Untitled page' : pickUp.title,
+          key: const ValueKey('carry-card-title'),
+          style: writingStyle(size: 22),
         ),
-        if (pickUp.lastTouchedAt != null) ...[
+        if (where.isNotEmpty) ...[
           const SizedBox(height: 2),
-          QuietText('Last touched ${_ago(pickUp.lastTouchedAt)}'),
+          QuietText(where),
         ],
         const _Label('You stopped at'),
         if (pickUp.stoppedAt != null)
@@ -321,7 +320,7 @@ class _CarryViewState extends ConsumerState<CarryView> {
         const SizedBox(height: AeronautTheme.spacingLg),
         Text('Nothing to pick up yet.', style: writingStyle(size: 20)),
         const SizedBox(height: AeronautTheme.spacingSm),
-        const QuietText('When you end a Deep session on the Mac, where you stopped shows here.'),
+        const QuietText('When you end a session at your Desk on the Mac, where you stopped shows here.'),
       ],
       if (carry.openQuestions.isNotEmpty) ...[
         const _Label('Open questions'),
@@ -339,14 +338,14 @@ class _CarryViewState extends ConsumerState<CarryView> {
         height: 48,
         onPressed: () => showCarryCaptureSheet(
           context,
-          title: pickUp != null ? 'Into ${pickUp.title.isEmpty ? 'this exploration' : pickUp.title}' : 'Captured away',
+          title: pickUp != null ? 'Into ${pickUp.title.isEmpty ? 'this page' : pickUp.title}' : 'Captured away',
           onCapture: (text) async {
             final ok = await _capture(
               context,
               ref,
               widget.apiBuilder,
               workspace: widget.workspace,
-              explorationId: pickUp?.explorationId,
+              cardId: pickUp?.cardId,
               text: text,
             );
             if (ok) await _load();
@@ -370,7 +369,7 @@ class _CarryViewState extends ConsumerState<CarryView> {
                     ref,
                     widget.apiBuilder,
                     workspace: widget.workspace,
-                    explorationId: pickUp.explorationId,
+                    cardId: pickUp.cardId,
                   );
                   if (!mounted) return;
                   setState(() => _settingNext = false);
@@ -383,6 +382,10 @@ class _CarryViewState extends ConsumerState<CarryView> {
       if (carry.capturedCount > 0) ...[
         const SizedBox(height: 4),
         QuietText('${carry.capturedCount} captured away'),
+      ],
+      if (carry.spooled > 0) ...[
+        const SizedBox(height: 4),
+        QuietText('${carry.spooled} waiting for Hester'),
       ],
     ];
   }
@@ -400,160 +403,6 @@ class _Label extends StatelessWidget {
       child: Text(
         text.toUpperCase(),
         style: const TextStyle(fontSize: 12, letterSpacing: 0.72, fontWeight: FontWeight.w500, color: Phosphor.text3),
-      ),
-    );
-  }
-}
-
-/// Active explorations, newest touched first (§5): the title, the last
-/// session's stopped-at note in Newsreader, and "about n words · n open
-/// questions". A tap offers capture and Open next.
-class ExplorationsView extends ConsumerStatefulWidget {
-  final String? workspace;
-  final HesterApiBuilder? apiBuilder;
-  final CopilotApiBuilder? copilotApi;
-
-  const ExplorationsView({required this.workspace, this.apiBuilder, this.copilotApi, super.key});
-
-  @override
-  ConsumerState<ExplorationsView> createState() => _ExplorationsViewState();
-}
-
-class _ExplorationsViewState extends ConsumerState<ExplorationsView> {
-  List<ExplorationSummary>? _items;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(covariant ExplorationsView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.workspace != widget.workspace) _load();
-  }
-
-  Future<void> _load() async {
-    final machine = ref.read(machinesProvider).activeMachine;
-    if (machine == null) return;
-    setState(() => _loading = true);
-    final api = (widget.apiBuilder ?? (m) => HesterApi(machine: m))(machine);
-    try {
-      final items = await api.getExplorations(workspace: widget.workspace);
-      if (!mounted) return;
-      setState(() {
-        _items = items;
-        _loading = false;
-      });
-    } finally {
-      api.dispose();
-    }
-  }
-
-  void _actions(ExplorationSummary e) {
-    final title = e.title.isEmpty ? 'Untitled exploration' : e.title;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AeronautColors.bgSurface,
-      builder: (sheet) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(title, style: AeronautTheme.headline),
-              const SizedBox(height: AeronautTheme.spacingMd),
-              WorkButton(
-                label: 'Capture a thought into this',
-                kind: BtnKind.next,
-                height: 48,
-                onPressed: () {
-                  Navigator.pop(sheet);
-                  showCarryCaptureSheet(
-                    context,
-                    title: 'Into $title',
-                    onCapture: (text) => _capture(
-                      context,
-                      ref,
-                      widget.copilotApi,
-                      workspace: widget.workspace,
-                      explorationId: e.id,
-                      text: text,
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: AeronautTheme.spacingSm),
-              WorkButton(
-                label: 'Open this first on the Mac',
-                height: 48,
-                onPressed: () {
-                  Navigator.pop(sheet);
-                  _openNext(context, ref, widget.copilotApi, workspace: widget.workspace, explorationId: e.id);
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _items;
-    if (_loading && items == null) {
-      return const Center(child: CircularProgressIndicator.adaptive());
-    }
-    return RefreshIndicator.adaptive(
-      color: AeronautColors.accent,
-      backgroundColor: AeronautColors.bgSurface,
-      onRefresh: _load,
-      child: ListView(
-        padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-        children: [
-          if (items == null)
-            const QuietText('Hester is offline.')
-          else if (items.isEmpty)
-            const QuietText('No explorations yet.')
-          else
-            for (final e in items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: AeronautTheme.spacingSm),
-                child: WorkCard(
-                  key: ValueKey('exploration-${e.id}'),
-                  onOpen: () => _actions(e),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              e.title.isEmpty ? 'Untitled exploration' : e.title,
-                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Phosphor.text1),
-                            ),
-                          ),
-                          Text(_ago(e.lastTouchedAt), style: AeronautTheme.caption1),
-                        ],
-                      ),
-                      if (e.stoppedAt != null) ...[
-                        const SizedBox(height: 6),
-                        WritingQuote(e.stoppedAt!, size: 16, maxLines: 3),
-                      ],
-                      const SizedBox(height: 6),
-                      QuietText([
-                        wordsLabel(e.words),
-                        if (e.openQuestions > 0) '${e.openQuestions} open question${e.openQuestions == 1 ? '' : 's'}',
-                      ].join(' · ')),
-                    ],
-                  ),
-                ),
-              ),
-        ],
       ),
     );
   }

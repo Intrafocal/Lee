@@ -46,7 +46,9 @@ export type CockpitEventType =
   | 'deep.action'
   | 'deep.affordance'
   | 'deep.switcher'
-  | 'desk.zoom';
+  | 'desk.zoom'
+  | 'deep.idle_push'
+  | 'deep.extend';
 
 // ---------------------------------------------------------------------------
 // Tabs (package A)
@@ -1025,6 +1027,13 @@ export function encodeWorkspaceHeader(workspace: string): string {
 // Cockpit design (docs/plans/2026-09-27-cockpit-design-contracts.md §9)
 // ---------------------------------------------------------------------------
 
+/** The four Cockpit sections (Desk D2, docs/16-Desk.md §6). C switches to these; SectionId and LEGACY_SECTION stay until the merge step. */
+export type CockpitSectionId = 'home' | 'work' | 'goals' | 'ops';
+export const COCKPIT_SECTION: Record<string, CockpitSectionId> = {
+  copilot: 'home', feed: 'work', tasks: 'work', explore: 'home', someday: 'home', files: 'home', tabs: 'home',
+  library: 'home', history: 'home', home: 'home', work: 'work', goals: 'goals', ops: 'ops',
+};
+
 /** The six Cockpit sections (§2.2). Remembered ids from older builds map through LEGACY_SECTION. */
 export type SectionId = 'home' | 'work' | 'goals' | 'library' | 'ops' | 'history';
 
@@ -1032,13 +1041,6 @@ export type SectionId = 'home' | 'work' | 'goals' | 'library' | 'ops' | 'history
 export const LEGACY_SECTION: Record<string, SectionId> = {
   copilot: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library', tabs: 'home',
   home: 'home', work: 'work', goals: 'goals', library: 'library', ops: 'ops', history: 'history',
-};
-
-/** The four Cockpit sections (Desk D2, docs/16-Desk.md §6). C switches to these; SectionId and LEGACY_SECTION stay until the merge step. */
-export type CockpitSectionId = 'home' | 'work' | 'goals' | 'ops';
-export const COCKPIT_SECTION: Record<string, CockpitSectionId> = {
-  copilot: 'home', feed: 'work', tasks: 'work', explore: 'home', someday: 'home', files: 'home', tabs: 'home',
-  library: 'home', history: 'home', home: 'home', work: 'work', goals: 'goals', ops: 'ops',
 };
 
 /**

@@ -293,7 +293,7 @@ class CopilotApi {
   }
 
   /// `GET /carry?workspace=` — Library's Carry (docs/14-Deep-Work.md §8.1):
-  /// the exploration to pick up, its open questions and what the Mac opens
+  /// your last Desk card, its open questions and what the Mac opens
   /// next. Without [workspace] Lee uses the focused window's. A 503 means
   /// Hester is offline.
   Future<CarryResult> getCarry({String? workspace}) async {
@@ -321,23 +321,86 @@ class CopilotApi {
   }
 
   /// `POST /carry/capture` — a thought captured away from the Mac, into
-  /// [explorationId] when given. Lands in the opener's "Captured away".
-  Future<CaptureResult> carryCapture(String text, {String? workspace, String? explorationId}) async {
+  /// the card [cardId] when given. Lands in the opener's "Captured away".
+  /// With Hester offline, Lee spools it and answers `spooled: true`.
+  Future<CaptureResult> carryCapture(String text, {String? workspace, String? cardId}) async {
     return _postCarry('/carry/capture', {
       'text': text,
       if (workspace != null) 'workspace': workspace,
-      if (explorationId != null) 'exploration_id': explorationId,
+      if (cardId != null) 'card_id': cardId,
     }, (data) => CaptureResult.fromJson({'success': true, ...data}));
   }
 
   /// `POST /carry/open-next` — what the Mac's next Deep session opens first
-  /// (an exploration or a captured thought).
-  Future<CaptureResult> carryOpenNext({String? workspace, String? explorationId, String? somedayId}) async {
+  /// (a card or a captured thought).
+  Future<CaptureResult> carryOpenNext({String? workspace, String? cardId, String? somedayId}) async {
     return _postCarry('/carry/open-next', {
       if (workspace != null) 'workspace': workspace,
-      if (explorationId != null) 'exploration_id': explorationId,
+      if (cardId != null) 'card_id': cardId,
       if (somedayId != null) 'someday_id': somedayId,
     }, (_) => const CaptureResult(success: true));
+  }
+
+  /// `POST /command {domain: tab, action: checkin, params: {pty_id}}`: ask a
+  /// running agent where it is; its answer arrives as its words. 202 means
+  /// this token may only propose it and Lee asks at the desk.
+  Future<ActionResult> agentCheckin(int ptyId) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('${machine.hostUrl}/command'),
+            headers: _headers,
+            body: jsonEncode({'domain': 'tab', 'action': 'checkin', 'params': {'pty_id': ptyId}}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (_isUnauthorized(response)) {
+        return const ActionResult(success: false, error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) return const ActionResult(success: false, error: _reAuthMessage);
+      if (response.statusCode == 202) return const ActionResult(success: true, error: 'proposed');
+      if (response.statusCode == 200) return const ActionResult(success: true);
+      return ActionResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
+    } catch (e) {
+      return ActionResult(success: false, error: e.toString());
+    }
+  }
+
+  /// `POST /deep/idle-end` (Desk D2 §9.2): answer the "Still thinking?"
+  /// push. [action] is `extend` or `end_rate`; [rating] is `deep`, `mixed`,
+  /// `shallow` or null. A 409 (the push was answered or the session moved
+  /// on) comes back as error 'stale'.
+  Future<ActionResult> deepIdleEnd(
+    String itemId, {
+    required int version,
+    required String action,
+    String? rating,
+    String? stoppedAt,
+  }) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('${machine.hostUrl}/deep/idle-end'),
+            headers: _headers,
+            body: jsonEncode({
+              'item_id': itemId,
+              'version': version,
+              'action': action,
+              if (action == 'end_rate') 'rating': rating,
+              if (stoppedAt != null && stoppedAt.trim().isNotEmpty) 'stopped_at': stoppedAt.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (_isUnauthorized(response)) {
+        return const ActionResult(success: false, error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) return const ActionResult(success: false, error: _reAuthMessage);
+      if (response.statusCode == 200) return const ActionResult(success: true);
+      if (response.statusCode == 409) return const ActionResult(success: false, error: 'stale');
+      if (response.statusCode == 404) return const ActionResult(success: false, error: 'gone');
+      return ActionResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
+    } catch (e) {
+      return ActionResult(success: false, error: e.toString());
+    }
   }
 
   Future<CaptureResult> _postCarry(

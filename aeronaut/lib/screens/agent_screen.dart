@@ -12,6 +12,7 @@ import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
+import '../widgets/agent_actions_row.dart';
 import '../widgets/attention_tile.dart';
 import '../widgets/in_flight_section.dart';
 import '../widgets/phosphor_icon.dart';
@@ -41,7 +42,8 @@ AttentionItem? agentItem(AttentionSnapshot snapshot, {int? ptyId, String? itemId
 }
 
 /// One agent (cockpit design §4.2, §8.1): its words as prose ("It asked" /
-/// "It said"), the pending action, the four quick replies as a 2×2 grid,
+/// "It said"), Check in / Rename / Accept / Assign… (Desk D2 §9.4), the
+/// pending action, the four quick replies as a 2×2 grid,
 /// Updates, "Along the way" (folded), and a reply bar pinned to the bottom
 /// with a round phosphor Send. Replies go through the item's Reply; with no
 /// open item the bar is disabled ("Reply from the Mac for now").
@@ -224,6 +226,7 @@ class _AgentScreenState extends ConsumerState<AgentScreen> {
                   const SizedBox(height: 4),
                   Text(agentSubLine(agent), style: AeronautTheme.footnote.copyWith(color: AeronautColors.textSecondary)),
                 ],
+                AgentActionsRow(agent: agent, workspace: agent?.workspace ?? item?.source.workspace),
                 if (item != null && item.title.isNotEmpty && item.title != name) ...[
                   const SizedBox(height: AeronautTheme.spacingMd),
                   Text(item.title, style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w600)),

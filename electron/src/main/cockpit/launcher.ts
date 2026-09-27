@@ -238,7 +238,7 @@ export function validTimebox(v: unknown): number | null {
 export function validOrigin(o: unknown): TaskOrigin | null {
   if (!o || typeof o !== 'object') return null;
   const v = o as Record<string, unknown>;
-  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester', 'explore', 'goal-eval', 'exploration'];
+  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester', 'explore', 'goal-eval', 'exploration', 'page'];
   if (typeof v.kind !== 'string' || !kinds.includes(v.kind)) return null;
   return { kind: v.kind as TaskOrigin['kind'], ref: typeof v.ref === 'string' ? v.ref : null };
 }

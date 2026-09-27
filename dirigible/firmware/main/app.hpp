@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Waiting, InFlight, Library, Tabs, Terminal, Hester, Pairing, Files, Viewer };
+enum class View { Waiting, InFlight, Library, Tabs, Terminal, Hester, Pairing, Files, Viewer, DeepIdle };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -89,6 +89,7 @@ struct App {
     lv_obj_t* view_viewer   = nullptr;
     lv_obj_t* view_inflight = nullptr;
     lv_obj_t* view_library  = nullptr;
+    lv_obj_t* view_deep_idle = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
     View view = View::Waiting;
@@ -217,6 +218,8 @@ bool ball_list(lv_obj_t* list, int dy, bool click);
 //   i  In flight  the running agents (screen_inflight.cpp)
 //   l  Library    Carry: what to take away from the last Deep session
 //                 (screen_carry.cpp)
+//   x  Still thinking?  the idle-end push, while one is open
+//                 (screen_deep_idle.cpp)
 // On Work, a question page takes w as Wait (you are already on Work).
 
 /// The snapshot the three views draw (Lee's, or the demo build's canned one);
@@ -228,8 +231,8 @@ bool cockpit_linked();
 /// runs at the machine, else Work's line ("One thing needs you.", "Working
 /// on it.", "All clear."), with the away / link states ahead of it.
 std::string cockpit_status();
-/// w / i / l from any of the three views (and i / l from Tabs).  True when
-/// the key moved somewhere.
+/// w / i / l from any of the three views (and i / l from Tabs), and x for
+/// the idle-end push while one is open.  True when the key moved somewhere.
 bool cockpit_nav_key(uint8_t ascii);
 
 // Waiting ("Work"): Lee's attention queue (Copilot v0, contracts §9.3), the
@@ -256,14 +259,25 @@ bool inflight_back();                      // close an opened agent; false at th
 bool inflight_key(uint8_t ascii);
 void inflight_ball(int dx, int dy, bool click);
 
-// Library (Carry): GET /carry, one exploration per page (j/k): "You stopped
-// at" in italic, one open question, Add a thought (C), Open next (O).  State
-// lives in screen_carry.cpp.
+// Library (Carry): GET /carry, your last Desk card first, one card per page
+// (j/k): "You stopped at" in italic, one open question, Add a thought (C),
+// Open next (O).  State lives in screen_carry.cpp.
 void library_build(lv_obj_t* parent);
 void library_open();                       // show it and refetch
 bool library_back();                       // close the thought box; false otherwise
 bool library_key(uint8_t ascii);
 void library_ball(int dx, int dy, bool click);
+
+// Still thinking? (Desk D2 §9.2): the idle-end push as its own page: e
+// extend, d / m / s end and rate (then an optional stopped-at line), c
+// capture into the card.  State lives in screen_deep_idle.cpp.
+void deep_idle_build(lv_obj_t* parent);
+bool deep_idle_pending();                  // the snapshot has an open push
+void deep_idle_open();
+void deep_idle_render();                   // a new snapshot
+bool deep_idle_back();                     // close the text box; false otherwise
+bool deep_idle_key(uint8_t ascii);
+void deep_idle_ball(int dx, int dy, bool click);
 
 void tabs_build(lv_obj_t* parent);
 void tabs_render(const dirigible::LeeContext* ctx);

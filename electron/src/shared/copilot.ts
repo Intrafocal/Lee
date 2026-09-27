@@ -87,7 +87,10 @@ export type LeeEventType =
   // docs/15-Usage.md §4.2 (Lee main): agent.usage {session_id, pty_id?, provider, by_model};
   // limits.snapshot {source, five_hour?, seven_day?, session_id} on change
   | 'agent.usage'
-  | 'limits.snapshot';
+  | 'limits.snapshot'
+  // Desk D2 §5.1 (Lee main): deep.idle_push {session_id, ends_at}; deep.extend {session_id, minutes, surface}
+  | 'deep.idle_push'
+  | 'deep.extend';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 
@@ -325,6 +328,11 @@ export interface DeepStartRequest {
 }
 export interface DeepEndRequest { reason: 'ritual' | 'esc'; rating?: DepthRating | null; stopped_at_chars?: number }
 
+/** POST /deep/idle-end (Desk D2 §9.2). */
+export type DeepIdleEndRequest =
+  | { item_id: string; version: number; action: 'extend' }
+  | { item_id: string; version: number; action: 'end_rate'; rating: DepthRating | null; stopped_at?: string | null };
+
 /** window.lee.deep (Deep D1 §6): main forwards Hester's ingested deep.answer events. */
 export interface DeepAPI {
   onAnswer: (cb: (e: DeepAnswerEvent) => void) => CopilotUnsubscribe;
@@ -553,8 +561,3 @@ export interface CopilotAPI {
   deepStart: (req: DeepStartRequest) => Promise<FocusState>;
   deepEnd: (req: DeepEndRequest) => Promise<FocusState>;
 }
-
-/** POST /deep/idle-end (§9.2). */
-export type DeepIdleEndRequest =
-  | { item_id: string; version: number; action: 'extend' }
-  | { item_id: string; version: number; action: 'end_rate'; rating: DepthRating | null; stopped_at?: string | null };

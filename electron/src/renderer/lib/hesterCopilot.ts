@@ -47,7 +47,7 @@ export interface DigestResponse {
   retro: { due: boolean; week: string };
   /** v4 §6: deterministic Q2 candidates (at most 5, goal priority order). Older daemons omit it. */
   q2_candidates?: Array<{
-    kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+    kind: 'goal-unserved' | 'exploration-quiet' | 'page-quiet' | 'evaluation-due';
     goal_id?: string | null;
     ref: string;
     title: string;
