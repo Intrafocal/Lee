@@ -38,6 +38,49 @@ file (`.hester/goals/metrics.jsonl`), so its history records only changes to def
 
 ## Goals (in priority order)
 
+G1 (friction), G4 (focused bursts), G2 (managed agents) and G3 (Hester's value) are all
+means to G0: they make room for deep work.
+
+### G0 Deep work
+
+Hard thinking is the work that matters most: a blank page, reading and research,
+sketching and marking up, working a problem until it gives. Lee makes room for it,
+supports it while it happens, and gets out of the way, including by encouraging
+you to stop. Every other goal exists to make room for this one.
+
+Deep work includes play and rapid prototyping, and slow, steady progress on what's
+important but not urgent. It often continues away from the machine; ending a
+session well is part of it.
+
+- metric: **session_depth**: at the end of a session, one tap: deep, mixed or shallow.
+  "Deep" means your brain hurts a bit, in a good way.
+  - kind: judged
+  - signal: the ending ritual's rating (Deep sessions' focus.end)
+  - available: yes (Deep D1)
+  - target: share of sessions rated deep rising
+  - guard: deep_time not falling
+- metric: **deep_time**: minutes per week in Deep sessions with input (writing, coding
+  by hand, reviewing, marking up, reading with scrolls or selections), not just open.
+  Hops to the Cockpit during a session neither count toward it nor end it.
+  - kind: proxy
+  - signal: deep.input events from the event log
+  - available: yes (Deep D1)
+  - target: rising
+  - guard: total active hours not rising, and session_depth not falling
+- metric: **turn_churn**: prompts sent to an agent within 2 minutes of that agent's
+  previous turn ending, per active hour. "One more turn," measured directly.
+  - kind: runnable
+  - signal: agent.prompt and agent.turn_end hook events
+  - available: yes, for Lee-launched Claude sessions
+  - target: falling
+  - guard: background_leverage not falling
+- metric: **time_to_deep**: in sessions rated deep, time from opening Lee (or
+  returning to the machine) to the first input in Deep mode.
+  - kind: runnable
+  - signal: presence, focus.start and deep.input events
+  - available: yes (Deep D1)
+  - target: falling
+
 ### G1 Humane, fun development
 
 Lee makes orchestration easy and centers human creativity and exploration. People are
@@ -196,6 +239,17 @@ writing code.
 
 ## Tensions
 
+- **G0 vs G2 (deep vs attention latency):** nothing interrupts Deep mode, so agents wait
+  longer. Default: agents park during Deep; attention_latency is measured separately inside
+  and outside Deep sessions, and only outside is expected to fall. Arbiter: session_depth
+  together with attention_latency outside Deep.
+- **G0 vs agency (deep vs checking in):** walling Deep off would raise deep_time on paper and
+  make it feel unsafe to go deep at all. Default: the Cockpit is always one key away, and
+  hops are never scored, nudged or counted against a session. Arbiter: session_depth (and
+  deep_time over weeks), never hop counts.
+- **G0 vs G1 (thinking vs finishing):** a blank page can be avoidance too. Default: Lee
+  doesn't judge what you do in Deep mode; the ending ritual's rating is the check.
+  Arbiter: session_depth and weekly_retro.
 - **G1 vs G2 (management becomes toil):** features for managing agents can themselves
   become management work. Default: a feature that asks you to manage something must
   remove more toil than it adds. Arbiter: toil_load, which counts ceremony alongside toil.
