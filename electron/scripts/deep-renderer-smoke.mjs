@@ -7,31 +7,41 @@
  * Insert's blockquote, the Answers tray and the wake line. Compiles the real
  * source with esbuild, no React, no DOM.
  *
+ * cockpit-design R3 (§10): the Page chrome's words (components/deep/deepView.ts),
+ * the palette's about-routing (components/paletteAbout.ts: an about goes to
+ * /cockpit/ask, none to /context/stream), and that var(--lit) appears in no
+ * renderer CSS outside the terminal (§1.4).
+ *
  * Run: node scripts/deep-renderer-smoke.mjs
  */
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcPath = join(__dirname, '../src/renderer/lib/deepModel.ts');
 
-const result = await esbuild.build({ entryPoints: [srcPath], bundle: false, format: 'esm', platform: 'node', write: false });
-const code = result.outputFiles[0].text;
-assert.ok(!/^\s*import\s/m.test(code), 'deepModel.ts must have type-only imports (pure)');
-
-const tmpDir = mkdtempSync(join(tmpdir(), 'lee-deep-smoke-'));
-const tmpFile = join(tmpDir, 'deepModel.mjs');
-writeFileSync(tmpFile, code);
-let mod;
-try {
-  mod = await import(pathToFileURL(tmpFile).href);
-} finally {
-  rmSync(tmpDir, { recursive: true, force: true });
+/** Compile one pure module (type-only imports) and import it. */
+async function loadPure(path, name) {
+  const result = await esbuild.build({ entryPoints: [path], bundle: false, format: 'esm', platform: 'node', write: false });
+  const code = result.outputFiles[0].text;
+  assert.ok(!/^\s*import\s/m.test(code), `${name} must have type-only imports (pure)`);
+  const tmpDir = mkdtempSync(join(tmpdir(), 'lee-deep-smoke-'));
+  const tmpFile = join(tmpDir, `${name}.mjs`);
+  writeFileSync(tmpFile, code);
+  try {
+    return await import(pathToFileURL(tmpFile).href);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
+
+const mod = await loadPure(srcPath, 'deepModel');
+const view = await loadPure(join(__dirname, '../src/renderer/components/deep/deepView.ts'), 'deepView');
+const palette = await loadPure(join(__dirname, '../src/renderer/components/paletteAbout.ts'), 'paletteAbout');
 const {
   deepRowKey,
   affordanceFor,
@@ -323,6 +333,123 @@ test('wokenItem / waitingCount: only woken open items make the wake line', () =>
   const items = [item({}), item({ severity: 'blocking' }), item({ severity: 'ambient' }), item({ state: 'dismissed' }), item({ kind: 'summary' })];
   assert.equal(waitingCount({ items }), 2);
   assert.equal(waitingCount(null), 0);
+});
+
+// ---------------------------------------------------------------------------
+// cockpit-design §6.1: the Page's chrome
+// ---------------------------------------------------------------------------
+
+test('deepView: header counts, margin note labels, the Deep status line', () => {
+  const { countLabel, marginNoteLabel, deepStatusLine } = view;
+  assert.equal(countLabel(0, 'answer'), '0 answers');
+  assert.equal(countLabel(1, 'answer'), '1 answer');
+  assert.equal(countLabel(3, 'question'), '3 questions');
+  assert.equal(countLabel(-2, 'question'), '0 questions');
+  assert.equal(marginNoteLabel('unread'), 'Hester answered');
+  assert.equal(marginNoteLabel('read'), 'Hester answered');
+  assert.equal(marginNoteLabel('pending'), 'asking…');
+  assert.equal(marginNoteLabel('pending', true), 'asking when Hester is back…');
+  assert.match(marginNoteLabel('error'), /couldn’t answer/);
+  assert.deepEqual(deepStatusLine(0), { left: 'Deep · ⇧⌘0 Cockpit', right: '' });
+  assert.deepEqual(deepStatusLine(2), { left: 'Deep · ⇧⌘0 Cockpit', right: '2 waiting' });
+});
+
+// ---------------------------------------------------------------------------
+// cockpit-design §6.2: the palette's about and its routing
+// ---------------------------------------------------------------------------
+
+test('paletteRoute: an about asks /cockpit/ask, none streams /context/stream', () => {
+  const { paletteRoute } = palette;
+  const about = { kind: 'task', id: 't1', label: 'Fix login' };
+  const r = paletteRoute(about);
+  assert.equal(r.kind, 'steward');
+  assert.equal(r.path, '/cockpit/ask');
+  assert.equal(r.about, about);
+  assert.deepEqual(paletteRoute(null), { kind: 'stream', path: '/context/stream' });
+  assert.deepEqual(paletteRoute(undefined), { kind: 'stream', path: '/context/stream' });
+});
+
+test('paletteAboutFor: the Cockpit selection, published ref first, tile fallback, nothing guessed', () => {
+  const { paletteAboutFor, publishPaletteAbout, publishedPaletteAbout, aboutLine, selectionKey } = palette;
+  const tabDisplay = new Map([[7, { provider: 'claude', name: 'Login fix' }], [8, { provider: 'codex', name: null }]]);
+  const cockpit = (selected) => ({ mode: 'cockpit', selected, tabDisplay });
+  const task = { kind: 'task', id: 't1', label: 'Fix login' };
+
+  assert.equal(paletteAboutFor(cockpit(null), null), null, 'nothing selected: general');
+  assert.equal(paletteAboutFor({ mode: 'deep', selected: { kind: 'tile', id: '7' }, tabDisplay }, null), null, 'outside the Cockpit: general');
+  assert.equal(paletteAboutFor({ mode: 'manual', selected: { kind: 'row', id: 'r' }, tabDisplay }, null), null);
+
+  // The owning view's published ref wins while it is for this selection.
+  const sel = { kind: 'row', id: 'work:agent:7' };
+  publishPaletteAbout(sel, task);
+  assert.equal(publishedPaletteAbout().key, selectionKey(sel));
+  assert.equal(paletteAboutFor(cockpit(sel), publishedPaletteAbout()), task);
+  assert.equal(paletteAboutFor(cockpit({ kind: 'row', id: 'other' }), publishedPaletteAbout()), null, 'a stale ref is ignored; rows are not guessed');
+
+  // A published null for this selection means "nothing to be about".
+  publishPaletteAbout({ kind: 'tile', id: '7' }, null);
+  assert.equal(paletteAboutFor(cockpit({ kind: 'tile', id: '7' }), publishedPaletteAbout()), null);
+  publishPaletteAbout(null, null);
+  assert.equal(publishedPaletteAbout(), null);
+
+  // An agent tile with nothing published is named from the store's tabDisplay.
+  const tile = paletteAboutFor(cockpit({ kind: 'tile', id: '7' }), null);
+  assert.deepEqual(tile, { kind: 'tile', id: '7', label: 'Login fix', record: { pty_id: 7, title: 'Login fix', provider: 'claude' } });
+  assert.equal(paletteAboutFor(cockpit({ kind: 'tile', id: '8' }), null).label, 'codex agent');
+  assert.equal(paletteAboutFor(cockpit({ kind: 'tile', id: '9' }), null).label, 'Agent 9');
+  assert.equal(paletteAboutFor(cockpit({ kind: 'tile', id: 'x' }), null), null);
+  assert.equal(paletteAboutFor(cockpit({ kind: 'feed', id: 'f1' }), null), null);
+
+  // The about line and the routing it implies.
+  assert.deepEqual(aboutLine(tile), { kind: 'agent', title: 'Login fix' });
+  assert.deepEqual(aboutLine(task), { kind: 'task', title: 'Fix login' });
+  assert.deepEqual(aboutLine({ kind: 'exploration', label: '  ' }), { kind: 'exploration', title: 'untitled' });
+  assert.equal(palette.paletteRoute(paletteAboutFor(cockpit({ kind: 'tile', id: '7' }), null)).path, '/cockpit/ask');
+  assert.equal(palette.paletteRoute(paletteAboutFor(cockpit(null), null)).path, '/context/stream');
+});
+
+// ---------------------------------------------------------------------------
+// cockpit-design §1.4: --lit is the terminal's bright green, never UI
+// ---------------------------------------------------------------------------
+
+test('no var(--lit) in renderer CSS outside the terminal', () => {
+  const root = join(__dirname, '../src/renderer');
+  // Stylesheets other packages own; their owners take --lit out (cockpit-design
+  // §9). Remove an entry once its file is clean; this test then holds it clean.
+  const PENDING = {
+    'styles/components.css': 'unowned (§9): the file tree’s selected icon',
+    'components/copilot/copilot.css': 'unowned (§9)',
+    'components/cockpit/cockpit-shell.css': 'R1',
+  };
+  const css = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith('.css')) css.push(full);
+    }
+  };
+  walk(root);
+  assert.ok(css.length > 5, 'found the renderer stylesheets');
+  const offenders = [];
+  for (const file of css) {
+    const rel = relative(root, file).split('\\').join('/');
+    if (/terminal|xterm/i.test(rel)) continue;
+    const hits = readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /var\(--lit(-rgb)?\)/.test(line));
+    if (!hits.length) {
+      if (PENDING[rel]) console.log(`  note: ${rel} is clean now; drop it from PENDING`);
+      continue;
+    }
+    if (PENDING[rel]) {
+      console.log(`  pending (${PENDING[rel]}): ${rel} uses var(--lit) on line ${hits.map((h) => h.n).join(', ')}`);
+      continue;
+    }
+    offenders.push(`${rel}:${hits.map((h) => h.n).join(',')}`);
+  }
+  assert.deepEqual(offenders, [], 'var(--lit) in UI CSS');
 });
 
 console.log(process.exitCode ? '\nsome FAILED' : `\n${passed} passed`);
