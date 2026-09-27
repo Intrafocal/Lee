@@ -79,6 +79,15 @@ test('resume guard: --resume is dropped when Claude has no transcript for that s
   assert.deepEqual(dropStaleResume(['--name', 'x'], '/w/proj', () => false, home), { args: ['--name', 'x'], dropped: null }, 'no resume: unchanged');
 });
 
+test('reported usage from a model on this machine (Pi on Ollama) is local, never billed', () => {
+  const t = new UsageTracker();
+  const turn = t.reportedTurn('pi-1', { by_model: [
+    { provider: 'ollama', model: 'gemma4:e4b', tokens: { input: 9553, output: 1340 }, cost_usd: 0 },
+    { provider: 'openai', model: 'gpt-x', tokens: { input: 10 }, cost_usd: 0.01 },
+  ] }, 'other', 'billed');
+  assert.deepStrictEqual(turn.by_model.map((e) => [e.provider, e.cost_basis, e.cost_usd]), [['ollama', 'local', undefined], ['openai', 'billed', 0.01]]);
+});
+
 test('dedupe by message.id: repeated streaming lines count once, last wins', () => {
   const t = new UsageTracker();
   const { id, file } = newTranscript();

@@ -1502,7 +1502,8 @@ const leeRows = [
     },
     baseline: {
       days: 7,
-      days_with_data: 5,
+      token_days: 5,
+      call_days: 7,
       totals: {
         by_source: {
           claude: { subscription_tokens: 2000000, shown_tokens: 2000000, count: 3 },
@@ -1658,7 +1659,7 @@ const leeRows = [
     assert.equal(nextCount(s), 0);
     assert.ok(!/is-needs/.test(s), 'no ember');
     assert.ok(!/>Week<|>Month</.test(s), 'today only');
-    for (const t of ['Claude subscription', 'Today', 'vs 7-day avg', 'Hester calls', 'Top work items']) assert.ok(s.includes(t), t);
+    for (const t of ['Claude subscription', 'Today', 'vs 5-day avg', 'vs 7-day avg', 'Hester calls', 'Top work items']) assert.ok(s.includes(t), t);
     assert.ok(s.includes('$1.67 spent · 3.1M tok on the subscription · 240k tok local.'), 'the total line: $1.25 + $0.42, never the subscription list price');
     assert.ok(!s.includes('$50') && !s.includes('$31'), 'subscription dollars never show');
     assert.equal((s.match(/class="cockpit-usage-dial( is-near)?"/g) ?? []).length, 2, 'a dial per window');
@@ -1669,6 +1670,7 @@ const leeRows = [
     assert.ok(s.includes('↑ 2.5×'), 'Pi spend: $1.25 against $0.50');
     assert.ok(s.includes('↑ 2.0×') && s.includes('avg 7<'), 'Hester cloud calls: 14 against 7');
     assert.ok(s.includes('↑ new today'), 'Hester local: nothing on average');
+    assert.ok(!s.includes('avg 0<'), 'no "avg 0" beside new today');
     assert.ok(s.includes('Fix the parser') && s.includes('2.4M tok<'), 'a subscription item is tokens only');
     assert.ok(s.includes('90k tok · $1.25'), 'a billed item shows dollars');
     assert.ok(s.indexOf('Pi refactor') < s.indexOf('Fix the parser'), 'dollars first');

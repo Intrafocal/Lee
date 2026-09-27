@@ -74,6 +74,9 @@ def usage_items(by_model: Any) -> List[Dict[str, Any]]:
 
 
 def basis_of(usage: Dict[str, Any]) -> str:
+    # A model on this machine is local whatever its basis says (Lee logged Pi-on-Ollama as billed $0).
+    if str(usage.get("provider") or "").lower() == "ollama":
+        return "local"
     b = usage.get("cost_basis")
     return b if b in BASES else "estimate"
 
@@ -343,35 +346,51 @@ def compute_usage(
     }
 
 
-_AVG_KEYS = ("shown_tokens", "spend_usd", "subscription_tokens", "local_tokens", "local_ms", "count",
-             "unpriced_tokens", "calls", "cloud_calls", "local_calls")
+_TOKEN_KEYS = ("shown_tokens", "spend_usd", "subscription_tokens", "local_tokens", "local_ms", "unpriced_tokens")
+_CALL_KEYS = ("count", "calls", "cloud_calls", "local_calls")
 
 
-def _avg(bucket: Dict[str, Any], days: int) -> Dict[str, Any]:
-    out = {k: round(bucket[k] / days, 6 if k == "spend_usd" else 1) for k in _AVG_KEYS if k in bucket}
+def _avg(bucket: Dict[str, Any], token_days: int, call_days: int) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for keys, days in ((_TOKEN_KEYS, token_days), (_CALL_KEYS, call_days)):
+        for k in keys:
+            if k in bucket:
+                out[k] = round(bucket[k] / days, 6 if k == "spend_usd" else 1) if days else 0
     return out
+
+
+def _span(days: List[Dict[str, Any]], seen) -> int:
+    """Days from the first one ``seen`` through the last: before it, usage wasn't recorded yet (not zero)."""
+    first = next((i for i, d in enumerate(days) if seen(d)), None)
+    return 0 if first is None else len(days) - first
 
 
 def compute_baseline(events: List[Dict[str, Any]], now: datetime, days: int = BASELINE_DAYS) -> Dict[str, Any]:
     """
     The per-day average of the ``days`` full local days before today (§6.3's
-    comparison): totals, by source and Hester by trigger, each divided by
-    ``days``. ``days_with_data`` says how many of them saw any usage, so a new
-    install can say it has no baseline yet rather than compare with zeros.
+    comparison): totals, by source and Hester by trigger. Tokens and spend
+    are averaged over ``token_days``, the days since tokens were first
+    recorded (usage capture is newer than the call log); call counts over
+    ``call_days``, likewise. Either is 0 when there is nothing to compare
+    with yet, so the view says so rather than compare with zeros.
     """
     midnight = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     start = (midnight - timedelta(days=days)).astimezone(timezone.utc)
     end = midnight.astimezone(timezone.utc) - timedelta(seconds=1)
     data = compute_usage(events, "week", now, bounds=(start, end))
-    active = sum(1 for d in data["by_day"] if d["count"] or d["shown_tokens"])
+    by_day = data["by_day"]
+    token_days = _span(by_day, lambda d: d["shown_tokens"] or d["spend_usd"])
+    call_days = _span(by_day, lambda d: d["count"])
     return {
         "days": days,
-        "days_with_data": active,
+        "token_days": token_days,
+        "call_days": call_days,
+        "days_with_data": sum(1 for d in by_day if d["count"] or d["shown_tokens"]),
         "from": iso(start),
         "to": iso(midnight.astimezone(timezone.utc)),
-        "totals": {**_avg(data["totals"], days),
-                   "by_source": {s: _avg(b, days) for s, b in data["totals"]["by_source"].items()}},
-        "hester": {k: _avg(data["hester"][k], days) for k in ("user", "automatic")},
+        "totals": {**_avg(data["totals"], token_days, call_days),
+                   "by_source": {s: _avg(b, token_days, call_days) for s, b in data["totals"]["by_source"].items()}},
+        "hester": {k: _avg(data["hester"][k], token_days, call_days) for k in ("user", "automatic")},
     }
 
 

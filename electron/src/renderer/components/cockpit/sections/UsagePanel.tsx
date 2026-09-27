@@ -126,7 +126,7 @@ const Metric: React.FC<MetricProps> = ({ label, value, cmp, note }) => (
       aria-hidden="true"
       title={cmp?.avg ? `Today ${value} · 7-day avg ${cmp.avg}` : undefined}
     >
-      {cmp && cmp.direction !== 'none' && (
+      {cmp && cmp.direction !== 'none' && cmp.avgFrac > 0 && (
         <>
           <span className="cockpit-usage-bullet-fill" style={{ width: `${cmp.todayFrac * 100}%` }} />
           {cmp.avgFrac > 0 && <span className="cockpit-usage-bullet-avg" style={{ left: `${cmp.avgFrac * 100}%` }} />}
@@ -140,7 +140,7 @@ const Metric: React.FC<MetricProps> = ({ label, value, cmp, note }) => (
           <span className="cockpit-usage-delta">
             {ARROW[cmp.direction]} {cmp.delta}
           </span>
-          <span className="cockpit-usage-avg">avg {cmp.avg}</span>
+          <span className="cockpit-usage-avg">{cmp.avgFrac > 0 ? `avg ${cmp.avg}` : ''}</span>
         </>
       ) : (
         <>
@@ -184,11 +184,15 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({ ctx, seed }) => {
   const view = raw != null ? usageView(raw) : null;
   const gauges = view ? limitGauges(view.limits, ctx.now) : [];
   const age = view ? limitsAge(view.limits, ctx.now) : '';
-  const base = view?.baseline && view.baseline.daysWithData > 0 ? view.baseline : null;
+  const base = view?.baseline ?? null;
+  const tokenDays = base?.tokenDays ?? 0;
+  const callDays = base?.callDays ?? 0;
   const total = view ? bucketLine(view.totals) : '';
 
   const cmpOf = (today: number, avg: UsageBucket | undefined, key: 'tokens' | 'spend_usd' | 'calls', fmt: (n: number) => string) =>
-    base ? compare(today, avg?.[key] ?? 0, fmt) : null;
+    (key === 'calls' ? callDays : tokenDays) > 0 ? compare(today, avg?.[key] ?? 0, fmt) : null;
+  /** "vs 7-day avg"; fewer days while the history is younger than a week. */
+  const vsLabel = (days: number) => (days > 0 ? `vs ${days}-day avg` : 'no average yet');
 
   return (
     <div className="cockpit-usage">
@@ -207,7 +211,7 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({ ctx, seed }) => {
             <div className="cockpit-empty">No limits read yet: they arrive after a Claude session's first reply.</div>
           )}
 
-          <Eyebrow right={base ? `vs ${base.days}-day avg` : 'no 7-day average yet'}>Today</Eyebrow>
+          <Eyebrow right={vsLabel(tokenDays)}>Today</Eyebrow>
           <p className="cockpit-usage-total">{total ? `${total}.` : 'Nothing recorded today.'}</p>
 
           {view.sources.length > 0 && (
@@ -227,7 +231,7 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({ ctx, seed }) => {
 
           {view.hester.length > 0 && (
             <>
-              <Eyebrow>Hester calls</Eyebrow>
+              <Eyebrow right={vsLabel(callDays)}>Hester calls</Eyebrow>
               <Card className="cockpit-usage-metrics">
                 {view.hester.map((s) => (
                   <Metric key={s.id} label={s.label} value={calls(s.calls ?? 0)} cmp={cmpOf(s.calls ?? 0, base?.hester[s.id], 'calls', formatCalls)} />

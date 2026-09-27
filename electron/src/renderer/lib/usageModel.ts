@@ -209,8 +209,10 @@ export interface UsageViewModel {
 
 export interface UsageBaseline {
   days: number;
-  /** How many of those days saw any usage: 0 means there is nothing to compare with yet. */
-  daysWithData: number;
+  /** Days the token and spend averages cover (since tokens were first recorded, up to `days`); 0: nothing to compare with yet. */
+  tokenDays: number;
+  /** Days the call-count averages cover, likewise. */
+  callDays: number;
   totals: UsageBucket;
   /** By source id (claude, pi, hester_cloud, hester_local). */
   sources: Record<string, UsageBucket>;
@@ -377,7 +379,9 @@ function baselineOf(raw: unknown): UsageBaseline | null {
   }
   return {
     days: num(b.days) ?? 7,
-    daysWithData: num(b.days_with_data) ?? 0,
+    // An older Hester sent only days_with_data and averaged over all `days`.
+    tokenDays: num(b.token_days) ?? (num(b.days_with_data) ? num(b.days) ?? 7 : 0),
+    callDays: num(b.call_days) ?? (num(b.days_with_data) ? num(b.days) ?? 7 : 0),
     totals: sum(Object.values(sources)),
     sources,
     hester,

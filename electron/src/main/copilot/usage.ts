@@ -661,12 +661,15 @@ export function normalizeReportedUsage(raw: unknown, provider: UsageProvider, ba
     if (!anyTokens(tokens)) continue;
     const cost = num(e.cost_usd);
     const duration = num(e.duration_ms);
+    const entryProvider = reportedProvider(e.provider, provider);
+    // A model on this machine (Pi on Ollama) costs nothing, whatever the report's basis says.
+    const entryBasis: CostBasis = entryProvider === 'ollama' ? 'local' : basis;
     out.push({
-      provider: reportedProvider(e.provider, provider),
+      provider: entryProvider,
       model,
       tokens,
-      ...(cost != null && cost >= 0 && basis !== 'local' ? { cost_usd: roundUsd(cost) } : {}),
-      cost_basis: basis,
+      ...(cost != null && cost >= 0 && entryBasis !== 'local' ? { cost_usd: roundUsd(cost) } : {}),
+      cost_basis: entryBasis,
       ...(duration != null && duration >= 0 ? { duration_ms: Math.round(duration) } : {}),
     });
   }

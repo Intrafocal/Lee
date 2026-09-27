@@ -1264,7 +1264,8 @@ button.cockpit-tag.is-goal:hover {
   margin-top: var(--space-4);
 }
 
-.cockpit-usage-dials {
+/* .ui-card sets display: block; out-rank it whatever order the sheets load in. */
+.ui-card.cockpit-usage-dials {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-4);

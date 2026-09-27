@@ -137,12 +137,34 @@ def test_today_carries_a_seven_day_baseline(events_dir):
         claude_turn(midnight - timedelta(days=8), "s-old", u("claude-opus-5", "subscription", output=9999)),
     ])
     b = usage.run("today", events_dir=events_dir, now=NOW)["baseline"]
+    # tokens first seen 6 days back; the one call 3 days back
     assert b["days"] == 7 and b["days_with_data"] == 3
-    assert b["totals"]["shown_tokens"] == 200.0
-    assert b["totals"]["by_source"]["claude"]["subscription_tokens"] == 100.0
-    assert b["totals"]["spend_usd"] == pytest.approx(0.1)
-    assert b["hester"]["user"]["calls"] == pytest.approx(1 / 7, abs=0.05)
+    assert b["token_days"] == 6 and b["call_days"] == 6
+    assert b["totals"]["shown_tokens"] == pytest.approx(1400 / 6, abs=0.1)
+    assert b["totals"]["by_source"]["claude"]["subscription_tokens"] == pytest.approx(700 / 6, abs=0.1)
+    assert b["totals"]["spend_usd"] == pytest.approx(0.7 / 6, abs=1e-5)
+    assert b["hester"]["user"]["calls"] == pytest.approx(1 / 6, abs=0.05)
     assert "baseline" not in usage.run("week", events_dir=events_dir, now=NOW)
+
+
+def test_baseline_averages_only_since_tokens_were_recorded(events_dir):
+    midnight = NOW.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    write_events(events_dir, [
+        hester_call(midnight - timedelta(days=5), "user", "cloud"),  # the call log predates usage capture
+        claude_turn(midnight - timedelta(hours=3), "s", u("claude-opus-5", "subscription", output=500)),
+        claude_turn(midnight - timedelta(hours=2), "p", u("gemma", "billed", 0, input=90), provider="pi"),
+    ])
+    b = usage.run("today", events_dir=events_dir, now=NOW)["baseline"]
+    assert b["token_days"] == 1 and b["call_days"] == 5
+    assert b["totals"]["by_source"]["claude"]["shown_tokens"] == 500.0
+    assert b["hester"]["user"]["calls"] == pytest.approx(0.2)
+
+
+def test_ollama_usage_is_local_whatever_its_basis(events_dir):
+    local = {**u("gemma4:e4b", "billed", 0, input=900, output=100), "provider": "ollama"}
+    write_events(events_dir, [claude_turn(NOW, "p", local, provider="pi")])
+    pi = usage.run("today", events_dir=events_dir, now=NOW)["totals"]["by_source"]["pi"]
+    assert pi["local_tokens"] == 1000 and pi["spend_usd"] == 0 and pi["unpriced_tokens"] == 0
 
 
 def test_limits_latest_with_age(events_dir):
