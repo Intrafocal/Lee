@@ -5,9 +5,10 @@
  *
  * - GFM markdown with live formatting (R9, page/liveMarkdown): marks hidden
  *   off the cursor's lines, fenced code highlighted by its language, tables
- *   rendered while the cursor is outside them. ⌘B ⌘I ⌘⇧K ⌘⌥C format
- *   (page/format, which also keeps ⌘I and ⌘⇧K from the app's hotkeys). The
- *   D1 ⌘E preview is retired.
+ *   rendered while the cursor is outside them. A slim formatting toolbar
+ *   (page/PageToolbar) sits sticky at the top of the column; each of its
+ *   actions has a chord (page/format, which also keeps ⌘I and ⌘⇧K from the
+ *   app's hotkeys). The D1 ⌘E preview is retired.
  * - A centred column (72ch) in Newsreader at 20/1.65 on --ground-0
  *   (cockpit-design §6.1), and a margin column outside it. With `answers`
  *   (R5): one mark per section at its first line, most urgent state plus a
@@ -60,6 +61,7 @@ import {
   deepRowKey,
   findMention,
   handoffLabel,
+  lineParts,
   locateAnchor,
   markerState,
   mentionMatches,
@@ -85,7 +87,8 @@ import {
 import { onDeepActions } from './deepBridge';
 import { marginNoteLabel } from './deepView';
 import { pageMarkdown, liveFormatting, tableField } from './page/liveMarkdown';
-import { formatKeymap, insertTable } from './page/format';
+import { formatCommand, formatKeymap, inTable, insertTable, type FormatId } from './page/format';
+import { PageToolbar, type ToolbarState } from './page/PageToolbar';
 import { mentionField, setMention, type ShownMention } from './page/mentionWidget';
 import { PagePicker, type PickerItem } from './page/PagePicker';
 import { SourcePanel, type SourceSelection } from './page/SourcePanel';
@@ -737,6 +740,8 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         mentionField(() => void sendMention()),
         pickerKeys,
         pageTheme,
+        // Scrolling the cursor into view keeps it clear of the sticky toolbar.
+        EditorView.scrollMargins.of(() => ({ top: 44 })),
         keymap.of([
           { key: 'Mod-.', run: () => deepActions() },
           {
@@ -1053,11 +1058,27 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
     rowButtons.push({ action: 'table', label: 'Insert table', mnemonic: 't', title: 'A 3×2 table' });
   }
 
+  // The toolbar's state: the cursor line's kind and whether it's in a table
+  // (read on every render; the view re-renders this on each selection change).
+  const toolbar: ToolbarState = (() => {
+    const v = viewRef.current;
+    if (!v) return { kind: 'paragraph', quoted: false, inTable: false };
+    const parts = lineParts(v.state.doc.lineAt(v.state.selection.main.head).text);
+    return { kind: parts.kind, quoted: parts.quoted, inTable: inTable(v) };
+  })();
+  const runFormat = (id: FormatId) => {
+    const v = viewRef.current;
+    if (!v) return;
+    formatCommand(id).run(v);
+    v.focus();
+  };
+
   return (
     <div className={`deep-page-wrap${source ? ' has-source' : ''}`}>
       <div className="deep-page-scroller" ref={scrollerRef}>
         <div className="deep-page-inner" ref={innerRef}>
           <div className="deep-page-column">
+            <PageToolbar state={toolbar} run={runFormat} onExit={() => viewRef.current?.focus()} />
             <div ref={hostRef} className="deep-page-cm" />
           </div>
           <div className="deep-margin" aria-label="Answers in the margin">

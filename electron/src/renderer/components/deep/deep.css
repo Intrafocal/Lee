@@ -392,6 +392,150 @@
   min-width: 0;
 }
 
+/* ---- the formatting toolbar ---- */
+
+/* One slim row, sticky at the top of the text column. Quiet at rest (text-3
+   at half opacity), fuller on hover or keyboard focus. No phosphor: there's
+   no next step here. The slot's ground hides the text scrolling under it. */
+.deep-tb-slot {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--ground-0);
+  padding: var(--space-2) 0 var(--space-1);
+}
+
+.deep-tb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  opacity: 0.5;
+  transition: opacity 160ms ease;
+}
+
+.deep-tb:hover,
+.deep-tb:focus-within,
+.deep-tb.has-menu {
+  opacity: 1;
+}
+
+.deep-tb-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.deep-tb-group + .deep-tb-group {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--ground-3);
+}
+
+.deep-tb-item {
+  position: relative;
+  display: inline-flex;
+}
+
+.deep-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 var(--space-1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.deep-tb-btn:hover,
+.deep-tb-btn:focus-visible,
+.deep-tb-btn[aria-expanded='true'] {
+  color: var(--text-1);
+  background: var(--ground-2);
+}
+
+.deep-tb-btn[aria-pressed='true'] {
+  color: var(--text-1);
+  background: var(--ground-1);
+}
+
+.deep-tb-glyph {
+  line-height: 1;
+}
+
+.deep-tb-glyph.is-bold {
+  font-weight: 700;
+}
+
+.deep-tb-glyph.is-italic {
+  font-family: var(--font-write);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.deep-tb-glyph.is-strike {
+  text-decoration: line-through;
+}
+
+.deep-tb-glyph.is-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* In a table: Add row / Add column. */
+.deep-tb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: var(--space-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+}
+
+.deep-tb-menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  text-align: left;
+  cursor: pointer;
+}
+
+.deep-tb-menu-item:hover,
+.deep-tb-menu-item:focus-visible {
+  color: var(--text-1);
+  background: var(--ground-3);
+}
+
+.deep-tb-kbd {
+  color: var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-tb {
+    transition: none;
+  }
+}
+
 .deep-page-cm .cm-editor .cm-line.deep-h {
   font-weight: 500;
   color: var(--text-1);
@@ -470,6 +614,40 @@
 
 .deep-wiki-src {
   color: var(--text-2);
+}
+
+/* A task's checkbox off the cursor's line; a done task reads quieter. */
+.deep-task-box {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.1em;
+  vertical-align: -0.05em;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.deep-task-box:hover {
+  border-color: var(--text-1);
+}
+
+.deep-task-box.is-done {
+  background: var(--text-3);
+  box-shadow: inset 0 0 0 2px var(--ground-0);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-task-done {
+  color: var(--text-3);
+}
+
+/* `---` off the cursor's line: a thin rule across the column. */
+.deep-hr {
+  display: inline-block;
+  width: 100%;
+  height: 1px;
+  vertical-align: middle;
+  background: var(--ground-4);
 }
 
 /* A GFM table while the cursor is outside it. */
