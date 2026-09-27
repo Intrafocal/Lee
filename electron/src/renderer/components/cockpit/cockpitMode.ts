@@ -383,6 +383,16 @@ function rememberLast(cardId: string): void {
   }, 2000);
 }
 
+/** The workspace's GOALS.md, or '' when there's none (the Goals Page then starts blank, with its prompts). */
+async function readGoalsMd(workspace: string): Promise<string> {
+  try {
+    const c: unknown = await window.lee?.fs?.readFile(`${workspace.replace(/\/+$/, '')}/GOALS.md`);
+    return typeof c === 'string' ? c : '';
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Start or retarget the Deep session on a card (on landing, and on every
  * zoom into a different card; never on zooming out). An in-memory Page
@@ -802,7 +812,9 @@ export async function openDesk(_api: CopilotAPI | null | undefined, workspace: s
         return;
       }
       // No Goals card and nothing typed: an in-memory one, created on its first save with content.
-      const id = newDraft({ workspace: workspaceKey, title: 'Goals', page: '', sendTitle: true, origin: { kind: 'cockpit' }, purpose: 'goals', desk: { area_id: null } });
+      // A project with a GOALS.md starts the Page from it, so Draft goals edits what's there.
+      const page = await readGoalsMd(workspaceKey);
+      const id = newDraft({ workspace: workspaceKey, title: 'Goals', page, sendTitle: true, origin: { kind: 'cockpit' }, purpose: 'goals', desk: { area_id: null } });
       await zoomIntoCard({ card_id: id, title: 'Goals' }, 'link');
       return;
     }
