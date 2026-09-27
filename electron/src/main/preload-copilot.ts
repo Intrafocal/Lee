@@ -15,10 +15,12 @@ import type {
   AttentionSnapshot,
   CeremonyAction,
   CopilotAPI,
+  DeepAPI,
   InputBatch,
   PresenceState,
   ReturnInfo,
 } from '../shared/copilot';
+import type { DeepAnswerEvent } from '../shared/cockpit';
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_event: unknown, payload: T) => cb(payload);
@@ -85,4 +87,11 @@ export const copilotApi: CopilotAPI = {
   handoffStart: (req) => ipcRenderer.invoke(COPILOT_IPC.handoffStart, req),
   handoffEnd: () => ipcRenderer.invoke(COPILOT_IPC.handoffEnd),
   onReturn: (cb) => subscribe<ReturnInfo>(COPILOT_IPC.returnPush, cb),
+  deepStart: (req) => ipcRenderer.invoke(COPILOT_IPC.deepStart, req),
+  deepEnd: (req) => ipcRenderer.invoke(COPILOT_IPC.deepEnd, req),
+};
+
+/** window.lee.deep (Deep D1 §6). */
+export const deepApi: DeepAPI = {
+  onAnswer: (cb) => subscribe<DeepAnswerEvent>(COPILOT_IPC.deepAnswer, cb),
 };

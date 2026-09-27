@@ -388,7 +388,7 @@ export interface LaunchRequest {
   origin?: TaskOrigin;
   /** Tab label; default: title. */
   label?: string;
-  /** Open the agent's terminal right away (workbench). Default false: a tile. */
+  /** Open the agent's terminal right away (Manual). Default false: a tile. */
   go_into?: boolean;
   /** Attach the launch to an existing task instead of creating one. */
   task_id?: string;
@@ -707,7 +707,8 @@ export interface NudgeClaimRequest {
 
 export interface NudgeClaim {
   granted: boolean;
-  reason: 'same_state' | 'overridden' | 'rate' | 'focus' | null;
+  /** 'deep': a Deep session is active; every claim is denied, blocking ones too (Deep D1 §2.3). */
+  reason: 'same_state' | 'overridden' | 'rate' | 'focus' | 'deep' | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +798,7 @@ export interface CreateTabRequest {
   args?: string[];
   /** For type 'agent': provider key. `label` is the tab's display label. */
   provider?: string;
-  /** Make it the active tab (workbench) instead of leaving it as a tile. */
+  /** Make it the active tab (Manual) instead of leaving it as a tile. */
   activate: boolean;
 }
 

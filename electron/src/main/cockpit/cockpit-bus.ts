@@ -259,8 +259,12 @@ export class NudgeBudget extends EventEmitter {
     this.now = opts.now ?? Date.now;
   }
 
-  /** At most one nudge per item per state, none during focus unless blocking, and a machine-wide hourly cap. */
-  claim(req: NudgeClaimRequest, focusActive: boolean): NudgeClaim {
+  /**
+   * At most one nudge per item per state, none during focus unless blocking,
+   * none at all during Deep (Deep D1 §2.3), and a machine-wide hourly cap.
+   */
+  claim(req: NudgeClaimRequest, focusActive: boolean, deepActive = false): NudgeClaim {
+    if (deepActive) return { granted: false, reason: 'deep' };
     const now = this.now();
     const rec = this.records.get(req.item_ref);
     if (rec && rec.state_key === req.state_key) {
@@ -397,6 +401,8 @@ class CockpitBus extends EventEmitter {
   private domains = new Map<string, CommandDomainHandler>();
   private feedHandlers = new Map<FeedProducer, FeedActionHandler>();
   private focusActive = false;
+  /** A Deep session (focus.start with source 'deep') is active. */
+  private deepActive = false;
   tabRuntime: TabRuntime | null = null;
   launcher: TaskLauncher | null = null;
   ops: OpsProvider | null = null;
@@ -405,8 +411,13 @@ class CockpitBus extends EventEmitter {
     super();
     this.setMaxListeners(50);
     copilotBus.on('event', (e: LeeEvent) => {
-      if (e.type === 'focus.start') this.focusActive = true;
-      else if (e.type === 'focus.end') this.focusActive = false;
+      if (e.type === 'focus.start') {
+        this.focusActive = true;
+        this.deepActive = (e.data as { source?: unknown } | null)?.source === 'deep';
+      } else if (e.type === 'focus.end') {
+        this.focusActive = false;
+        this.deepActive = false;
+      }
     });
   }
 
@@ -476,8 +487,12 @@ class CockpitBus extends EventEmitter {
     return this.focusActive;
   }
 
+  isDeepActive(): boolean {
+    return this.deepActive;
+  }
+
   claimNudge(req: NudgeClaimRequest): NudgeClaim {
-    const res = this.nudges.claim(req, this.focusActive);
+    const res = this.nudges.claim(req, this.focusActive, this.deepActive);
     logCockpitEvent('nudge.claim', {
       workspace: req.workspace ?? null,
       data: { item_ref: req.item_ref, source: req.source, granted: res.granted, reason: res.reason },

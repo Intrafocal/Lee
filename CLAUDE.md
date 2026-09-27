@@ -513,6 +513,11 @@ lee --workspace ./myproject
 | `Cmd+Shift+F` | Flutter dev tools (flx) |
 | `Cmd+Shift+E` | File tree |
 | `Cmd+Shift+O` | DevOps dashboard |
+| `Cmd+0` | **Mode switcher** - Tap for the last mode, hold for Cockpit / Deep / Manual |
+| `Cmd+Shift+0` | Cockpit ↔ Deep |
+| `Cmd+Option+0` | Cockpit ↔ Manual |
+| `Cmd+Option+1` | Deep: the exploration's Page |
+| `Cmd+.` | Deep: selection actions (Capture, Keep, Ask, Explore) |
 | `Cmd+1-9` | Switch to tab by number |
 | `Cmd+W` | **Watch** - Toggle idle detection on current tab |
 | `Cmd+I` | **Idle tabs** - Cycle through tabs marked as idle |

@@ -3,7 +3,9 @@
  * queue, focus sessions, the v1 away policy and handoff, Reply into PTYs,
  * IPC handlers, bus subscriptions and stream pushes.
  *
- * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5, §6, §7.
+ * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5, §6, §7;
+ * Deep sessions, window modes and the device fields:
+ * docs/plans/2026-09-26-deep-d1-contracts.md §2.
  */
 
 import * as path from 'path';
@@ -12,6 +14,7 @@ import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent } from 'electron';
 import { windowRegistry } from '../window-registry';
 import type { PTYManager } from '../pty-manager';
 import { COPILOT_IPC } from '../../shared/copilot';
+import type { DepthRating, LeeMode } from '../../shared/cockpit';
 import type {
   ActionResult,
   Actor,
@@ -20,6 +23,9 @@ import type {
   AttentionSnapshot,
   AttentionSource,
   AwayState,
+  DeepEndRequest,
+  DeepStartRequest,
+  FocusEndReason,
   FocusItem,
   FocusState,
   HandoffAgent,
@@ -54,7 +60,7 @@ import {
 import type { ParsedQuestion } from './hook-payload';
 import { AgentSession, AgentSessions } from './agent-sessions';
 import { AttentionQueue, PROMPT_KINDS, isPromptKind, kindTitle, providerLabel, sourceKey } from './attention-queue';
-import { FocusTracker, parseFocusItem } from './focus';
+import { FocusTracker, parseExplorationId, parseFocusItem } from './focus';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
 import { checkReply, sanitizeReplyText, writeReply, writeText } from './reply';
 import { claudeSettingsPath, hookPaths, installClaudeHooks, writeAuthHeader } from './hook-install';
@@ -114,6 +120,15 @@ interface TabInfo {
 }
 
 const LEE_ACTOR: Actor = { kind: 'user', surface: 'lee' };
+
+const LEE_MODES = new Set<LeeMode>(['cockpit', 'deep', 'manual']);
+const DEPTH_RATINGS = new Set<DepthRating>(['deep', 'mixed', 'shallow']);
+const DEEP_END_REASONS = new Set<DeepEndRequest['reason']>(['ritual', 'esc']);
+const QUIT_REASONS = new Set<FocusEndReason>(['quit', 'deep_end']);
+const WORKSPACE_MAX = 4096;
+const DEEP_TITLE_MAX = 200;
+/** Page length cap (Hester's PUT /page is 1 MB); stopped_at_chars beyond it is dropped. */
+const STOPPED_AT_CHARS_MAX = 1_000_000;
 
 /** Does the agent's last message end by asking the user something? (A trailing lee-status block doesn't count.) */
 function endsOnQuestion(summary: string | null): boolean {
@@ -187,6 +202,8 @@ export class CopilotQueue {
   private agentsSig = '';
   /** pushSignature() of the last device push. */
   private lastPushSig: string | null = null;
+  /** Each window's mode, from the renderer's cockpit.mode events (Deep D1 §2.2, decision 1). */
+  private windowModes = new Map<number, LeeMode>();
 
   constructor(private ptyManager: PTYManager) {
     this.focus = new FocusTracker({
@@ -279,7 +296,7 @@ export class CopilotQueue {
     try {
       const now = Date.now();
       const cfg = getCopilotConfig();
-      this.focus.tick(now, this.presence(), cfg.focus);
+      this.focus.tick(now, this.presence(), cfg.focus, { deep: cfg.deep, inferBlocked: this.anyWindowDeep() });
       if (this.away.summaryDue(now)) this.deliverSummary(now);
       this.queue.recompute(now);
       this.queue.prune(now);
@@ -386,9 +403,45 @@ export class CopilotQueue {
   snapshot(opts: { compact?: boolean; all?: boolean } = {}): AttentionSnapshot {
     const now = Date.now();
     this.queue.recompute(now);
-    const snap = this.queue.snapshot(this.focusState(), this.awayState(), opts, now);
+    const focus = this.focusState();
+    const snap = this.queue.snapshot(focus, this.awayState(), opts, now);
     const agents = this.agentSummaries({ compact: opts.compact });
-    return { ...snap, agents };
+    // Deep D1 §2.5: focus.active stays true during Deep, so devices hold
+    // notifications unchanged; mode and deep are for v6 devices.
+    const deep = focus.deep ? { exploration_id: focus.deep.exploration_id, title: focus.deep.title } : null;
+    return { ...snap, agents, mode: this.focusedWindowMode(), deep };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Window modes (Deep D1 §2.2)
+  // ---------------------------------------------------------------------------
+
+  /** A window's mode; Lee always opens in the Cockpit, so an unreported window is 'cockpit'. */
+  windowMode(windowId: number): LeeMode {
+    return this.windowModes.get(windowId) ?? 'cockpit';
+  }
+
+  /** The focused (else any) window's mode. */
+  focusedWindowMode(): LeeMode {
+    const ws = windowRegistry.getFocused() ?? windowRegistry.getAny();
+    return ws ? this.windowMode(ws.browserWindow.id) : 'cockpit';
+  }
+
+  /** True while some open window is in Deep mode: inference stays off (Deep D1 §2.2). */
+  anyWindowDeep(): boolean {
+    const open = windowRegistry.getAll();
+    for (const [id, mode] of Array.from(this.windowModes)) {
+      if (!open.has(id)) this.windowModes.delete(id);
+      else if (mode === 'deep') return true;
+    }
+    return false;
+  }
+
+  private noteWindowMode(windowId: number | null, to: unknown): void {
+    if (windowId == null || !LEE_MODES.has(to as LeeMode)) return;
+    if (this.windowModes.get(windowId) === to) return;
+    this.windowModes.set(windowId, to as LeeMode);
+    this.changed();
   }
 
   getItem(id: string): AttentionItem | undefined {
@@ -900,6 +953,9 @@ export class CopilotQueue {
       }
     } else if (e.type === 'presence.change') {
       this.onPresenceChange(obj(d.from), obj(d.to), d.away_ms);
+    } else if ((e.type as string) === 'cockpit.mode') {
+      // Logged by tabs-main after validRendererEvent ('workbench' already rewritten to 'manual').
+      this.noteWindowMode(e.window_id, d.to);
     }
   }
 
@@ -1088,6 +1144,9 @@ export class CopilotQueue {
   }
 
   focusStart(rawItem: unknown, actor: Actor, surface: 'lee' | 'device', windowId: number | null = null): Outcome<FocusState> {
+    // Deep D1 §2.1: manual Focus is retired. A device's (or HTTP) focus start
+    // is Go deep with nothing open, in the focused window's workspace.
+    if (surface === 'device') return this.deepStart({ exploration_id: null }, actor, 'device');
     const now = Date.now();
     let item: FocusItem | null = rawItem == null ? null : parseFocusItem(rawItem);
     if (rawItem != null && !item) return { status: 400, body: this.focusState(), error: 'invalid focus item' };
@@ -1107,12 +1166,92 @@ export class CopilotQueue {
     return { status: 200, body: this.focusState() };
   }
 
+  /** Ends the session; a Deep session ends with reason 'deep_end' and no rating. */
   focusStop(actor: Actor): Outcome<FocusState> {
     const now = Date.now();
-    this.focus.stop('manual', now, actor);
+    this.focus.stop(this.focus.source === 'deep' ? 'deep_end' : 'manual', now, actor);
     this.queue.recompute(now);
     this.changed();
     return { status: 200, body: this.focusState() };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deep sessions (Deep D1 §2.1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Start a Deep session, or point the active one at another exploration.
+   * `workspace` defaults to the focused window's; `exploration_id: null` is
+   * Deep with nothing open yet (a device's Go deep), which never clears an
+   * exploration the active session already has.
+   */
+  deepStart(rawReq: unknown, actor: Actor, surface: 'lee' | 'device', windowId: number | null = null): Outcome<FocusState> {
+    const now = Date.now();
+    const req = obj(rawReq);
+    const explorationId = parseExplorationId(req.exploration_id);
+    if (explorationId === undefined) return { status: 400, body: this.focusState(), error: 'invalid exploration_id' };
+    if (req.title !== undefined && req.title !== null && typeof req.title !== 'string') {
+      return { status: 400, body: this.focusState(), error: 'title must be a string' };
+    }
+    let workspace: string | null = null;
+    if (req.workspace !== undefined && req.workspace !== null) {
+      if (typeof req.workspace !== 'string' || !req.workspace || req.workspace.length > WORKSPACE_MAX) {
+        return { status: 400, body: this.focusState(), error: 'invalid workspace' };
+      }
+      workspace = req.workspace;
+    } else {
+      const ws = (windowId != null ? windowRegistry.get(windowId) : undefined) ?? windowRegistry.getFocused() ?? windowRegistry.getAny();
+      workspace = ws?.workspace ?? null;
+    }
+    if (!workspace) return { status: 409, body: this.focusState(), error: 'no window to go deep in' };
+
+    const cur = this.focus.deep;
+    const given = typeof req.title === 'string' ? req.title.trim().slice(0, DEEP_TITLE_MAX) : '';
+    let item: FocusItem;
+    if (cur && explorationId === null && cur.exploration_id !== null) {
+      // Go deep while already deep on an exploration: keep it.
+      item = { kind: 'exploration', workspace: cur.workspace, exploration_id: cur.exploration_id, title: given || cur.title };
+    } else {
+      const same = cur !== null && cur.exploration_id === explorationId;
+      item = { kind: 'exploration', workspace, exploration_id: explorationId, title: given || (same && cur ? cur.title : 'Deep') };
+    }
+    if (surface === 'lee' && this.away.active) this.endHandoff('return');
+    this.focus.start(item, 'deep', surface, actor, now);
+    this.queue.recompute(now);
+    this.changed();
+    return { status: 200, body: this.focusState() };
+  }
+
+  /** End the Deep session (ritual or Esc). No session, or a non-Deep one, is left alone. */
+  deepEnd(rawReq: unknown, actor: Actor): Outcome<FocusState> {
+    const now = Date.now();
+    const req = obj(rawReq);
+    if (!DEEP_END_REASONS.has(req.reason as DeepEndRequest['reason'])) {
+      return { status: 400, body: this.focusState(), error: "reason must be 'ritual' or 'esc'" };
+    }
+    const rating = req.rating === undefined || req.rating === null ? null : req.rating;
+    if (rating !== null && !DEPTH_RATINGS.has(rating as DepthRating)) {
+      return { status: 400, body: this.focusState(), error: "rating must be 'deep', 'mixed', 'shallow' or null" };
+    }
+    const chars = req.stopped_at_chars;
+    const stoppedAtChars =
+      typeof chars === 'number' && Number.isInteger(chars) && chars >= 0 && chars <= STOPPED_AT_CHARS_MAX ? chars : undefined;
+    if (this.focus.source === 'deep') {
+      this.focus.stop('deep_end', now, actor, {
+        deep_rating: rating as DepthRating | null,
+        ...(stoppedAtChars !== undefined ? { stopped_at_chars: stoppedAtChars } : {}),
+      });
+      this.queue.recompute(now);
+      this.changed();
+    }
+    return { status: 200, body: this.focusState() };
+  }
+
+  /** window.lee.app.quit() (Deep D1 §2.4): end any Deep session with `reason`, then quit. */
+  quitApp(rawReason: unknown): void {
+    const reason = QUIT_REASONS.has(rawReason as FocusEndReason) ? (rawReason as FocusEndReason) : 'quit';
+    if (this.focus.source === 'deep' && this.focus.stop(reason, Date.now(), LEE_ACTOR)) this.flushPushes();
+    app.quit();
   }
 
   // ---------------------------------------------------------------------------
@@ -1363,6 +1502,9 @@ export class CopilotQueue {
     ipcMain.handle(COPILOT_IPC.handoffProposals, () => this.handoffProposals());
     ipcMain.handle(COPILOT_IPC.handoffStart, (_e, req: HandoffRequest) => this.handoffStart(req, LEE_ACTOR).body);
     ipcMain.handle(COPILOT_IPC.handoffEnd, () => this.endHandoff('manual', LEE_ACTOR));
+    ipcMain.handle(COPILOT_IPC.deepStart, (e, req: DeepStartRequest) => this.deepStart(req, LEE_ACTOR, 'lee', win(e)).body);
+    ipcMain.handle(COPILOT_IPC.deepEnd, (_e, req: DeepEndRequest) => this.deepEnd(req, LEE_ACTOR).body);
+    ipcMain.on(COPILOT_IPC.appQuit, (_e, payload: unknown) => this.quitApp(obj(payload).reason));
   }
 }
 

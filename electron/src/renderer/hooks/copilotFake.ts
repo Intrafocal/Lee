@@ -14,6 +14,8 @@ import type {
   CaptureResult,
   CeremonyAction,
   CopilotAPI,
+  DeepEndRequest,
+  DeepStartRequest,
   DeviceInfo,
   FocusItem,
   FocusState,
@@ -287,6 +289,36 @@ export function createFakeCopilotApi(): CopilotAPI {
     onReturn: (cb) => {
       returnListeners.add(cb);
       return () => returnListeners.delete(cb);
+    },
+    // Deep D1 §2.1 (package M added these so the fake keeps satisfying CopilotAPI).
+    deepStart: (req: DeepStartRequest) => {
+      if (focus.source !== 'deep') {
+        focus.session_id = 'focus_fake_deep';
+        focus.started_at = now();
+      }
+      focus.active = true;
+      focus.source = 'deep';
+      focus.policy = 'none';
+      const title = req.title ?? focus.deep?.title ?? 'Deep';
+      focus.item = { kind: 'exploration', workspace: req.workspace, exploration_id: req.exploration_id, title };
+      focus.deep = { exploration_id: req.exploration_id, title, workspace: req.workspace };
+      focus.quiet_count = items.filter((i) => i.state === 'open' && i.severity !== 'ambient').length;
+      emitSnapshot();
+      return Promise.resolve(focus);
+    },
+    deepEnd: (_req: DeepEndRequest) => {
+      if (focus.source === 'deep') {
+        focus.active = false;
+        focus.session_id = null;
+        focus.source = null;
+        focus.started_at = null;
+        focus.item = null;
+        focus.quiet_count = 0;
+        focus.policy = 'normal';
+        focus.deep = null;
+        emitSnapshot();
+      }
+      return Promise.resolve(focus);
     },
   };
 

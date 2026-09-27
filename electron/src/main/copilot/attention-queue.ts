@@ -2,7 +2,8 @@
  * The machine-wide attention queue: items, supersede/resolve rules, severity,
  * notify and snapshots (full and compact). Pure: no Electron.
  *
- * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.1, §5.2, §5.4, §7.2.
+ * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.1, §5.2, §5.4, §7.2;
+ * attention policy 'none' during Deep: docs/plans/2026-09-26-deep-d1-contracts.md §2.3.
  */
 
 import * as crypto from 'crypto';
@@ -118,6 +119,8 @@ export interface QueueDeps {
   focus: {
     readonly active: boolean;
     readonly sessionId: string | null;
+    /** 'none' during a Deep session: only woken items escalate or notify. */
+    readonly policy: 'normal' | 'none';
     isRelated: (ptyId: number | null, filesWritten: string[]) => boolean;
     noteInterruption: () => void;
   };
@@ -499,7 +502,16 @@ export class AttentionQueue {
         continue;
       }
 
-      const parked = this.deps.away.active && !this.deps.away.isWoken(item);
+      const base = baseSeverity(item.kind);
+      const woken = this.deps.away.isWoken(item);
+      const deep = this.deps.focus.policy === 'none';
+      // Deep D1 §2.3: during Deep, an item that would have escalated (by age;
+      // nothing relates to a Deep session) is parked instead, as under away.
+      // Once parked its wait stops at or past the limit, so it stays parked
+      // until Deep ends.
+      const waitNow = e.waitAccum + (e.waitSince !== null ? Math.max(0, now - e.waitSince) : 0);
+      const wouldEscalate = base === 'needs-you' && item.state === 'open' && waitNow >= limitMs;
+      const parked = !woken && (this.deps.away.active || (deep && wouldEscalate));
       if (parked && e.waitSince !== null) {
         e.waitAccum += Math.max(0, now - e.waitSince);
         e.waitSince = null;
@@ -509,13 +521,13 @@ export class AttentionQueue {
       item.active_wait_ms = e.waitAccum + (e.waitSince !== null ? Math.max(0, now - e.waitSince) : 0);
 
       const related = this.deps.focus.active && this.deps.focus.isRelated(item.source.pty_id, this.deps.sessionFiles(item));
-      const base = baseSeverity(item.kind);
+      // During Deep neither age nor relatedness escalates; only a woken item does.
       const blocking =
-        base === 'needs-you' && item.state === 'open' && !parked && (related || item.active_wait_ms >= limitMs);
+        base === 'needs-you' && item.state === 'open' && !parked &&
+        (deep ? woken : related || item.active_wait_ms >= limitMs);
       const severity: AttentionSeverity = blocking ? 'blocking' : base;
-      const woken = this.deps.away.isWoken(item);
       const notify =
-        !quiet && item.state === 'open' && (this.deps.away.active ? woken : severity === 'blocking');
+        !quiet && item.state === 'open' && (this.deps.away.active || deep ? woken : severity === 'blocking');
 
       const changes: string[] = [];
       const prevSeverity = item.severity;
@@ -547,7 +559,7 @@ export class AttentionQueue {
               item_id: item.id,
               from: prevSeverity,
               to: 'blocking',
-              reason: related ? 'focus' : 'age',
+              reason: deep ? 'wake' : related ? 'focus' : 'age',
               surfaced,
               during_focus: duringFocus,
             },
@@ -577,11 +589,16 @@ export class AttentionQueue {
     return counts;
   }
 
-  /** Open, non-blocking items not related to focus (held quietly during focus). */
+  /**
+   * Open, non-blocking items not related to focus (held quietly during focus).
+   * During Deep: every open needs-you item, parked or not (the neutral "N waiting").
+   */
   quietCount(): number {
+    const deep = this.deps.focus.policy === 'none';
     let n = 0;
     for (const e of this.live()) {
-      if (e.item.state === 'open' && e.item.severity !== 'blocking' && !e.item.related_to_focus) n++;
+      if (e.item.state !== 'open') continue;
+      if (deep ? baseSeverity(e.item.kind) === 'needs-you' : e.item.severity !== 'blocking' && !e.item.related_to_focus) n++;
     }
     return n;
   }

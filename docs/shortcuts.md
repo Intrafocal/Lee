@@ -85,8 +85,16 @@ keybindings:
 
 | Chord | Action | Owner | What it does |
 |---|---|---|---|
+| `⌘0` | `mode_switcher` | renderer | Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual |
+| `⇧⌘0` | `mode_deep` | renderer | Cockpit ↔ Deep |
+| `⌥⌘0` | `mode_manual` | renderer | Cockpit ↔ Manual |
+| `⌥⌘1` | `deep_view_page` | renderer | Deep: the exploration's Page |
 | `⇧⌘R` | `force_reload` | menu | Reload the Lee UI, discarding caches (prompts if terminals are open) |
 | `⌘↓` | `scroll_bottom` | renderer | Scroll the focused terminal to the bottom (ignored while a code editor has focus, where it means go-to-end) |
+| — | View ▸ Reset Zoom | menu | Reset the zoom level. Menu only, no chord: `⌘0` is the mode switcher and `⇧⌘0` is Deep |
+
+`mode_switcher` replaced `cockpit_toggle`; a `keybindings:` entry for
+`cockpit_toggle` still applies to it.
 
 ## Editor
 
@@ -94,6 +102,7 @@ keybindings:
 |---|---|---|---|
 | `⌘E` | `editor_markdown_preview` | editor | Toggle markdown preview (markdown files only; handled inside the editor panel) |
 | `⌘F` | `editor_find` | editor | Find in file (CodeMirror's search keymap) |
+| `⌘.` | `deep_actions` | renderer | Deep only: the selection's action row (Capture, Keep, Ask, Explore), or the visible typing affordance |
 
 ## Cockpit
 
@@ -145,6 +154,7 @@ keybindings:
 | `⌘W` taken by the File ▸ Close menu role | The Close Window item keeps its place but loses the accelerator; `⌘W` is Watch, as documented | Menu accelerators resolve before the renderer sees the key, so Watch never fired. Close the window with the red button, the menu item, or `⌘Q` to quit |
 | `⌘↓` always scrolled the terminal to the bottom | Ignored while a CodeMirror editor has focus | It shadowed the editor's go-to-end |
 | `CommandOrControl+Shift+L` registered system-wide at startup | Opt-in via `keybindings.global_focus_lee` | It stole the chord from every other app |
+| `⇧⌘0` bound to View ▸ Reset Zoom | Reset Zoom has no chord (menu only); `⇧⌘0` is Cockpit ↔ Deep (Deep D1) | The menu accelerator would have taken the Deep chord |
 
 ## Regenerating
 

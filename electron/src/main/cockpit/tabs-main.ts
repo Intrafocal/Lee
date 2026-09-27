@@ -35,6 +35,7 @@ import { listWorkspaceFiles } from './workspace-files';
 import { copilotBus } from '../copilot/bus';
 import { getCopilotQueue } from '../copilot/queue';
 import { quadrantRank } from '../copilot/attention-queue';
+import { parseExplorationId } from '../copilot/focus';
 import type { LeeEvent } from '../../shared/copilot';
 import { getHesterCache } from './hester-cache';
 import { registerLintEffects } from './lint-main';
@@ -61,8 +62,62 @@ const MODE_REASONS = new Set([
 const legacyMode = (m: unknown): unknown => (m === 'workbench' ? 'manual' : m);
 const GO_INTO_FROM = new Set(['tile', 'feed', 'drawer', 'hotkey', 'tabs', 'other-window']);
 const AGENT_STATES = new Set(['busy', 'idle', 'waiting', 'unknown', 'idle-at-prompt', 'awaiting-input', 'exited']);
+// Deep D1 §10.1: the deep.* renderer events carry counts and ids only.
+const DEEP_VIEWS = new Set(['page']);
+const DEEP_ACTIONS = new Set(['capture', 'keep', 'ask', 'explore', 'insert', 'follow_up', 'dismiss']);
+const AFFORDANCE_PATTERNS = new Set(['question', 'url', 'later']);
+const AFFORDANCE_OUTCOMES = new Set(['accepted', 'ignored']);
+const SWITCHER_VIA = new Set(['tap', 'overlay', 'chip']);
+/** Upper bound for a count or span in one deep.input line (a day in ms). */
+const DEEP_COUNT_MAX = 86_400_000;
 
-/** Validate a renderer event (contract §2.2); null drops it. */
+function count(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= DEEP_COUNT_MAX;
+}
+
+function explorationId(v: unknown): string | null {
+  return parseExplorationId(v) ?? null;
+}
+
+/** Validate a deep.* renderer event; null drops it. Only whitelisted fields are kept. */
+function validDeepEvent(type: string, d: Record<string, unknown>): CockpitRendererEvent | null {
+  if (type === 'deep.input') {
+    const id = explorationId(d.exploration_id);
+    if (!id || !DEEP_VIEWS.has(d.view as string)) return null;
+    if (!count(d.keys) || !count(d.clicks) || !count(d.wheels) || !count(d.span_ms)) return null;
+    return {
+      type,
+      data: { exploration_id: id, view: d.view, keys: d.keys, clicks: d.clicks, wheels: d.wheels, span_ms: d.span_ms },
+    } as CockpitRendererEvent;
+  }
+  if (type === 'deep.view') {
+    const id = explorationId(d.exploration_id);
+    if (!id || !DEEP_VIEWS.has(d.view as string)) return null;
+    return { type, data: { exploration_id: id, view: d.view } } as CockpitRendererEvent;
+  }
+  if (type === 'deep.action') {
+    const id = explorationId(d.exploration_id);
+    if (!id || !DEEP_ACTIONS.has(d.action as string)) return null;
+    if (d.chars !== undefined && !count(d.chars)) return null;
+    return {
+      type,
+      data: { action: d.action, exploration_id: id, ...(d.chars !== undefined ? { chars: d.chars } : {}) },
+    } as CockpitRendererEvent;
+  }
+  if (type === 'deep.affordance') {
+    if (!AFFORDANCE_PATTERNS.has(d.pattern as string) || !AFFORDANCE_OUTCOMES.has(d.outcome as string)) return null;
+    return { type, data: { pattern: d.pattern, outcome: d.outcome } } as CockpitRendererEvent;
+  }
+  if (type === 'deep.switcher') {
+    const from = legacyMode(d.from);
+    const to = legacyMode(d.to);
+    if (!MODES.has(from as string) || !MODES.has(to as string) || !SWITCHER_VIA.has(d.via as string)) return null;
+    return { type, data: { from, to, via: d.via } } as CockpitRendererEvent;
+  }
+  return null;
+}
+
+/** Validate a renderer event (contract §2.2, Deep D1 §1.1); null drops it. */
 export function validRendererEvent(ev: unknown): CockpitRendererEvent | null {
   if (!ev || typeof ev !== 'object') return null;
   const e = ev as { type?: unknown; data?: unknown };
@@ -78,6 +133,7 @@ export function validRendererEvent(ev: unknown): CockpitRendererEvent | null {
     if (!Number.isInteger(d.pty_id) || !AGENT_STATES.has(d.agent_state as string) || !GO_INTO_FROM.has(d.from as string)) return null;
     return { type: 'cockpit.go_into', data: { pty_id: d.pty_id, agent_state: d.agent_state, from: d.from } } as CockpitRendererEvent;
   }
+  if (typeof e.type === 'string' && e.type.startsWith('deep.')) return validDeepEvent(e.type, d);
   return null;
 }
 
