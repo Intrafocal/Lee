@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Waiting, Tabs, Terminal, Hester, Pairing, Files, Viewer };
+enum class View { Waiting, InFlight, Library, Tabs, Terminal, Hester, Pairing, Files, Viewer };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -87,6 +87,8 @@ struct App {
     lv_obj_t* view_pairing  = nullptr;
     lv_obj_t* view_files    = nullptr;
     lv_obj_t* view_viewer   = nullptr;
+    lv_obj_t* view_inflight = nullptr;
+    lv_obj_t* view_library  = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
     View view = View::Waiting;
@@ -209,9 +211,30 @@ bool ball_list(lv_obj_t* list, int dy, bool click);
 
 // Views ---------------------------------------------------------------------
 
-// Waiting: Lee's attention queue (Copilot v0, contracts §9.3), the default
-// view once connected.  A pager, one needs-you item per page, with big
-// lettered action buttons; reply and capture open a full-body text box.
+// The device Cockpit (Cockpit design §8.2): three views a plain letter apart,
+// from each other and from Tabs.
+//   w  Work       the waiting pager (screen_waiting.cpp, View::Waiting)
+//   i  In flight  the running agents (screen_inflight.cpp)
+//   l  Library    Carry: what to take away from the last Deep session
+//                 (screen_carry.cpp)
+// On Work, a question page takes w as Wait (you are already on Work).
+
+/// The snapshot the three views draw (Lee's, or the demo build's canned one);
+/// null until one has arrived.
+const dirigible::AttentionSnapshot* cockpit_snapshot();
+/// Lee is reachable (always, in the demo build).
+bool cockpit_linked();
+/// Header centre for the three views: "In deep work" while a Deep session
+/// runs at the machine, else Work's line ("One thing needs you.", "Working
+/// on it.", "All clear."), with the away / link states ahead of it.
+std::string cockpit_status();
+/// w / i / l from any of the three views (and i / l from Tabs).  True when
+/// the key moved somewhere.
+bool cockpit_nav_key(uint8_t ascii);
+
+// Waiting ("Work"): Lee's attention queue (Copilot v0, contracts §9.3), the
+// default view once connected.  A pager, one needs-you item per page, with
+// big lettered action buttons; reply and capture open a full-body text box.
 // State lives in screen_waiting.cpp.
 void waiting_build(lv_obj_t* parent);
 void waiting_open();                       // show it, refetch the queue
@@ -222,6 +245,25 @@ bool waiting_back();                       // close a box / opened item; false a
 void waiting_alert();                      // an item's notify flipped: blink
 bool waiting_key(uint8_t ascii);
 void waiting_ball(int dx, int dy, bool click);
+
+// In flight: agents[] from the snapshot as a trackball list (state dot, name,
+// what it is doing now, age, tokens); a press opens the agent's words as a
+// page; c checks in.  State lives in screen_inflight.cpp.
+void inflight_build(lv_obj_t* parent);
+void inflight_open();
+void inflight_render();                    // a new snapshot
+bool inflight_back();                      // close an opened agent; false at the list
+bool inflight_key(uint8_t ascii);
+void inflight_ball(int dx, int dy, bool click);
+
+// Library (Carry): GET /carry, one exploration per page (j/k): "You stopped
+// at" in italic, one open question, Add a thought (C), Open next (O).  State
+// lives in screen_carry.cpp.
+void library_build(lv_obj_t* parent);
+void library_open();                       // show it and refetch
+bool library_back();                       // close the thought box; false otherwise
+bool library_key(uint8_t ascii);
+void library_ball(int dx, int dy, bool click);
 
 void tabs_build(lv_obj_t* parent);
 void tabs_render(const dirigible::LeeContext* ctx);

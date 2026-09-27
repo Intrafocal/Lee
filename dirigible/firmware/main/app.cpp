@@ -281,18 +281,20 @@ static void menu_item_cb(lv_event_t* e)
     menu_close();
     switch (choice) {
     case 0: waiting_open(); break;
-    case 1: app_show(View::Tabs); break;
-    case 2: files_open(); break;
-    case 3: app_show(View::Hester); break;
-    case 4: waiting_open_capture(); break;
-    case 5: windows_open(); break;
-    case 6: pairing_begin(); break;
-    case 7:
+    case 1: inflight_open(); break;
+    case 2: library_open(); break;
+    case 3: app_show(View::Tabs); break;
+    case 4: files_open(); break;
+    case 5: app_show(View::Hester); break;
+    case 6: waiting_open_capture(); break;
+    case 7: windows_open(); break;
+    case 8: pairing_begin(); break;
+    case 9:
         if (auto* c = activeConn()) { c->disconnect(); c->connect(); }
         app_set_status("reconnecting...");
         break;
 #if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
-    case 8: viewer_open_demo(); break;
+    case 10: viewer_open_demo(); break;
 #endif
     default: break;
     }
@@ -331,12 +333,13 @@ static void menu_open(void*)
     a.menu = lv_list_create(a.screen);
     menu_style(a.menu, 180);
 
-    static const char* names[] = { "Waiting", "Tabs", "Files", "Hester", "Capture",
-                                   "Windows", "Pairing", "Reconnect", "MD sample" };
+    static const char* names[] = { "Work (W)", "In flight (I)", "Library (L)", "Tabs", "Files",
+                                   "Hester", "Capture", "Windows", "Pairing", "Reconnect",
+                                   "MD sample" };
 #if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
-    const intptr_t n = 9;   // + the viewer's markdown sample
+    const intptr_t n = 11;   // + the viewer's markdown sample
 #else
-    const intptr_t n = 8;
+    const intptr_t n = 10;
 #endif
     for (intptr_t i = 0; i < n; i++) {
         menu_add(a.menu, names[i], menu_item_cb, (void*)i);
@@ -430,6 +433,12 @@ void app_back()
     case View::Waiting:
         if (!waiting_back()) menu_open(nullptr);
         return;
+    case View::InFlight:
+        if (!inflight_back()) waiting_open();
+        return;
+    case View::Library:
+        if (!library_back()) waiting_open();
+        return;
     }
 }
 
@@ -453,6 +462,8 @@ static bool key_hook(uint8_t ascii, void*)
 
     switch (a.view) {
     case View::Waiting:  return waiting_key(ascii);
+    case View::InFlight: return inflight_key(ascii);
+    case View::Library:  return library_key(ascii);
     case View::Terminal: return terminal_key(ascii);
     case View::Pairing:  return pairing_key(ascii);
     case View::Files:    return files_key(ascii);
@@ -462,7 +473,9 @@ static bool key_hook(uint8_t ascii, void*)
         return false;
     case View::Tabs:
         if (ascii == 0x1B) { app_back(); return true; }
+        // w stays the window picker here (Work is back, or the menu).
         if (ascii == 'w')  { windows_open(); return true; }
+        if (ascii == 'i' || ascii == 'l') return cockpit_nav_key(ascii);
         return false;   // Enter activates the focused list row
     }
     return false;
@@ -592,6 +605,8 @@ static void ball_hook(int dx, int dy, bool click, void*)
 
     switch (a.view) {
     case View::Waiting:  waiting_ball(dx, dy, click);  break;
+    case View::InFlight: inflight_ball(dx, dy, click); break;
+    case View::Library:  library_ball(dx, dy, click);  break;
     case View::Tabs:     ball_list(a.tab_list, dy, click); break;
     case View::Hester:   hester_ball(dx, dy, click);   break;
     case View::Pairing:  pairing_ball(dx, dy, click);  break;
@@ -615,6 +630,8 @@ void app_show(View v)
     a.view = v;
 
     lv_obj_add_flag(a.view_waiting,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(a.view_inflight, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(a.view_library,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_tabs,     LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_hester,   LV_OBJ_FLAG_HIDDEN);
@@ -646,6 +663,16 @@ void app_show(View v)
         lv_obj_clear_flag(a.view_waiting, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph(LV_SYMBOL_LIST);   // root: back opens the menu
         waiting_chrome();
+        break;
+    case View::InFlight:
+        lv_obj_clear_flag(a.view_inflight, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);    // back: Work
+        chrome_set_title("In flight");
+        break;
+    case View::Library:
+        lv_obj_clear_flag(a.view_library, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);    // back: Work
+        chrome_set_title("Library");
         break;
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
@@ -950,6 +977,8 @@ void app_start()
 
     // ---- views ---------------------------------------------------------
     waiting_build(a.content);
+    inflight_build(a.content);
+    library_build(a.content);
     tabs_build(a.content);
     terminal_build(a.content);
     hester_build(a.content);
@@ -983,9 +1012,11 @@ void app_start()
     dirigible::EventBus::instance().on(dirigible::Event::ConnectionChanged, []() {
         tabs_render(activeConn() ? activeConn()->currentContext() : nullptr);
         waiting_render();
+        inflight_render();
     });
     dirigible::EventBus::instance().on(dirigible::Event::AttentionChanged, []() {
         waiting_render(true);
+        inflight_render();
     });
     dirigible::EventBus::instance().on(dirigible::Event::AttentionAlert, []() {
         waiting_alert();

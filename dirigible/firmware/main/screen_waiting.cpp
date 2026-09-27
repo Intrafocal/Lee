@@ -31,7 +31,22 @@
  * last.  Only the kinds that want an answer page (approval, waiting, blocker,
  * decision, plus anything Lee marks blocking).  With none of those the body
  * says "Nothing needs you" over a few recently finished turns (tap one to read
- * it as a page) and the c / f / t hints.
+ * it as a page) and the c / i / l hints.
+ *
+ * This is the device Cockpit's Work (Cockpit design §8.2).  An item that takes
+ * text gets the quick replies as letter buttons, sent at once through the
+ * reply path, exactly as written on the button (C3):
+ *
+ *   Go (G)     "Yes, go ahead"
+ *   Wait (W)   "Stop and wait for me"
+ *   Why (E)    "Explain first"
+ *   Reply (R)  opens the reply box
+ *
+ * (Lee's fourth, "Show me the diff", has no letter here.)  Approvals keep
+ * Approve (Y) / Deny (N); d dismisses and s snoozes any item from the keys.
+ * The header says Work's line (cockpit_status) and "In deep work" while a
+ * Deep session runs at the machine.  The old f (Focus) key is retired: Deep
+ * can't start remotely, and Library's Open next (O) replaces it (14 §8.1).
  *
  * Every write echoes the version the page showed; a 409 means the item moved
  * on, so the queue is refetched, nothing is resent and the human looks again
@@ -49,6 +64,7 @@
 #include <string>
 
 #include "app.hpp"
+#include "dirigible/activity.hpp"
 #include "esp_log.h"
 #include "theme.hpp"
 #include "ui_text.hpp"
@@ -68,6 +84,8 @@ using dirigible::AttentionKind;
 using dirigible::AttentionSeverity;
 using dirigible::AttentionSnapshot;
 using dirigible::ReplyResult;
+using dirigible::AgentState;
+using dirigible::AgentSummary;
 
 // Montserrat for everything in this view (Latin only: agent text is folded
 // with ui_fold).  Short local names for the theme's accessors.
@@ -83,7 +101,7 @@ constexpr int WORDS_Y    = 44;
 constexpr int BAR_H      = 40;
 constexpr int BAR_Y      = BODY_H - BAR_H - 3;          // 161
 constexpr int WORDS_H    = BAR_Y - 4 - WORDS_Y;         // 113
-constexpr int MAX_BTNS   = 3;
+constexpr int MAX_BTNS   = 4;
 constexpr int RECENT     = 3;
 constexpr int ROW_H      = 34;
 constexpr int HINT_H     = 28;
@@ -102,6 +120,27 @@ constexpr int      BALL_PAGE_DETENTS = 4;
 constexpr uint32_t BALL_QUIET_MS     = 250;   // since the last vertical detent
 constexpr uint32_t BALL_WINDOW_MS    = 400;   // sideways detents must be this close
 constexpr uint32_t BALL_COOLDOWN_MS  = 500;   // one flick, one page
+
+/// Lee's QUICK_REPLIES (electron/src/shared/cockpit.ts; Aeronaut's
+/// quickReplyChips), the first three, with their letters.  Change together.
+struct Quick {
+    char        key;
+    const char* name;
+    const char* text;
+};
+constexpr Quick QUICK[] = {
+    { 'g', "Go",   "Yes, go ahead" },
+    { 'w', "Wait", "Stop and wait for me" },
+    { 'e', "Why",  "Explain first" },
+};
+
+const Quick* quick_for(char k)
+{
+    for (const Quick& q : QUICK) {
+        if (q.key == k) return &q;
+    }
+    return nullptr;
+}
 
 enum class Compose : uint8_t { None, Reply, Capture };
 
@@ -155,7 +194,6 @@ struct State {
     lv_obj_t* e_sub   = nullptr;
     Row       rows[RECENT];
     lv_obj_t* hints   = nullptr;
-    lv_obj_t* hint_focus = nullptr;   // label of the f hint (focus on/off)
 
     // ---- compose overlay (reply or capture)
     lv_obj_t* compose  = nullptr;
@@ -425,19 +463,17 @@ void centre_status()
     auto& s = st();
     if (app().view != View::Waiting) return;
     if ((int32_t)(s.flash_until - lv_tick_get()) > 0) return;
-    const auto* snap = snapshot();
-    auto* c = conn();
-    char buf[32];
-    if (!linked()) {
-        snprintf(buf, sizeof(buf), "disconnected");
-    } else if (!snap) {
-        snprintf(buf, sizeof(buf), c && c->attentionUnsupported() ? "no queue" : "loading");
-    } else {
-        const char* pre = snap->away_active ? "away: " : snap->focus_active ? "focus: " : "";
-        if (s.count) snprintf(buf, sizeof(buf), "%s%d waiting", pre, s.count);
-        else         snprintf(buf, sizeof(buf), "%s%s", pre, *pre ? "clear" : "all clear");
+    chrome_set_centre(cockpit_status().c_str());
+}
+
+/// Items the pager would show (not parked): what Work's line counts.
+int waiting_count(const AttentionSnapshot& snap)
+{
+    int n = 0;
+    for (const auto& it : snap.items) {
+        if (pages(it) && !it.parked) n++;
     }
-    chrome_set_centre(buf);
+    return n;
 }
 
 void footer()
@@ -451,7 +487,7 @@ void footer()
     }
     if (current()) {
         chrome_set_footer(s.pinned_id.empty() ? "j/k or swipe: items" : LV_SYMBOL_LEFT " or hold: back",
-                          "c f t");
+                          "c i l t");
         return;
     }
     const std::string& id = device_id();
@@ -574,19 +610,23 @@ void act(const char* verb, const std::string& text = std::string(), int choice =
     if (yes_no && (it->question_as_approval() || it->kind == AttentionKind::Question)) return;
     if (need == dirigible::ActChoose && !pickable(*it)) return;
 
-    // A reply answers the version its box was opened on; everything else the
-    // version on screen.  A snapshot that lands in between makes it a 409.
-    const std::string id = is_text ? s.reply_id : it->id;
-    const int version = is_text ? s.reply_version : s.shown_version;
+    // A reply from the box answers the version the box was opened on; a
+    // quick reply and everything else the version on screen.  A snapshot
+    // that lands in between makes it a 409.
+    const bool from_box = is_text && s.mode == Compose::Reply;
+    const std::string id = from_box ? s.reply_id : it->id;
+    const int version = from_box ? s.reply_version : s.shown_version;
     if (id == s.acted_id && version == s.acted_version) {
         flash("sent - waiting on Lee");
         return;
     }
 
     s.busy = true;
-    // Say exactly what is being sent for a pick.
+    // Say exactly what is being sent for a pick or a quick reply.
     std::string what = "sending...";
-    if (need == dirigible::ActChoose) {
+    if (is_text && !from_box) {
+        what = "sending: " + text;
+    } else if (need == dirigible::ActChoose) {
         const auto& qs = questions_of(*it);
         if (!qs.empty() && choice >= 0 && choice < (int)qs[0].options.size()) {
             what = "sending: " + ui_fold(qs[0].options[choice].label, false);
@@ -595,14 +635,17 @@ void act(const char* verb, const std::string& text = std::string(), int choice =
     flash(what.c_str());
     ESP_LOGI(TAG, "%s %s v%d%s", verb, id.c_str(), version, choice >= 0 ? " (choice)" : "");
     const std::string v = verb;
-    send(id, verb, text, version, [id, version, v, what](const ReplyResult& r) {
+    send(id, verb, text, version, [id, version, v, what, from_box](const ReplyResult& r) {
         auto& s = st();
         s.busy = false;
         if (!r.ok) { report_failure(id, r); return; }
         if (v == "open") { flash("opened on Lee"); return; }   // the item stays
         s.acted_id = id;
         s.acted_version = version;
-        if (v == "choose") { flash(("sent" + what.substr(7)).c_str()); return; }
+        if (v == "choose" || (v == "text" && !from_box)) {
+            flash(("sent" + what.substr(7)).c_str());   // "sent: Yes, go ahead"
+            return;
+        }
         if (v == "text") {
             s.reply_draft.clear();
             s.reply_draft_id.clear();
@@ -613,32 +656,23 @@ void act(const char* verb, const std::string& text = std::string(), int choice =
     }, choice);
 }
 
-void focus_toggle()
+/// An item the quick replies suit: one that takes text and isn't a question
+/// (those take a pick) or an approval (Approve / Deny).
+bool takes_text(const AttentionItem& it)
 {
-    auto& s = st();
-    const auto* snap = snapshot();
-    if (!snap || s.busy) { flash(snap ? "busy" : "no queue"); return; }
-    const bool on = !snap->focus_active;
-#if DIRIGIBLE_UI_DEMO
-    demo_snap().focus_active = on;
-    flash(on ? "focus on" : "focus off");
-    render();
-#else
-    auto* c = conn();
-    if (!c || !c->isConnected()) { flash("not connected"); return; }
-    s.busy = true;
-    flash(on ? "starting focus..." : "ending focus...");
-    // The new state arrives with the snapshot Lee broadcasts on the change.
-    c->focusSet(on, [on](const ReplyResult& r) {
-        st().busy = false;
-        if (!r.ok) {
-            if (r.status == 403) st().reply_forbidden = true;
-            flash(r.status == 403 ? "re-pair for focus" : r.error.c_str());
-            return;
-        }
-        flash(on ? "focus on" : "focus off");
-    });
-#endif
+    return it.can(dirigible::ActReply) && it.kind != AttentionKind::Question &&
+           !it.question_as_approval() && !it.can(dirigible::ActApprove);
+}
+
+/// Go / Wait / Why: send the quick reply's words now, through the reply path.
+/// Returns false when the page's item doesn't take them.
+bool quick_reply(char k)
+{
+    const Quick* q = quick_for(k);
+    const auto* it = current();
+    if (!q || !it || !takes_text(*it) || st().mode != Compose::None) return false;
+    act("text", q->text);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1052,10 @@ void layout_buttons(const AttentionItem& it)
     } else if (it.can(dirigible::ActApprove)) {
         spec[n++] = { "Approve", 'y' };
         if (it.can(dirigible::ActDeny)) spec[n++] = { "Deny", 'n' };
+    } else if (takes_text(it)) {
+        // Go / Wait / Why / Reply; dismiss and snooze stay on d and s.
+        for (const Quick& q : QUICK) spec[n++] = { q.name, q.key };
+        spec[n++] = { "Reply", 'r' };
     } else {
         if (it.can(dirigible::ActReply))   spec[n++] = { "Reply", 'r' };
         if (it.can(dirigible::ActDismiss)) spec[n++] = { "Dismiss", 'd' };
@@ -1033,13 +1071,16 @@ void layout_buttons(const AttentionItem& it)
         int w;
         if (n == 1)      w = inner;
         else if (n == 2) w = (inner - gap) / 2;
+        else if (n == 4) w = (inner - 3 * gap) / 4;
         else             w = i == 0 ? 124 : (inner - 2 * gap - 124) / 2;
         lv_obj_set_pos(b.obj, x, BAR_Y);
         lv_obj_set_size(b.obj, w, BAR_H);
         x += w + gap;
         b.key = spec[i].key;
+        // Phosphor marks one next step (Approve); the quick replies are
+        // equals, so none of them is filled.
         const bool primary = i == 0 && spec[i].key != 'd' && spec[i].key != 's' &&
-                             !(question && pickable(it));
+                             !quick_for(spec[i].key) && !(question && pickable(it));
         style_btn(b, primary);
         // "Approve (Y)": the key after the word, capitalised for display
         // (the keyboard still takes the lowercase letter), a shade quieter.
@@ -1097,13 +1138,6 @@ void render_page(const AttentionItem& it)
     want_full(it);
 }
 
-void set_hint_focus()
-{
-    auto& s = st();
-    const auto* snap = snapshot();
-    lv_label_set_text(s.hint_focus, snap && snap->focus_active ? "End focus (F)" : "Focus (F)");
-}
-
 void render_empty(const char* title, const char* sub, bool with_recent)
 {
     auto& s = st();
@@ -1132,7 +1166,6 @@ void render_empty(const char* title, const char* sub, bool with_recent)
         if (!age.empty()) m += "  " LV_SYMBOL_BULLET "  " + age;
         lv_label_set_text(row.meta, m.c_str());
     }
-    set_hint_focus();
 }
 
 void render()
@@ -1173,9 +1206,18 @@ void render()
     } else if (const auto* it = current()) {
         render_page(*it);
     } else {
-        render_empty("Nothing needs you",
-                     s.recent_count ? "Recently finished" : "Agents will show up here when they ask.",
-                     true);
+        const auto* snap = snapshot();
+        const int working = snap ? snap->working() : 0;
+        std::string sub;
+        if (s.recent_count) {
+            sub = "Recently finished";
+        } else if (working) {
+            sub = dirigible::number_word(working, true) +
+                  (working == 1 ? " agent is working: i shows it." : " agents are working: i shows them.");
+        } else {
+            sub = "Agents will show up here when they ask.";
+        }
+        render_empty("Nothing needs you", sub.c_str(), true);
     }
     centre_status();
     footer();
@@ -1214,6 +1256,7 @@ void key_action(char k)
     case 's': act("snooze"); break;
     case 'r': open_compose(Compose::Reply); break;
     case 'o': act("open"); break;
+    case 'g': case 'w': case 'e': quick_reply(k); break;
     default: break;
     }
 }
@@ -1250,8 +1293,8 @@ void hint_cb(lv_event_t* e)
     if (st().mode != Compose::None) return;
     switch ((char)(intptr_t)lv_event_get_user_data(e)) {
     case 'c': waiting_open_capture(); break;
-    case 'f': focus_toggle(); break;
-    case 't': app_show(View::Tabs); break;
+    case 'i': inflight_open(); break;
+    case 'l': library_open(); break;
     default: break;
     }
 }
@@ -1455,7 +1498,7 @@ void build_empty(lv_obj_t* parent)
 
     // Three bordered buttons along the bottom, each naming its key.
     static const struct { char key; const char* text; } hints[] = {
-        { 'c', "Capture (C)" }, { 'f', "Focus (F)" }, { 't', "Tabs (T)" },
+        { 'c', "Capture (C)" }, { 'i', "In flight (I)" }, { 'l', "Library (L)" },
     };
     const int gap = 4;
     const int w = (SCREEN_W - 2 * PAD - 2 * gap) / 3;
@@ -1471,7 +1514,6 @@ void build_empty(lv_obj_t* parent)
         lv_obj_add_event_cb(b, hint_cb, LV_EVENT_CLICKED, (void*)(intptr_t)hints[i].key);
         lv_obj_t* l = label(b, F_BODY, dg::text2(), hints[i].text);
         lv_obj_center(l);
-        if (hints[i].key == 'f') s.hint_focus = l;
     }
 }
 
@@ -1620,6 +1662,40 @@ void demo_fill()
     s.items.push_back(demo_item("demo-exit", AttentionKind::Failure, AttentionSeverity::Ambient,
         "Claude exited (code 1)", "hester", 42, ActOpen | ActDismiss, "Session ended."));
     s.focus_active = false;
+
+    // In flight: one of each state, with and without the Cockpit-design fields.
+    s.agents.clear();
+    {
+        AgentSummary a;
+        a.pty_id = 7; a.label = "lee copilot"; a.provider = "claude";
+        a.state = AgentState::Busy; a.busy_ms = 18 * 60000;
+        a.has_now = true; a.now.tool = "Bash"; a.now.preview = "cd electron && npm test";
+        a.last_summary = "Wiring the carry routes into the device snapshot; the smokes are next.";
+        a.recent.push_back({ "Edit", "/ws/electron/src/main/copilot/queue.ts",
+                             { "/ws/electron/src/main/copilot/queue.ts" }, false, true, 4 * 60000 });
+        a.recent.push_back({ "Grep", "open_next", {}, false, true, 2 * 60000 });
+        a.has_usage = true; a.usage.shown_tokens = 412345; a.usage.cost_basis = "subscription";
+        s.agents.push_back(a);
+    }
+    {
+        AgentSummary a;
+        a.pty_id = 9; a.label = "firmware"; a.provider = "claude";
+        a.state = AgentState::Waiting; a.busy_ms = 6 * 60000;
+        a.last_summary = "I want to rebuild the demo firmware; approve the command on Work.";
+        a.has_usage = true; a.usage.shown_tokens = 1234567;
+        s.agents.push_back(a);
+    }
+    {
+        AgentSummary a;
+        a.pty_id = 11; a.label = "aeronaut"; a.provider = "claude";
+        a.state = AgentState::Idle; a.idle_ms = 35 * 60000;
+        a.last_summary = "Moved the Files browser to the new fs endpoints and removed the old "
+                         "polling path. Tests pass.";
+        a.updates.push_back({ "Started on the Files browser: the tree loads over /fs/list now.", 70 * 60000 });
+        s.agents.push_back(a);
+    }
+    s.has_limits = true;
+    s.limits.five_hour_pct = 42;
     st().snapshot_tick = lv_tick_get();
 }
 #endif
@@ -1629,6 +1705,44 @@ void demo_fill()
 // ---------------------------------------------------------------------------
 // Public
 // ---------------------------------------------------------------------------
+
+const AttentionSnapshot* cockpit_snapshot()
+{
+    return snapshot();
+}
+
+bool cockpit_linked()
+{
+    return linked();
+}
+
+std::string cockpit_status()
+{
+    const auto* snap = snapshot();
+    if (!linked()) return "disconnected";
+    if (!snap) {
+        auto* c = conn();
+        return c && c->attentionUnsupported() ? "no queue" : "loading";
+    }
+    // A Deep session at the machine: nothing is pushed here (agents park),
+    // and the header says why.
+    if (snap->deep_active) return "In deep work";
+    const int waiting = waiting_count(*snap);
+    if (snap->away_active) {
+        return waiting ? "away: " + std::to_string(waiting) + " waiting" : std::string("away: clear");
+    }
+    return dirigible::work_line(waiting, snap->working());
+}
+
+bool cockpit_nav_key(uint8_t k)
+{
+    switch (k) {
+    case 'w': if (app().view != View::Waiting)  waiting_open();  return true;
+    case 'i': if (app().view != View::InFlight) inflight_open(); return true;
+    case 'l': if (app().view != View::Library)  library_open();  return true;
+    default:  return false;
+    }
+}
 
 void waiting_build(lv_obj_t* parent)
 {
@@ -1684,6 +1798,12 @@ bool waiting_back()
 void waiting_alert()
 {
     auto& s = st();
+    // Lee already holds notify while you are deep (focus stays active); this
+    // is belt and braces, since the device gets no pushes then (14 §8.1).
+    if (const auto* snap = snapshot(); snap && snap->deep_active) {
+        ESP_LOGI(TAG, "attention: notify held (in deep work)");
+        return;
+    }
     s.blink_left = 8;   // four ember flashes, 250 ms apart
     if (!s.blink) s.blink = lv_timer_create(blink_cb, 250, nullptr);
     ESP_LOGI(TAG, "attention: notify");
@@ -1710,8 +1830,17 @@ bool waiting_key(uint8_t k)
     case 'j': go(1);  return true;
     case 'k': go(-1); return true;
     case 'c': waiting_open_capture(); return true;
-    case 'f': focus_toggle(); return true;
     case 't': app_show(View::Tabs); return true;
+    case 'i': case 'l':
+        cockpit_nav_key(k);
+        return true;
+    case 'g': case 'e':
+        if (!quick_reply((char)k) && it) flash("no quick reply here");
+        return true;
+    case 'w':
+        // On Work already: w is Wait wherever a quick reply fits.
+        if (!quick_reply('w') && it && takes_text(*it)) flash("no quick reply here");
+        return true;
     case ' ': scroll_words(WORDS_H - 24);    return true;
     case 'b': scroll_words(-(WORDS_H - 24)); return true;
     case '\r': case '\n':
@@ -1738,6 +1867,13 @@ bool waiting_key(uint8_t k)
     default:
 #if DIRIGIBLE_UI_DEMO
         if (k == 'x' && !it) { demo_fill(); render(); }
+        if (k == 'z') {   // demo: a Deep session starts or ends at the machine
+            auto& d = demo_snap();
+            d.deep_active = !d.deep_active;
+            d.deep_title = d.deep_active ? "Carry on the T-Deck" : "";
+            d.focus_active = d.deep_active;
+            render();
+        }
 #endif
         return true;   // nothing strays into a hidden widget
     }
