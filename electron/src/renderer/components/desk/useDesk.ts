@@ -32,6 +32,7 @@ export interface DeskData {
 }
 
 const REFRESH_MS = 30000;
+const OFFLINE_RETRY_MS = 3000;
 
 export function useDesk(workspace: string, active: boolean): DeskData {
   const [desk, setDesk] = useState<Desk | null>(null);
@@ -58,12 +59,14 @@ export function useDesk(workspace: string, active: boolean): DeskData {
     setStatus('loading');
   }, [workspace]);
 
+  // Hester not answering yet (Deep opened before it started): ask again soon, not in 30 s.
+  const waitingForHester = status === 'offline' || status === 'loading';
   useEffect(() => {
     if (!active) return;
     void refresh();
-    const t = window.setInterval(() => void refresh(), REFRESH_MS);
+    const t = window.setInterval(() => void refresh(), waitingForHester ? OFFLINE_RETRY_MS : REFRESH_MS);
     return () => window.clearInterval(t);
-  }, [active, refresh]);
+  }, [active, refresh, waitingForHester]);
 
   const titleOf = useCallback((id: string) => deskRef.current?.cards.find((c) => c.id === id)?.title ?? '', []);
   const defaultArea = useCallback((inView: string | null) => {

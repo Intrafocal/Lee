@@ -154,6 +154,9 @@ export interface DeepHostProps {
 }
 
 const SAVE_DEBOUNCE_MS = 800;
+/** Deep opened before Hester was up: how soon to ask for the Page again (doubling, capped). */
+const LOAD_RETRY_MS = 2000;
+const LOAD_RETRY_MAX_MS = 15000;
 const ANSWER_POLL_MS = 20000;
 const INPUT_FLUSH_MS = 60000;
 const FLASH_MS = 6000;
@@ -627,11 +630,48 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
         if (mirror?.dirty) {
           setDirty(true);
           scheduleSave(saveBackoffMs(0));
-        }
+        } else retryLoad(text.current, landing?.line ?? null, 0);
       }
     });
+
+    /**
+     * Deep opened before Hester was up: keep asking for the Page until it
+     * answers (a save only retries once you've typed), then show Hester's text
+     * if you haven't written since, or the conflict sheet if you have.
+     */
+    const retryLoad = (shown: string, line: number | null, n: number) => {
+      retryTimer = setTimeout(async () => {
+        if (cancelled) return;
+        const r = await getPage(workspace, id);
+        if (cancelled || realIdRef.current !== id) return;
+        if (!r.ok) {
+          if (!r.status) retryLoad(shown, line, n + 1);
+          return;
+        }
+        version.current = r.data.version;
+        loaded.current = true;
+        setOffline(false);
+        if (text.current === shown) {
+          text.current = r.data.text;
+          lastSent.current = r.data.text;
+          editor.current?.replaceAll(r.data.text);
+          if (line != null) editor.current?.reveal(lineEnd(r.data.text, line));
+          writeMirror(workspace, id, { text: r.data.text, base: r.data.version, dirty: false });
+          setNearlyEmpty(pageNearlyEmpty(r.data.text));
+          setDirty(false);
+          setSaveState('saved');
+        } else if (shown.trim() || !r.data.text.trim()) {
+          scheduleSave(0);
+        } else {
+          setConflict(r.data);
+          setSaveState('conflict');
+        }
+      }, Math.min(LOAD_RETRY_MS * 2 ** n, LOAD_RETRY_MAX_MS));
+    };
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, id]);
