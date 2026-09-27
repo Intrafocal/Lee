@@ -17,17 +17,24 @@ images) and a Files browser (see "Tab type support" below).
 Machine.
 - **Work** (`screens/work_screen.dart`, was Now): the serif headline
   (`workLine`), waiting cards (`widgets/attention_tile.dart`: 44px Allow/Deny,
-  the first three quick replies in a sideways scroll, swipe to snooze/dismiss,
-  `⋯` for the rest), In flight (`widgets/in_flight_section.dart`: grouped rows
+  the first three quick replies in a sideways scroll, swipe to snooze/dismiss
+  (a swiped snooze leaves "Snoozed · Undo" for 5 s before it is sent),
+  `⋯` for the rest), the Desk's "Still thinking?" push first when one is open
+  (`widgets/deep_idle_card.dart`: Extend, End and rate, Capture through Lee
+  `POST /deep/idle-end` and `/carry/capture`), In flight (`widgets/in_flight_section.dart`: grouped rows
   with the "doing now" line and a token label), Progress. "In deep work"
   replaces Focus in the header while `snapshot.deep` is set. Capture is the +.
-- **One agent** (`screens/agent_screen.dart`): It asked / It said, Allow/Deny,
+- **One agent** (`screens/agent_screen.dart`): It asked / It said, Check in /
+  Rename / Accept / Assign… (`widgets/agent_actions_row.dart`: the check-in
+  through Lee's `/command` tab domain, the task writes straight to Hester's
+  `/cockpit/tasks` routes, as Someday is), Allow/Deny,
   the four quick replies as a 2×2 grid, Updates, Along the way, and a pinned
   reply bar that sends through the item's Reply (disabled, "Reply from the
   Mac for now", when the agent has no open item).
 - **Library** (`screens/library_screen.dart`): Carry (Lee `GET /carry`,
-  `POST /carry/capture`, `POST /carry/open-next`), Explorations (Hester
-  `GET /cockpit/explorations`), Ideas (the Someday list).
+  `POST /carry/capture`, `POST /carry/open-next`: your last Desk card, by
+  `card_id`), Ideas (the Someday list). The Explorations tab went with the
+  Desk (docs/plans/2026-09-27-desk-foundation-contract.md decision 6).
 - **Machine**: the machine list until one is chosen, then `HomeScreen` with
   Tabs | Files and "All machines".
 

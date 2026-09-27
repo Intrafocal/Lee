@@ -777,6 +777,10 @@ class AgentSummary extends Equatable {
   /// first turn ends, or from an older Lee.
   final AgentUsage? usage;
 
+  /// The agent's session id, in full snapshots only (compact ones omit it):
+  /// what Rename names when the agent has no task.
+  final String? sessionId;
+
   const AgentSummary({
     required this.ptyId,
     this.windowId,
@@ -794,6 +798,7 @@ class AgentSummary extends Equatable {
     this.recent = const [],
     this.updates = const [],
     this.usage,
+    this.sessionId,
   });
 
   factory AgentSummary.fromJson(Map<String, dynamic> json) {
@@ -825,6 +830,7 @@ class AgentSummary extends Equatable {
       usage: json['usage'] is Map<String, dynamic>
           ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>)
           : null,
+      sessionId: json['session_id'] as String?,
     );
   }
 
@@ -848,6 +854,7 @@ class AgentSummary extends Equatable {
         lastTool,
         lastSummary,
         filesTouchedCount,
+        sessionId,
         now,
         recent,
         updates,

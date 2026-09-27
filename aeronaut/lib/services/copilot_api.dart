@@ -341,6 +341,30 @@ class CopilotApi {
     }, (_) => const CaptureResult(success: true));
   }
 
+  /// `POST /command {domain: tab, action: checkin, params: {pty_id}}`: ask a
+  /// running agent where it is; its answer arrives as its words. 202 means
+  /// this token may only propose it and Lee asks at the desk.
+  Future<ActionResult> agentCheckin(int ptyId) async {
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('${machine.hostUrl}/command'),
+            headers: _headers,
+            body: jsonEncode({'domain': 'tab', 'action': 'checkin', 'params': {'pty_id': ptyId}}),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (_isUnauthorized(response)) {
+        return const ActionResult(success: false, error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) return const ActionResult(success: false, error: _reAuthMessage);
+      if (response.statusCode == 202) return const ActionResult(success: true, error: 'proposed');
+      if (response.statusCode == 200) return const ActionResult(success: true);
+      return ActionResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
+    } catch (e) {
+      return ActionResult(success: false, error: e.toString());
+    }
+  }
+
   /// `POST /deep/idle-end` (Desk D2 §9.2): answer the "Still thinking?"
   /// push. [action] is `extend` or `end_rate`; [rating] is `deep`, `mixed`,
   /// `shallow` or null. A 409 (the push was answered or the session moved
