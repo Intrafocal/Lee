@@ -9,9 +9,10 @@
  * from its activity (§7.1, folded) and the actions: icons for Resume (a
  * not-open task's Claude session), Check in, Rename, Open terminal in
  * Manual, Confirm, Accept / Discard and Close agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
- * workstream), Escalate → Explore (an exploration seeded from it, shown in
- * the Library), Hester's view (/suggest, answered inline with its
- * proposals) and Assign….
+ * workstream), Escalate → Explore (an exploration seeded from it, a Page
+ * on the Desk), Hester's view (/suggest, answered inline with its
+ * proposals) and Assign…, plus Open its Page for a hand-off's task (its
+ * origin's card at the Desk, Desk D2 §8).
  *
  * Esc and ↑/↓ are Work's (WorkSection): back to the list, or the previous or
  * next item without going back.
@@ -20,6 +21,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { AgentSummary, AttentionItem } from '../../../../shared/copilot';
 import { CHECKIN_PROMPT, type CockpitTask, type StewardAnswer } from '../../../../shared/cockpit';
+import { cardIdForOrigin } from '../../../../shared/desk';
 import { taskTitle, type TileModel } from '../../../lib/cockpitModel';
 import { closeTask, confirmTask, escalateTask, promoteTask, suggestTask } from '../../../lib/hesterCockpit';
 import {
@@ -50,6 +52,7 @@ import type { CockpitCtx } from '../CockpitHost';
 import { choosable, choose, decide, sendText } from './actions';
 import { MoreMenu, type MoreItem } from './MoreMenu';
 import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
+import { openDesk } from '../cockpitMode';
 
 /** What the detail view shows, resolved from the list id by WorkSection. */
 export interface DetailSubject {
@@ -249,10 +252,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         return false;
       }
       ctx.hester.refresh();
-      ctx.notify(`Exploration started: ${r.data.exploration.title}`);
-      // The task stays open; its exploration is in the Library.
-      ctx.setSection('library');
-      ctx.selectRow(`explore:${r.data.exploration.id}`);
+      // The task stays open; its exploration becomes a Page on the Desk (Desk D2 §6.1).
+      ctx.notify(`On your Desk: ${r.data.exploration.title}`);
       return true;
     });
   };
@@ -361,7 +362,12 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
     'hester-view': { label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view", disabled: view.phase === 'loading', onClick: hesterView },
     assign: { label: 'Assign…', onClick: () => togglePanel('assign') },
   };
-  const moreItems: MoreItem[] = more.map((id) => moreSpec[id]).filter((x): x is MoreItem => !!x);
+  // A hand-off's task came from a Page: open that card at the Desk (Desk D2 §8; either origin form).
+  const originCard = task ? cardIdForOrigin(task.origin) : null;
+  const moreItems: MoreItem[] = [
+    ...(originCard ? [{ label: 'Open its Page', onClick: () => void openDesk(ctx.copilotApi, ctx.workspace, { kind: 'card', card_id: originCard }) }] : []),
+    ...more.map((id) => moreSpec[id]).filter((x): x is MoreItem => !!x),
+  ];
   const iconItems = icons.map((id) => ({ id, spec: spec(id) })).filter((x): x is { id: DetailActionId; spec: ActionSpec } => !!x.spec);
 
   return (

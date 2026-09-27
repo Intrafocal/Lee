@@ -8,6 +8,7 @@ import ReactDOM from 'react-dom';
 import { AttentionItemRow } from './AttentionItemRow';
 import { FocusControl } from './FocusControl';
 import { groupAttentionItems } from '../../lib/copilotAttention';
+import { cockpitShows } from '../../lib/cockpitModel';
 import type { AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 
 interface AttentionFlyoutProps {
@@ -39,7 +40,8 @@ export const AttentionFlyout: React.FC<AttentionFlyoutProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
-  const { blocking, needsYou, recent } = groupAttentionItems(snapshot.items);
+  // The idle-end push (deep_idle) is devices-only (Desk D2 §9.2).
+  const { blocking, needsYou, recent } = groupAttentionItems(snapshot.items.filter(cockpitShows));
   const empty = blocking.length === 0 && needsYou.length === 0 && recent.length === 0;
 
   const style: React.CSSProperties = {

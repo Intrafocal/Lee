@@ -1,6 +1,7 @@
 /**
- * Pure Cockpit model (contracts §3, §4; Deep D1 §1): mode transitions, the
- * ⌘0 switcher, agent tiles, the merged Feed and the Cockpit keyboard map. No
+ * Pure Cockpit model (contracts §3, §4; Deep D1 §1; Desk D2 §8): mode
+ * transitions, the ⌘0 switcher, agent tiles, the merged Feed, Home's door and
+ * the Cockpit keyboard map. No
  * React, no DOM, type-only imports (plus pure values from shared/cockpit), so
  * scripts/cockpit-renderer-smoke.mjs can bundle it with esbuild and run it
  * under plain node.
@@ -26,31 +27,36 @@ import type {
   TabFidelity,
   TabRunState,
   TabRuntimeInfo,
-  SectionId,
+  CockpitSectionId,
 } from '../../shared/cockpit';
+import type { DeskLast } from '../../shared/desk';
 // The one value import: pure data from shared (the smoke bundles it in).
-import { LEGACY_SECTION } from '../../shared/cockpit';
+import { COCKPIT_SECTION } from '../../shared/cockpit';
 
-export type { SectionId };
+/** The Cockpit's four sections (Desk D2 §8; docs/16-Desk.md §6). */
+export type SectionId = CockpitSectionId;
 
-/** Nav order (sections have no keys: click only). Home first (cockpit-design §2.2). */
-export const SECTIONS: readonly SectionId[] = ['home', 'work', 'goals', 'library', 'ops', 'history'];
+/** Nav order, ⌘1–⌘4. Home first (cockpit-design §2.2). */
+export const SECTIONS: readonly SectionId[] = ['home', 'work', 'goals', 'ops'];
 
-/** Deep's views in ⌘digit order (D1: the Page only; Board, Browse, Workbench in D2). */
+/**
+ * Deep's views in ⌘digit order. The Desk has none (Desk D2 §8): zooming is
+ * Esc and the cards themselves. Kept for DeepHost, which still reads it.
+ */
 export const DEEP_VIEWS: readonly DeepView[] = ['page'];
 
 /**
- * What ⌘1–⌘9 pick in each mode: the rail's section in the Cockpit, Deep's
- * view in Deep, the center tab in Manual (or with the Cockpit off). Null
+ * What ⌘1–⌘9 pick in each mode: the rail's section in the Cockpit, the
+ * center tab in Manual (or with the Cockpit off), nothing at the Desk. Null
  * when that digit has nothing to pick in this mode.
  */
 export function digitTarget(
   mode: LeeMode,
   enabled: boolean,
   index: number,
-): { kind: 'section'; section: SectionId } | { kind: 'view'; view: DeepView } | { kind: 'tab'; index: number } | null {
+): { kind: 'section'; section: SectionId } | { kind: 'tab'; index: number } | null {
   if (enabled && mode === 'cockpit') return SECTIONS[index] ? { kind: 'section', section: SECTIONS[index] } : null;
-  if (enabled && mode === 'deep') return DEEP_VIEWS[index] ? { kind: 'view', view: DEEP_VIEWS[index] } : null;
+  if (enabled && mode === 'deep') return null;
   return { kind: 'tab', index };
 }
 
@@ -61,18 +67,26 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   home: 'Home',
   work: 'Work',
   goals: 'Goals',
-  library: 'Library',
   ops: 'Ops',
-  history: 'History',
 };
 
 /**
  * A remembered or requested section id, old or new, as a section now
- * (cockpit-design §2.2): copilot and tabs → home, feed and tasks → work,
- * explore, someday and files → library. Unknown ids land on the default.
+ * (Desk D2 §8): copilot, tabs, library, history and Library's old tabs
+ * (explore, someday, files) → home, feed and tasks → work. Unknown ids land
+ * on the default.
  */
 export function readSection(id: string | null | undefined): SectionId {
-  return (id && Object.prototype.hasOwnProperty.call(LEGACY_SECTION, id) ? LEGACY_SECTION[id] : null) ?? DEFAULT_SECTION;
+  return (id && Object.prototype.hasOwnProperty.call(COCKPIT_SECTION, id) ? COCKPIT_SECTION[id] : null) ?? DEFAULT_SECTION;
+}
+
+/**
+ * Whether the Cockpit shows an attention item. The idle-end push
+ * (`deep_idle`, Desk D2 §9.2) is for devices only: Work, Home, the status
+ * bar and the flyout never show it.
+ */
+export function cockpitShows(item: Pick<AttentionItem, 'kind'>): boolean {
+  return item.kind !== 'deep_idle';
 }
 
 /** The renderer tab fields the Cockpit needs (a structural subset of App's TabData). */
@@ -196,6 +210,8 @@ export interface ModeDecision {
 export interface DeepSessionInfo {
   exploration_id: string | null;
   title: string;
+  /** Desk D2: the card the session is on (null at the overview; absent from older Lee mains). */
+  card_id?: string | null;
 }
 
 /**
@@ -207,12 +223,15 @@ export function deepSessionOf(snapshot: AttentionSnapshot | null | undefined, wo
   const f = snapshot?.focus;
   if (!f || !f.active || f.source !== 'deep') return null;
   const item = f.item && f.item.kind === 'exploration' ? f.item : null;
-  const ws = f.deep?.workspace ?? item?.workspace ?? null;
+  const card = f.item && f.item.kind === 'card' ? f.item : null;
+  const ws = f.deep?.workspace ?? item?.workspace ?? card?.workspace ?? null;
   // A session with no workspace on record is machine-wide: every window sees it.
   if (ws && workspace && !sameWorkspace(ws, workspace)) return null;
+  const cardId = f.deep?.card_id ?? card?.card_id ?? null;
   return {
-    exploration_id: f.deep?.exploration_id ?? item?.exploration_id ?? null,
-    title: f.deep?.title ?? item?.title ?? '',
+    exploration_id: f.deep?.exploration_id ?? item?.exploration_id ?? cardId,
+    title: f.deep?.title ?? item?.title ?? card?.title ?? '',
+    card_id: cardId,
   };
 }
 
@@ -658,7 +677,7 @@ export function mergeFeed(input: FeedInput): FeedRow[] {
   const ws = input.workspace;
   const rows: FeedRow[] = [];
   for (const item of input.items ?? []) {
-    if (item.state !== 'open') continue;
+    if (item.state !== 'open' || !cockpitShows(item)) continue;
     if (item.source.workspace && !sameWorkspace(item.source.workspace, ws)) continue;
     const name = item.source.pty_id != null ? input.names?.get(item.source.pty_id) : undefined;
     const shown = name && name !== item.source.tab_label ? { ...item, source: { ...item.source, tab_label: name } } : item;
@@ -742,7 +761,7 @@ export interface KeyContext {
 export const COCKPIT_KEYS: ReadonlyArray<readonly [string, string]> = [
   ['⌘0', 'Switch mode: tap for the last one, hold for Cockpit / Deep / Manual'],
   ['⇧⌘0 / ⌥⌘0', 'Cockpit ↔ Deep / Cockpit ↔ Manual'],
-  ['⌘N', 'New: a task, an exploration or a run (the Launcher)'],
+  ['⌘N', 'New: a task, a Page or a run (the Launcher)'],
   ['↓ / ↑', 'Next / previous row'],
   ['Enter', 'Open the selected row'],
   ['⌘⏎ / ⌘D', 'Approve / deny the selected approval'],
@@ -1411,12 +1430,6 @@ export interface MeanwhileDigest {
 }
 
 /**
- * Meanwhile's one sentence (§3.6): what finished, what shipped and what's
- * waiting on you, in words ("Two agents finished while you were away. One
- * is waiting on you."). Finished turns count once per agent session; wins
- * are the digest's verified progress; `waiting` is what needs you now.
- */
-/**
  * Where things stand, in one line: "Two things need you." when something is
  * waiting, else "Working on it." while agents are busy, else "All clear."
  * Shared by Work, Home's Meanwhile and the attention flyout so they agree.
@@ -1432,6 +1445,14 @@ export function quietLine(working: number): string {
   return workLine({ waiting: 0, working });
 }
 
+/**
+ * Home's one reassuring sentence (§3.6; Desk D2 §8): what finished, what
+ * shipped and what's waiting on you, in words ("Two agents finished while
+ * you were away. One needs you."). With nothing waiting it says
+ * "Everything's handled.", and how many agents are working. Finished turns
+ * count once per agent session; wins are the digest's verified progress;
+ * `waiting` is what needs you now.
+ */
 export function meanwhileSentence(
   digest: MeanwhileDigest | null | undefined,
   attention: { waiting: number; working?: number },
@@ -1458,10 +1479,40 @@ export function meanwhileSentence(
         : workLine({ waiting }),
     );
   } else {
-    const quiet = quietLine(attention.working ?? 0);
-    parts.push(parts.length ? quiet : `Quiet while you were away. ${quiet}`);
+    const working = Math.max(0, attention.working ?? 0);
+    parts.push("Everything's handled.");
+    if (working > 0) parts.push(`${numberWord(working, true)} ${plural(working, 'agent', 'agents')} working.`);
   }
   return parts.join(' ');
+}
+
+/** Home shows at most this many things that need you; the rest are "n more in Work" (Desk D2 §8). */
+export const HOME_NEEDS_MAX = 2;
+
+/** "3 more in Work" beyond what Home shows, else null. */
+export function homeMoreLine(total: number, shown: number): string | null {
+  const more = Math.max(0, total - shown);
+  return more > 0 ? `${more} more in Work` : null;
+}
+
+/** Home's door to the Desk (Desk D2 §8): its label, your last card's title and where you stopped. */
+export interface DeskDoor {
+  label: 'Back to your Desk' | 'Go to your Desk';
+  /** The card's title (your words, Newsreader); null with no card. */
+  title: string | null;
+  /** The stopped-at line (Newsreader italic); null when there is none. */
+  stopped: string | null;
+}
+
+/**
+ * The door from GET /desk/last. With no card, an error, or an older Hester
+ * without the route (a 404, passed as null), it reads "Go to your Desk".
+ */
+export function deskDoor(last: Pick<DeskLast, 'card' | 'stopped_at'> | null | undefined): DeskDoor {
+  const card = last?.card ?? null;
+  if (!card) return { label: 'Go to your Desk', title: null, stopped: null };
+  const stopped = (last?.stopped_at ?? '').trim();
+  return { label: 'Back to your Desk', title: card.title.trim() || 'Untitled', stopped: stopped || null };
 }
 
 /** A Feed row from the attention queue (an agent waiting on you). */
@@ -1510,7 +1561,8 @@ export function homeFeedNeeds(rows: readonly FeedRow[], opsProposalIds: Iterable
 
 /** The Q2 candidate fields a sentence needs (lib/hesterCockpit Q2Candidate). */
 export interface Q2Like {
-  kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+  /** 'page-quiet' is the Desk's name for 'exploration-quiet' (Desk D2 §6.4). */
+  kind: 'goal-unserved' | 'exploration-quiet' | 'page-quiet' | 'evaluation-due';
   goal_id?: string | null;
   title: string;
   detail: string;
@@ -1532,6 +1584,7 @@ export function q2Sentence(c: Q2Like): string {
       if (/^never evaluated/i.test(detail)) return `${who} has never been evaluated`;
       return lower ? `${who} was ${lower}` : `${who} is due an evaluation`;
     case 'exploration-quiet':
+    case 'page-quiet':
       return lower ? `${c.title}: ${lower}` : `${c.title} has gone quiet`;
   }
   return c.title;
@@ -1580,11 +1633,11 @@ export function arrivedLine(arrived: { answers: number; open_questions: number }
     .join(' · ');
 }
 
-/** The Launcher's three choices at the top (§2.1): Task (Enter launches), Explore, Run… (⌘{). */
-export type LauncherChoice = 'task' | 'explore' | 'run';
+/** The Launcher's three choices at the top (§2.1; Desk D2 §8): Task (Enter launches), New Page (the Desk), Run… (⌘{). */
+export type LauncherChoice = 'task' | 'page' | 'run';
 export const LAUNCHER_CHOICES: ReadonlyArray<{ id: LauncherChoice; label: string; kbd?: string }> = [
   { id: 'task', label: 'Task', kbd: '⏎' },
-  { id: 'explore', label: 'Explore' },
+  { id: 'page', label: 'New Page' },
   { id: 'run', label: 'Run…', kbd: '⌘{' },
 ];
 
@@ -1613,8 +1666,7 @@ export interface RailInput {
 /**
  * The rail's ember dots (§2.1): a section gets one when it holds something
  * that needs you. No counts anywhere. Home's own are the Lee Feed entries
- * nothing else shows (its attention rows are Work's items, and count there);
- * Library and History never do: ideas are never urgent.
+ * nothing else shows (its attention rows are Work's items, and count there).
  */
 export function railDots(input: RailInput): Record<SectionId, boolean> {
   const goals = input.goals ?? [];
@@ -1622,9 +1674,7 @@ export function railDots(input: RailInput): Record<SectionId, boolean> {
     home: (input.home ?? 0) > 0,
     work: input.work > 0,
     goals: goals.some((g) => g.flagged || evaluationDue(g.last_evaluated_at, input.now)),
-    library: false,
     ops: input.opsFailing + input.opsProposals > 0,
-    history: false,
   };
 }
 
@@ -1642,7 +1692,7 @@ export function cockpitStatusCounts(input: {
   const mine = (w: string | null | undefined) => !w || !ws || sameWorkspace(w, ws);
   const working = (input.agents ?? []).filter((a) => a.state === 'busy' && mine(a.workspace)).length;
   const waiting = (input.items ?? []).filter(
-    (i) => i.state === 'open' && i.severity !== 'ambient' && i.kind !== 'summary' && mine(i.source.workspace),
+    (i) => i.state === 'open' && i.severity !== 'ambient' && i.kind !== 'summary' && cockpitShows(i) && mine(i.source.workspace),
   ).length;
   return { working, waiting };
 }

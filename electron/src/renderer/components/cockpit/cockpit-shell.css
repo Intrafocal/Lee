@@ -425,7 +425,44 @@
   margin-bottom: var(--space-2);
 }
 
-/* Your words: the question and the field are Newsreader. */
+/* Desk D2 §8: the one reassuring sentence, under the greeting. */
+.home-lead {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
+.home-needs-block .work-waiting {
+  margin: 0;
+}
+
+/* Back to your Desk: the big door, the view's one next step. Your card's title and where you stopped are your words. */
+.home-door {
+  padding: var(--space-4);
+}
+
+.home-door .ui-eyebrow {
+  margin-top: 0;
+}
+
+.home-door-title {
+  font-family: var(--font-write);
+  font-size: 26px;
+  line-height: 1.25;
+  color: var(--text-1);
+  margin-bottom: var(--space-2);
+}
+
+.home-door-actions {
+  margin-top: var(--space-3);
+}
+
+.home-shipped-list {
+  margin-bottom: var(--space-1);
+}
+
+/* Your words: the question and the field are Newsreader (Goals' empty state reuses them). */
 .home-question {
   display: block;
   font-family: var(--font-write);
@@ -1250,15 +1287,20 @@ button.cockpit-tag.is-goal:hover {
    primitives' type scale. */
 
 .cockpit-goals,
-.cockpit-ops,
-.cockpit-history {
+.cockpit-ops {
   max-width: var(--col-library);
   margin: 0 auto;
   padding-top: var(--space-5);
   font-size: 14px;
 }
 
-/* History › Usage (docs/15-Usage.md §6.3): the subscription dials, then today against the 7-day average. */
+/* Ops › Usage (docs/15-Usage.md §6.3; moved from History, Desk D2 §8): the subscription dials, then today against the 7-day average. */
+
+.ui-section-head.cockpit-ops-usage {
+  margin-top: var(--space-6);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--ground-3);
+}
 
 .cockpit-usage > .ui-eyebrow:first-child {
   margin-top: var(--space-4);

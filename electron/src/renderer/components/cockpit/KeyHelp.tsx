@@ -1,5 +1,6 @@
 /**
- * KeyHelp - the Cockpit keyboard map (contracts §3.7), opened from the header.
+ * KeyHelp - the Cockpit keyboard map (contracts §3.7), opened from the rail.
+ * Desk D2 §8: ⌘1–⌘4 are the four sections; the Desk's Esc is noted here.
  */
 
 import React from 'react';
@@ -21,7 +22,10 @@ export const KeyHelp: React.FC<{ onClose: () => void }> = ({ onClose }) => (
           ))}
         </tbody>
       </table>
-      <div className="cockpit-muted">⌘1–9 (tabs), ⇧⌘C and the other global shortcuts keep working. Keys are ignored while you type in a field.</div>
+      <div className="cockpit-muted">
+        ⌘1–⌘4 pick Home, Work, Goals and Ops; ⇧⌘C and the other global shortcuts keep working. Keys are ignored while you type in a field. At
+        your Desk, Esc from a card goes back to the overview.
+      </div>
     </div>
   </div>
 );

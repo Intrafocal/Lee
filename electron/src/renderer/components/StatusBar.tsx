@@ -26,7 +26,7 @@ import { offscreenNeeds } from '../lib/copilotAttention';
 import './copilot/copilot.css';
 import { CockpitModeChip } from './cockpit/CockpitModeChip';
 import { cockpitModeStore, endDeepSession, goDeep, useCockpitModeState } from './cockpit/cockpitMode';
-import { cockpitStatusCounts, cockpitStatusParts } from '../lib/cockpitModel';
+import { cockpitShows, cockpitStatusCounts, cockpitStatusParts } from '../lib/cockpitModel';
 import { deepStatusLine } from './deep/deepView';
 import { fetchSteward, setStewardNotToday, type StewardState } from '../lib/hesterCockpit';
 
@@ -90,7 +90,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const isFocused = !!copilot.focus?.active;
   const isDeep = isFocused && copilot.focus?.source === 'deep';
-  const offscreenCount = copilot.api ? offscreenNeeds(copilot.snapshot?.items, visiblePtyIds).length : 0;
+  // The idle-end push (deep_idle) is devices-only (Desk D2 §9.2).
+  const offscreenCount = copilot.api ? offscreenNeeds(copilot.snapshot?.items?.filter(cockpitShows), visiblePtyIds).length : 0;
   const modeState = useCockpitModeState();
   const inCockpit = modeState.enabled && modeState.mode === 'cockpit';
   const cockpitParts = cockpitStatusParts(

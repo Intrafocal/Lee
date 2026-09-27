@@ -8,9 +8,11 @@
  * Library's word estimate and "quiet", the detail's reply box states (item,
  * idle PTY, busy, none), its Updates feed and dedupe, the merged "Along the
  * way" lines and which actions are icons and which sit in ⋯. Compiles the real source with
- * esbuild, no React, no DOM. Then renders WorkSection, WorkDetail and
- * LibrarySection to static HTML with fixture data (react-dom/server) and
- * checks the one-next-step rule and the chips each place shows.
+ * esbuild, no React, no DOM. Then renders WorkSection and WorkDetail to
+ * static HTML with fixture data (react-dom/server) and checks the
+ * one-next-step rule and the chips each place shows. Desk D2 §8: Library is
+ * gone (its pure helpers stay tested until the merge step); deep_idle is
+ * never a waiting card.
  * Usage (docs/15-Usage.md §6.1, §6.2; package UR): usageModel.ts's token and
  * dollar labels (dollars only for billed / estimate), the limits in Work's
  * summary (hidden to 50%, "as of" past 10 minutes, resets in the tooltip,
@@ -126,6 +128,11 @@ test('waiting: blocking, then needs-you, oldest first; ambient, closed and other
   assert.equal(w[2].kind, 'approval');
   assert.equal(w[2].name, 'Renamed agent', 'the agent’s current name wins over the tab label');
   assert.equal(w[1].kind, 'text');
+});
+
+test('waiting (Desk D2 §9.2): the idle-end push is devices-only, never a waiting card', () => {
+  const idle = item('idle', { kind: 'deep_idle', title: 'Still thinking?', actions: ['extend', 'end_rate', 'capture', 'dismiss'] });
+  assert.deepEqual(m.waitingItems({ items: [idle, item('b')], workspace: WS }).map((x) => x.item.id), ['b']);
 });
 
 test('waiting: hidden items (a swipe in its Undo window) drop out', () => {
@@ -518,11 +525,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { WorkSection } from './components/cockpit/sections/WorkSection';
 import { WorkDetail } from './components/cockpit/work/WorkDetail';
-import { LibrarySection } from './components/cockpit/sections/LibrarySection';
 export const render = {
   work: (ctx) => renderToStaticMarkup(React.createElement(WorkSection, { ctx })),
   detail: (ctx, subject) => renderToStaticMarkup(React.createElement(WorkDetail, { ctx, subject, focusReply: false, openLink: false, onBack: () => {} })),
-  library: (ctx) => renderToStaticMarkup(React.createElement(LibrarySection, { ctx, focusCreateNonce: 0 })),
 };
 `;
 const rendered = await esbuild.build({
@@ -748,11 +753,16 @@ test('render: Not open folds below In flight; Resume shows only with a Claude se
   assert.ok(!/aria-label="Resume"/.test(open), 'an open agent has no Resume');
 });
 
-test('render: Library has no next step', () => {
-  const html = render.library(fixtureCtx());
-  assert.equal(nextCount(html), 0);
-  assert.match(html, /Explorations/);
-  assert.match(html, /New exploration/);
+test('render (Desk D2 §8): a hand-off task from a Page, in either origin form, renders its detail with the ⋯ menu', () => {
+  const base = { id: 't7', title: 'Spike the merge', name: null, title_source: 'user', status: 'running', confirmed: true, kind: 'prototype', lead: 'agent', serves: [], quadrant: null };
+  const withPage = render.detail(fixtureCtx(), subject({ id: 'work:task:t7', task: { ...base, origin: { kind: 'page', ref: 'pg-1a2b3c4d#ans-01' } }, tile: null, ptyId: null }));
+  const withOld = render.detail(fixtureCtx(), subject({ id: 'work:task:t7', task: { ...base, origin: { kind: 'exploration', ref: 'exp-1a2b3c4d#ans-01' } }, tile: null, ptyId: null }));
+  // "Open its Page" sits in the ⋯ menu, which renders closed; cardIdForOrigin is covered by the renderer smoke.
+  for (const html of [withPage, withOld]) {
+    assert.match(html, /aria-label="More actions"/);
+    assert.equal(nextCount(html), 0);
+    assert.ok(!/Library/.test(html), 'no Library left');
+  }
 });
 
 // ---------------------------------------------------------------------------
