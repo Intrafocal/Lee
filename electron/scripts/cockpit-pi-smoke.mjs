@@ -69,7 +69,11 @@ await fire('tool_result', { type: 'tool_result', toolCallId: 't1', toolName: 'ed
 await fire('tool_call', { type: 'tool_call', toolCallId: 't2', toolName: 'bash', input: { command: 'rm SECRET' } });
 await fire('tool_result', { type: 'tool_result', toolCallId: 't2', toolName: 'bash', input: {}, content: [], isError: true });
 await fire('message_end', { type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: 'SECRET user' }] } });
-await fire('message_end', { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Done. ' + 'y'.repeat(2500) }] } });
+// docs/15-Usage.md §3.3: usage per provider/model, summed over the run.
+const piUsage = (input, output, cost) => ({ input, output, cacheRead: 100, cacheWrite: 10, totalTokens: input + output + 110, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } });
+await fire('message_end', { type: 'message_end', message: { role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-5', usage: piUsage(5, 50, 0.01), content: [{ type: 'text', text: 'Working.' }] } });
+await fire('message_end', { type: 'message_end', message: { role: 'assistant', provider: 'google', model: 'gemini-3-pro', usage: piUsage(7, 70, 0.02), content: [] } });
+await fire('message_end', { type: 'message_end', message: { role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-5', usage: piUsage(5, 50, 0.01), content: [{ type: 'text', text: 'Done. ' + 'y'.repeat(2500) }] } });
 await fire('agent_settled', { type: 'agent_settled' });
 await fire('session_shutdown', { type: 'session_shutdown', reason: 'quit' });
 
@@ -98,6 +102,16 @@ assert.strictEqual(get('PostToolUseFailure').tool_name, 'Bash');
 assert.strictEqual(get('Stop').last_assistant_message.length, 2000);
 assert.ok(get('Stop').last_assistant_message.startsWith('Done. '), 'a long message keeps its beginning');
 assert.ok(!JSON.stringify(posts).includes('SECRET'), 'no prompt, tool input or user text leaves Pi');
+{
+  const u = get('Stop').usage;
+  assert.ok(u && Array.isArray(u.by_model), 'Stop carries usage');
+  const sonnet = u.by_model.find((m) => m.model === 'claude-sonnet-5');
+  assert.deepStrictEqual(sonnet.tokens, { input: 10, output: 100, cache_read: 200, cache_write: 20 });
+  assert.strictEqual(sonnet.provider, 'anthropic');
+  assert.ok(Math.abs(sonnet.cost_usd - 0.02) < 1e-9);
+  assert.strictEqual(u.by_model.find((m) => m.model === 'gemini-3-pro').tokens.output, 70);
+  for (const p of posts) if (p.body.hook_event_name !== 'Stop') assert.strictEqual(p.body.usage, undefined);
+}
 console.log('ok - hook posts are Claude-shaped, loopback-only, with no prompt or tool input');
 
 // The v0 queue takes these posts unchanged for a Pi PTY (isClaudePty covers hooked Pi).
@@ -146,6 +160,17 @@ console.log('ok - hook posts are Claude-shaped, loopback-only, with no prompt or
   assert.ok(review, 'a review item after the turn');
   assert.strictEqual(review.source.provider, 'pi');
   assert.strictEqual(review.title, 'Pi finished a turn', 'titled for Pi, not Claude');
+  const usage = seen.find((e) => e.type === 'agent.usage');
+  assert.ok(usage, 'agent.usage after the Pi turn');
+  assert.strictEqual(usage.data.provider, 'pi');
+  assert.strictEqual(usage.data.pty_id, 42);
+  assert.ok(usage.data.by_model.every((m) => m.cost_basis === 'billed'));
+  assert.strictEqual(usage.data.by_model.find((m) => m.model === 'gemini-3-pro').provider, 'google');
+  const agent = q.snapshot({ compact: true }).agents.find((a) => a.pty_id === 42);
+  if (agent) {
+    assert.strictEqual(agent.usage.cost_basis, 'billed');
+    assert.strictEqual(agent.usage.shown_tokens, 10 + 100 + 20 + 7 + 70 + 10);
+  }
   console.log('ok - the v0 queue turns Pi posts into agent.prompt / agent.tool / agent.turn_end and a review item');
 }
 

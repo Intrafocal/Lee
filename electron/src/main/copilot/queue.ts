@@ -64,6 +64,9 @@ import { FocusTracker, parseExplorationId, parseFocusItem } from './focus';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
 import { checkReply, sanitizeReplyText, writeReply, writeText } from './reply';
 import { claudeSettingsPath, hookPaths, installClaudeHooks, writeAuthHeader } from './hook-install';
+import { payloadShape, UsageTracker } from './usage';
+import type { TurnUsage } from './usage';
+import { safeTranscriptPath } from '../cockpit/session-name';
 
 export const LEE_STATUS_HINT =
   'When you finish a unit of work or need a decision, you may end your message with a fenced lee-status block ' +
@@ -123,6 +126,10 @@ interface TabInfo {
 }
 
 const LEE_ACTOR: Actor = { kind: 'user', surface: 'lee' };
+
+// docs/15-Usage.md §4.2. Not yet in shared LeeEventType (a shared-contract change); the log accepts any type.
+const USAGE_EVENT = 'agent.usage' as LeeEventInput['type'];
+const LIMITS_EVENT = 'limits.snapshot' as LeeEventInput['type'];
 
 const LEE_MODES = new Set<LeeMode>(['cockpit', 'deep', 'manual']);
 const DEPTH_RATINGS = new Set<DepthRating>(['deep', 'mixed', 'shallow']);
@@ -193,6 +200,8 @@ function pushSignature(snap: AttentionSnapshot): string {
   return JSON.stringify({
     ...snap,
     generated_at: null,
+    // The status line re-stamps as_of on every render; it rides along with the next push.
+    limits: snap.limits ? { ...snap.limits, as_of: null } : null,
     agents: (snap.agents ?? []).map((a) => ({ ...a, last_tool: null, files_touched_count: null, now: null, recent: null })),
   });
 }
@@ -206,6 +215,8 @@ export class CopilotQueue {
   readonly away = new AwayPolicy();
   readonly focus: FocusTracker;
   readonly queue: AttentionQueue;
+  /** docs/15-Usage.md: limits from the status line relay and per-session token usage. */
+  readonly usage = new UsageTracker({ safePath: (p) => safeTranscriptPath(p) });
 
   private ipcTimer: ReturnType<typeof setTimeout> | null = null;
   private wsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,6 +234,8 @@ export class CopilotQueue {
   private lastPushSig: string | null = null;
   /** Each window's mode, from the renderer's cockpit.mode events (Deep D1 §2.2, decision 1). */
   private windowModes = new Map<number, LeeMode>();
+  /** U0.1: the first status line payload's shape has been logged. */
+  private statusShapeLogged = false;
 
   constructor(private ptyManager: PTYManager) {
     this.focus = new FocusTracker({
@@ -320,6 +333,7 @@ export class CopilotQueue {
       this.queue.recompute(now);
       this.queue.prune(now);
       this.sessions.prune(now, SESSION_KEEP_MS);
+      this.usage.prune((id) => !!this.sessions.get(id), now, SESSION_KEEP_MS);
       for (const id of Array.from(this.turnUpdates.keys())) if (!this.sessions.get(id)) this.turnUpdates.delete(id);
       // A tab can adopt a prewarmed Claude without a hook event.
       this.noteAgents();
@@ -443,7 +457,7 @@ export class CopilotQueue {
     // Deep D1 §2.5: focus.active stays true during Deep, so devices hold
     // notifications unchanged; mode and deep are for v6 devices.
     const deep = focus.deep ? { exploration_id: focus.deep.exploration_id, title: focus.deep.title } : null;
-    return { ...snap, agents, mode: this.focusedWindowMode(), deep };
+    return { ...snap, agents, mode: this.focusedWindowMode(), deep, limits: this.usage.limits() };
   }
 
   // ---------------------------------------------------------------------------
@@ -536,6 +550,35 @@ export class CopilotQueue {
     }
   }
 
+  /**
+   * docs/15-Usage.md §3.1: one Claude status line render (POST /agent/status).
+   * Keeps the session's cost and the latest limits; logs limits.snapshot only
+   * when a whole percentage or a reset time changed. Never answers with a body.
+   */
+  handleStatus(headers: HookHeaders, body: unknown): Outcome<null> {
+    const now = Date.now();
+    if (!this.statusShapeLogged && body && typeof body === 'object') {
+      this.statusShapeLogged = true;
+      this.ptyManager.log('INFO', 'Copilot: first Claude status line payload (shape)', { shape: payloadShape(body) });
+    }
+    const { status, snapshot } = this.usage.noteStatus(body, now);
+    if (snapshot) {
+      const s = status.session_id ? this.sessions.get(status.session_id) : undefined;
+      const claimedPty = parseId(headers.ptyId);
+      const ptyId = s?.pty_id ?? (claimedPty != null && this.ptyManager.isClaudePty(claimedPty) ? claimedPty : null);
+      const src = s ? this.sourceFor(s, ptyId, null, parseId(headers.windowId)) : null;
+      this.log({
+        type: LIMITS_EVENT,
+        source: 'hook',
+        workspace: src?.workspace ?? null,
+        window_id: src?.window_id ?? null,
+        actor: { kind: 'agent', provider: s?.provider ?? 'claude', session_id: status.session_id, pty_id: ptyId },
+        data: { ...snapshot },
+      });
+    }
+    return { status: 204, body: null };
+  }
+
   private applyHook(headers: HookHeaders, body: unknown): Outcome<string | null> {
     const now = Date.now();
     const h = normalizeHook(headers.event, body);
@@ -583,6 +626,7 @@ export class CopilotQueue {
       case 'SessionStart': {
         // Where Claude files this session (a resume must run there).
         if (h.cwd) s.start_cwd = h.cwd;
+        if (h.transcript_path && s.provider !== 'pi') this.usage.primeTranscript(s.session_id, h.transcript_path, now);
         ev('agent.session_start', { provider: s.provider, ...(h.cwd ? { cwd: h.cwd } : {}), ...(h.source ? { source: h.source } : {}) });
         if (cfg.hooks.lee_status_hint) return { status: 200, body: LEE_STATUS_HINT };
         return { status: 204, body: null };
@@ -804,6 +848,17 @@ export class CopilotQueue {
         s.last_summary = summary;
         s.last_lee_status = lee;
         ev('agent.turn_end', { busy_ms: busyMs, ...(summary ? { summary } : {}), ...(lee ? { lee_status: lee } : {}) });
+        // docs/15-Usage.md §3.2, §3.3: Claude's usage from its transcript, Pi's as it reported it (API keys: billed).
+        let turn: TurnUsage | null = null;
+        try {
+          turn =
+            s.provider === 'pi'
+              ? this.usage.reportedTurn(s.session_id, h.usage, 'other', 'billed', now)
+              : this.usage.claudeTurn(s.session_id, h.transcript_path, now);
+        } catch (err) {
+          this.ptyManager.log('WARN', 'Copilot: usage read failed', { error: String(err) });
+        }
+        if (turn) ev(USAGE_EVENT, { provider: s.provider, by_model: turn.by_model });
         this.noteTurnUpdate(s.session_id, { at: new Date(now).toISOString(), summary: updateSummary(full), lee_status: lee });
         this.away.noteTurnEnd();
         this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
@@ -1370,6 +1425,7 @@ export class CopilotQueue {
         now: shortActivityTool(this.sessions.activityNow(s, now)),
         recent: this.sessions.recentActivity(s).map((e) => shortActivityTool(e)),
         updates: this.agentUpdates(s.session_id),
+        usage: this.usage.agentUsage(s.session_id),
         ...(opts.compact ? {} : { session_id: s.session_id, cwd: s.start_cwd ?? s.cwd }),
       };
     });

@@ -5,7 +5,8 @@
  *
  * Lee writes ~/.lee/hooks/pi-lee.ts at startup and every `pi` it spawns gets
  * `--extension <that file>`. Pi started by hand outside Lee is unaffected.
- * `copilot.hooks.pi: false` turns it off.
+ * `copilot.hooks.pi: false` turns it off. The Stop post also carries the
+ * run's token counts and Pi's own cost (docs/15-Usage.md §3.3).
  */
 
 import * as fs from 'fs';
@@ -17,7 +18,7 @@ export const PI_EXTENSION = `// Lee relay for Pi lifecycle events. Written by Le
 // Loaded per session with \`pi --extension <this file>\`. Posts Claude-shaped hook
 // payloads to Lee's loopback API. Never sends prompts or tool input (file paths
 // only); the one exception is the agent's own last message (text parts only), clipped to its
-// first 2000 chars plus any trailing lee-status block.
+// first 2000 chars plus any trailing lee-status block. Stop also carries token counts and cost.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -107,9 +108,35 @@ function clipText(raw: string): string {
   return text.slice(0, TEXT_MAX);
 }
 
+// docs/15-Usage.md §3.3: token counts and Pi's own cost per message, summed per
+// provider and model over one agent run, sent with the Stop post. Numbers only.
+type Totals = { provider: string; model: string; tokens: Record<string, number>; cost_usd?: number };
+const USAGE_FIELDS: Array<[string, string]> = [
+  ["input", "input"], ["output", "output"], ["cacheRead", "cache_read"], ["cacheWrite", "cache_write"],
+];
+function addUsage(acc: Map<string, Totals>, message: any): void {
+  const u = message && message.role === "assistant" ? message.usage : null;
+  if (!u || typeof u !== "object") return;
+  const provider = typeof message.provider === "string" ? message.provider : "other";
+  const model = typeof message.model === "string" ? message.model : "unknown";
+  const key = provider + "/" + model;
+  let t = acc.get(key);
+  if (!t) {
+    t = { provider, model, tokens: {} };
+    acc.set(key, t);
+  }
+  for (const [from, to] of USAGE_FIELDS) {
+    const v = u[from];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) t.tokens[to] = (t.tokens[to] ?? 0) + v;
+  }
+  const cost = u.cost && typeof u.cost.total === "number" && Number.isFinite(u.cost.total) ? u.cost.total : null;
+  if (cost !== null && cost >= 0) t.cost_usd = (t.cost_usd ?? 0) + cost;
+}
+
 export default function (pi: any) {
   let sessionId: string | null = null;
   let lastText: string | null = null;
+  let usage = new Map<string, Totals>();
   const sid = (ctx: any): string | null => {
     try {
       const id = ctx?.sessionManager?.getSessionId?.();
@@ -126,6 +153,7 @@ export default function (pi: any) {
   });
   pi.on("before_agent_start", (_e: any, ctx: any) => {
     lastText = null;
+    usage = new Map();
     post("UserPromptSubmit", { session_id: sid(ctx) });
   });
   pi.on("tool_call", (e: any, ctx: any) => {
@@ -146,11 +174,22 @@ export default function (pi: any) {
   pi.on("message_end", (e: any) => {
     const text = messageText(e?.message);
     if (text && text.trim()) lastText = text;
+    try {
+      addUsage(usage, e?.message);
+    } catch {
+      // usage is best effort
+    }
   });
   pi.on("agent_settled", (_e: any, ctx: any) => {
     const text = lastText ? clipText(lastText) : null;
     lastText = null;
-    post("Stop", { session_id: sid(ctx), ...(text ? { last_assistant_message: text } : {}) });
+    const byModel = [...usage.values()];
+    usage = new Map();
+    post("Stop", {
+      session_id: sid(ctx),
+      ...(text ? { last_assistant_message: text } : {}),
+      ...(byModel.length ? { usage: { by_model: byModel } } : {}),
+    });
   });
   pi.on("session_shutdown", (_e: any, ctx: any) => {
     post("SessionEnd", { session_id: sid(ctx) });
