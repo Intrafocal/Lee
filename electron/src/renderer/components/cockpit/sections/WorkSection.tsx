@@ -394,12 +394,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         summary={summaryLine}
         right={
           <span className="work-new">
-            <Btn kind="quiet" onClick={() => ctx.openLauncher({ kind: 'bug' })}>
-              Report a bug
-            </Btn>
-            <Btn kind="quiet" onClick={() => ctx.openLauncher({ kind: 'prototype' })}>
-              Prototype
-            </Btn>
+            {/* Bug and Prototype are the Launcher's own kinds: one door in. */}
             <Btn kind="quiet" kbd="⌘N" onClick={() => ctx.openLauncher()}>
               New
             </Btn>

@@ -15,7 +15,7 @@
  * sits at the end, pulled when Ops opens, never on a timer.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { LintDiagnostic, LintSnapshot, OperationDef, OperationInfo, OperationKind } from '../../../../shared/cockpit';
 import { formatAge, formatDuration, lintFamilyLabel, rendererAction } from '../../../lib/cockpitModel';
 import { RunOpDialog, fillCommand } from '../RunMenu';
@@ -317,6 +317,7 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx; usageSeed?: unknown 
   const snap = ctx.ops;
   const ops = snap?.operations ?? [];
   const [running, setRunning] = useState<OperationInfo | null>(null);
+  const usageRef = useRef<HTMLDivElement | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   // Suggestions are ambient: one collapsed row until you choose to review them.
@@ -376,7 +377,15 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx; usageSeed?: unknown 
 
   return (
     <section className="cockpit-sec cockpit-ops">
-      <SectionHead title="Ops" summary={`${ops.length} defined${bad ? ` · ${bad} failing` : ''}`} />
+      <SectionHead
+        title="Ops"
+        summary={`${ops.length} defined${bad ? ` · ${bad} failing` : ''}`}
+        right={
+          <Btn kind="quiet" onClick={() => usageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+            Usage
+          </Btn>
+        }
+      />
       {!snap && <div className="cockpit-empty">No operations data from Lee yet.</div>}
 
       {proposals.length > 0 && (
@@ -511,6 +520,7 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx; usageSeed?: unknown 
 
       <LintGroup ctx={ctx} />
 
+      <div ref={usageRef} />
       <SectionHead title="Usage" summary="What today's work cost" className="cockpit-ops-usage" />
       <UsagePanel ctx={ctx} seed={usageSeed} />
       {running && <RunOpDialog ctx={ctx} op={running} onClose={() => setRunning(null)} />}
