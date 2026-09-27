@@ -1,5 +1,6 @@
 /**
- * FilesSection - the workspace's files as a first-class Cockpit section.
+ * FilesSection - Library's Files tab (cockpit-design §5; package R2): the
+ * workspace's files, filtered by Library's find.
  *
  * Same data sources as Manual's FileTreePane (window.lee.fs.readdir,
  * and the main-process directory watch: watchDir/unwatchDir/onDirChanged),
@@ -12,20 +13,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../Icon';
 import { flattenFileTree, type FileEntryLite } from '../../../lib/cockpitModel';
+import { QuietLinks } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 function lee() {
   return typeof window !== 'undefined' ? window.lee : undefined;
 }
 
-export const FilesSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
+export const FilesSection: React.FC<{ ctx: CockpitCtx; filter: string }> = ({ ctx, filter }) => {
   const workspace = ctx.workspace;
   const [root, setRoot] = useState<FileEntryLite[] | null>(null);
   const [children, setChildren] = useState<Map<string, FileEntryLite[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const filterRef = useRef<HTMLInputElement | null>(null);
 
   const loadRoot = useCallback(async () => {
     const api = lee();
@@ -121,36 +121,11 @@ export const FilesSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const sel = ctx.mode.selected;
 
   return (
-    <section className="cockpit-sec">
-      <header className="cockpit-sec-head">
-        <h2>Files</h2>
-        <span className="cockpit-muted">Enter opens in Manual</span>
-        <span className="cockpit-header-spacer" />
-        <button className="cockpit-btn is-icon" onClick={() => void loadRoot()} title="Refresh" aria-label="Refresh files">
-          <Icon name="refresh" size={12} />
-        </button>
-      </header>
-      <div className="cockpit-capture">
-        <input
-          ref={filterRef}
-          className="cockpit-input"
-          value={filter}
-          placeholder="Filter loaded files… (Esc clears)"
-          onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopPropagation();
-              setFilter('');
-              filterRef.current?.blur();
-            }
-          }}
-        />
-      </div>
-      {error && <div className="cockpit-offline">{error}</div>}
-      {!root && !error && <div className="cockpit-muted">Loading…</div>}
-      {root && rows.length === 0 && <div className="cockpit-empty">{filter ? `No loaded file matches "${filter}"` : 'Empty workspace'}</div>}
-      <div className="cockpit-files">
+    <div className="library-tab">
+      {error && <div className="library-hint">{error}</div>}
+      {!root && !error && <div className="library-hint">Loading…</div>}
+      {root && rows.length === 0 && <p className="library-hint">{filter ? `No loaded file matches “${filter}”` : 'Empty workspace'}</p>}
+      <div className="library-files">
         {rows.map((r, i) => {
           const isDir = r.entry.type === 'directory';
           const id = handles[i].id;
@@ -158,7 +133,7 @@ export const FilesSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
             <div
               key={r.entry.path}
               data-cockpit-row={id}
-              className={`cockpit-file-row${sel?.kind === 'row' && sel.id === id ? ' is-selected' : ''}`}
+              className={`library-file${sel?.kind === 'row' && sel.id === id ? ' is-selected' : ''}`}
               style={{ paddingLeft: 8 + r.depth * 14 }}
               title={rel(r.entry.path)}
               onClick={() => {
@@ -168,23 +143,25 @@ export const FilesSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
               onDoubleClick={() => !isDir && ctx.openFile(r.entry.path)}
             >
               <Icon name={isDir ? (r.expanded ? 'folder-open' : 'folder') : 'file-code'} size={12} />
-              <span className="cockpit-file-name">{r.entry.name}</span>
+              <span className="library-file-name">{r.entry.name}</span>
               {!isDir && (
                 <button
-                  className="cockpit-link cockpit-file-open"
+                  type="button"
+                  className="library-file-open"
                   onClick={(e) => {
                     e.stopPropagation();
                     ctx.openFile(r.entry.path);
                   }}
                 >
-                  open
+                  Open in Manual
                 </button>
               )}
             </div>
           );
         })}
       </div>
-    </section>
+      <QuietLinks items={[{ label: 'Refresh', onClick: () => void loadRoot() }]} />
+    </div>
   );
 };
 
