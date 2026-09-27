@@ -215,6 +215,7 @@ Q2_GOALS = "# Goals\n\n## Goals\n\n### G1 One\n\n### G2 Two\n\n### G3 Three\n"
 
 
 def test_q2_candidates(tmp_path, now, events_dir):
+    from hester.daemon.cockpit.desk import DeskStore, page_id_for_exploration
     from hester.daemon.cockpit.explorations import ExplorationStore
     from hester.daemon.cockpit.goal_status import q2_candidates
     from hester.daemon.cockpit.tasks import CockpitTaskStore
@@ -232,20 +233,24 @@ def test_q2_candidates(tmp_path, now, events_dir):
     (ev_dir / f"G1-{(now - timedelta(days=3)).strftime('%Y%m%dT%H%M%S')}.md").write_text("x")
     (ev_dir / f"G3-{(now - timedelta(days=20)).strftime('%Y%m%dT%H%M%S')}.md").write_text("x")
 
+    # Desk D2: the explorations become Page cards (migrated on the first read); their goals come along.
     got = q2_candidates(ws, now)
+    pg = page_id_for_exploration
     assert [(c["kind"], c["ref"]) for c in got] == [
         # G1: served and recently evaluated -> nothing
-        ("exploration-quiet", quiet["id"]),   # G2 is served by a (quiet) active exploration, so not unserved
+        ("page-quiet", pg(quiet["id"])),   # G2 is served by a (quiet) card on the Desk, so not unserved
         ("evaluation-due", "G2"),
-        ("evaluation-due", "G3"),             # G3 served by the fresh exploration; evaluated 20 days ago
-        ("exploration-quiet", loose["id"]),
+        ("evaluation-due", "G3"),          # G3 served by the fresh card; evaluated 20 days ago
+        ("page-quiet", pg(loose["id"])),
     ]
     assert got[0]["goal_id"] == "G2" and got[0]["detail"] == "Untouched for 9 days."
     assert got[1]["detail"] == "Never evaluated." and got[2]["detail"] == "Last evaluated 20 days ago."
     assert got[3]["goal_id"] is None
 
-    # nothing serving G3 any more -> goal-unserved for it; capped at 5
-    exps.patch(fresh["id"], {"status": "archived"})
+    # nothing serving G3 any more (its card's Area put away) -> goal-unserved for it; capped at 5
+    desk = DeskStore(ws)
+    area = next(c["area_id"] for c in desk.desk()["cards"] if c["id"] == pg(fresh["id"]))
+    desk.put_away(area, {})
     got = q2_candidates(ws, now)
     assert ("goal-unserved", "G3") in [(c["kind"], c["ref"]) for c in got] and len(got) <= 5
 

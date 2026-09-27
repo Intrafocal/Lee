@@ -128,15 +128,21 @@ def test_someday_promote_to_explore(cockpit_env):
                json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    exp, triaged = data["exploration"], data["item"]
-    assert triaged["status"] == "explored" and triaged["triage"]["note"] == f"explore:{exp['id']}"
-    assert exp["title"] == "Durable explorations" and exp["origin"] == {"kind": "someday", "ref": item["id"]}
-    assert "with a tree" in c.get(f"/cockpit/explorations/{exp['id']}", headers=hdr(env.b)).json()["data"]["body"]
+    # Desk D2: the idea becomes a Page card in a new Area named after it; ``exploration`` is a legacy alias.
+    card, triaged = data["card"], data["item"]
+    assert data["exploration"] == {"id": card["id"], "title": card["title"]}
+    assert triaged["status"] == "explored" and triaged["triage"]["note"] == f"page:{card['id']}"
+    assert card["title"] == "Durable explorations" and data["area"]["name"] == "Durable explorations"
+    assert card["area_id"] == data["area"]["id"]
+    page = c.get(f"/desk/pages/{card['id']}/page", headers=hdr(env.b)).json()["data"]
+    assert page["text"] == "Durable explorations\nwith a tree"
     bad = c.post(f"/someday/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "keep", "to": "explore"})
     assert bad.status_code == 400
+    again = c.post(f"/someday/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
+    assert again.status_code == 409 and again.json()["error"] == "not_open"
     missing = c.post("/someday/sd_nope/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert missing.status_code in (400, 404)
-    assert c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"][0]["id"] == exp["id"]
+    assert c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"] == [], "no exploration is made any more"
 
 
 def test_v3_fields_and_record_turn_signatures(tmp_path):
