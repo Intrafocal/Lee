@@ -308,6 +308,8 @@ export interface GoalStatus {
   serving: GoalServing;
   /** Nothing serving and at least one metric failing or trending the wrong way. */
   flagged: boolean;
+  /** Deep next R12: false for a goal with no metrics ("not measured yet", never flagged). Older daemons omit it. */
+  measured?: boolean;
   last_evaluated_at: string | null;
   focus_ms_7d: number;
 }

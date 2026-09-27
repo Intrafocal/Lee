@@ -17,6 +17,10 @@
  *
  * Swipes and ⌘⌫ wait out their 5s Undo row before the queue hears of them;
  * leaving Work sends them at once.
+ *
+ * The header's ⋯ menu holds "Hand off to agents…" (the v1 hand-off dialog:
+ * what running agents should do while you're away), moved here from the
+ * Deep ritual (Deep next R6).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -43,6 +47,8 @@ import { Btn, Card, Eyebrow, Row, SectionHead } from '../ui';
 import { goDeep } from '../cockpitMode';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 import { SwipedRow, WaitingCard } from '../work/WaitingCard';
+import { MoreMenu } from '../work/MoreMenu';
+import { HandoffDialog } from '../../copilot/HandoffDialog';
 import { WorkDetail, taskName, type DetailSubject } from '../work/WorkDetail';
 import { dismiss as dismissItem, snooze as snoozeItem } from '../work/actions';
 
@@ -175,6 +181,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   }, [ctx.tiles, snapshot, times, open, ctx.ops, ctx.now, allWaiting, swiped]);
   const [showEarlier, setShowEarlier] = useState(false);
   const [showNotOpen, setShowNotOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const flightRows = [...flight.rows, ...(showEarlier ? flight.earlier : []), ...(showNotOpen ? flight.notOpen : [])];
 
   const summary = workSummary({
@@ -396,9 +403,16 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
             <Btn kind="quiet" kbd="⌘N" onClick={() => ctx.openLauncher()}>
               New
             </Btn>
+            <MoreMenu
+              label="More"
+              items={[{ label: 'Hand off to agents…', onClick: () => setHandoffOpen(true), disabled: !ctx.copilotApi }]}
+            />
           </span>
         }
       />
+      {handoffOpen && ctx.copilotApi && (
+        <HandoffDialog api={ctx.copilotApi} workspace={ctx.workspace} onClose={() => setHandoffOpen(false)} onLaunched={() => setHandoffOpen(false)} />
+      )}
       {ctx.hester.offline && !ctx.hester.snapshot && <div className="work-hint">{ctx.hester.offline}: tasks need Hester. Agents and approvals still work.</div>}
 
       {hasWaiting ? (

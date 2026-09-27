@@ -908,4 +908,10 @@ test('usage: a dial per window that empties as it is used; even-pace tick, reset
   assert.deepEqual(u.limitGauges(null, now), []);
 });
 
+test('Deep next R6: the v1 hand-off dialog lives in Work’s header ⋯ menu', () => {
+  const html = render.work(fixtureCtx());
+  assert.match(html, /class="work-new"[\s\S]*aria-label="More" aria-haspopup="menu" aria-expanded="false"[^>]*>⋯/, 'a quiet ⋯ after New');
+  assert.ok(!html.includes('Hand off to agents…'), 'the item shows only when the menu is open');
+});
+
 console.log(`cockpit-work-smoke: ${passed} tests passed`);

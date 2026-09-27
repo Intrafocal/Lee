@@ -7,12 +7,16 @@
  * 2. The question, "What's on your mind, <name>?", in Newsreader; the name is
  *    window.lee.app.userName() (§7.2), else no name.
  * 3. The field: Enter opens an active exploration with that exact title
- *    (any case), else creates one with your text as its seed and Page, and
- *    opens it in Deep. One keystroke to writing (unchanged from D1).
+ *    (any case), else opens a Page in Deep with your text as its first line.
+ *    One keystroke to writing. The exploration itself is created on the
+ *    Page's first save with content (Deep next R8), so an empty Page left
+ *    behind creates nothing; A blank page works the same way.
  * 4. Pick up where you left off (when the opener has one): one Card, with
  *    your stopped_at sentence and Continue ⇧⌘0, the view's one phosphor.
  * 5. Or start from: each surface as a sentence; lists open inline and
- *    picking opens Deep. Q2 items are written out one by one.
+ *    picking opens Deep. Q2 items are written out one by one. With no goals
+ *    yet (no GOALS.md, or no `### G…`), it leads with "This project doesn't
+ *    have goals yet", which opens the Goals Page (Deep next R12).
  * 6. Meanwhile: one sentence (meanwhileSentence()), up to three needs-you
  *    rows (Allow or Reply, and a quiet second action), the Lee Feed entries
  *    that need you and live nowhere else (homeFeedNeeds(): a check-in
@@ -40,7 +44,7 @@ import {
   type Exploration,
   type Q2Candidate,
 } from '../../../lib/hesterCockpit';
-import { createDeepExploration, fetchOpener, patchReference } from '../../../lib/hesterDeep';
+import { cutAtWord, fetchOpener, goalsEntryShown, newDraft, patchReference, resolveGoalsPage } from '../../../lib/hesterDeep';
 import { matchExploration, untitledTitle } from '../../../lib/deepModel';
 import {
   arrivedLine,
@@ -58,7 +62,7 @@ import {
   type LeeFeedRow,
   type StartSurface,
 } from '../../../lib/cockpitModel';
-import { openInDeep, openUrl } from '../../deep/deepBridge';
+import { deepStart, openInDeep, openUrl } from '../../deep/deepBridge';
 import { cockpitModeStore } from '../cockpitMode';
 import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
@@ -104,6 +108,25 @@ function userName(): Promise<string | null> {
     })();
   }
   return userNameCache;
+}
+
+/**
+ * Open a Page in Deep: an exploration (starting the Deep session on it), or
+ * an in-memory Page (`draft`, Deep next R8), whose session starts with no
+ * exploration and is retargeted when the Page's first save creates it.
+ */
+export async function openPageTarget(workspace: string, target: { id: string; title: string; draft: boolean }): Promise<void> {
+  if (!target.draft) {
+    await openInDeep(workspace, target.id, target.title);
+    return;
+  }
+  await deepStart({ workspace, exploration_id: null, title: target.title, surface: 'lee' });
+  cockpitModeStore.openDeep(target.id, target.title);
+}
+
+/** R12's entry points: open the Goals Page (the existing one, else a new in-memory one) with your text first. */
+export async function openGoalsPage(workspace: string, firstLine: string): Promise<void> {
+  await openPageTarget(workspace, await resolveGoalsPage(workspace, firstLine));
 }
 
 type Expanded = 'open_questions' | 'captured_away' | 'reading_list' | 'quiet' | null;
@@ -269,18 +292,32 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
     }
   };
 
-  const create = async (input: { seed?: string; title?: string; page?: string }) => {
-    setBusy(true);
-    const r = await createDeepExploration(workspace, { ...input, origin: { kind: 'opener' } });
-    if (!alive.current) return;
-    setBusy(false);
-    if (!r.ok) {
-      setOpenerError(r.error);
-      return;
-    }
-    explorations.current = [r.data, ...explorations.current];
+  /** An in-memory Page (R8): nothing is created until its first save with content. */
+  const create = async (input: { seed?: string; title: string; page: string }) => {
+    const id = newDraft({
+      workspace,
+      title: input.title,
+      page: input.page,
+      ...(input.seed ? { seed: input.seed } : {}),
+      sendTitle: !input.seed,
+      origin: { kind: 'opener' },
+    });
     setText('');
-    await open(r.data.id, r.data.title);
+    setBusy(true);
+    try {
+      await openPageTarget(workspace, { id, title: input.title, draft: true });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const openGoals = async () => {
+    setBusy(true);
+    try {
+      await openGoalsPage(workspace, '');
+    } finally {
+      if (alive.current) setBusy(false);
+    }
   };
 
   const submit = async () => {
@@ -296,7 +333,7 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
       await open(hit.id, hit.title);
       return;
     }
-    await create({ seed: t, page: `${t}\n\n` });
+    await create({ seed: t, title: cutAtWord(t, 60), page: `${t}\n\n` });
   };
 
   const onQ2 = (c: Q2Candidate) => {
@@ -519,7 +556,8 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
       <div className="home-block">
         <Eyebrow>Or start from</Eyebrow>
         <div className="home-starts">
-          {startLink('blank', 'A blank page', () => void create({ title: untitledTitle(new Date()) }))}
+          {goalsEntryShown(ctx.goals.data) && startLink('goals', 'This project doesn’t have goals yet', () => void openGoals())}
+          {startLink('blank', 'A blank page', () => void create({ title: untitledTitle(new Date()), page: '' }))}
           {before.map((s) => startLink(s.kind, s.sentence, () => setExpanded((cur) => (cur === s.kind ? null : s.kind)), expanded === s.kind))}
           {q2.map((c) => startLink(`q2:${c.kind}:${c.ref}`, q2Sentence(c), () => onQ2(c)))}
           {quiet.map((s) => startLink(s.kind, s.sentence, () => setExpanded((cur) => (cur === s.kind ? null : s.kind)), expanded === s.kind))}

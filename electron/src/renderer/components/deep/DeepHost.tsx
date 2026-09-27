@@ -8,14 +8,29 @@
  * exploration remounts the surface.
  *
  * Header (cockpit-design §6.1): one quiet 44px line with no fill: the title
- * (click to rename), the view name "Page", the wake line (§2.3), then
- * "n answers" and "n questions" as quiet buttons and End session as a plain
- * outline button. The way back (⇧⌘0 Cockpit, n waiting) is the status
- * bar's (deepStatusLine).
+ * (click to rename inline; Enter saves, Esc cancels), the view name "Page",
+ * the wake line (§2.3), then "n answers" and "n questions" as quiet buttons
+ * and End session as a plain outline button. On the Goals Page it also shows
+ * Draft goals. The way back (⇧⌘0 Cockpit, n waiting) is the status bar's
+ * (deepStatusLine).
  * No chat panel, no feed, no toasts; a one-line status in the header is the
  * only feedback. The Page saves through PUT /page with a version check
  * (§4.3); Hester offline, it keeps writing locally and saves when Hester is
  * back. Input is counted while visible (§4.5), counts only.
+ *
+ * Deep next (docs/plans/2026-09-27-deep-next-contract.md §3, §5; package RB):
+ * - The seam: DeepHost passes PageEditor the answers (asks and hand-offs),
+ *   onAskMany (one POST /asks each, with its section), onHandOff (the Hand
+ *   off sheet), onReplyHandoff (Work's reply path: the agent's attention
+ *   item, else tabs.send to its pty), mentionTargets, files ([[ and the
+ *   source panel), onQuote (a file reference) and, on the Goals Page, the
+ *   four margin prompts.
+ * - R7: while the title is still "Untitled · …", the first Ask, the first
+ *   Hand off or the ritual names it from the Page (autoTitle).
+ * - R8: an in-memory Page (a `draft-` id from the opener) creates its
+ *   exploration on the first save with content; switching away from, or
+ *   ending the session on, an Untitled empty Page deletes it (409 ignored).
+ * - R12: Draft goals and Draft from README on the Goals Page.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,20 +40,45 @@ import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { cockpitModeStore, useCockpitModeState } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
-import { getExploration, patchExploration } from '../../lib/hesterCockpit';
+import { getExploration, listTasks, patchExploration, workspacePath } from '../../lib/hesterCockpit';
 import {
+  GOALS_PROMPTS,
+  HANDOFF_PROVIDERS,
   addQuestion,
   addReference,
   askDeep,
+  autoTitle,
   captureSomeday,
+  createDeepExploration,
+  deleteExploration,
+  draftCreateBody,
+  draftFromReadme,
+  dropDraft,
   exploreFrom,
+  firstLineInsertion,
+  getDraft,
   getPage,
+  handoffInFlight,
+  handoffKindLabel,
+  handoffStateLabel,
+  isDraftId,
+  isHandoff,
+  isUntitled,
   listAnswers,
   listQuestions,
+  mentionTargetsFor,
+  pageNearlyEmpty,
   patchAnswer,
   putPage,
+  readmeInsertion,
   retryAnswer,
+  sessionLists,
+  stillOpenOnPage,
+  takePendingFirstLine,
+  type DraftPage,
   type PageDoc,
+  type ReferenceCreate,
+  type StillOpen,
 } from '../../lib/hesterDeep';
 import {
   anchorFor,
@@ -54,15 +94,20 @@ import {
   markerState,
   saveBackoffMs,
   sectionAt,
+  untitledTitle,
   wokenItem,
   type Affordance,
   type AffordanceOption,
   type DeepRowAction,
 } from '../../lib/deepModel';
+import { canTextReply, tabSendError } from '../../lib/workModel';
 import { PageEditor, type PageEditorHandle, type PageMarker, type PageSelection } from './PageEditor';
 import { EndSessionSheet, type RitualQuestion } from './EndSessionSheet';
+import { HandoffSheet } from './HandoffSheet';
+import { GoalsDraftSheet } from './GoalsDraftSheet';
 import { countLabel } from './deepView';
 import {
+  deepStart,
   logDeep,
   onDeepAnswer,
   readMirror,
@@ -73,6 +118,7 @@ import {
   type DeepCursor,
 } from './deepBridge';
 import './deep.css';
+import './HandoffSheet.css';
 
 export interface DeepHostProps {
   workspace: string;
@@ -106,10 +152,26 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
     [explorationId, visible, title],
   );
 
-  // Remember what Deep shows, for restarts (§4.4).
+  // Remember what Deep shows, for restarts (§4.4). An in-memory Page isn't remembered until it exists.
   useEffect(() => {
-    if (workspace && explorationId) rememberDeep(workspace, { exploration_id: explorationId, title, view: 'page' });
+    if (workspace && explorationId && !isDraftId(explorationId)) rememberDeep(workspace, { exploration_id: explorationId, title, view: 'page' });
   }, [workspace, explorationId, title]);
+
+  // An in-memory Page that got its exploration keeps its surface (and undo history): real id → surface key.
+  const aliases = useRef(new Map<string, string>());
+  const surfaceKey = explorationId ? aliases.current.get(explorationId) ?? explorationId : null;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const onPromoted = useCallback(
+    (key: string, realId: string, realTitle: string) => {
+      aliases.current.set(realId, key);
+      void deepStart({ workspace, exploration_id: realId, title: realTitle, surface: 'lee' });
+      rememberDeep(workspace, { exploration_id: realId, title: realTitle, view: 'page' });
+      // Point this window at it; while Deep is hidden that would switch modes, so it waits for the next visit.
+      if (visibleRef.current) cockpitModeStore.openDeep(realId, realTitle);
+    },
+    [workspace],
+  );
 
   // ---- overlay geometry: between the title bar and the status bar ----
   const [box, setBox] = useState<{ top: number; bottom: number }>({ top: 0, bottom: 0 });
@@ -187,7 +249,7 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
   const focus = copilot.focus ?? copilot.snapshot?.focus ?? null;
 
   if (!workspace) return null;
-  if (!explorationId) {
+  if (!explorationId || !surfaceKey) {
     return bareSheet ? (
       <EndSessionSheet
         workspace={workspace}
@@ -195,7 +257,6 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
         prefill=""
         questions={[]}
         focus={focus}
-        copilotApi={copilot.api}
         onClose={() => setBareSheet(false)}
       />
     ) : null;
@@ -211,7 +272,14 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
       role="region"
       aria-label="Deep"
     >
-      <DeepSurface key={explorationId} {...props} explorationId={explorationId} title={title} endNonce={endNonce} />
+      <DeepSurface
+        key={surfaceKey}
+        {...props}
+        explorationId={explorationId}
+        title={title}
+        endNonce={endNonce}
+        onPromoted={(realId, t) => onPromoted(surfaceKey, realId, t)}
+      />
     </div>,
     document.body,
   );
@@ -225,6 +293,8 @@ interface DeepSurfaceProps extends DeepHostProps {
   explorationId: string;
   title: string;
   endNonce: number;
+  /** An in-memory Page just got its exploration. */
+  onPromoted: (realId: string, title: string) => void;
 }
 
 /** An Ask made while Hester was offline, waiting to be sent (§4.1 degraded). */
@@ -233,12 +303,18 @@ interface LocalAsk {
   question: string;
   anchor: Anchor;
   follow_up_of?: string;
+  section_text?: string;
 }
 
 type SaveState = 'saved' | 'saving' | 'retrying' | 'conflict';
 type Popover = 'answers' | 'questions' | null;
 
-function DeepSurface({ workspace, visible, explorationId: id, title, copilot, onHop, endNonce }: DeepSurfaceProps): JSX.Element {
+/** A blank in-memory Page (a remembered draft id after a restart, or a Page whose exploration was deleted). */
+function blankDraft(workspace: string, title: string): DraftPage {
+  return { workspace, title: title || untitledTitle(new Date()), page: '', sendTitle: true, origin: { kind: 'opener' } };
+}
+
+function DeepSurface({ workspace, visible, explorationId: propId, title, copilot, onHop, endNonce, onPromoted }: DeepSurfaceProps): JSX.Element {
   const editor = useRef<PageEditorHandle | null>(null);
   const alive = useRef(true);
   useEffect(() => {
@@ -248,12 +324,25 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     };
   }, []);
 
+  // ---- which exploration: a real one, or in memory until the Page has text (R8) ----
+  const [draft0] = useState<DraftPage | null>(() => (isDraftId(propId) ? getDraft(propId) ?? blankDraft(workspace, title) : null));
+  const draftRef = useRef<DraftPage | null>(draft0);
+  const [realId, setRealId] = useState<string | null>(draft0 ? null : propId);
+  const realIdRef = useRef<string | null>(realId);
+  const id = realId ?? propId;
+  const promotedTo = useRef<string | null>(null);
+  const creating = useRef<Promise<string | null> | null>(null);
+  const onPromotedRef = useRef(onPromoted);
+  onPromotedRef.current = onPromoted;
+  const draftKey = useRef(propId);
+
   // ---- the Page: load, mirror, save (§4.3) ----
   const [initial, setInitial] = useState<{ text: string; cursor: DeepCursor | null } | null>(null);
   const [offline, setOffline] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [conflict, setConflict] = useState<PageDoc | null>(null);
+  const [nearlyEmpty, setNearlyEmpty] = useState(true);
   const version = useRef<string | null>(null);
   const text = useRef('');
   const lastEdit = useRef<number | null>(null);
@@ -263,15 +352,120 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
   const lastSent = useRef<string | null>(null);
   const conflictRef = useRef<PageDoc | null>(null);
   conflictRef.current = conflict;
+  /** The Page's text came from Hester (so "empty" means empty there too). */
+  const loaded = useRef(false);
+
+  // ---- header status line (not a toast) ----
+  const [flash, setFlash] = useState<{ text: string; tone: 'ok' | 'warn' } | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const say = useCallback((t: string, tone: 'ok' | 'warn' = 'ok') => {
+    if (!alive.current) return;
+    setFlash({ text: t, tone });
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), FLASH_MS);
+  }, []);
+  useEffect(() => () => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+  }, []);
+
+  // ---- title and purpose ----
+  const [shownTitle, setShownTitle] = useState(title || draft0?.title || '');
+  const shownTitleRef = useRef(shownTitle);
+  shownTitleRef.current = shownTitle;
+  const [purpose, setPurpose] = useState<'goals' | null>(draft0?.purpose ?? null);
+  useEffect(() => {
+    if (title) setShownTitle(title);
+  }, [title]);
+  useEffect(() => {
+    if (!realId) return;
+    let cancelled = false;
+    getExploration(workspace, realId).then((r) => {
+      if (cancelled || !r.ok) return;
+      if (!shownTitleRef.current || !title) setShownTitle(r.data.title);
+      setPurpose(r.data.purpose === 'goals' ? 'goals' : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, realId]);
+
+  /** Back to an in-memory Page (its exploration is gone): the next save with content creates a new one. */
+  const becomeDraft = useCallback(() => {
+    draftRef.current = blankDraft(workspace, shownTitleRef.current);
+    realIdRef.current = null;
+    creating.current = null;
+    promotedTo.current = null;
+    version.current = null;
+    if (alive.current) setRealId(null);
+  }, [workspace]);
+
+  /**
+   * The exploration id, creating it from the in-memory Page first (with the
+   * Page as written now). Null when Hester can't create it.
+   */
+  const ensureId = useCallback(async (): Promise<string | null> => {
+    if (realIdRef.current) return realIdRef.current;
+    if (creating.current) return creating.current;
+    const d = draftRef.current;
+    if (!d) return null;
+    const run = (async (): Promise<string | null> => {
+      const page = text.current;
+      const r = await createDeepExploration(workspace, draftCreateBody({ ...d, title: shownTitleRef.current || d.title }, page));
+      if (!r.ok) {
+        if (!r.status) setOffline(true);
+        else say(r.error, 'warn');
+        return null;
+      }
+      const newId = r.data.id;
+      const pg = await getPage(workspace, newId);
+      version.current = pg.ok ? pg.data.version : null;
+      lastSent.current = page;
+      draftRef.current = null;
+      loaded.current = true;
+      promotedTo.current = newId;
+      realIdRef.current = newId;
+      dropDraft(draftKey.current);
+      writeMirror(workspace, newId, { text: text.current, base: version.current, dirty: text.current !== page });
+      if (alive.current) {
+        setOffline(false);
+        setShownTitle(r.data.title);
+        if (r.data.purpose === 'goals' || d.purpose === 'goals') setPurpose('goals');
+        setRealId(newId);
+        if (text.current === page) {
+          setDirty(false);
+          setSaveState('saved');
+        } else scheduleSave(SAVE_DEBOUNCE_MS);
+      }
+      onPromotedRef.current(newId, r.data.title);
+      return newId;
+    })();
+    creating.current = run;
+    const out = await run;
+    if (!out) creating.current = null;
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, say]);
 
   useEffect(() => {
+    if (promotedTo.current && promotedTo.current === id) return; // just created from this buffer
     let cancelled = false;
+    const d = draftRef.current;
+    if (d) {
+      text.current = d.page;
+      setNearlyEmpty(pageNearlyEmpty(d.page));
+      setInitial({ text: d.page, cursor: null });
+      if (d.page.trim()) setDirty(true); // saved (and created) on leaving, or on the first edit
+      return;
+    }
     const mirror = readMirror(workspace, id);
-    getPage(workspace, id).then((r) => {
+    const firstLine = takePendingFirstLine(id);
+    getPage(workspace, id).then(async (r) => {
       if (cancelled) return;
       const cursor = savedCursor(workspace, id);
       if (r.ok) {
         version.current = r.data.version;
+        loaded.current = true;
         if (mirror?.dirty && mirror.text !== r.data.text) {
           // Unsaved writing from before a crash or an offline stretch.
           text.current = mirror.text;
@@ -283,15 +477,35 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
             setSaveState('conflict');
           }
         } else {
-          text.current = r.data.text;
-          setInitial({ text: r.data.text, cursor });
-          writeMirror(workspace, id, { text: r.data.text, base: r.data.version, dirty: false });
+          // The Goals entry points' typed line goes first (unless the Page already says it).
+          const ins = firstLine ? firstLineInsertion(r.data.text, firstLine) : null;
+          const t = ins ? ins.insert + r.data.text : r.data.text;
+          text.current = t;
+          setInitial({ text: t, cursor: ins ? { anchor: ins.insert.length, head: ins.insert.length, scroll: 0 } : cursor });
+          if (ins) {
+            setDirty(true);
+            scheduleSave(0);
+          } else writeMirror(workspace, id, { text: r.data.text, base: r.data.version, dirty: false });
         }
+        setNearlyEmpty(pageNearlyEmpty(text.current));
       } else {
+        if (r.status === 404) {
+          // Deleted (an empty Untitled Page) or never made: write on an in-memory Page instead.
+          const exp = await getExploration(workspace, id);
+          if (cancelled) return;
+          if (!exp.ok && exp.status === 404) {
+            becomeDraft();
+            text.current = mirror?.dirty ? mirror.text : '';
+            setInitial({ text: text.current, cursor: null });
+            if (text.current.trim()) setDirty(true);
+            return;
+          }
+        }
         // Hester offline (or the page isn't there yet): write locally, save later.
         setOffline(true);
         version.current = mirror?.base ?? null;
         text.current = mirror?.text ?? '';
+        setNearlyEmpty(pageNearlyEmpty(text.current));
         setInitial({ text: text.current, cursor });
         if (mirror?.dirty) {
           setDirty(true);
@@ -309,15 +523,31 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
     if (conflictRef.current) return;
+    if (!realIdRef.current) {
+      // In memory: nothing is written until the Page has text (R8).
+      if (!text.current.trim()) {
+        setDirty(false);
+        setSaveState('saved');
+        return;
+      }
+      setSaveState('saving');
+      const made = await ensureId();
+      if (!made && alive.current) {
+        setSaveState('retrying');
+        scheduleSave(saveBackoffMs(attempt.current++));
+      }
+      return;
+    }
     if (inFlight.current) {
       await inFlight.current;
       if (text.current === lastSent.current) return;
     }
+    const sid = realIdRef.current;
     const sent = text.current;
     lastSent.current = sent;
     setSaveState('saving');
     const run = (async () => {
-      const r = await putPage(workspace, id, sent, version.current);
+      const r = await putPage(workspace, sid, sent, version.current);
       if (r.ok) {
         version.current = r.version;
         attempt.current = 0;
@@ -325,11 +555,15 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
         if (text.current === sent) {
           setDirty(false);
           setSaveState('saved');
-          writeMirror(workspace, id, { text: sent, base: r.version, dirty: false });
+          writeMirror(workspace, sid, { text: sent, base: r.version, dirty: false });
         } else scheduleSave(SAVE_DEBOUNCE_MS);
       } else if (r.conflict) {
         setConflict(r.conflict);
         setSaveState('conflict');
+      } else if (r.status === 404) {
+        // The exploration went away under us (an empty Page deleted): make a new one from this text.
+        becomeDraft();
+        scheduleSave(0);
       } else {
         if (!r.status) setOffline(true);
         setSaveState('retrying');
@@ -343,7 +577,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
       if (inFlight.current === run) inFlight.current = null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, id]);
+  }, [workspace, ensureId, becomeDraft]);
 
   function scheduleSave(ms: number) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -360,11 +594,12 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
       text.current = next;
       lastEdit.current = pos;
       setDirty(true);
-      writeMirror(workspace, id, { text: next, base: version.current, dirty: true });
+      setNearlyEmpty(pageNearlyEmpty(next));
+      if (realIdRef.current) writeMirror(workspace, realIdRef.current, { text: next, base: version.current, dirty: true });
       if (!conflictRef.current) scheduleSave(SAVE_DEBOUNCE_MS);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workspace, id],
+    [workspace],
   );
 
   const keepMine = () => {
@@ -379,107 +614,158 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     editor.current?.replaceAll(conflict.text);
     text.current = conflict.text;
     version.current = conflict.version;
-    writeMirror(workspace, id, { text: conflict.text, base: conflict.version, dirty: false });
+    if (realIdRef.current) writeMirror(workspace, realIdRef.current, { text: conflict.text, base: conflict.version, dirty: false });
     setConflict(null);
     setDirty(false);
     setSaveState('saved');
   };
 
+  /** A write is waiting: a timer, or an in-memory Page with text that hasn't been created yet. */
+  const unsaved = () => !!saveTimer.current || (!realIdRef.current && !!draftRef.current && !!text.current.trim());
+
   // Save now when leaving Deep or this exploration; remember the cursor.
   useEffect(() => {
     if (visible) return;
-    if (saveTimer.current) void save();
+    if (unsaved()) void save();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, save]);
   useEffect(
     () => () => {
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-        void saveRef.current();
-      }
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (unsaved()) void saveRef.current();
       const c = editor.current?.cursor();
-      if (c) rememberCursor(workspace, id, c);
+      if (c && realIdRef.current) rememberCursor(workspace, realIdRef.current, c);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [workspace, id],
   );
-  const onCursor = useCallback((c: DeepCursor) => rememberCursor(workspace, id, c), [workspace, id]);
+  const onCursor = useCallback((c: DeepCursor) => {
+    if (realIdRef.current) rememberCursor(workspace, realIdRef.current, c);
+  }, [workspace]);
   useEffect(() => {
     // Remember the cursor now and then while writing (a restart restores it).
     if (!visible) return;
     const t = window.setInterval(() => {
       const c = editor.current?.cursor();
-      if (c) rememberCursor(workspace, id, c);
+      if (c && realIdRef.current) rememberCursor(workspace, realIdRef.current, c);
     }, 15000);
     return () => window.clearInterval(t);
-  }, [visible, workspace, id]);
+  }, [visible, workspace]);
 
-  // ---- header status line (not a toast) ----
-  const [flash, setFlash] = useState<{ text: string; tone: 'ok' | 'warn' } | null>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const say = useCallback((t: string, tone: 'ok' | 'warn' = 'ok') => {
-    if (!alive.current) return;
-    setFlash({ text: t, tone });
-    if (flashTimer.current) clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => setFlash(null), FLASH_MS);
-  }, []);
-  useEffect(() => () => {
-    if (flashTimer.current) clearTimeout(flashTimer.current);
-  }, []);
-
-  // ---- answers (§4.2, §6) ----
+  // ---- answers and hand-offs (§4.2, §6; R3) ----
   const [answers, setAnswers] = useState<DeepAnswer[]>([]);
   const [localAsks, setLocalAsks] = useState<LocalAsk[]>([]);
   const [openMarker, setOpenMarker] = useState<string | null>(null);
   const [followUp, setFollowUp] = useState<{ id: string; text: string } | null>(null);
+  const [replying, setReplying] = useState<{ id: string; text: string; busy?: boolean } | null>(null);
+  const answersRef = useRef(answers);
+  answersRef.current = answers;
+  const localAsksRef = useRef(localAsks);
+  localAsksRef.current = localAsks;
+  /** Asks and hand-offs made from this Page while it was open (the ritual's "This session"). */
+  const madeHere = useRef(new Set<string>());
+
+  const upsertAnswer = useCallback((a: DeepAnswer) => {
+    madeHere.current.add(a.id);
+    setAnswers((prev) => (prev.some((x) => x.id === a.id) ? prev.map((x) => (x.id === a.id ? a : x)) : [a, ...prev]));
+  }, []);
 
   const refreshAnswers = useCallback(async () => {
-    const r = await listAnswers(workspace, id);
+    if (!realIdRef.current) return;
+    const r = await listAnswers(workspace, realIdRef.current);
     if (r.ok && alive.current) setAnswers(Array.isArray(r.data) ? r.data : []);
-  }, [workspace, id]);
+  }, [workspace]);
 
   useEffect(() => {
+    if (!realId) return;
     void refreshAnswers();
     return onDeepAnswer((e) => {
-      if (e.exploration_id === id && (!e.workspace || e.workspace === workspace)) void refreshAnswers();
+      if (e.exploration_id === realId && (!e.workspace || e.workspace === workspace)) void refreshAnswers();
     });
-  }, [refreshAnswers, id, workspace]);
+  }, [refreshAnswers, realId, workspace]);
+
+  // ---- titles (R7) ----
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const renameTo = useCallback(
+    async (next: string): Promise<void> => {
+      const t = next.trim();
+      if (!t || t === shownTitleRef.current) return;
+      if (!realIdRef.current) {
+        // In memory: the title goes with the create.
+        if (draftRef.current) draftRef.current = { ...draftRef.current, title: t, sendTitle: true };
+        setShownTitle(t);
+        return;
+      }
+      const rid = realIdRef.current;
+      const r = await patchExploration(workspace, rid, { title: t });
+      if (!r.ok) return say(r.error, 'warn');
+      if (!alive.current) return;
+      setShownTitle(r.data.title);
+      rememberDeep(workspace, { exploration_id: rid, title: r.data.title, view: 'page' });
+      cockpitModeStore.openDeep(rid, r.data.title);
+    },
+    [workspace, say],
+  );
+  const commitRename = () => {
+    const next = renaming ?? '';
+    setRenaming(null);
+    void renameTo(next);
+  };
+  /** R7: while the title is still "Untitled · …", name it from the Page; returns the title to use now. */
+  const autoTitled = useRef(false);
+  const maybeAutoTitle = useCallback((): string => {
+    const current = shownTitleRef.current;
+    if (autoTitled.current || !isUntitled(current)) return current;
+    const t = autoTitle(text.current);
+    if (!t) return current;
+    autoTitled.current = true;
+    shownTitleRef.current = t;
+    void renameTo(t);
+    return t;
+  }, [renameTo]);
 
   const sendAsk = useCallback(
-    async (ask: { question: string; anchor: Anchor; follow_up_of?: string }, queuedId?: string): Promise<boolean> => {
-      const r = await askDeep(workspace, id, ask);
+    async (ask: { question: string; anchor: Anchor; follow_up_of?: string; section_text?: string }, queuedId?: string): Promise<boolean> => {
+      const eid = await ensureId();
+      const r = eid ? await askDeep(workspace, eid, ask) : ({ ok: false, error: 'Hester offline' } as const);
       if (!alive.current) return r.ok;
       if (r.ok) {
-        setAnswers((prev) => [r.data, ...prev.filter((a) => a.id !== r.data.id)]);
+        upsertAnswer(r.data);
         if (queuedId) setLocalAsks((l) => l.filter((x) => x.id !== queuedId));
         setOffline(false);
         return true;
       }
-      if (!r.status) {
+      if (!('status' in r) || !r.status) {
         setOffline(true);
         if (!queuedId) {
-          setLocalAsks((l) => [...l, { id: `local-${Date.now().toString(36)}`, ...ask }]);
+          setLocalAsks((l) => [...l, { id: `local-${Date.now().toString(36)}-${l.length}`, ...ask }]);
           say('Hester offline · queued', 'warn');
         }
       } else say(r.error, 'warn');
       return false;
     },
-    [workspace, id, say],
+    [workspace, say, ensureId, upsertAnswer],
   );
 
   // Poll while something is pending (a missed deep:answer isn't fatal), and send queued asks.
-  const pending = answers.some(isPending) || localAsks.length > 0;
-  const localRef = useRef(localAsks);
-  localRef.current = localAsks;
+  const pending = answers.some((a) => isPending(a) || handoffInFlight(a)) || localAsks.length > 0;
   useEffect(() => {
     if (!pending) return;
     const t = window.setInterval(() => {
       void refreshAnswers();
-      for (const q of localRef.current) void sendAsk({ question: q.question, anchor: q.anchor, ...(q.follow_up_of ? { follow_up_of: q.follow_up_of } : {}) }, q.id);
+      for (const q of localAsksRef.current) {
+        void sendAsk(
+          { question: q.question, anchor: q.anchor, ...(q.follow_up_of ? { follow_up_of: q.follow_up_of } : {}), ...(q.section_text ? { section_text: q.section_text } : {}) },
+          q.id,
+        );
+      }
     }, ANSWER_POLL_MS);
     return () => window.clearInterval(t);
   }, [pending, refreshAnswers, sendAsk]);
 
-  const ask = (question: string, anchor: Anchor, follow_up_of?: string) => {
-    void sendAsk({ question, anchor, ...(follow_up_of ? { follow_up_of } : {}) });
+  const ask = (question: string, anchor: Anchor, follow_up_of?: string, sectionText?: string) => {
+    if (!follow_up_of) maybeAutoTitle();
+    void sendAsk({ question, anchor, ...(follow_up_of ? { follow_up_of } : {}), ...(sectionText ? { section_text: sectionText } : {}) });
     logDeep({ type: 'deep.action', data: { action: follow_up_of ? 'follow_up' : 'ask', exploration_id: id, chars: question.length } });
   };
 
@@ -487,52 +773,125 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
 
   const openCard = (aid: string, force = false) => {
     setFollowUp(null);
+    setReplying(null);
     if (openMarker === aid && !force) {
       setOpenMarker(null);
       return;
     }
     setOpenMarker(aid);
     const a = answers.find((x) => x.id === aid);
-    if (a && isUnread(a)) {
+    if (a && isUnread(a) && realIdRef.current) {
       patchLocal(aid, { read_at: new Date().toISOString() });
-      void patchAnswer(workspace, id, aid, { read: true });
+      void patchAnswer(workspace, realIdRef.current, aid, { read: true });
     }
   };
 
   const insertAnswer = (a: DeepAnswer) => {
     const ed = editor.current;
-    if (!ed || !a.answer) return;
+    if (!ed || !a.answer || !realIdRef.current) return;
     const doc = ed.getText();
     const at = locateAnchor(doc, a.anchor).pos;
     const change = answerInsertion(doc, at, a.answer, attributionDate(new Date()));
     ed.insert(change.from, change.insert);
     patchLocal(a.id, { inserted_at: new Date().toISOString() });
-    void patchAnswer(workspace, id, a.id, { inserted: true });
+    void patchAnswer(workspace, realIdRef.current, a.id, { inserted: true });
     logDeep({ type: 'deep.action', data: { action: 'insert', exploration_id: id, chars: a.answer.length } });
   };
 
   const keepAnswer = async (a: DeepAnswer) => {
-    if (!a.answer) return;
+    const rid = realIdRef.current;
+    if (!a.answer || !rid) return;
     const section = a.anchor.kind === 'page' ? a.anchor.section : null;
-    const r = await addReference(workspace, id, { kind: 'quote', quote: a.answer, section, source: { kind: 'answer', ref: a.id } });
+    const r = await addReference(workspace, rid, { kind: 'quote', quote: a.answer, section, source: { kind: 'answer', ref: a.id } });
     if (!r.ok) return say(r.error, 'warn');
     patchLocal(a.id, { kept_at: new Date().toISOString() });
-    void patchAnswer(workspace, id, a.id, { kept: true });
+    void patchAnswer(workspace, rid, a.id, { kept: true });
     logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: id, chars: a.answer.length } });
     say('Kept as a reference');
   };
 
   const dismissAnswer = (a: DeepAnswer) => {
+    if (!realIdRef.current) return;
     patchLocal(a.id, { dismissed_at: new Date().toISOString() });
     setOpenMarker(null);
-    void patchAnswer(workspace, id, a.id, { dismissed: true });
+    void patchAnswer(workspace, realIdRef.current, a.id, { dismissed: true });
     logDeep({ type: 'deep.action', data: { action: 'dismiss', exploration_id: id } });
   };
 
   const retry = async (a: DeepAnswer) => {
-    const r = await retryAnswer(workspace, id, a.id);
+    if (!realIdRef.current) return;
+    const r = await retryAnswer(workspace, realIdRef.current, a.id);
     if (r.ok) setAnswers((prev) => prev.map((x) => (x.id === a.id ? r.data : x)));
     else say(r.error, 'warn');
+  };
+
+  // ---- hand-offs (R3) ----
+  const [handoff, setHandoff] = useState<{ eid: string; title: string; sectionText: string; anchor: Anchor; provider?: string } | null>(null);
+  const openHandoff = async (sectionText: string, anchor: Anchor, provider?: string) => {
+    if (!sectionText.trim()) return say('Nothing to hand off: select text or write a section first', 'warn');
+    const t = maybeAutoTitle();
+    const eid = await ensureId();
+    if (!eid) return say('Hester offline: hand-offs need Hester', 'warn');
+    if (alive.current) setHandoff({ eid, title: shownTitleRef.current || t, sectionText, anchor, ...(provider ? { provider } : {}) });
+  };
+
+  /** Open a hand-off's task in Work (its detail view). */
+  const openInWork = (taskId: string) => {
+    onHop('cockpit');
+    cockpitModeStore.setSection('work');
+    cockpitModeStore.select({ kind: 'row', id: `task:${taskId}` });
+  };
+
+  /**
+   * R11 / R5 Reply: through the hand-off's agent, Work's way: its open
+   * attention item that takes text, else typed into its idle terminal.
+   */
+  const replyHandoff = async (aid: string, body: string): Promise<boolean> => {
+    const typed = body.trim();
+    const a = answersRef.current.find((x) => x.id === aid);
+    const taskId = a?.handoff?.task_id ?? null;
+    if (!typed) return false;
+    if (!taskId) {
+      say('That hand-off has no agent yet', 'warn');
+      return false;
+    }
+    const tasks = await listTasks(workspace, 'open');
+    const task = tasks.ok ? tasks.data.find((t) => t.id === taskId) ?? null : null;
+    const pty = task?.agent?.pty_id ?? null;
+    const item =
+      pty != null ? (copilot.snapshot?.items ?? []).find((i) => i.state === 'open' && i.source.pty_id === pty && canTextReply(i)) ?? null : null;
+    if (item && copilot.api) {
+      try {
+        const r = await copilot.api.reply(item.id, { action: 'text', text: typed, version: item.version });
+        if (!r.success) {
+          say(r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'Reply failed', 'warn');
+          return false;
+        }
+      } catch {
+        say('Reply failed', 'warn');
+        return false;
+      }
+      say('Replied');
+      return true;
+    }
+    if (pty == null) {
+      say('That agent isn’t running. Open it in Work to resume it.', 'warn');
+      return false;
+    }
+    const api = window.lee?.cockpit;
+    if (!api) return false;
+    try {
+      const r = await api.tabs.send(pty, { text: typed, submit: true, purpose: 'reply' });
+      if (!r.success) {
+        say(tabSendError(r.error), 'warn');
+        return false;
+      }
+    } catch {
+      say('Reply failed', 'warn');
+      return false;
+    }
+    say('Replied');
+    return true;
   };
 
   const markers: PageMarker[] = useMemo(
@@ -543,6 +902,89 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     [answers, localAsks],
   );
 
+  const answerActions = (a: DeepAnswer) =>
+    a.answer ? (
+      <>
+        <button className="deep-quiet" onClick={() => insertAnswer(a)} disabled={!!a.inserted_at} title="Insert into the Page as a quote">
+          {a.inserted_at ? 'Inserted' : 'Insert'}
+        </button>
+        <button className="deep-quiet" onClick={() => void keepAnswer(a)} disabled={!!a.kept_at} title="Keep as a reference">
+          {a.kept_at ? 'Kept' : 'Keep'}
+        </button>
+      </>
+    ) : null;
+
+  const renderHandoffCard = (a: DeepAnswer): React.ReactNode => {
+    const h = a.handoff;
+    const provider = HANDOFF_PROVIDERS.find((p) => p.id === h?.provider)?.label ?? h?.provider ?? '';
+    const waiting = h?.state === 'waiting';
+    return (
+      <>
+        <div className="deep-muted">
+          {handoffKindLabel(h?.kind)}
+          {provider ? ` · ${provider}` : ''} · {handoffStateLabel(h?.state)}
+        </div>
+        {(a.status === 'error' || h?.state === 'error') && <div className="deep-card-err">{a.error || 'The hand-off failed.'}</div>}
+        {a.answer && (
+          <div className="deep-card-a">
+            <AgentMarkdown text={a.answer} />
+          </div>
+        )}
+        <div className="deep-card-actions">
+          {h?.task_id && (
+            <button className="deep-quiet" onClick={() => openInWork(h.task_id as string)}>
+              Open in Work
+            </button>
+          )}
+          {waiting && h?.task_id && (
+            <button className="deep-quiet" onClick={() => setReplying({ id: a.id, text: '' })}>
+              Reply
+            </button>
+          )}
+          {answerActions(a)}
+          <button className="deep-quiet" onClick={() => dismissAnswer(a)}>
+            Dismiss
+          </button>
+        </div>
+        {replying?.id === a.id && (
+          <input
+            className="deep-ask-input"
+            autoFocus
+            value={replying.text}
+            disabled={replying.busy}
+            placeholder="Reply to the agent (sent exactly as written)…"
+            onChange={(e) => setReplying({ id: a.id, text: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const body = replying.text;
+                if (!body.trim()) return;
+                setReplying({ ...replying, busy: true });
+                void replyHandoff(a.id, body).then((ok) => {
+                  if (!alive.current) return;
+                  setReplying(ok ? null : { id: a.id, text: body });
+                  if (ok) editor.current?.focus();
+                });
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setReplying(null);
+              }
+            }}
+          />
+        )}
+        {h?.brief && (
+          <details className="deep-muted">
+            <summary>The brief as sent</summary>
+            <div className="deep-card-a">
+              <AgentMarkdown text={h.brief} />
+            </div>
+          </details>
+        )}
+      </>
+    );
+  };
+
   const renderCard = (mid: string): React.ReactNode => {
     const local = localAsks.find((q) => q.id === mid);
     if (local) {
@@ -552,6 +994,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     }
     const a = answers.find((x) => x.id === mid);
     if (!a) return null;
+    if (isHandoff(a)) return renderHandoffCard(a);
     return (
       <>
         {(a.status === 'error' || a.status === 'interrupted') && (
@@ -568,12 +1011,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
               <AgentMarkdown text={a.answer} />
             </div>
             <div className="deep-card-actions">
-              <button className="deep-quiet" onClick={() => insertAnswer(a)} disabled={!!a.inserted_at} title="Insert into the Page as a quote">
-                {a.inserted_at ? 'Inserted' : 'Insert'}
-              </button>
-              <button className="deep-quiet" onClick={() => void keepAnswer(a)} disabled={!!a.kept_at} title="Keep as a reference">
-                {a.kept_at ? 'Kept' : 'Keep'}
-              </button>
+              {answerActions(a)}
               <button className="deep-quiet" onClick={() => setFollowUp({ id: a.id, text: '' })}>
                 Follow up
               </button>
@@ -615,52 +1053,57 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
   const [questions, setQuestions] = useState<DeepQuestion[]>([]);
   const [markedThisSession, setMarkedThisSession] = useState<Set<string>>(() => new Set());
   useEffect(() => {
+    if (!realId) return;
     let cancelled = false;
-    listQuestions(workspace, id).then((r) => {
+    listQuestions(workspace, realId).then((r) => {
       if (!cancelled && r.ok && Array.isArray(r.data)) setQuestions(r.data);
     });
     return () => {
       cancelled = true;
     };
-  }, [workspace, id]);
+  }, [workspace, realId]);
   const openQuestions = questions.filter((q) => q.status === 'open');
 
   // ---- selection actions (§5) and affordances (§7) ----
   const captureText = async (t: string, from: number, to: number) => {
     const doc = text.current;
+    const eid = await ensureId();
+    if (!eid) return say('Hester offline: capture needs Hester', 'warn');
     const r = await captureSomeday(workspace, t, {
       surface: 'lee',
-      exploration_id: id,
+      exploration_id: eid,
       section: sectionAt(doc, from),
       context: contextAround(doc, from, to, 300),
     });
     if (r.ok) say('Captured to Someday');
     else say(r.error, 'warn');
-    logDeep({ type: 'deep.action', data: { action: 'capture', exploration_id: id, chars: t.length } });
+    logDeep({ type: 'deep.action', data: { action: 'capture', exploration_id: eid, chars: t.length } });
   };
 
   const onAction = async (action: DeepRowAction, sel: PageSelection, question?: string) => {
     const doc = text.current;
     const chars = sel.text.length;
     if (action === 'capture') return captureText(sel.text, sel.from, sel.to);
+    if (action === 'ask') {
+      ask(question || 'Explain this.', anchorFor(doc, sel.from, sel.to));
+      return;
+    }
+    const eid = await ensureId();
+    if (!eid) return say('Hester offline', 'warn');
     if (action === 'keep') {
       const t = sel.text.trim();
       const body = isBareUrl(t)
         ? { kind: 'link' as const, url: t, section: sectionAt(doc, sel.from), source: { kind: 'page' as const } }
         : { kind: 'quote' as const, quote: sel.text, section: sectionAt(doc, sel.from), source: { kind: 'page' as const } };
-      const r = await addReference(workspace, id, body);
+      const r = await addReference(workspace, eid, body);
       say(r.ok ? 'Kept as a reference' : r.error, r.ok ? 'ok' : 'warn');
-      logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: id, chars } });
-      return;
-    }
-    if (action === 'ask') {
-      ask(question || 'Explain this.', anchorFor(doc, sel.from, sel.to));
+      logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: eid, chars } });
       return;
     }
     if (action === 'explore') {
-      const r = await exploreFrom(workspace, id, { seed: sel.text, anchor: anchorFor(doc, sel.from, sel.to) });
+      const r = await exploreFrom(workspace, eid, { seed: sel.text, anchor: anchorFor(doc, sel.from, sel.to) });
       say(r.ok ? `Explored: ${r.data.title}` : r.error, r.ok ? 'ok' : 'warn');
-      logDeep({ type: 'deep.action', data: { action: 'explore', exploration_id: id, chars } });
+      logDeep({ type: 'deep.action', data: { action: 'explore', exploration_id: eid, chars } });
     }
   };
 
@@ -672,7 +1115,9 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
         ask(opt.question, anchor);
         return;
       case 'mark_question': {
-        const r = await addQuestion(workspace, id, { text: opt.text.slice(0, 500), source: 'page', anchor });
+        const eid = await ensureId();
+        if (!eid) return say('Hester offline', 'warn');
+        const r = await addQuestion(workspace, eid, { text: opt.text.slice(0, 500), source: 'page', anchor });
         if (!r.ok) return say(r.error, 'warn');
         setQuestions((qs) => [r.data, ...qs.filter((q) => q.id !== r.data.id)]);
         setMarkedThisSession((s) => new Set(s).add(r.data.id));
@@ -680,7 +1125,9 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
         return;
       }
       case 'keep_link': {
-        const r = await addReference(workspace, id, {
+        const eid = await ensureId();
+        if (!eid) return say('Hester offline', 'warn');
+        const r = await addReference(workspace, eid, {
           kind: 'link',
           url: opt.url,
           ...(opt.title ? { title: opt.title } : {}),
@@ -688,7 +1135,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           source: { kind: 'page' },
         });
         say(r.ok ? 'Kept as a reference' : r.error, r.ok ? 'ok' : 'warn');
-        logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: id, chars: opt.url.length } });
+        logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: eid, chars: opt.url.length } });
         return;
       }
       case 'capture':
@@ -698,6 +1145,87 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
 
   const onAffordanceShown = (aff: Affordance, outcome: 'accepted' | 'ignored') =>
     logDeep({ type: 'deep.affordance', data: { pattern: aff.pattern, outcome } });
+
+  // ---- the §3 seam: what the Page reaches through us ----
+  const onAskMany = (asks: Array<{ question: string; anchor: Anchor; sectionText: string }>) => {
+    for (const q of asks) if (q.question.trim()) ask(q.question.trim(), q.anchor, undefined, q.sectionText);
+  };
+  const onHandOff = (sel: PageSelection & { anchor: Anchor; sectionText: string }, provider?: string) =>
+    void openHandoff(sel.sectionText || sel.text, sel.anchor, provider);
+  const onReplyHandoff = (aid: string, body: string) => void replyHandoff(aid, body);
+  // RA's margin cards: "Open in Work" for a hand-off. The prop lands with RA's
+  // branch (PageEditorProps.onOpenInWork); spread untyped until the merge.
+  // TODO(deep-next merge): pass onOpenInWork as a plain prop.
+  const seamExtras = {
+    onOpenInWork: (aid: string) => {
+      const taskId = answersRef.current.find((a) => a.id === aid)?.handoff?.task_id;
+      if (taskId) openInWork(taskId);
+      else say('That hand-off has no task yet', 'warn');
+    },
+  } as unknown as Record<string, never>;
+  const mentionTargets = useMemo(() => mentionTargetsFor(answers), [answers]);
+  const files = useMemo(
+    () => ({
+      list: async (): Promise<string[]> => {
+        try {
+          const r = await window.lee?.cockpit?.files(workspace);
+          return Array.isArray(r?.files) ? r.files : [];
+        } catch {
+          return [];
+        }
+      },
+      read: async (path: string): Promise<string | null> => {
+        try {
+          const c: unknown = await window.lee?.fs?.readFile(workspacePath(workspace, path));
+          return typeof c === 'string' ? c : null;
+        } catch {
+          return null;
+        }
+      },
+    }),
+    [workspace],
+  );
+  const onQuote = async (q: { file: string; lines: [number, number]; text: string; label: string }) => {
+    const eid = await ensureId();
+    if (!eid) return say('Hester offline: the reference wasn’t recorded', 'warn');
+    const pos = editor.current?.cursor().head ?? 0;
+    const body: ReferenceCreate = {
+      kind: q.text.trim() ? 'quote' : 'link',
+      ...(q.text.trim() ? { quote: q.text } : {}),
+      file: q.file,
+      lines: q.lines,
+      ...(q.label ? { title: q.label } : {}),
+      section: sectionAt(text.current, pos),
+      source: { kind: 'file' },
+    };
+    const r = await addReference(workspace, eid, body);
+    if (!r.ok) say(r.status === 400 ? `Not recorded: ${r.error}` : r.error, 'warn');
+  };
+
+  // ---- the Goals Page (R12) ----
+  const isGoals = purpose === 'goals';
+  const [goalsDraft, setGoalsDraft] = useState<string | null>(null);
+  const [readme, setReadme] = useState<'idle' | 'busy' | 'none'>('idle');
+  const draftReadme = async () => {
+    if (readme !== 'idle') return;
+    setReadme('busy');
+    const eid = await ensureId();
+    const r = eid ? await draftFromReadme(workspace, eid) : null;
+    if (!alive.current) return;
+    if (!r || !r.ok) {
+      // 400: no README.md or CLAUDE.md here; 404: an older Hester. Either way, stop offering it.
+      setReadme(r && !r.ok && (r.status === 400 || r.status === 404) ? 'none' : 'idle');
+      if (r && !r.ok && r.status !== 400 && r.status !== 404) say(r.error, 'warn');
+      else if (!r) say('Hester offline', 'warn');
+      return;
+    }
+    setReadme('idle');
+    const ed = editor.current;
+    if (!ed || !r.data.text?.trim()) return;
+    const ins = readmeInsertion(ed.getText(), r.data.text, attributionDate(new Date()));
+    ed.insert(ins.from, ins.insert);
+    say('Hester’s first guess is in. Rewrite it in your words.');
+  };
 
   // ---- input counting (§4.5) and deep.view ----
   const counts = useRef({ keys: 0, clicks: 0, wheels: 0, since: Date.now() });
@@ -720,33 +1248,21 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     };
   }, [visible, id, flushInput]);
 
-  // ---- header: rename, popovers, the ritual ----
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [shownTitle, setShownTitle] = useState(title);
-  useEffect(() => {
-    if (title) setShownTitle(title);
-  }, [title]);
-  useEffect(() => {
-    if (title) return;
-    let cancelled = false;
-    getExploration(workspace, id).then((r) => {
-      if (!cancelled && r.ok) setShownTitle(r.data.title);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspace, id, title]);
-  const commitRename = async () => {
-    const next = (renaming ?? '').trim();
-    setRenaming(null);
-    if (!next || next === shownTitle) return;
-    const r = await patchExploration(workspace, id, { title: next });
-    if (!r.ok) return say(r.error, 'warn');
-    setShownTitle(r.data.title);
-    rememberDeep(workspace, { exploration_id: id, title: r.data.title, view: 'page' });
-    cockpitModeStore.openDeep(id, r.data.title);
-  };
+  // ---- R8: an Untitled Page left empty is deleted when it closes ----
+  const deleteIfEmpty = useCallback(async (): Promise<boolean> => {
+    const rid = realIdRef.current;
+    if (!rid || !loaded.current || !isUntitled(shownTitleRef.current) || text.current.trim() || answersRef.current.length || localAsksRef.current.length) return false;
+    const r = await deleteExploration(workspace, rid); // 409 not_empty / 404: leave it
+    return r.ok;
+  }, [workspace]);
+  useEffect(
+    () => () => {
+      void deleteIfEmpty();
+    },
+    [deleteIfEmpty],
+  );
 
+  // ---- header popovers and the ritual ----
   const [popover, setPopover] = useState<Popover>(null);
   const jumpTo = (anchor: Anchor | undefined, markerId?: string) => {
     setPopover(null);
@@ -757,17 +1273,17 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     ed.focus();
   };
 
+  const startedAt = (copilot.focus ?? copilot.snapshot?.focus)?.started_at ?? null;
   const [sheet, setSheet] = useState<{ prefill: string; questions: RitualQuestion[] } | null>(null);
   const openSheet = useCallback(() => {
+    maybeAutoTitle();
     const doc = text.current;
-    const startedAt = (copilot.focus ?? copilot.snapshot?.focus)?.started_at ?? null;
     const qs: RitualQuestion[] = questions
       .filter((q) => q.status === 'open' && (markedThisSession.has(q.id) || (q.source === 'page' && !!startedAt && q.at >= startedAt)))
       .map((q) => ({ id: q.id, kind: 'question' as const, text: q.text }));
-    for (const a of answers) if (isUnread(a)) qs.push({ id: a.id, kind: 'answer', text: a.question });
     setPopover(null);
     setSheet({ prefill: lastSentence(doc, lastEdit.current ?? doc.length), questions: qs });
-  }, [answers, questions, markedThisSession, copilot.focus, copilot.snapshot]);
+  }, [questions, markedThisSession, startedAt, maybeAutoTitle]);
   const endSeen = useRef(endNonce);
   useEffect(() => {
     if (endNonce === endSeen.current) return;
@@ -775,21 +1291,31 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
     openSheet();
   }, [endNonce, openSheet]);
 
-  const tray = answersTray([...answers, ...localAsks.map(() => ({ status: 'queued' as const }))]);
+  const session = sheet
+    ? { ...sessionLists(answers, startedAt, madeHere.current), stillOpen: stillOpenOnPage(text.current, answers) }
+    : undefined;
+  const askStillOpen = (o: StillOpen) =>
+    ask(o.kind === 'question' ? o.text : 'What is still open here, and what would settle it?', anchorFor(text.current, o.from, o.to), undefined, o.sectionText);
+  const handOffStillOpen = (o: StillOpen) => void openHandoff(o.sectionText, anchorFor(text.current, o.from, o.to));
+
+  const asks = answers.filter((a) => !isHandoff(a));
+  const tray = answersTray([...asks, ...localAsks.map(() => ({ status: 'queued' as const }))]);
   const woken = wokenItem(copilot.snapshot);
-  const liveAnswers = answers.filter((a) => !a.dismissed_at).length + localAsks.length;
+  const liveAnswers = asks.filter((a) => !a.dismissed_at).length + localAsks.length;
+  const liveAll = answers.filter((a) => !a.dismissed_at);
+  const overlay = !!sheet || !!handoff || goalsDraft != null;
 
   return (
     <div
       className="deep-surface"
       onKeyDownCapture={() => {
-        if (visible && !sheet) counts.current.keys++;
+        if (visible && !overlay) counts.current.keys++;
       }}
       onMouseDownCapture={() => {
-        if (visible && !sheet) counts.current.clicks++;
+        if (visible && !overlay) counts.current.clicks++;
       }}
       onWheelCapture={() => {
-        if (visible && !sheet) counts.current.wheels++;
+        if (visible && !overlay) counts.current.wheels++;
       }}
     >
       <header className="deep-header">
@@ -798,12 +1324,14 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
             className="deep-title-input"
             autoFocus
             value={renaming}
+            aria-label="Title"
             onChange={(e) => setRenaming(e.target.value)}
-            onBlur={() => void commitRename()}
+            onBlur={commitRename}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                void commitRename();
+                commitRename();
+                editor.current?.focus();
               } else if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
@@ -830,6 +1358,16 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
             {woken.title}
           </button>
         )}
+        {isGoals && (
+          <button
+            className="deep-quiet"
+            onClick={() => setGoalsDraft(text.current)}
+            disabled={!text.current.trim()}
+            title="Hester drafts GOALS.md from this Page and shows the diff; nothing is written until Apply"
+          >
+            Draft goals
+          </button>
+        )}
         <div className="deep-pop-anchor">
           <button
             className="deep-quiet"
@@ -842,20 +1380,24 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           </button>
           {popover === 'answers' && (
             <div className="deep-popover" role="menu">
-              {answers.filter((a) => !a.dismissed_at).length === 0 && localAsks.length === 0 && <div className="deep-muted">No answers yet. Select text and Ask (⌘. a).</div>}
+              {liveAll.length === 0 && localAsks.length === 0 && <div className="deep-muted">No answers yet. Select text and Ask Hester (⌘.).</div>}
               {localAsks.map((q) => (
                 <button key={q.id} className="deep-pop-row" onClick={() => jumpTo(q.anchor, q.id)}>
                   <span className="deep-marker is-pending" /> {q.question}
                   <span className="deep-muted"> · queued</span>
                 </button>
               ))}
-              {answers
-                .filter((a) => !a.dismissed_at)
-                .map((a) => (
-                  <button key={a.id} className="deep-pop-row" onClick={() => jumpTo(a.anchor, a.id)}>
-                    <span className={`deep-marker is-${markerState(a)}`} /> {a.question}
-                  </button>
-                ))}
+              {liveAll.map((a) => (
+                <button key={a.id} className="deep-pop-row" onClick={() => jumpTo(a.anchor, a.id)}>
+                  <span className={`deep-marker is-${markerState(a)}`} /> {a.question}
+                  {isHandoff(a) && (
+                    <span className="deep-muted">
+                      {' '}
+                      · {handoffKindLabel(a.handoff?.kind)} {handoffStateLabel(a.handoff?.state)}
+                    </span>
+                  )}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -885,6 +1427,19 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
         </span>
       </header>
 
+      {isGoals && nearlyEmpty && readme !== 'none' && (
+        <div className="deep-goals-strip">
+          <button
+            className="deep-link"
+            disabled={readme === 'busy'}
+            onClick={() => void draftReadme()}
+            title="Hester reads README.md and CLAUDE.md and inserts a first guess at the four prompts, attributed, for you to rewrite"
+          >
+            {readme === 'busy' ? 'Reading the README…' : 'Draft from README'}
+          </button>
+        </div>
+      )}
+
       {conflict && (
         <div className="deep-conflict" role="alert">
           Changed elsewhere ·{' '}
@@ -903,7 +1458,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           ref={editor}
           initialText={initial.text}
           initialCursor={initial.cursor}
-          visible={visible && !sheet}
+          visible={visible && !overlay}
           markers={markers}
           openMarker={openMarker}
           onMarkerClick={openCard}
@@ -914,6 +1469,15 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           onAction={(a, s, q) => void onAction(a, s, q)}
           onAffordance={(o, a, l) => void onAffordance(o, a, l)}
           onAffordanceShown={onAffordanceShown}
+          answers={answers}
+          onAskMany={onAskMany}
+          onHandOff={onHandOff}
+          onReplyHandoff={onReplyHandoff}
+          mentionTargets={mentionTargets}
+          files={files}
+          onQuote={(q) => void onQuote(q)}
+          marginPrompts={isGoals ? GOALS_PROMPTS : undefined}
+          {...seamExtras}
         />
       ) : (
         <div className="deep-loading deep-muted">Opening the Page…</div>
@@ -922,20 +1486,52 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
       {sheet && (
         <EndSessionSheet
           workspace={workspace}
-          explorationId={id}
+          explorationId={realId}
           prefill={sheet.prefill}
           questions={sheet.questions}
           focus={copilot.focus ?? copilot.snapshot?.focus ?? null}
-          copilotApi={copilot.api}
-          running={answers.filter(isPending).length + localAsks.length}
+          running={asks.filter(isPending).length + localAsks.length}
+          runningHandoffs={answers.filter(handoffInFlight).length}
+          session={session}
+          onAsk={askStillOpen}
+          onHandOff={handOffStillOpen}
+          suspended={!!handoff}
           beforeEnd={async () => {
-            if (saveTimer.current || inFlight.current) await save();
+            if (saveTimer.current || inFlight.current || unsaved()) await save();
             const c = editor.current?.cursor();
-            if (c) rememberCursor(workspace, id, c);
+            if (c && realIdRef.current) rememberCursor(workspace, realIdRef.current, c);
+          }}
+          onEnded={() => {
+            void deleteIfEmpty().then((gone) => {
+              if (gone && alive.current) becomeDraft();
+            });
           }}
           onClose={() => setSheet(null)}
         />
       )}
+
+      {handoff && (
+        <HandoffSheet
+          workspace={workspace}
+          explorationId={handoff.eid}
+          explorationTitle={handoff.title}
+          sectionText={handoff.sectionText}
+          anchor={handoff.anchor}
+          provider={handoff.provider}
+          onRecord={upsertAnswer}
+          onLaunched={() => {
+            setHandoff(null);
+            say('Handed off · it shows in Work');
+            if (!sheet) editor.current?.focus();
+          }}
+          onClose={() => {
+            setHandoff(null);
+            if (!sheet) editor.current?.focus();
+          }}
+        />
+      )}
+
+      {goalsDraft != null && <GoalsDraftSheet workspace={workspace} page={goalsDraft} onClose={() => setGoalsDraft(null)} />}
     </div>
   );
 }
