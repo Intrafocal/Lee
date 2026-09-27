@@ -210,6 +210,7 @@ def build_opener(
         if item.source.get("surface") in AWAY_SURFACES and created is not None and created > since:
             captured.append({"someday_id": item.id, "text": _clip(item.text, MAX_ITEM_TEXT),
                              "surface": item.source.get("surface"), "created_at": item.created_at})
+    captured.sort(key=lambda c: str(c["created_at"]), reverse=True)
     if captured:
         surfaces.append({"kind": "captured_away", "count": len(captured), "items": captured[:MAX_ITEMS]})
 

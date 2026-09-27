@@ -104,6 +104,7 @@ def test_captured_away_windows_on_the_last_deep_session(tmp_path, events_dir):
     op = opener.build_opener(tmp_path, now=NOW, events_dir=events_dir)
     [cap] = [s for s in op["surfaces"] if s["kind"] == "captured_away"]
     assert cap["count"] == 2, "no Deep session yet: the last 7 days, away surfaces only"
+    assert cap["items"][0]["someday_id"] == after.id, "newest first"
 
     deep.add_session(store, exp["id"], {
         "focus_session_id": "f", "started_at": iso(ago(hours=5)), "ended_at": iso(ago(hours=4)),
