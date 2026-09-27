@@ -82,7 +82,11 @@ export type LeeEventType =
   // Deep D1 §10.1 (Hester -> Lee via POST /events/ingest): deep.answer {workspace, exploration_id, answer_id, status};
   // opener.shown {workspace, pick_up, surfaces}
   | 'deep.answer'
-  | 'opener.shown';
+  | 'opener.shown'
+  // docs/15-Usage.md §4.2 (Lee main): agent.usage {session_id, pty_id?, provider, by_model};
+  // limits.snapshot {source, five_hour?, seven_day?, session_id} on change
+  | 'agent.usage'
+  | 'limits.snapshot';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 

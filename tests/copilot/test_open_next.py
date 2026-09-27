@@ -151,7 +151,12 @@ def test_routes_with_a_device(cockpit_env, events_dir):  # noqa: F811
     assert r.status_code == 201, r.text
     assert not open_next.path_for(cockpit_env.a).exists()
 
-    c.post("/copilot/open-next", json={"exploration_id": exp["id"]}, headers=hdr())
+    # Lee main relays POST /carry/open-next with the shared token and names the device's surface;
+    # a device can't claim another surface.
+    r = c.post("/copilot/open-next", json={"exploration_id": exp["id"], "surface": "dirigible"}, headers=hdr())
+    assert r.json()["data"]["surface"] == "dirigible"
+    r = c.post("/copilot/open-next", json={"exploration_id": exp["id"], "surface": "lee"}, headers=hdr(device=True))
+    assert r.json()["data"]["surface"] == "aeronaut"
     r = c.delete("/copilot/open-next", headers=hdr(device=True))
     assert r.json()["data"] == {"cleared": True}
     assert c.delete("/copilot/open-next", headers=hdr()).json()["data"] == {"cleared": False}

@@ -850,4 +850,33 @@ test('render: the detail meta line has tokens after "started", dollars only for 
   assert.ok(!/tokens/.test(none));
 });
 
+test('usage: the Usage tab reads Hester\'s GET /cockpit/usage shape (totals.by_source, hester user/automatic, top_tasks)', () => {
+  const b = (o) => ({ tokens: {}, shown_tokens: 0, spend_usd: 0, subscription_tokens: 0, local_tokens: 0, local_ms: 0, count: 0, unpriced_tokens: 0, ...o });
+  const view = u.usageView({
+    range: 'today',
+    limits: null,
+    totals: {
+      ...b({ shown_tokens: 3450000, spend_usd: 1.67, subscription_tokens: 3100000, local_tokens: 240000, count: 50 }),
+      by_source: {
+        claude: b({ shown_tokens: 3100000, subscription_tokens: 3100000, count: 4 }),
+        pi: b({ shown_tokens: 90000, spend_usd: 1.25, count: 2 }),
+        hester_cloud: b({ shown_tokens: 20000, spend_usd: 0.42, count: 14 }),
+        hester_local: b({ shown_tokens: 240000, local_tokens: 240000, count: 30 }),
+      },
+    },
+    by_day: [],
+    hester: { user: { calls: 9, cloud_calls: 9, local_calls: 0, ...b({ spend_usd: 0.3 }) }, automatic: { calls: 35, cloud_calls: 5, local_calls: 30, ...b({ spend_usd: 0.12 }) }, unknown_trigger_calls: 0 },
+    top_tasks: [
+      { task_id: 't1', title: 'Fix the parser', ...b({ shown_tokens: 2400000, subscription_tokens: 2400000 }) },
+      { task_id: 't2', title: 'Pi refactor', ...b({ shown_tokens: 90000, spend_usd: 1.25 }) },
+    ],
+  });
+  assert.deepEqual(view.sources.map((s) => s.id), ['claude', 'pi', 'hester_cloud', 'hester_local']);
+  assert.equal(view.totals.spend_usd.toFixed(2), '1.67');
+  assert.equal(view.totals.subscription_tokens, 3100000);
+  assert.deepEqual(view.hester.map((s) => [s.id, s.calls]), [['cloud', 14], ['local', 30], ['user', 9], ['automatic', 35]]);
+  assert.equal(u.itemCostLabel(view.top[0]), '90k tok · $1.25', 'dollars first');
+  assert.equal(u.itemCostLabel(view.top[1]), '2.4M tok', 'subscription work shows tokens only');
+});
+
 console.log(`cockpit-work-smoke: ${passed} tests passed`);

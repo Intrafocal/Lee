@@ -127,9 +127,6 @@ interface TabInfo {
 
 const LEE_ACTOR: Actor = { kind: 'user', surface: 'lee' };
 
-// docs/15-Usage.md §4.2. Not yet in shared LeeEventType (a shared-contract change); the log accepts any type.
-const USAGE_EVENT = 'agent.usage' as LeeEventInput['type'];
-const LIMITS_EVENT = 'limits.snapshot' as LeeEventInput['type'];
 
 const LEE_MODES = new Set<LeeMode>(['cockpit', 'deep', 'manual']);
 const DEPTH_RATINGS = new Set<DepthRating>(['deep', 'mixed', 'shallow']);
@@ -568,7 +565,7 @@ export class CopilotQueue {
       const ptyId = s?.pty_id ?? (claimedPty != null && this.ptyManager.isClaudePty(claimedPty) ? claimedPty : null);
       const src = s ? this.sourceFor(s, ptyId, null, parseId(headers.windowId)) : null;
       this.log({
-        type: LIMITS_EVENT,
+        type: 'limits.snapshot',
         source: 'hook',
         workspace: src?.workspace ?? null,
         window_id: src?.window_id ?? null,
@@ -858,7 +855,7 @@ export class CopilotQueue {
         } catch (err) {
           this.ptyManager.log('WARN', 'Copilot: usage read failed', { error: String(err) });
         }
-        if (turn) ev(USAGE_EVENT, { provider: s.provider, by_model: turn.by_model });
+        if (turn) ev('agent.usage', { provider: s.provider, by_model: turn.by_model });
         this.noteTurnUpdate(s.session_id, { at: new Date(now).toISOString(), summary: updateSummary(full), lee_status: lee });
         this.away.noteTurnEnd();
         this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);

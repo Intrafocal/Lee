@@ -12,6 +12,7 @@ the auth middleware puts the caller on ``request.state.principal``.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -75,6 +76,19 @@ def caller_surface(request: Request) -> str:
     if p.get("kind") == "device":
         return str(p.get("device_kind") or "device")
     return "lee"
+
+
+_SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def _relayed_surface(request: Request, body: Dict[str, Any]) -> str:
+    """A device's own surface; the shared token (Lee main relaying POST /carry/open-next) may name the device's."""
+    p = principal_of(request)
+    if p.get("kind") != "device":
+        claimed = body.get("surface")
+        if isinstance(claimed, str) and _SURFACE_RE.match(claimed):
+            return claimed
+    return caller_surface(request)
 
 
 def resolve_workspace(value: Optional[str]) -> Path:
@@ -353,7 +367,7 @@ def create_copilot_router() -> APIRouter:
                 data = await asyncio.to_thread(
                     open_next_mod.set_, ws,
                     exploration_id=body.get("exploration_id"), someday_id=body.get("someday_id"),
-                    surface=caller_surface(request),
+                    surface=_relayed_surface(request, body),
                 )
             except open_next_mod.OpenNextError as e:
                 return _err(str(e), e.status)

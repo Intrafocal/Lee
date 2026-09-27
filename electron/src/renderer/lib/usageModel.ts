@@ -254,7 +254,7 @@ export function usageBucket(raw: unknown): UsageBucket {
     subscription_tokens: sub ?? 0,
     local_tokens: local ?? 0,
     tokens: tokens ?? (sub ?? 0) + (local ?? 0),
-    calls: num(o.calls),
+    calls: num(o.calls) ?? num(o.count),
   };
 }
 
@@ -295,7 +295,9 @@ const HESTER_SLICES: ReadonlyArray<{ id: string; label: string }> = [
 /** GET /cockpit/usage's response, as the Usage tab shows it. */
 export function usageView(raw: unknown): UsageViewModel {
   const o = obj(raw) ?? {};
-  const totals = sourceMap(o.totals);
+  // Hester nests the per-source buckets under totals.by_source (totals itself is the overall bucket).
+  const totalsObj = obj(o.totals);
+  const totals = sourceMap(obj(totalsObj?.by_source) ?? o.totals);
   const sources: UsageSourceRow[] = [];
   for (const s of USAGE_SOURCES) {
     if (!totals.has(s.id)) continue;
@@ -309,7 +311,12 @@ export function usageView(raw: unknown): UsageViewModel {
   const hesterRaw = obj(o.hester) ?? {};
   const hester: UsageViewModel['hester'] = [];
   for (const s of HESTER_SLICES) {
-    const v = hesterRaw[s.id] ?? obj(hesterRaw.by_location)?.[s.id] ?? obj(hesterRaw.by_trigger)?.[s.id];
+    const v =
+      hesterRaw[s.id] ??
+      obj(hesterRaw.by_location)?.[s.id] ??
+      obj(hesterRaw.by_trigger)?.[s.id] ??
+      // Hester splits user / automatic; cloud / local are its sources in totals.
+      (s.id === 'cloud' || s.id === 'local' ? totals.get(`hester_${s.id}`) : undefined);
     if (v === undefined) continue;
     hester.push({ ...s, ...usageBucket(v) });
   }
@@ -320,8 +327,16 @@ export function usageView(raw: unknown): UsageViewModel {
     const it = obj(r);
     if (!it) continue;
     const usage = obj(it.usage);
-    const basis = (typeof it.cost_basis === 'string' ? it.cost_basis : typeof usage?.cost_basis === 'string' ? usage.cost_basis : null) as CostBasis | null;
-    const cost = num(it.cost_usd) ?? num(it.spend_usd) ?? num(usage?.cost_usd);
+    // Hester's top_tasks rows carry spend_usd (billed + estimate only) and no cost_basis.
+    const spend = num(it.spend_usd);
+    const basis = (typeof it.cost_basis === 'string'
+      ? it.cost_basis
+      : typeof usage?.cost_basis === 'string'
+        ? usage.cost_basis
+        : spend != null && spend > 0
+          ? 'estimate'
+          : null) as CostBasis | null;
+    const cost = num(it.cost_usd) ?? spend ?? num(usage?.cost_usd);
     const tokens = num(it.shown_tokens) ?? num(usage?.shown_tokens) ?? tokensOf(it.tokens ?? usage?.tokens);
     const id = String(it.task_id ?? it.id ?? it.session_id ?? top.length);
     top.push({ id, title: String(it.title ?? it.name ?? id), tokens, cost_basis: basis, cost_usd: cost });
