@@ -353,7 +353,23 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
 
   return (
     <div className="work" onKeyDown={onKeyDown}>
-      <SectionHead title="Work" summary={summary || undefined} />
+      <SectionHead
+        title="Work"
+        summary={summary || undefined}
+        right={
+          <span className="work-new">
+            <Btn kind="quiet" onClick={() => ctx.openLauncher({ kind: 'bug' })}>
+              Report a bug
+            </Btn>
+            <Btn kind="quiet" onClick={() => ctx.openLauncher({ kind: 'prototype' })}>
+              Prototype
+            </Btn>
+            <Btn kind="quiet" kbd="⌘N" onClick={() => ctx.openLauncher()}>
+              New
+            </Btn>
+          </span>
+        }
+      />
       {ctx.hester.offline && !ctx.hester.snapshot && <div className="work-hint">{ctx.hester.offline}: tasks need Hester. Agents and approvals still work.</div>}
 
       {hasWaiting ? (

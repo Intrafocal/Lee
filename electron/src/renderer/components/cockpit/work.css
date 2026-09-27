@@ -219,6 +219,13 @@
   cursor: default;
 }
 
+/* New work from Work's header: quiet, one click */
+
+.work-new {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
 /* Where things stand: "Two things need you." / "Working on it." / "All clear." */
 
 .work-line {

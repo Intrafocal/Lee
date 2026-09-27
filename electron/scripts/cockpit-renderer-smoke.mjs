@@ -1155,6 +1155,7 @@ const leeRows = [
     meanwhileSentence,
     quietLine,
     workLine,
+    kindPrefix,
     homeNeeds,
     homeFeedNeeds,
     workNeedsCount,
@@ -1211,6 +1212,11 @@ const leeRows = [
     assert.equal(workLine({ waiting: 1 }), 'One thing needs you.');
     assert.equal(workLine({ waiting: 2, working: 3 }), 'Two things need you.');
     assert.equal(workLine({ waiting: 0, working: 0 }), 'All clear.');
+    assert.deepEqual(kindPrefix('bug: the tab bar flickers'), { kind: 'bug', rest: 'the tab bar flickers' });
+    assert.deepEqual(kindPrefix('Proto:try a canvas'), { kind: 'prototype', rest: 'try a canvas' });
+    assert.deepEqual(kindPrefix('q: why is it slow?'), { kind: 'question', rest: 'why is it slow?' });
+    assert.equal(kindPrefix('note: not a kind'), null);
+    assert.equal(kindPrefix('fix the bug: soon'), null);
     assert.equal(
       meanwhileSentence(d(4, ['a', 'b']), { waiting: 3 }),
       'Two agents finished while you were away, and four things shipped. Three need you.',

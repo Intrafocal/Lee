@@ -1103,6 +1103,26 @@ export function overridePatch(axis: 'important' | 'urgent', choice: OverrideChoi
   return axis === 'important' ? { important: v } : { urgent: v };
 }
 
+const KIND_PREFIXES: Record<string, TaskKind> = {
+  bug: 'bug',
+  proto: 'prototype',
+  prototype: 'prototype',
+  q: 'question',
+  question: 'question',
+  chore: 'chore',
+};
+
+/**
+ * A kind typed as a prefix in the Launcher ("bug: the tab bar flickers"):
+ * the kind and the text without it, or null. Spec 13 §6.0: kind from the
+ * button or a prefix.
+ */
+export function kindPrefix(text: string): { kind: TaskKind; rest: string } | null {
+  const m = /^\s*([a-z]+):\s*/i.exec(text);
+  const kind = m ? KIND_PREFIXES[m[1].toLowerCase()] : undefined;
+  return m && kind ? { kind, rest: text.slice(m[0].length) } : null;
+}
+
 /**
  * The Launcher's one-line Q4 note (v4 §8.5): a prototype (kind, or a
  * `proto:` prefix) with no goal, no play and not a human lead. Never blocks.

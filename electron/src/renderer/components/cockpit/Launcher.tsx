@@ -23,7 +23,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { LaunchRequest, TaskKind, TaskLead, TaskOrigin } from '../../../shared/cockpit';
-import { fuzzyFilter, q4NoteVisible, LAUNCHER_CHOICES } from '../../lib/cockpitModel';
+import { fuzzyFilter, kindPrefix, q4NoteVisible, LAUNCHER_CHOICES } from '../../lib/cockpitModel';
 import { fetchBundles, fetchGoals, type ContextBundleRef, type GoalRef } from '../../lib/hesterCockpit';
 import type { CockpitCtx } from './CockpitHost';
 import { Btn } from './ui';
@@ -308,7 +308,14 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExp
           className="cockpit-textarea is-launcher"
           value={text}
           placeholder={lead === 'human' ? 'What will you do?' : 'What should the agent do? Enter launches'}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            // "bug: …", "proto: …", "q: …", "chore: …" set the kind and are dropped from the text.
+            const p = kindPrefix(e.target.value);
+            if (p) {
+              setKind(p.kind);
+              setText(p.rest);
+            } else setText(e.target.value);
+          }}
           onKeyDown={(e) => {
             if (commonKeys(e)) return;
             if (e.key === 'Enter' && !e.shiftKey) {
