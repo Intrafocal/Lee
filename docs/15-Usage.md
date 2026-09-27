@@ -168,7 +168,7 @@ Numbers are tokens for subscription usage and dollars only for billed or estimat
 - Top work items by cost.
 
 
-Aeronaut and Dirigible get nothing in v1. If added later, only the limit strip, and only on request (G4 pull-first).
+On Aeronaut and Dirigible (*first pass built 2026-09-27*), each agent in In flight shows its token label, the same as on the Mac (§6.2). They show no limits and no Usage view; if limits are added later, it's only on request (G4 pull-first).
 
 ## 7. API billing (optional, U3)
 

@@ -88,13 +88,15 @@ def ws(tmp_path, monkeypatch):
 def test_parse_real_goals_file():
     parsed = parse_goals_full((REPO / "GOALS.md").read_text())
     goals = parsed["goals"]
-    assert [g["id"] for g in goals] == ["G1", "G4", "G2", "G3"]
-    assert [g["priority"] for g in goals] == [0, 1, 2, 3]
-    assert goals[0]["title"] == "Humane, fun development"
-    assert goals[0]["prose"].startswith("Lee makes orchestration easy") and len(goals[0]["prose"]) <= 1500
-    assert "Keep good friction" in goals[0]["prose"] and "metric:" not in goals[0]["prose"]
+    assert [g["id"] for g in goals] == ["G0", "G1", "G4", "G2", "G3"]
+    assert [g["priority"] for g in goals] == [0, 1, 2, 3, 4]
+    assert goals[0]["title"] == "Deep work"
+    assert goals[1]["title"] == "Humane, fun development"
+    assert goals[1]["prose"].startswith("Lee makes orchestration easy") and len(goals[1]["prose"]) <= 1500
+    assert "Keep good friction" in goals[1]["prose"] and "metric:" not in goals[1]["prose"]
     names = {g["id"]: [m["name"] for m in g["metrics"]] for g in goals}
     assert names == {
+        "G0": ["session_depth", "deep_time", "turn_churn", "time_to_deep"],
         "G1": ["peek_rate", "toil_load", "tool_failures", "creative_share", "catch_up_time", "weekly_retro"],
         "G4": ["focus_interruptions", "background_leverage", "device_creative_share", "capture_pickup"],
         "G2": ["attributed_agent_time", "attention_latency", "lost_threads"],
@@ -128,13 +130,16 @@ def test_parse_real_goals_file():
         assert "Target" not in c["telemetry"]
 
     tens = parsed["tensions"]
-    assert len(tens) == 9
-    t0 = tens[0]
+    assert len(tens) == 12
+    # G0's three tensions lead (deep vs attention latency, vs agency, vs G1); the G1 ones follow.
+    assert (tens[0]["a"], tens[0]["b"], tens[0]["label"]) == ("G0", "G2", "deep vs attention latency")
+    assert tens[0]["arbiter"].startswith("session_depth")
+    t0 = tens[3]
     assert (t0["a"], t0["b"], t0["label"]) == ("G1", "G2", "management becomes toil")
     assert t0["default"].startswith("a feature that asks you to manage") and "Arbiter" not in t0["default"]
     assert t0["arbiter"].startswith("toil_load") and t0["arbiter_metrics"] == ["toil_load"]
     assert t0["ids"] == ["G1", "G2"]
-    assert tens[1]["a"] == "Good friction" and tens[1]["label"] is None
+    assert tens[4]["a"] == "Good friction" and tens[4]["label"] is None
     reading = next(t for t in tens if t["a"] == "Less reading")
     assert reading["b"] == "informed review" and reading["label"] == "G1 vs C3"
     for t in tens:
@@ -143,7 +148,7 @@ def test_parse_real_goals_file():
 
 def test_link_picker_unchanged():
     ids = [g["id"] for g in load_goals(REPO)]
-    assert ids[:3] == ["C1", "C2", "C3"] and set(ids[3:]) == {"G1", "G2", "G3", "G4"}
+    assert ids[:3] == ["C1", "C2", "C3"] and set(ids[3:]) == {"G0", "G1", "G2", "G3", "G4"}
 
 
 @pytest.mark.parametrize("text,want", [
