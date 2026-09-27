@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..copilot.digest import _norm
 from ..copilot.event_reader import events_dir as default_events_dir
 from ..copilot.event_reader import list_files, parse_ts
+from ..copilot.usage import accumulate, merge_usage
 from . import spikes
 from .plain import plain_title
 from .tasks import (
@@ -63,6 +64,7 @@ FOLLOW_TYPES = {
     "agent.tool",
     "agent.waiting",
     "agent.turn_end",
+    "agent.usage",
     "agent.session_end",
     "agent.exit",
     "checkin.result",
@@ -515,6 +517,8 @@ class EventFollower:
             """Move an automatic task's progress into ``dst`` and drop ``src``."""
             dst["busy_ms"] = int(dst.get("busy_ms") or 0) + int(src.get("busy_ms") or 0)
             dst["turns"] = int(dst.get("turns") or 0) + int(src.get("turns") or 0)
+            if src.get("usage"):
+                dst["usage"] = merge_usage(dst.get("usage"), src["usage"])
             files = list(dst.get("files") or [])
             for f in src.get("files") or []:
                 if f not in files and len(files) < MAX_FILES:
@@ -718,6 +722,8 @@ class EventFollower:
                 task["turns"] = int(task.get("turns") or 0) + 1
                 apply_report(task, data, ev, respect_agent_title=True)
                 turn_ends.add(task["id"])
+            elif t == "agent.usage":
+                task["usage"] = accumulate(task.get("usage"), data.get("by_model"))
             elif t in ("agent.session_end", "agent.exit"):
                 old_pty = (task.get("agent") or {}).get("pty_id")
                 if task.get("agent"):

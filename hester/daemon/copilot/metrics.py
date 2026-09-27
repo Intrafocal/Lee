@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .event_reader import iso, parse_ts, read_events
+from .usage import SPEND_BASES, basis_of, shown_tokens, usage_items
 
 # v2: capture_pickup counts only acting triages (explore/promote/drop, not
 # keep) and leaves out spooled captures that never got a someday_id.
@@ -406,6 +407,27 @@ def load_goals_by_workspace(workspaces: Iterable[str]) -> Dict[str, List[Dict[st
     return out
 
 
+def _spend_row(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "task_id": task["id"], "model": (task.get("agent") or {}).get("model"), "busy_ms": 0.0,
+        "tokens": 0, "cost_usd": 0.0, "subscription_value_usd": 0.0,
+    }
+
+
+def _per_result(accepted_spend: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    n = len(accepted_spend)
+    if not n:
+        return None
+    rows = accepted_spend.values()
+    return {
+        "results": n,
+        "busy_ms": _round(sum(r["busy_ms"] for r in rows) / n, 0),
+        "tokens": _round(sum(r["tokens"] for r in rows) / n, 0),
+        "cost_usd": _round(sum(r["cost_usd"] for r in rows) / n, 4),
+        "subscription_value_usd": _round(sum(r["subscription_value_usd"] for r in rows) / n, 4),
+    }
+
+
 def _task_session_map(tasks: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     from ..cockpit.tasks import task_sessions
 
@@ -720,10 +742,29 @@ def compute_metrics(
             attributed_ms += ms
         if task.get("accepted") is True and task.get("status") == "done":
             accepted_ms += ms
-            spend = accepted_spend.setdefault(task["id"], {
-                "task_id": task["id"], "model": (task.get("agent") or {}).get("model"), "busy_ms": 0.0,
-            })
+            spend = accepted_spend.setdefault(task["id"], _spend_row(task))
             spend["busy_ms"] += ms
+    # docs/15-Usage.md §5: tokens and dollars per accepted result, from agent.usage.
+    # Spend (billed + estimate) and subscription value are kept apart (§2).
+    for ev in window:
+        if ev.get("type") != "agent.usage":
+            continue
+        d = _data(ev)
+        task = session_task.get(d.get("session_id"))
+        if task is None or not (task.get("accepted") is True and task.get("status") == "done"):
+            continue
+        spend = accepted_spend.setdefault(task["id"], _spend_row(task))
+        for u in usage_items(d.get("by_model")):
+            spend["tokens"] += shown_tokens(u.get("tokens"))
+            cost = u.get("cost_usd")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+                if basis_of(u) == "subscription":
+                    spend["subscription_value_usd"] += float(cost)
+                elif basis_of(u) in SPEND_BASES:
+                    spend["cost_usd"] += float(cost)
+    for spend in accepted_spend.values():
+        spend["cost_usd"] = round(spend["cost_usd"], 6)
+        spend["subscription_value_usd"] = round(spend["subscription_value_usd"], 6)
     lost = 0
     for task in tasks:
         if task.get("status") in ("done", "discarded"):
@@ -825,6 +866,8 @@ def compute_metrics(
         "accepted_busy_ms": accepted_ms,
         "accepted_tasks": len(accepted_spend),
         "accepted_task_spend": sorted(accepted_spend.values(), key=lambda r: r["task_id"]),
+        # background_leverage guard: spend per accepted result (§5); subscription value labelled apart
+        "accepted_spend_per_result": _per_result(accepted_spend),
         "attributed_agent_time": _round(attributed_ms / busy_ms) if busy_ms else None,
         "attributed_busy_ms": attributed_ms,
         "focus_ms": focus_ms,

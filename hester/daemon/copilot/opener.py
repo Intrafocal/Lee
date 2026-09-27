@@ -4,7 +4,9 @@ The opener (Deep D1 contract section 8.1; spec 14 section 6).
 ``build_opener`` assembles the top of the Copilot section: where you left off
 and every surface that could get your brain working, in a fixed order. It is
 assembly, not generation: deterministic, from records, with no model client.
-It ranks nothing beyond "pick up where you left off" first.
+It ranks nothing beyond "pick up where you left off" first; an Open next pick
+(14 §8.1, ``open_next.py``) takes that place, and a picked captured thought
+leads Captured away.
 
 Before building, it writes the session records Deep sessions that ended
 ``away`` or ``quit`` never got from the ending ritual (it sees their
@@ -21,6 +23,7 @@ from ..cockpit import deep
 from ..cockpit.explorations import ExplorationStore
 from ..cockpit.goal_status import QUIET_DAYS
 from .digest import q2_candidates_safe
+from . import open_next as open_next_mod
 from .event_reader import iso, parse_ts, read_events
 from .someday import SomedayStore
 
@@ -119,15 +122,22 @@ def _touched(exp: Dict[str, Any]) -> str:
 
 def _pick_up(
     store: ExplorationStore, active: List[Dict[str, Any]], records: Dict[str, List[Dict[str, Any]]],
+    prefer: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    """The exploration to pick up: ``prefer`` (Open next) when active, else the last session's."""
     latest: Optional[Tuple[str, Dict[str, Any], Dict[str, Any]]] = None
+    preferred = next((e for e in active if e["id"] == prefer), None) if prefer else None
     for exp in active:
+        if preferred is not None and exp is not preferred:
+            continue
         for r in records.get(exp["id"], []):
             key = str(r.get("ended_at") or "")
             if latest is None or key > latest[0]:
                 latest = (key, exp, r)
     if latest is not None:
         exp, last = latest[1], latest[2]
+    elif preferred is not None:
+        exp, last = preferred, None
     else:
         written = [e for e in active if int(e.get("page_chars") or 0) > 0]
         if not written:
@@ -151,6 +161,7 @@ def _pick_up(
             answers += 1 if at is not None and at > since else 0
     return {
         "exploration": {"id": exp["id"], "title": exp.get("title"), "last_touched_at": exp.get("last_touched_at")},
+        "open_next": preferred is not None,
         "stopped_at": stopped,
         "arrived": {
             "answers": answers,
@@ -177,7 +188,9 @@ def build_opener(
     active = [e for e in everything.values() if e.get("status") == "active"]
     records = {e["id"]: deep.list_sessions(store, e["id"]) for e in active}
 
-    pick_up = _pick_up(store, active, records)
+    # Open next (14 §8.1): a device's pick goes first; the read clears a stale one.
+    nxt = open_next_mod.get(ws, now)
+    pick_up = _pick_up(store, active, records, prefer=(nxt or {}).get("exploration_id"))
 
     # The end of the last Deep session (records, or the log for sessions with nothing open).
     ends = [parse_ts(r.get("ended_at")) for rows in records.values() for r in rows]
@@ -211,6 +224,14 @@ def build_opener(
             captured.append({"someday_id": item.id, "text": _clip(item.text, MAX_ITEM_TEXT),
                              "surface": item.source.get("surface"), "created_at": item.created_at})
     captured.sort(key=lambda c: str(c["created_at"]), reverse=True)
+    next_sd = (nxt or {}).get("someday_id")
+    if next_sd:
+        item = SomedayStore(ws).get(next_sd)
+        if item is not None and item.status == "open":
+            captured = [c for c in captured if c["someday_id"] != next_sd]
+            captured.insert(0, {"someday_id": item.id, "text": _clip(item.text, MAX_ITEM_TEXT),
+                                "surface": item.source.get("surface"), "created_at": item.created_at,
+                                "open_next": True})
     if captured:
         surfaces.append({"kind": "captured_away", "count": len(captured), "items": captured[:MAX_ITEMS]})
 
@@ -240,4 +261,5 @@ def build_opener(
     if quiet:
         surfaces.append({"kind": "quiet", "items": quiet[:MAX_QUIET]})
 
-    return {"generated_at": iso(now), "workspace": str(ws), "pick_up": pick_up, "surfaces": surfaces}
+    return {"generated_at": iso(now), "workspace": str(ws), "pick_up": pick_up, "surfaces": surfaces,
+            "open_next": nxt}

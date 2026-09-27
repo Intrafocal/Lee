@@ -60,7 +60,8 @@ def test_attributed_accepted_and_lost_threads(tmp_path, events_dir):
     assert m["attributed_busy_ms"] == 100000  # confirmed + accepted (play counts) + rejected
     assert m["attributed_agent_time"] == 0.5
     assert m["accepted_busy_ms"] == 30000 and m["accepted_tasks"] == 1
-    assert m["accepted_task_spend"] == [{"task_id": "task-00000003", "model": "sonnet", "busy_ms": 30000.0}]
+    assert m["accepted_task_spend"] == [{"task_id": "task-00000003", "model": "sonnet", "busy_ms": 30000.0,
+                                         "tokens": 0, "cost_usd": 0.0, "subscription_value_usd": 0.0}]
     assert m["background_leverage_accepted_ms_per_focus_hour"] == 30000
     assert m["lost_threads"] == 1
 
