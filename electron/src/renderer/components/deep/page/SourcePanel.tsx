@@ -144,7 +144,8 @@ export function SourcePanel({ path, text, lines, onQuote, onLink, onClose }: Sou
       className="deep-source"
       aria-label={`Source: ${path}`}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') {
+        // The editor's own Esc already closed it (and prevented the default).
+        if (e.key === 'Escape' && !e.defaultPrevented) {
           e.preventDefault();
           e.stopPropagation();
           onClose();

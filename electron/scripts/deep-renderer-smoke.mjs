@@ -12,6 +12,12 @@
  * /cockpit/ask, none to /context/stream), and that var(--lit) appears in no
  * renderer CSS outside the terminal (§1.4).
  *
+ * Deep next (docs/plans/2026-09-27-deep-next-contract.md §4): sectionsOf
+ * (headings, paragraph blocks, a list after a colon), question splitting,
+ * mark aggregation (most urgent plus a count), the @ and [[ parsers, the
+ * live-formatting hide-markers decision, formatting keys and Insert table,
+ * and the Goals Page's prompts.
+ *
  * Run: node scripts/deep-renderer-smoke.mjs
  */
 import { strict as assert } from 'node:assert';

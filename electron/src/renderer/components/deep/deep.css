@@ -8,6 +8,11 @@
  * --font-write at 20/1.65, a quiet header with no fill, margin notes with no
  * border or card, and no phosphor anywhere but the caret, the selection and
  * the new-answer dot. Focus is the global rule (§1.4).
+ *
+ * Deep next (2026-09-27 contract §4): the margin's section marks add a
+ * running hand-off's small phosphor agent mark and a waiting hand-off's
+ * ember dot (R5: the one place ember shows in Deep); live formatting, the
+ * [[ / @ pickers and the source panel (R9–R11) use neutral grounds only.
  */
 
 /* ---- overlay ---- */
