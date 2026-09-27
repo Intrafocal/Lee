@@ -71,7 +71,7 @@ Lee main (`/agent/status` handler, next to `/agent/hook` in `copilot/queue.ts`):
 - Keeps each session's latest `cost.total_cost_usd` for §3.2.
 - Omits limits entirely when the fields are absent (API-key sessions, or before a session's first response).
 
-**Verify first:** the field names above come from the Claude Code status line docs, not from observed input on the installed version (2.1.283). Step U0.1 logs one real payload before anything depends on it.
+**Verified 2026-09-27 (Claude Code 2.1.283):** the first status-line payload of a session has `cost` and `context_window` but no `rate_limits`; `rate_limits.five_hour` / `seven_day` (`used_percentage`, `resets_at`) appear once the session has had a response. The relay handles both.
 
 ### 3.2 Claude transcript reader
 
