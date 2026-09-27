@@ -86,6 +86,7 @@ def _compact_status(status: Dict[str, Any]) -> Dict[str, Any]:
         "goals": [
             {
                 "id": g["id"], "title": g["title"], "priority": g["priority"], "flagged": g["flagged"],
+                "measured": g.get("measured", True),
                 "last_evaluated_at": g["last_evaluated_at"], "focus_ms_7d": g["focus_ms_7d"],
                 "serving": {k: len(v) for k, v in g["serving"].items()},
                 "metrics": [

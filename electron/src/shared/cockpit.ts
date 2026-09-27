@@ -240,7 +240,11 @@ export type TaskKind = 'bug' | 'question' | 'prototype' | 'chore' | 'unknown';
 export type TaskLead = 'delegate' | 'human' | 'plan';
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'review' | 'done' | 'discarded';
 
-export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval';
+/**
+ * Where a task came from. 'explore' refs a spike node ('<exp>/<node>'); 'exploration'
+ * (Deep next R3) refs a hand-off record ('<exp>#<answer id>'), which Hester's follower keeps in step.
+ */
+export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval' | 'exploration';
 
 // ---------------------------------------------------------------------------
 // Copilot v4: goals and steward (contract 2026-09-26 v4 §9)
@@ -386,6 +390,11 @@ export interface LaunchRequest {
   /** Claude --allowedTools (no prompt for these). */
   allowed_tools?: string[];
   origin?: TaskOrigin;
+  /**
+   * The task's timebox in minutes (1-1440); default: Hester's (30 for a
+   * delegate lead). Hand-offs pass spike 45, docs 30, research 20.
+   */
+  timebox_min?: number;
   /** Tab label; default: title. */
   label?: string;
   /** Open the agent's terminal right away (Manual). Default false: a tile. */

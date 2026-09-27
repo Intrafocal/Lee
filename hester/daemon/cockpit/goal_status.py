@@ -551,11 +551,14 @@ def build_status(
         serving = items.serving(g["id"], now)
         nothing = not (serving["tasks"] or serving["workstreams"] or serving["explorations"])
         bad = any(m["ok"] is False or wrong_way(m.get("target") or {}, m.get("trend")) for m in metrics_out)
+        # Deep next R12: a goal with no metrics is "not measured yet", never a problem.
+        measured = bool(metrics_out)
         out_goals.append({
             "id": g["id"], "title": g["title"], "priority": g["priority"], "prose": g["prose"],
             "metrics": metrics_out,
+            "measured": measured,
             "serving": serving,
-            "flagged": bool(nothing and bad),
+            "flagged": bool(measured and nothing and bad),
             "last_evaluated_at": evaluated.get(g["id"]),
             "focus_ms_7d": int(balance["by_goal"].get(g["id"]) or 0),
         })
@@ -670,6 +673,7 @@ def evidence_packet(workspace: Path, gid: str, days: int = 7, now: Optional[date
         },
         "metrics": gs["metrics"],
         "flagged": gs["flagged"],
+        "measured": gs["measured"],
         "serving": gs["serving"],
         "commits_since": iso(since) if since else None,
         "commits": _commits_for(workspace, serving_tasks, since, now),

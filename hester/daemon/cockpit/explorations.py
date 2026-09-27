@@ -20,6 +20,7 @@ free-form body:
     knowledge_path: null
     links: [{kind: exploration, id, rel: child | parent, at}]
     questions: [{id, text, source, anchor, status, at, closed_at}]
+    purpose: goals          # Deep next R12: the workspace's Goals Page (one active per workspace)
     ...
     ---
     # <title>
@@ -93,6 +94,8 @@ STATUSES = ("active", "archived")
 ORIGIN_KINDS = ("cockpit", "someday", "hester", "library", "task", "exploration", "opener")
 NODE_KINDS = ("thought", "source_file", "source_web", "source_db", "decision", "spike", "evidence")
 LOG_KINDS = ("thought", "source_file", "source_web", "source_db")
+# Deep next R12: what an exploration is for, when it's special.
+PURPOSES = ("goals",)
 MODES = ("ideate", "explore", "learn", "brainstorm", "visualize", "search")
 SPIKE_STATUSES = ("pending", "running", "review", "done", "discarded", "failed")
 PROMOTE_TARGETS = ("task", "workstream", "goal")
@@ -100,6 +103,7 @@ FIELDS = (
     "id", "workspace", "title", "status", "seed", "origin", "session_id", "turns",
     "created_at", "updated_at", "last_touched_at", "archived_at", "version",
     "nodes", "active_node", "serves", "promoted", "knowledge_path", "links", "questions",
+    "purpose",
 )
 # Derived on load from the exploration's directory (never written to frontmatter).
 DEEP_FIELDS = (
@@ -470,6 +474,7 @@ class ExplorationStore:
         exp["knowledge_path"] = meta.get("knowledge_path") if isinstance(meta.get("knowledge_path"), str) else None
         exp["links"] = _norm_links(meta.get("links"))
         exp["questions"] = _norm_questions(meta.get("questions"))
+        exp["purpose"] = meta.get("purpose") if meta.get("purpose") in PURPOSES else None
         if deep and path.name == EXPLORATION_FILE:
             from . import deep as deep_files
 
@@ -537,14 +542,35 @@ class ExplorationStore:
                 out.append(loaded[0])
         return out
 
-    def list(self, status: str = "active", limit: int = 100) -> List[Dict[str, Any]]:
+    def list(self, status: str = "active", limit: int = 100, purpose: Optional[str] = None) -> List[Dict[str, Any]]:
         if status not in ("active", "archived", "all"):
             raise ExplorationError("status must be active, archived or all")
+        if purpose is not None and purpose not in PURPOSES:
+            raise ExplorationError(f"purpose must be one of {', '.join(PURPOSES)}")
         items = self.load_all()
         if status != "all":
             items = [e for e in items if e["status"] == status]
+        if purpose is not None:
+            items = [e for e in items if e.get("purpose") == purpose]
         items.sort(key=lambda e: (str(e.get("last_touched_at") or e.get("updated_at") or ""), e["id"]), reverse=True)
         return items[: max(0, limit)]
+
+    def with_purpose(self, purpose: str) -> Optional[Dict[str, Any]]:
+        """The active exploration with ``purpose`` (the oldest, if files were copied in), else None."""
+        found = [e for e in self.load_all() if e["status"] == "active" and e.get("purpose") == purpose]
+        found.sort(key=lambda e: (str(e.get("created_at") or ""), e["id"]))
+        return found[0] if found else None
+
+    def create_or_get(self, body: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[Dict[str, Any], bool]:
+        """``create``, except that a ``purpose`` the workspace already has returns that exploration: (exp, created)."""
+        purpose = body.get("purpose")
+        if purpose is not None:
+            if purpose not in PURPOSES:
+                raise ExplorationError(f"purpose must be one of {', '.join(PURPOSES)}")
+            existing = self.with_purpose(purpose)
+            if existing is not None:
+                return existing, False
+        return self.create(body, now), True
 
     def nodes(self, exp_id: str) -> List[Dict[str, Any]]:
         return self.require(exp_id)["nodes"]
@@ -581,6 +607,9 @@ class ExplorationStore:
             raise ExplorationError(f"origin.kind must be one of {', '.join(ORIGIN_KINDS)}")
         origin = {"kind": origin["kind"], "ref": origin.get("ref") if isinstance(origin.get("ref"), str) else None}
         serves = _str_list("serves", body.get("serves"))
+        purpose = body.get("purpose")
+        if purpose is not None and purpose not in PURPOSES:
+            raise ExplorationError(f"purpose must be one of {', '.join(PURPOSES)}")
         page = body.get("page")
         if page is not None:
             if not isinstance(page, str):
@@ -609,6 +638,7 @@ class ExplorationStore:
             "knowledge_path": None,
             "links": _norm_links(body.get("links")),
             "questions": [],
+            "purpose": purpose,
         })
         exp["nodes"] = [root_node(exp)]
         text = f"# {title}\n\n## Seed\n\n{seed or '(none)'}\n\n{LOG_HEADING}\n"

@@ -88,14 +88,20 @@ def build_context(
     cap: int = CONTEXT_CAP,
 ) -> str:
     """
-    In order: the title and seed; the anchor's section and the quote with
-    ±1 000 chars around it; the rest of the Page (cut from the far end); open
+    In order: the title and seed; the section the question is about (Deep next
+    R2, ``section_text`` when the Ask sent one); the anchor's section and the
+    quote with ±1 000 chars around it; the rest of the Page (cut from the far end); open
     questions; the last 20 references; the followed-up question and answer.
     The Page gets whatever the other parts leave of ``cap``.
     """
     head = f"### Exploration\n\nTitle: {exp.get('title') or ''}"
     if exp.get("seed"):
         head += f"\n\nSeed:\n{exp['seed']}"
+
+    section_text = answer.get("section_text")
+    section_part = ""
+    if isinstance(section_text, str) and section_text.strip():
+        section_part = "### The section this is about\n\n" + section_text.strip("\n")
 
     anchor = answer.get("anchor") or {"kind": "none"}
     center = None
@@ -138,12 +144,12 @@ def build_context(
             f"Question: {follow_up.get('question') or ''}\n\nAnswer: {follow_up.get('answer') or '(none)'}"
         )
 
-    fixed = [p for p in (head, anchor_part, q_part, ref_part, follow_part) if p]
+    fixed = [p for p in (head, section_part, anchor_part, q_part, ref_part, follow_part) if p]
     budget = cap - sum(len(p) + 2 for p in fixed) - 40
     page_part = ""
     if page.strip() and budget > 0:
         page_part = "### The Page\n\n" + _window(page, center, budget)
-    parts = [p for p in (head, anchor_part, page_part, q_part, ref_part, follow_part) if p]
+    parts = [p for p in (head, section_part, anchor_part, page_part, q_part, ref_part, follow_part) if p]
     text = "\n\n".join(parts)
     return text if len(text) <= cap else text[: cap - 1] + "…"
 
@@ -276,3 +282,73 @@ _runner = DeepAskRunner()
 
 def get_runner() -> DeepAskRunner:
     return _runner
+
+
+# ---------------------------------------------------------------------------
+# Draft from README (Deep next R12)
+# ---------------------------------------------------------------------------
+
+README_SURFACE = "goals-readme"
+README_FILES = ("README.md", "CLAUDE.md")
+README_CAP = 12000
+GOALS_PROMPTS = (
+    "What is this for, and who is it for?",
+    "How will you know it's working?",
+    "What won't you trade away?",
+    "What pulls against what?",
+)
+README_INSTRUCTION = (
+    "From the project files below, write a first guess at the answers to these four questions, as short "
+    "markdown under exactly these four `##` headings, in this order:\n\n"
+    + "\n".join(f"## {p}" for p in GOALS_PROMPTS)
+    + "\n\nA few sentences or bullets under each. Say only what the files support; where they say nothing, "
+    "write \"(the files don't say)\". Reply with the markdown only: no preamble, no code fence, no offers."
+)
+
+
+def readme_sources(workspace: Path, cap: int = README_CAP) -> Dict[str, str]:
+    """``README.md`` and ``CLAUDE.md`` at the workspace root when present, each cut to ``cap`` chars."""
+    out: Dict[str, str] = {}
+    for name in README_FILES:
+        path = Path(workspace) / name
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if text.strip():
+            out[name] = text if len(text) <= cap else text[: cap - 1] + "…"
+    return out
+
+
+def readme_context(sources: Dict[str, str]) -> str:
+    return "\n\n".join(f"### {name}\n\n````markdown\n{text}\n````" for name, text in sources.items())
+
+
+def strip_fence(text: str) -> str:
+    """The model's markdown without a wrapping ``` fence, if it added one."""
+    t = (text or "").strip()
+    lines = t.splitlines()
+    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip().startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return t
+
+
+async def draft_from_readme(ctx, exp_id: str) -> Dict[str, Any]:
+    """
+    POST /draft-from-readme: a user action (C2). One agent turn with surface
+    ``goals-readme`` (not a steer surface: no steward.md; Hester's hybrid
+    routing). Returns ``{text}``; never writes the Page.
+    """
+    store = ctx.explorations()
+    async with ctx.lock:
+        await asyncio.to_thread(store.require, exp_id)
+    sources = await asyncio.to_thread(readme_sources, Path(ctx.path))
+    if not sources:
+        raise steward.StewardError("this workspace has no README.md or CLAUDE.md", 400)
+    with model_log.surface_override(README_SURFACE):
+        text = await steward.call_model(
+            Path(ctx.path), README_SURFACE, README_INSTRUCTION, readme_context(sources), steward.new_request_id(),
+        )
+    return {"text": strip_fence(text), "sources": list(sources)}

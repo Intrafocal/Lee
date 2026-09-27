@@ -228,11 +228,17 @@ export function resumeCwd(
 }
 
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const TIMEBOX_MAX_MIN = 24 * 60;
+
+/** A launch's timebox in whole minutes (1-1440), else null (Hester's default applies). */
+export function validTimebox(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= TIMEBOX_MAX_MIN ? v : null;
+}
 
 export function validOrigin(o: unknown): TaskOrigin | null {
   if (!o || typeof o !== 'object') return null;
   const v = o as Record<string, unknown>;
-  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester', 'explore', 'goal-eval'];
+  const kinds = ['launcher', 'agent', 'checkin', 'someday', 'operation', 'lint', 'hester', 'explore', 'goal-eval', 'exploration'];
   if (typeof v.kind !== 'string' || !kinds.includes(v.kind)) return null;
   return { kind: v.kind as TaskOrigin['kind'], ref: typeof v.ref === 'string' ? v.ref : null };
 }
@@ -264,6 +270,7 @@ export class TaskLauncherImpl implements TaskLauncher {
     const plan = launchPlan(req, { worktree_for_delegate: cfg.launch.worktree_for_delegate, permission_default });
     const taskId = req.task_id ?? newTaskId();
     const origin = validOrigin(req.origin) ?? { kind: 'launcher', ref: null };
+    const timebox = validTimebox(req.timebox_min);
     const serves = Array.isArray(req.serves) ? req.serves.filter((s): s is string => typeof s === 'string') : [];
     const name = launchName(req);
     // Context: paths and bundle ids only; the references go into the argv.
@@ -292,6 +299,7 @@ export class TaskLauncherImpl implements TaskLauncher {
       ...(name ? { name, name_source: 'user' as const } : {}),
       ...(ctx.files.length || ctx.bundles.length ? { context: { files: ctx.files, bundles: ctx.bundles } } : {}),
       ...(worktree ? { worktree } : {}),
+      ...(timebox != null ? { timebox_min: timebox } : {}),
     });
 
     if (plan.lead === 'human') {
@@ -363,6 +371,7 @@ export class TaskLauncherImpl implements TaskLauncher {
         ...(model ? { model } : {}),
         origin_kind: origin.kind,
         ...(origin.ref ? { origin_ref: origin.ref } : {}),
+        ...(timebox != null ? { timebox_min: timebox } : {}),
         named: !!name,
         ...(ctx.files.length ? { context_files: ctx.files.length } : {}),
         ...(ctx.bundles.length ? { context_bundles: ctx.bundles.length } : {}),
