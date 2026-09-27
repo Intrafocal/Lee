@@ -233,7 +233,7 @@ test('agents: busy with busy_since, idle with last_summary after Stop; no prompt
   try {
     hook('SessionStart');
     hook('UserPromptSubmit', { prompt: 'SECRET PROMPT' });
-    hook('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: '/work/api/SECRET.ts', old_string: 'a', new_string: 'b' }, tool_use_id: 'a' });
+    hook('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: '/work/api/router.ts', old_string: 'SECRET_OLD', new_string: 'SECRET_NEW' }, tool_use_id: 'a' });
     let snap = q.snapshot({ compact: true });
     assert.strictEqual(snap.agents.length, 1);
     let [a] = snap.agents;
@@ -245,7 +245,10 @@ test('agents: busy with busy_since, idle with last_summary after Stop; no prompt
     assert.strictEqual(a.idle_since, null);
     assert.strictEqual(a.last_tool, 'Edit');
     assert.strictEqual(a.files_touched_count, 1);
-    assert.ok(!JSON.stringify(snap.agents).includes('SECRET'), 'no prompt text or tool input');
+    // Cockpit design §7.1: now/recent carry the path and toolPreview, never the prompt or the edit itself.
+    assert.ok(!JSON.stringify(snap.agents).includes('SECRET'), 'no prompt text or raw tool input');
+    assert.strictEqual(a.now.tool, 'Edit');
+    assert.deepStrictEqual(a.now.files, ['/work/api/router.ts']);
 
     hook('Stop', { last_assistant_message: 'Refactored the router. ' + 'y'.repeat(600) });
     snap = q.snapshot({ compact: true });
@@ -1016,16 +1019,188 @@ test('Deep: the ritual\'s Hand off leaves the Deep session to deepEnd, which car
   q.endHandoff('manual');
 });
 
-let failed = 0;
-for (const [name, fn] of tests) {
+// ---------------------------------------------------------------------------
+// Cockpit design §7.1: agent activity; §7.2: the user's name
+// ---------------------------------------------------------------------------
+
+const { describeActivity } = require(path.join(dist, '..', 'shared', 'cockpit.js'));
+
+/** Run fn with Date.now() returning `clock.t`, which fn may advance. */
+function withClock(fn) {
+  const real = Date.now;
+  const clock = { t: real() };
+  Date.now = () => clock.t;
   try {
-    fn();
-    console.log(`ok   ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`FAIL ${name}\n     ${err && err.stack ? err.stack.split('\n').slice(0, 3).join('\n     ') : err}`);
+    fn(clock);
+  } finally {
+    Date.now = real;
   }
 }
-fs.rmSync(tmpHome, { recursive: true, force: true });
-console.log(failed ? `\n${failed} failed` : `\nall ${tests.length} passed`);
-process.exit(failed ? 1 : 0);
+
+test('activity: pre and post feed the ring; now is the open tool, then the last entry for 60s', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  try {
+    withClock((clock) => {
+      hook('SessionStart');
+      hook('UserPromptSubmit', { prompt: 'x' });
+      hook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' });
+      let [a] = q.snapshot({ compact: true }).agents;
+      assert.strictEqual(a.now.tool, 'Bash');
+      assert.strictEqual(a.now.preview, 'npm test');
+      assert.strictEqual(a.now.since, new Date(clock.t).toISOString());
+      assert.strictEqual(describeActivity(a.now), 'Running tests');
+      assert.deepStrictEqual(a.recent.map((e) => e.phase), ['pre']);
+
+      clock.t += 5 * MIN; // a long-running tool is still "now"
+      assert.strictEqual(q.snapshot().agents[0].now.tool, 'Bash');
+
+      hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' });
+      const postAt = new Date(clock.t).toISOString();
+      [a] = q.snapshot().agents;
+      assert.deepStrictEqual(a.now, { tool: 'Bash', preview: 'npm test', files: [], since: postAt }, 'the last entry');
+      assert.deepStrictEqual(a.recent.map((e) => e.phase), ['pre', 'post']);
+      assert.strictEqual(describeActivity(a.recent[1], 'past'), 'Ran tests');
+
+      clock.t += 60_000;
+      assert.ok(q.snapshot().agents[0].now, 'still now at 60s');
+      clock.t += 1;
+      assert.strictEqual(q.snapshot().agents[0].now, null, 'null after 60s with nothing open');
+      assert.strictEqual(q.snapshot().agents[0].recent.length, 2, 'recent outlives now');
+    });
+  } finally {
+    done();
+  }
+});
+
+test('activity: the ring keeps 20; the snapshot shows the last 8, newest last', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  try {
+    hook('SessionStart');
+    hook('UserPromptSubmit', { prompt: 'x' });
+    for (let i = 0; i < 15; i++) {
+      const tool_input = { file_path: `/work/api/f${i}.ts` };
+      hook('PreToolUse', { tool_name: 'Read', tool_input, tool_use_id: `r${i}` });
+      hook('PostToolUse', { tool_name: 'Read', tool_input, tool_use_id: `r${i}` });
+    }
+    const log = q.sessions.get('s1').activity_log;
+    assert.strictEqual(log.length, 20, 'capped at 20');
+    assert.deepStrictEqual(log[0].files, ['/work/api/f5.ts'], 'oldest dropped first');
+    const { recent, now } = q.snapshot({ compact: true }).agents[0];
+    assert.strictEqual(recent.length, 8);
+    assert.deepStrictEqual(recent[7], { ...recent[7], phase: 'post', files: ['/work/api/f14.ts'], writes: false });
+    assert.deepStrictEqual(recent[6].files, ['/work/api/f14.ts']);
+    assert.strictEqual(recent[6].phase, 'pre');
+    assert.strictEqual(describeActivity(now), 'Reading f14.ts');
+  } finally {
+    done();
+  }
+});
+
+test('activity: failures, writes, preview cap, short MCP names; only agent.tool is logged', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  try {
+    hook('SessionStart');
+    hook('UserPromptSubmit', { prompt: 'x' });
+    const events = captureEvents(() => {
+      hook('PreToolUse', { tool_name: 'Write', tool_input: { file_path: '/work/api/a.ts', content: 'SECRET' }, tool_use_id: 'w' });
+      hook('PostToolUseFailure', { tool_name: 'Write', tool_input: { file_path: '/work/api/a.ts', content: 'SECRET' }, tool_use_id: 'w' });
+      const long = 'echo ' + 'x'.repeat(500);
+      hook('PreToolUse', { tool_name: 'Bash', tool_input: { command: long }, tool_use_id: 'b' });
+      hook('PostToolUse', { tool_name: 'Bash', tool_input: { command: long }, tool_use_id: 'b' });
+      hook('PreToolUse', { tool_name: 'mcp__lee__open_file', tool_input: {}, tool_use_id: 'm' });
+    });
+    assert.deepStrictEqual([...new Set(events.map((e) => e.type))], ['agent.tool'], 'no new event types');
+    assert.ok(events.every((e) => !('preview' in e.data)), 'previews are never logged');
+    const { recent, now } = q.snapshot().agents[0];
+    assert.strictEqual(recent[0].writes, true);
+    assert.strictEqual(recent[0].failed, undefined, 'pre is not failed');
+    assert.strictEqual(recent[1].failed, true);
+    assert.strictEqual(describeActivity(recent[1], 'past'), 'Edited a.ts (failed)');
+    assert.ok(recent[2].preview.length <= 160 && recent[3].preview.length <= 160, 'previews capped at 160');
+    assert.strictEqual(now.tool, 'open_file', 'MCP names shortened as last_tool is');
+    assert.ok(!JSON.stringify(recent).includes('SECRET'), 'no raw tool input');
+  } finally {
+    done();
+  }
+});
+
+test('activity: an answered AskUserQuestion keeps its question as the preview', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  try {
+    askFlow(hook);
+    const answered = { ...ASK, answers: { [ASK.questions[0].question]: ASK.questions[0].options[0].label } };
+    hook('PostToolUse', { tool_name: 'AskUserQuestion', tool_input: answered, tool_use_id: 'q1' });
+    const { recent } = q.snapshot().agents[0];
+    const post = recent[recent.length - 1];
+    assert.strictEqual(post.phase, 'post');
+    assert.strictEqual(post.preview, ASK.questions[0].question);
+    assert.strictEqual(describeActivity(post, 'past'), 'Asked you a question');
+  } finally {
+    done();
+  }
+});
+
+test('activity: a tool event refreshes the renderer, not devices', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude' }]);
+  const clearTimers = () => {
+    for (const t of ['wsTimer', 'ipcTimer']) if (q[t]) { clearTimeout(q[t]); q[t] = null; }
+  };
+  const orig = copilotBus.broadcast;
+  copilotBus.broadcast = () => {};
+  try {
+    q.started = true;
+    hook('SessionStart');
+    hook('UserPromptSubmit', { prompt: 'x' });
+    clearTimers();
+    q.broadcastSnapshot();
+    hook('PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: 't1' });
+    assert.ok(q.ipcTimer, 'renderer push scheduled');
+    clearTimers();
+    assert.strictEqual(q.broadcastSnapshot(), false, 'devices are not pushed for a tool event');
+    q.tick(); // nothing changed: no renderer push either
+    assert.strictEqual(q.ipcTimer, null);
+  } finally {
+    copilotBus.broadcast = orig;
+    clearTimers();
+    q.started = false;
+    done();
+  }
+});
+
+test('userName: app.user_name, else the first word of id -F (read once), else null', async () => {
+  const { UserNameResolver, firstWord, configUserName } = require(path.join(dist, 'user-name.js'));
+  let reads = 0;
+  const mac = new UserNameResolver(async () => { reads++; return '  Ben  Example '; });
+  assert.strictEqual(await mac.resolve({ app: { user_name: ' Benjamin ' } }), 'Benjamin', 'config wins');
+  assert.strictEqual(reads, 0, 'id -F not run when the config names you');
+  assert.strictEqual(await mac.resolve({ app: { user_name: '  ' } }), 'Ben', 'blank config falls through');
+  assert.strictEqual(await mac.resolve(null), 'Ben');
+  assert.strictEqual(await mac.resolve({ app: {} }), 'Ben');
+  assert.strictEqual(reads, 1, 'cached');
+  assert.strictEqual(await new UserNameResolver(async () => null).resolve({}), null, 'nothing: null');
+  assert.strictEqual(await new UserNameResolver(async () => { throw new Error('no id'); }).resolve({}), null, 'failure: null');
+  assert.strictEqual(await new UserNameResolver(async () => '').resolve({ app: { user_name: 42 } }), null, 'non-string config ignored');
+  assert.strictEqual(firstWord('Ada Lovelace'), 'Ada');
+  assert.strictEqual(configUserName({ app: { user_name: 'Ada' } }), 'Ada');
+});
+
+(async () => {
+  let failed = 0;
+  for (const [name, fn] of tests) {
+    try {
+      await fn();
+      console.log(`ok   ${name}`);
+    } catch (err) {
+      failed++;
+      console.log(`FAIL ${name}\n     ${err && err.stack ? err.stack.split('\n').slice(0, 3).join('\n     ') : err}`);
+    }
+  }
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+  console.log(failed ? `\n${failed} failed` : `\nall ${tests.length} passed`);
+  process.exit(failed ? 1 : 0);
+})();

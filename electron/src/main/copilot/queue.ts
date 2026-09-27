@@ -58,7 +58,7 @@ import {
   toolSignature,
 } from './hook-payload';
 import type { ParsedQuestion } from './hook-payload';
-import { AgentSession, AgentSessions } from './agent-sessions';
+import { ACTIVITY_PREVIEW_MAX, AgentSession, AgentSessions } from './agent-sessions';
 import { AttentionQueue, PROMPT_KINDS, isPromptKind, kindTitle, providerLabel, sourceKey } from './attention-queue';
 import { FocusTracker, parseExplorationId, parseFocusItem } from './focus';
 import { AwayPolicy, normalizeSummaryPolicy } from './away';
@@ -164,6 +164,11 @@ function shortToolName(name: string | null): string | null {
   return clip(parts[parts.length - 1] || name, TOOL_NAME_MAX);
 }
 
+/** An activity entry (or `now`) with the short tool name, as last_tool has. */
+function shortActivityTool<T extends { tool: string } | null>(a: T): T {
+  return a ? { ...a, tool: shortToolName(a.tool) ?? a.tool } : a;
+}
+
 function iso(ms: number | null): string | null {
   return ms == null ? null : new Date(ms).toISOString();
 }
@@ -171,14 +176,14 @@ function iso(ms: number | null): string | null {
 /**
  * What decides whether a device push is worth sending: the compact snapshot
  * minus its timestamp and the per-tool agent fields (last_tool,
- * files_touched_count), so tool events alone don't push. Those fields ride
- * along with the next push.
+ * files_touched_count, now, recent), so tool events alone don't push. Those
+ * fields ride along with the next push.
  */
 function pushSignature(snap: AttentionSnapshot): string {
   return JSON.stringify({
     ...snap,
     generated_at: null,
-    agents: (snap.agents ?? []).map((a) => ({ ...a, last_tool: null, files_touched_count: null })),
+    agents: (snap.agents ?? []).map((a) => ({ ...a, last_tool: null, files_touched_count: null, now: null, recent: null })),
   });
 }
 
@@ -200,6 +205,8 @@ export class CopilotQueue {
   private approvalMeta = new Map<string, ApprovalMeta>();
   /** Per-agent state last seen by noteAgents(). */
   private agentsSig = '';
+  /** Per-agent activity (now, latest entry) last seen by noteAgents(). */
+  private activitySig = '';
   /** pushSignature() of the last device push. */
   private lastPushSig: string | null = null;
   /** Each window's mode, from the renderer's cockpit.mode events (Deep D1 §2.2, decision 1). */
@@ -328,17 +335,23 @@ export class CopilotQueue {
 
   private changed(): void {
     if (!this.started) return;
-    if (!this.ipcTimer) {
-      this.ipcTimer = setTimeout(() => {
-        this.ipcTimer = null;
-        this.pushIpc();
-      }, IPC_DEBOUNCE_MS);
-    }
+    this.scheduleIpc();
     if (!this.wsTimer) {
       this.wsTimer = setTimeout(() => {
         this.wsTimer = null;
         this.broadcastSnapshot();
       }, WS_DEBOUNCE_MS);
+    }
+  }
+
+  /** The renderer push only (the Cockpit shows activity live; devices get it with their next push). */
+  private scheduleIpc(): void {
+    if (!this.started) return;
+    if (!this.ipcTimer) {
+      this.ipcTimer = setTimeout(() => {
+        this.ipcTimer = null;
+        this.pushIpc();
+      }, IPC_DEBOUNCE_MS);
     }
   }
 
@@ -355,15 +368,23 @@ export class CopilotQueue {
   /**
    * Schedule pushes when an agent's state changed (turn start/end, pause or
    * resume on a prompt, session start/end, PTY exit, a tab appearing), even
-   * if no attention item did.
+   * if no attention item did. A change in activity alone (a tool started or
+   * finished, or `now` aged out) refreshes the renderer only.
    */
   private noteAgents(): void {
-    const sig = this.agentSummaries()
-      .map((a) => `${a.pty_id}:${a.tab_id}:${a.state}:${a.busy_since}:${a.idle_since}`)
+    const agents = this.agentSummaries();
+    const sig = agents.map((a) => `${a.pty_id}:${a.tab_id}:${a.state}:${a.busy_since}:${a.idle_since}`).join('|');
+    const activity = agents
+      .map((a) => `${a.pty_id}:${a.now?.tool ?? ''}:${a.now?.since ?? ''}:${a.recent?.[a.recent.length - 1]?.at ?? ''}:${a.recent?.length ?? 0}`)
       .join('|');
-    if (sig === this.agentsSig) return;
-    this.agentsSig = sig;
-    this.changed();
+    const activityChanged = activity !== this.activitySig;
+    this.activitySig = activity;
+    if (sig !== this.agentsSig) {
+      this.agentsSig = sig;
+      this.changed();
+    } else if (activityChanged) {
+      this.scheduleIpc();
+    }
   }
 
   private flushPushes(): void {
@@ -577,8 +598,17 @@ export class CopilotQueue {
           agent_id: h.agent_id,
           files,
           question: asks,
+          started_at: now,
         };
         this.sessions.openTool(s, pending);
+        this.sessions.noteActivity(s, {
+          at: new Date(now).toISOString(),
+          tool,
+          preview: clip(pending.preview, ACTIVITY_PREVIEW_MAX),
+          files,
+          writes,
+          phase: 'pre',
+        });
         if (writes) this.sessions.addWritten(s, files);
         // The same agent started a newer call, so it is past its prompt.
         const passed = this.queue.resolveWhere(
@@ -654,6 +684,17 @@ export class CopilotQueue {
         const sig = toolSignature(tool, h.tool_input);
         ev('agent.tool', { phase: 'post', tool, files, writes, signature: sig, ...(failed ? { failed: true } : {}) });
         if (writes && !failed) this.sessions.addWritten(s, files);
+        // The started call's preview, so an answered AskUserQuestion still reads as its question.
+        const started = this.sessions.findOpenTool(s, h.tool_use_id, sig);
+        this.sessions.noteActivity(s, {
+          at: new Date(now).toISOString(),
+          tool,
+          preview: clip(started?.preview ?? toolPreview(tool, h.tool_input), ACTIVITY_PREVIEW_MAX),
+          files,
+          writes,
+          ...(failed ? { failed: true as const } : {}),
+          phase: 'post',
+        });
         // Only the prompt for this call: parallel or subagent calls to the
         // same tool must not clear a prompt that is still showing.
         this.queue.resolveWhere(
@@ -1287,8 +1328,12 @@ export class CopilotQueue {
     return out;
   }
 
-  /** Running agents for snapshots. Never prompt text or tool inputs. */
+  /**
+   * Running agents for snapshots. Never prompt text or raw tool inputs; the
+   * activity fields (now, recent) carry only toolPreview's short previews.
+   */
   agentSummaries(opts: { compact?: boolean } = {}): AgentSummary[] {
+    const now = Date.now();
     return this.liveAgents().map(({ s, ptyId, tab }) => {
       const src = this.sourceFor(s, ptyId, null, null);
       const state = this.agentState(s);
@@ -1306,6 +1351,8 @@ export class CopilotQueue {
         last_tool: shortToolName(s.last_tool),
         last_summary: summary,
         files_touched_count: s.files_written.length,
+        now: shortActivityTool(this.sessions.activityNow(s, now)),
+        recent: this.sessions.recentActivity(s).map((e) => shortActivityTool(e)),
       };
     });
   }
