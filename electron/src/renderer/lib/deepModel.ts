@@ -1037,6 +1037,270 @@ export function liveHidden(node: string, parent: string | null, from: number, to
 }
 
 // ---------------------------------------------------------------------------
+// The Page's toolbar: line prefixes, links, rules and table edits
+// ---------------------------------------------------------------------------
+
+/** What a line is, by its block prefix (after any indent and quote markers). */
+export type LineKind = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'bullet' | 'ordered' | 'task' | 'paragraph';
+
+/** The line prefixes the toolbar toggles. */
+export type PrefixKind = 'h1' | 'h2' | 'h3' | 'bullet' | 'ordered' | 'task' | 'quote';
+
+export interface LineParts {
+  /** Indent and quote markers, kept as they are. */
+  prefix: string;
+  /** The heading or list marker (with a task's checkbox), or ''. */
+  marker: string;
+  body: string;
+  kind: LineKind;
+  quoted: boolean;
+  /** A checked task. */
+  done: boolean;
+}
+
+/** A line's prefix, marker and body. `---` and `**bold**` aren't list items. */
+export function lineParts(line: string): LineParts {
+  const q = /^[ \t]*(?:>[ \t]?)*/.exec(line)![0];
+  let rest = line.slice(q.length);
+  const ind = /^[ \t]*/.exec(rest)![0];
+  rest = rest.slice(ind.length);
+  let marker = '';
+  let kind: LineKind = 'paragraph';
+  let done = false;
+  let m: RegExpExecArray | null;
+  if ((m = /^(#{1,6})(?:[ \t]+|$)/.exec(rest))) {
+    marker = m[0];
+    kind = `h${m[1].length}` as LineKind;
+  } else if ((m = /^(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)/.exec(rest))) {
+    marker = m[0];
+    kind = /^\d/.test(marker) ? 'ordered' : 'bullet';
+    const t = /^\[([ xX])\](?:[ \t]+|$)/.exec(rest.slice(marker.length));
+    if (t) {
+      marker += t[0];
+      kind = 'task';
+      done = t[1] !== ' ';
+    }
+  }
+  return { prefix: q + ind, marker, body: rest.slice(marker.length), kind, quoted: q.includes('>'), done };
+}
+
+/** A position through sorted, non-overlapping changes (inside a replaced range: the end of its insert). */
+function mapThrough(pos: number, changes: ReadonlyArray<{ from: number; to: number; insert: string }>): number {
+  let out = pos;
+  for (const c of changes) {
+    if (c.from > pos) break;
+    if (pos >= c.to) out += c.insert.length - (c.to - c.from);
+    else out = out - (pos - c.from) + c.insert.length;
+  }
+  return out;
+}
+
+/** The lines a selection touches; a line it only reaches the start of isn't one. */
+function touchedLines(doc: string, from: number, to: number): Array<{ from: number; text: string }> {
+  const a = Math.max(0, Math.min(from, to, doc.length));
+  const b0 = Math.min(doc.length, Math.max(from, to));
+  const b = b0 > a && doc[b0 - 1] === '\n' ? b0 - 1 : b0;
+  const lines: Array<{ from: number; text: string }> = [];
+  let start = doc.lastIndexOf('\n', a - 1) + 1;
+  for (;;) {
+    let end = doc.indexOf('\n', start);
+    if (end < 0) end = doc.length;
+    lines.push({ from: start, text: doc.slice(start, end) });
+    if (end >= b || end >= doc.length) break;
+    start = end + 1;
+  }
+  return lines;
+}
+
+const HEADING_MARK: Record<string, string> = { h1: '# ', h2: '## ', h3: '### ' };
+
+/**
+ * Headings, lists, tasks and quotes: toggle the prefix on every line the
+ * selection touches. When every non-blank line already has it, it comes
+ * off; otherwise each line gets it, replacing another heading or list
+ * marker (a task keeps its line's list marker; numbers count from 1). A
+ * quote goes outside everything else, and a quote over several lines marks
+ * the blank lines between too, so it stays one quote.
+ */
+export function linePrefixToggle(doc: string, from: number, to: number, kind: PrefixKind): TextEdit {
+  const lines = touchedLines(doc, from, to);
+  const changes: TextEdit['changes'] = [];
+  if (kind === 'quote') {
+    const quoted = (t: string) => /^[ \t]*>/.test(t);
+    const nonBlank = lines.filter((l) => l.text.trim());
+    const all = nonBlank.length > 0 && nonBlank.every((l) => quoted(l.text));
+    for (const l of lines) {
+      if (all) {
+        const m = /^([ \t]*)>[ \t]?/.exec(l.text);
+        if (m) changes.push({ from: l.from + m[1].length, to: l.from + m[0].length, insert: '' });
+      } else if (!quoted(l.text)) {
+        if (!l.text.trim() && lines.length > 1) changes.push({ from: l.from, to: l.from + l.text.length, insert: '>' });
+        else changes.push({ from: l.from, to: l.from, insert: '> ' });
+      }
+    }
+  } else {
+    const parts = lines.map((l) => ({ ...l, ...lineParts(l.text) }));
+    const considered = lines.length === 1 ? parts : parts.filter((p) => (p.marker + p.body).trim());
+    const all = considered.length > 0 && considered.every((p) => p.kind === kind);
+    considered.forEach((p, i) => {
+      const at = p.from + p.prefix.length;
+      if (all) {
+        if (p.marker) changes.push({ from: at, to: at + p.marker.length, insert: '' });
+        return;
+      }
+      if (p.kind === kind) return;
+      let insert: string;
+      if (kind === 'bullet') insert = '- ';
+      else if (kind === 'ordered') insert = `${i + 1}. `;
+      else if (kind === 'task') insert = (p.kind === 'bullet' || p.kind === 'ordered' ? p.marker.replace(/[ \t]*$/, ' ') : '- ') + '[ ] ';
+      else insert = HEADING_MARK[kind];
+      changes.push({ from: at, to: at + p.marker.length, insert });
+    });
+  }
+  const a = Math.min(from, to);
+  const b = Math.max(from, to);
+  return { changes, selFrom: mapThrough(a, changes), selTo: mapThrough(b, changes) };
+}
+
+/**
+ * Link: `[text]()` with the cursor in the parentheses; a selected URL
+ * becomes `[](url)` with the cursor in the brackets; nothing selected,
+ * `[]()`. A cursor or selection inside a link unwraps it to its text.
+ */
+export function linkToggle(doc: string, from: number, to: number): TextEdit {
+  let a = Math.max(0, Math.min(from, to));
+  let b = Math.min(doc.length, Math.max(from, to));
+  const lineStart = doc.lastIndexOf('\n', a - 1) + 1;
+  let lineEnd = doc.indexOf('\n', lineStart);
+  if (lineEnd < 0) lineEnd = doc.length;
+  const re = /(!?)\[([^\]\n]*)\]\(([^)\n]*)\)/g;
+  const line = doc.slice(lineStart, lineEnd);
+  for (let m = re.exec(line); m; m = re.exec(line)) {
+    if (m[1]) continue; // an image
+    const s = lineStart + m.index;
+    const e = s + m[0].length;
+    if (a >= s && b <= e) return { changes: [{ from: s, to: e, insert: m[2] }], selFrom: s, selTo: s + m[2].length };
+  }
+  if (a === b) return { changes: [{ from: a, to: a, insert: '[]()' }], selFrom: a + 1, selTo: a + 1 };
+  while (a < b && /\s/.test(doc[a])) a++;
+  while (b > a && /\s/.test(doc[b - 1])) b--;
+  const text = doc.slice(a, b);
+  if (isBareUrl(text)) return { changes: [{ from: a, to: b, insert: `[](${text})` }], selFrom: a + 1, selTo: a + 1 };
+  const at = a + text.length + 3;
+  return { changes: [{ from: a, to: b, insert: `[${text}]()` }], selFrom: at, selTo: at };
+}
+
+/**
+ * Horizontal rule: `---` on its own line (the cursor's line when it's
+ * empty, else after it), with a blank line above so it can't turn the line
+ * above into a heading, and the cursor on the line after it.
+ */
+export function ruleInsertion(doc: string, pos: number): TextEdit {
+  const p = Math.max(0, Math.min(pos, doc.length));
+  let lineEnd = doc.indexOf('\n', p);
+  if (lineEnd < 0) lineEnd = doc.length;
+  const lineStart = doc.lastIndexOf('\n', p - 1) + 1;
+  const emptyLine = !doc.slice(lineStart, lineEnd).trim();
+  const at = emptyLine ? lineStart : lineEnd;
+  const lead = emptyLine ? (lineStart === 0 || doc.slice(0, lineStart).endsWith('\n\n') ? '' : '\n') : '\n\n';
+  const insert = `${lead}---\n`;
+  return { changes: [{ from: at, to: lineEnd, insert }], selFrom: at + insert.length, selTo: at + insert.length };
+}
+
+function isDelimiterRow(line: string): boolean {
+  if (!line.includes('-')) return false;
+  const cells = tableCells(line);
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+/** The GFM table around a position, header row to last row. */
+export interface TableSpan {
+  from: number;
+  to: number;
+  /** The table's lines: the header, the delimiter row, then the body. */
+  lines: string[];
+  /** Which of `lines` holds the position. */
+  row: number;
+  /** The position within its line. */
+  offset: number;
+}
+
+/** The table the position is in (a run of `|` lines with a delimiter row under its header), or null. */
+export function tableAt(doc: string, pos: number): TableSpan | null {
+  const p = Math.max(0, Math.min(pos, doc.length));
+  const all = doc.split('\n');
+  const cur = doc.slice(0, p).split('\n').length - 1;
+  const piped = (i: number) => i >= 0 && i < all.length && all[i].includes('|') && !!all[i].trim();
+  if (!piped(cur)) return null;
+  let first = cur;
+  while (piped(first - 1)) first--;
+  let last = cur;
+  while (piped(last + 1)) last++;
+  // The header is the line above the first delimiter row; lines above it aren't the table.
+  let delim = -1;
+  for (let i = first + 1; i <= last; i++) {
+    if (isDelimiterRow(all[i])) {
+      delim = i;
+      break;
+    }
+  }
+  if (delim < 0 || cur < delim - 1) return null;
+  const head = delim - 1;
+  let from = 0;
+  for (let i = 0; i < head; i++) from += all[i].length + 1;
+  const lines = all.slice(head, last + 1);
+  let lineFrom = from;
+  for (let i = head; i < cur; i++) lineFrom += all[i].length + 1;
+  return { from, to: from + lines.join('\n').length, lines, row: cur - head, offset: p - lineFrom };
+}
+
+/** One table row with its cells escaped: `| a | b |`. */
+export function tableRow(cells: readonly string[]): string {
+  return `| ${cells.map((c) => c.replace(/\|/g, '\\|')).join(' | ')} |`;
+}
+
+/** Add row: an empty row under the cursor's (under the delimiter row from the header), the cursor in its first cell. */
+export function tableAddRow(doc: string, pos: number): TextEdit | null {
+  const t = tableAt(doc, pos);
+  if (!t) return null;
+  const cols = tableCells(t.lines[0]).length;
+  const after = Math.max(t.row, 1);
+  let at = t.from;
+  for (let i = 0; i < after; i++) at += t.lines[i].length + 1;
+  at += t.lines[after].length;
+  const insert = `\n${tableRow(Array(cols).fill(''))}`;
+  return { changes: [{ from: at, to: at, insert }], selFrom: at + 3, selTo: at + 3 };
+}
+
+/** The cell index of an offset in a table line. */
+function cellIndexAt(line: string, offset: number): number {
+  let s = line.slice(0, offset);
+  s = s.slice(/^\s*\|?/.exec(s)![0].length);
+  let n = 0;
+  for (let i = 0; i < s.length; i++) if (s[i] === '|' && s[i - 1] !== '\\') n++;
+  return n;
+}
+
+/** Add column: a column right of the cursor's, its header cell ("Column") selected. The rows are re-spaced. */
+export function tableAddColumn(doc: string, pos: number): TextEdit | null {
+  const t = tableAt(doc, pos);
+  if (!t) return null;
+  const cols = tableCells(t.lines[0]).length;
+  const k = Math.min(cellIndexAt(t.lines[t.row], t.offset), cols - 1) + 1;
+  const rows = t.lines.map((line, i) => {
+    const cells = tableCells(line);
+    while (cells.length < cols) cells.push('');
+    cells.length = cols;
+    cells.splice(k, 0, i === 0 ? 'Column' : i === 1 ? '---' : '');
+    return cells;
+  });
+  const insert = rows.map(tableRow).join('\n');
+  // `| a | b ` (the header up to the new cell, without its closing pipe), then `| `.
+  const cell = t.from + tableRow(rows[0].slice(0, k)).length - 1 + 2;
+  return { changes: [{ from: t.from, to: t.to, insert }], selFrom: cell, selTo: cell + 'Column'.length };
+}
+
+// ---------------------------------------------------------------------------
 // Deep next R12: margin prompts
 // ---------------------------------------------------------------------------
 

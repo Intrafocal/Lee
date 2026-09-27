@@ -100,6 +100,14 @@ const {
   touchesActive,
   liveHidden,
   promptAnswered,
+  lineParts,
+  linePrefixToggle,
+  linkToggle,
+  ruleInsertion,
+  tableAt,
+  tableRow,
+  tableAddRow,
+  tableAddColumn,
   AFFORDANCE_DELAY_MS,
   AFFORDANCE_FADE_MS,
 } = mod;
@@ -598,6 +606,129 @@ test('formatting keys: wrap and unwrap (⌘B ⌘I ⌘⇧K), code block (⌘⌥C)
   assert.equal(r.sel, 'Column', 'first header cell selected');
   assert.equal(apply('', tableInsertion('', 0)).doc, `${TABLE_STARTER}\n`);
   assert.equal(apply('a\n\n\nb', tableInsertion('a\n\n\nb', 3)).doc, `a\n\n${TABLE_STARTER}\n\nb`);
+});
+
+// ---------------------------------------------------------------------------
+// The Page's toolbar: toggles, prefixes, link, rule, table edits
+// ---------------------------------------------------------------------------
+
+/** Apply a TextEdit: the new doc, the selected text and the selection. */
+function applyEdit(doc, e) {
+  let out = doc;
+  for (const c of [...e.changes].sort((a, b) => b.from - a.from)) out = out.slice(0, c.from) + c.insert + out.slice(c.to);
+  return { doc: out, sel: out.slice(e.selFrom, e.selTo), from: e.selFrom, to: e.selTo };
+}
+
+test('toolbar: bold, italic, strikethrough and inline code are idempotent toggles', () => {
+  for (const marker of ['**', '*', '~~', '`']) {
+    const once = applyEdit('say hello now', wrapToggle('say hello now', 4, 9, marker));
+    assert.equal(once.doc, `say ${marker}hello${marker} now`, marker);
+    assert.equal(once.sel, 'hello');
+    const twice = applyEdit(once.doc, wrapToggle(once.doc, once.from, once.to, marker));
+    assert.deepEqual([twice.doc, twice.sel], ['say hello now', 'hello'], `${marker} twice is off`);
+  }
+});
+
+test('toolbar: lineParts reads headings, lists, tasks and quotes', () => {
+  assert.deepEqual(lineParts('## Title'), { prefix: '', marker: '## ', body: 'Title', kind: 'h2', quoted: false, done: false });
+  assert.deepEqual(lineParts('  - [x] done'), { prefix: '  ', marker: '- [x] ', body: 'done', kind: 'task', quoted: false, done: true });
+  assert.equal(lineParts('> 1. item').kind, 'ordered');
+  assert.equal(lineParts('> 1. item').quoted, true);
+  assert.equal(lineParts('> 1. item').prefix, '> ');
+  assert.equal(lineParts('---').kind, 'paragraph', 'a rule is not a bullet');
+  assert.equal(lineParts('**bold**').kind, 'paragraph');
+  assert.equal(lineParts('#tag').kind, 'paragraph');
+  assert.equal(lineParts('-').kind, 'bullet', 'an empty item');
+});
+
+test('toolbar: headings toggle and switch level; the cursor stays on its text', () => {
+  const h1 = applyEdit('hello', linePrefixToggle('hello', 2, 2, 'h1'));
+  assert.deepEqual([h1.doc, h1.from], ['# hello', 4]);
+  const off = applyEdit(h1.doc, linePrefixToggle(h1.doc, 4, 4, 'h1'));
+  assert.deepEqual([off.doc, off.from], ['hello', 2], 'H1 twice is off');
+  assert.equal(applyEdit('# hello', linePrefixToggle('# hello', 3, 3, 'h2')).doc, '## hello', 'H1 → H2');
+  assert.equal(applyEdit('- item', linePrefixToggle('- item', 3, 3, 'h3')).doc, '### item', 'a heading replaces a bullet');
+  assert.equal(applyEdit('> quoted', linePrefixToggle('> quoted', 4, 4, 'h2')).doc, '> ## quoted', 'inside the quote');
+});
+
+test('toolbar: lists toggle on every selected line', () => {
+  const on = applyEdit('a\nb\nc', linePrefixToggle('a\nb\nc', 0, 5, 'bullet'));
+  assert.equal(on.doc, '- a\n- b\n- c');
+  assert.equal(applyEdit(on.doc, linePrefixToggle(on.doc, 0, on.doc.length, 'bullet')).doc, 'a\nb\nc', 'twice is off');
+  assert.equal(applyEdit('- a\nb', linePrefixToggle('- a\nb', 0, 5, 'bullet')).doc, '- a\n- b', 'mixed: all get it');
+  assert.equal(applyEdit('a\n\nb', linePrefixToggle('a\n\nb', 0, 4, 'ordered')).doc, '1. a\n\n2. b', 'blank lines skipped, numbered from 1');
+  assert.equal(applyEdit('- a\n- b', linePrefixToggle('- a\n- b', 0, 7, 'ordered')).doc, '1. a\n2. b', 'bullets → numbers');
+  assert.equal(applyEdit('1. a\n2. b', linePrefixToggle('1. a\n2. b', 0, 9, 'ordered')).doc, 'a\nb');
+  assert.equal(applyEdit('a\nb', linePrefixToggle('a\nb', 0, 2, 'bullet')).doc, '- a\nb', 'a selection ending at a line start leaves that line');
+  const empty = applyEdit('', linePrefixToggle('', 0, 0, 'bullet'));
+  assert.deepEqual([empty.doc, empty.from], ['- ', 2]);
+  assert.equal(applyEdit('> a', linePrefixToggle('> a', 3, 3, 'bullet')).doc, '> - a');
+  assert.equal(applyEdit('  - a', linePrefixToggle('  - a', 5, 5, 'bullet')).doc, '  a', 'indent kept');
+});
+
+test('toolbar: task lists keep a list marker; quotes wrap everything', () => {
+  assert.equal(applyEdit('a', linePrefixToggle('a', 1, 1, 'task')).doc, '- [ ] a');
+  assert.equal(applyEdit('- a', linePrefixToggle('- a', 3, 3, 'task')).doc, '- [ ] a');
+  assert.equal(applyEdit('1. a', linePrefixToggle('1. a', 4, 4, 'task')).doc, '1. [ ] a');
+  assert.equal(applyEdit('- [x] a', linePrefixToggle('- [x] a', 7, 7, 'task')).doc, 'a', 'task twice is off');
+  const q = applyEdit('a\n\nb', linePrefixToggle('a\n\nb', 0, 4, 'quote'));
+  assert.equal(q.doc, '> a\n>\n> b', 'one quote, blank line marked');
+  assert.equal(applyEdit(q.doc, linePrefixToggle(q.doc, 0, q.doc.length, 'quote')).doc, 'a\n\nb', 'quote twice is off');
+  assert.equal(applyEdit('- a', linePrefixToggle('- a', 1, 1, 'quote')).doc, '> - a');
+  const e = applyEdit('', linePrefixToggle('', 0, 0, 'quote'));
+  assert.deepEqual([e.doc, e.from], ['> ', 2]);
+  assert.equal(applyEdit('> ', linePrefixToggle('> ', 2, 2, 'quote')).doc, '');
+});
+
+test('toolbar: link wraps, takes a URL, and unwraps', () => {
+  const l = applyEdit('see docs', linkToggle('see docs', 4, 8));
+  assert.deepEqual([l.doc, l.from], ['see [docs]()', 11], 'cursor in the parentheses');
+  const u = applyEdit('go https://example.com now', linkToggle('go https://example.com now', 3, 22));
+  assert.deepEqual([u.doc, u.from], ['go [](https://example.com) now', 4], 'cursor in the brackets');
+  const off = applyEdit('see [docs](u) x', linkToggle('see [docs](u) x', 6, 6));
+  assert.deepEqual([off.doc, off.sel], ['see docs x', 'docs']);
+  const e = applyEdit('ab', linkToggle('ab', 1, 1));
+  assert.deepEqual([e.doc, e.from], ['a[]()b', 2]);
+  assert.equal(applyEdit('![alt](p.png)', linkToggle('![alt](p.png)', 3, 3)).doc, '![alt](p.png)'.slice(0, 3) + '[]()' + '![alt](p.png)'.slice(3), 'images are not unwrapped');
+});
+
+test('toolbar: horizontal rule gets a blank line above (never a setext heading)', () => {
+  const r = applyEdit('text', ruleInsertion('text', 2));
+  assert.deepEqual([r.doc, r.from], ['text\n\n---\n', 10]);
+  assert.equal(applyEdit('text\n', ruleInsertion('text\n', 5)).doc, 'text\n\n---\n');
+  assert.equal(applyEdit('', ruleInsertion('', 0)).doc, '---\n');
+  const mid = applyEdit('a\n\n\nb', ruleInsertion('a\n\n\nb', 3));
+  assert.deepEqual([mid.doc, mid.from], ['a\n\n---\n\nb', 7]);
+});
+
+test('toolbar: tableAt, add row, add column', () => {
+  const doc = `Intro\n\n${TABLE_STARTER}\n\nafter`;
+  assert.equal(tableAt(doc, 3), null, 'not in the intro');
+  assert.equal(tableAt(doc, doc.length), null, 'not after it');
+  const t = tableAt(doc, 9);
+  assert.deepEqual([t.from, t.to, t.row, t.lines.length], [7, 7 + TABLE_STARTER.length, 0, 4]);
+  assert.equal(tableAt('x | y\n| A |\n| --- |', 1), null, 'a piped line above the header is not the table');
+  assert.equal(tableAt('x | y\n| A |\n| --- |', 7).from, 6);
+  assert.equal(tableAt('a | b\nc | d', 1), null, 'no delimiter row');
+
+  const row = applyEdit(doc, tableAddRow(doc, 9));
+  assert.equal(row.doc, `Intro\n\n| Column | Column | Column |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n|  |  |  |\n\nafter`, 'from the header: under the delimiter');
+  assert.equal(row.doc.slice(row.from - 2, row.from + 2), '|  |', 'cursor in the new first cell');
+  assert.equal(parseTable(row.doc.slice(7, row.doc.indexOf('\n\nafter'))).rows.length, 3);
+  const last = doc.indexOf('\n\nafter') - 1;
+  assert.equal(applyEdit(doc, tableAddRow(doc, last)).doc, `Intro\n\n${TABLE_STARTER}\n|  |  |  |\n\nafter`, 'from the last row: at the end');
+  assert.equal(tableAddRow('plain', 2), null);
+
+  const small = '| A | B |\n| --- | :-: |\n| 1 | 2 |';
+  const c1 = applyEdit(small, tableAddColumn(small, 6));
+  assert.deepEqual([c1.doc, c1.sel], ['| A | B | Column |\n| --- | :-: | --- |\n| 1 | 2 |  |', 'Column'], 'right of B');
+  const c2 = applyEdit(small, tableAddColumn(small, small.indexOf('1') + 1));
+  assert.equal(c2.doc, '| A | Column | B |\n| --- | --- | :-: |\n| 1 |  | 2 |', 'right of the body cell, alignment kept');
+  assert.equal(c2.sel, 'Column');
+  const esc = '| a \\| b | c |\n| --- | --- |';
+  assert.equal(applyEdit(esc, tableAddColumn(esc, 2)).doc, '| a \\| b | Column | c |\n| --- | --- | --- |', 'escaped pipes stay one cell');
+  assert.equal(tableAddColumn('plain', 1), null);
+  assert.equal(tableRow(['', '', '']), '|  |  |  |');
 });
 
 test('promptAnswered: a matching heading with text under it fades the prompt', () => {
