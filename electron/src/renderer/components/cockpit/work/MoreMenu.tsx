@@ -1,11 +1,14 @@
 /**
  * MoreMenu - the quiet `⋯` menu on Work's waiting cards and Library's cards
  * (cockpit-design §4.3, §5): the mouse way to what a swipe or a key does, and
- * the less common actions. Text-only items; Esc or a click outside closes it.
+ * the less common actions; Work's detail keeps its rarer actions here too,
+ * behind the `more` icon (`icon`). Text-only items; Esc or a click outside
+ * closes it.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Btn } from '../ui';
+import type { IconName } from '../../Icon';
+import { Btn, IconAction } from '../ui';
 
 export interface MoreItem {
   label: string;
@@ -13,7 +16,7 @@ export interface MoreItem {
   disabled?: boolean;
 }
 
-export const MoreMenu: React.FC<{ items: MoreItem[]; label?: string }> = ({ items, label = 'More' }) => {
+export const MoreMenu: React.FC<{ items: MoreItem[]; label?: string; icon?: IconName }> = ({ items, label = 'More', icon }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -39,9 +42,13 @@ export const MoreMenu: React.FC<{ items: MoreItem[]; label?: string }> = ({ item
         }
       }}
     >
-      <Btn kind="quiet" aria-label={label} aria-haspopup="menu" aria-expanded={open} title={label} onClick={() => setOpen((o) => !o)}>
-        ⋯
-      </Btn>
+      {icon ? (
+        <IconAction icon={icon} label={label} open={open} expanded={open} onClick={() => setOpen((o) => !o)} />
+      ) : (
+        <Btn kind="quiet" aria-label={label} aria-haspopup="menu" aria-expanded={open} title={label} onClick={() => setOpen((o) => !o)}>
+          ⋯
+        </Btn>
+      )}
       {open && (
         <div className="work-more-menu" role="menu">
           {items.map((it) => (

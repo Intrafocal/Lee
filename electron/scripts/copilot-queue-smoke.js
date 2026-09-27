@@ -267,6 +267,47 @@ test('agents: busy with busy_since, idle with last_summary after Stop; no prompt
   }
 });
 
+test('agents: updates ring keeps the last 10 turns (summary clipped to 600, lee-status parsed), newest last', () => {
+  const { q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude: api' }]);
+  try {
+    hook('SessionStart');
+    assert.deepStrictEqual(q.snapshot().agents[0].updates, [], 'no turns yet');
+    const logged = [];
+    const onEv = (e) => logged.push(e);
+    copilotBus.on('event', onEv);
+    for (let i = 0; i < 12; i++) {
+      hook('UserPromptSubmit', { prompt: `SECRET PROMPT ${i}` });
+      hook('Stop', { last_assistant_message: `Turn ${i}.` });
+    }
+    hook('UserPromptSubmit', { prompt: 'long' });
+    const long = 'Refactored the router. ' + 'z'.repeat(2000) + '\n\n```lee-status\nstatus: blocked\nsummary: Need the key\nnext: ask Ben\n```';
+    hook('Stop', { last_assistant_message: long });
+    copilotBus.off('event', onEv);
+    const ups = q.snapshot().agents[0].updates;
+    assert.strictEqual(ups.length, 10, 'capped at 10');
+    assert.strictEqual(ups[0].summary, 'Turn 3.', 'oldest dropped first');
+    const last = ups[ups.length - 1];
+    assert.ok(last.summary.length <= 600, `clipped to 600 (${last.summary.length})`);
+    assert.match(last.summary, /^Refactored the router\./);
+    assert.ok(!last.summary.includes('lee-status'), 'the parsed block is not repeated in the summary');
+    assert.strictEqual(last.lee_status.status, 'blocked');
+    assert.strictEqual(last.lee_status.summary, 'Need the key');
+    assert.strictEqual(last.lee_status.next, 'ask Ben');
+    assert.ok(!Number.isNaN(Date.parse(last.at)), 'at is an ISO time');
+    assert.strictEqual(ups[0].lee_status, null);
+    assert.ok(Array.isArray(q.snapshot({ compact: true }).agents[0].updates), 'compact snapshots carry it too');
+    ups[0].summary = 'mutated';
+    assert.strictEqual(q.snapshot().agents[0].updates[0].summary, 'Turn 3.', 'snapshots get copies');
+    const endEvents = logged.filter((e) => e.type === 'agent.turn_end');
+    assert.strictEqual(endEvents.length, 13);
+    assert.ok(endEvents.every((e) => !('updates' in (e.data ?? {}))), 'the ring itself is never logged');
+    assert.ok(!JSON.stringify(logged).includes('SECRET'), 'no prompt text logged');
+  } finally {
+    done();
+  }
+});
+
 test('agents: warm and tab-less PTYs are not listed; exited PTY drops out', () => {
   const { pty, q, hook } = setup();
   pty.add(9, { name: 'Claude (warm)' });

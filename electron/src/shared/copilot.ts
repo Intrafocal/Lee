@@ -6,7 +6,7 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
-import type { AgentActivity, AgentNow, DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
+import type { AgentActivity, AgentNow, AgentUpdate, DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -353,6 +353,8 @@ export interface AgentSummary {
   now?: AgentNow | null;
   /** Cockpit design §7.1: the last 8 activity entries, newest last. */
   recent?: AgentActivity[];
+  /** Work's Updates feed: the last 10 finished turns (summary, lee-status), newest last. */
+  updates?: AgentUpdate[];
 }
 
 export interface AttentionSnapshot {

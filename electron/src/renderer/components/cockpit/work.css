@@ -379,6 +379,80 @@
   color: var(--text-3);
 }
 
+.work-reply.is-waiting .work-reply-field {
+  opacity: 0.6;
+}
+
+/* Updates: the agent's recent turn summaries, newest first */
+
+.work-updates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.work-updates li {
+  display: flex;
+  gap: var(--space-3);
+  padding: 4px 0;
+  color: var(--text-2);
+}
+
+.work-update-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
+.work-update-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+}
+
+.work-update-text {
+  color: var(--text-1);
+}
+
+.work-update-next {
+  flex-basis: 100%;
+  color: var(--text-3);
+}
+
+/* Along the way: folded by default */
+
+.work-along-fold {
+  margin-top: var(--space-5);
+}
+
+.work-fold-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.work-fold-toggle:hover {
+  color: var(--text-2);
+}
+
+.work-fold-chevron {
+  font-size: 10px;
+}
+
 .work-picker {
   display: flex;
   flex-direction: column;

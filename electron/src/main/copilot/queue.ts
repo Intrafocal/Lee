@@ -14,7 +14,7 @@ import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent } from 'electron';
 import { windowRegistry } from '../window-registry';
 import type { PTYManager } from '../pty-manager';
 import { COPILOT_IPC } from '../../shared/copilot';
-import type { DepthRating, LeeMode } from '../../shared/cockpit';
+import type { AgentUpdate, DepthRating, LeeMode } from '../../shared/cockpit';
 import type {
   ActionResult,
   Actor,
@@ -75,6 +75,9 @@ const WS_DEBOUNCE_MS = 250;
 /** last_summary length in compact snapshots (devices). */
 const COMPACT_AGENT_SUMMARY_MAX = 280;
 const TOOL_NAME_MAX = 40;
+/** Work's Updates feed (cockpit-design §4.2): finished turns kept per session, and each summary's cap. */
+export const AGENT_UPDATES_MAX = 10;
+export const AGENT_UPDATE_SUMMARY_MAX = 600;
 const SESSION_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_SNOOZE_MINUTES = 7 * 24 * 60;
 const PERMISSION_MODES = new Set<HandoffLaunch['permission_mode']>(['acceptEdits', 'default', 'plan']);
@@ -169,6 +172,13 @@ function shortActivityTool<T extends { tool: string } | null>(a: T): T {
   return a ? { ...a, tool: shortToolName(a.tool) ?? a.tool } : a;
 }
 
+/** A turn's message for the Updates feed: without its lee-status block (that is parsed), clipped. */
+function updateSummary(full: string | null): string | null {
+  if (!full) return null;
+  const text = full.replace(/(^|\n)[ \t]*(`{3,}|~{3,})[ \t]*lee-status[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*\2[ \t]*(?=\r?\n|$)/g, '$1').trim();
+  return text ? clip(text, AGENT_UPDATE_SUMMARY_MAX) : null;
+}
+
 function iso(ms: number | null): string | null {
   return ms == null ? null : new Date(ms).toISOString();
 }
@@ -205,6 +215,8 @@ export class CopilotQueue {
   private approvalMeta = new Map<string, ApprovalMeta>();
   /** Per-agent state last seen by noteAgents(). */
   private agentsSig = '';
+  /** Work's Updates feed: the last AGENT_UPDATES_MAX finished turns per session id, newest last. In memory only. */
+  private turnUpdates = new Map<string, AgentUpdate[]>();
   /** Per-agent activity (now, latest entry) last seen by noteAgents(). */
   private activitySig = '';
   /** pushSignature() of the last device push. */
@@ -308,6 +320,7 @@ export class CopilotQueue {
       this.queue.recompute(now);
       this.queue.prune(now);
       this.sessions.prune(now, SESSION_KEEP_MS);
+      for (const id of Array.from(this.turnUpdates.keys())) if (!this.sessions.get(id)) this.turnUpdates.delete(id);
       // A tab can adopt a prewarmed Claude without a hook event.
       this.noteAgents();
       for (const id of Array.from(this.approvalMeta.keys())) {
@@ -789,6 +802,7 @@ export class CopilotQueue {
         s.last_summary = summary;
         s.last_lee_status = lee;
         ev('agent.turn_end', { busy_ms: busyMs, ...(summary ? { summary } : {}), ...(lee ? { lee_status: lee } : {}) });
+        this.noteTurnUpdate(s.session_id, { at: new Date(now).toISOString(), summary: updateSummary(full), lee_status: lee });
         this.away.noteTurnEnd();
         this.queue.resolveWhere((i) => sourceKey(i.source) === key && isPromptKind(i.kind), 'answered_in_tab', now);
         this.openTurnItem(s, src, summary, lee, now);
@@ -1353,8 +1367,26 @@ export class CopilotQueue {
         files_touched_count: s.files_written.length,
         now: shortActivityTool(this.sessions.activityNow(s, now)),
         recent: this.sessions.recentActivity(s).map((e) => shortActivityTool(e)),
+        updates: this.agentUpdates(s.session_id),
       };
     });
+  }
+
+  /** Record one finished turn in the session's Updates ring (newest last, capped). */
+  private noteTurnUpdate(sessionId: string, update: AgentUpdate): void {
+    if (!update.summary && !update.lee_status) return;
+    const ring = this.turnUpdates.get(sessionId) ?? [];
+    ring.push(update);
+    if (ring.length > AGENT_UPDATES_MAX) ring.splice(0, ring.length - AGENT_UPDATES_MAX);
+    this.turnUpdates.set(sessionId, ring);
+  }
+
+  /** A session's Updates, newest last (copies). */
+  agentUpdates(sessionId: string): AgentUpdate[] {
+    return (this.turnUpdates.get(sessionId) ?? []).map((u) => ({
+      ...u,
+      lee_status: u.lee_status ? { ...u.lee_status, files: [...u.lee_status.files] } : null,
+    }));
   }
 
   handoffProposals(): HandoffProposals {

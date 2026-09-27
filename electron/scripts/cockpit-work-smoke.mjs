@@ -5,7 +5,9 @@
  * "earlier" fold at 2h, the swipe accumulator (threshold, direction, snap
  * back, ignoring vertical), the quick replies shown (3 in the list, 4 in the
  * detail), stepping to the next and previous item in the detail view, and
- * Library's word estimate and "quiet". Compiles the real source with
+ * Library's word estimate and "quiet", the detail's reply box states (item,
+ * idle PTY, busy, none), its Updates feed and dedupe, the merged "Along the
+ * way" lines and which actions are icons and which sit in ⋯. Compiles the real source with
  * esbuild, no React, no DOM. Then renders WorkSection, WorkDetail and
  * LibrarySection to static HTML with fixture data (react-dom/server) and
  * checks the one-next-step rule and the chips each place shows.
@@ -283,11 +285,104 @@ test('detail: along the way pairs pre and post, past tense for post, last 8', ()
   const along = m.alongTheWay(recent);
   assert.deepEqual(along.map((x) => x.text), ['Edited a.ts', 'Ran tests (failed)', 'Reading b.ts']);
   assert.equal(along[1].failed, true);
-  const many = Array.from({ length: 12 }, (_, i) => e(i, { preview: `echo ${i}` }));
+  const many = Array.from({ length: 12 }, (_, i) => e(i, { preview: `cmd${i} x` }));
   const last = m.alongTheWay(many);
   assert.equal(last.length, 8);
-  assert.equal(last[7].text, 'Ran echo');
+  assert.equal(last[7].text, 'Ran cmd11');
   assert.match(m.clockTime(ago(0)), /^\d\d:\d\d$/);
+});
+
+test('detail: along the way merges identical consecutive lines ("Ran grep ×3"), not separated ones', () => {
+  const e = (i, preview, over = {}) => ({ at: ago(20 - i), tool: 'Bash', preview, files: [], writes: false, phase: 'post', ...over });
+  const along = m.alongTheWay([
+    e(0, 'grep -rn foo src'),
+    e(1, 'cd electron && grep bar'),
+    e(2, 'grep baz'),
+    e(3, 'npm test'),
+    e(4, 'grep again'),
+  ]);
+  assert.deepEqual(along.map((x) => x.text), ['Ran grep ×3', 'Ran tests', 'Ran grep']);
+  assert.deepEqual(along.map((x) => x.count), [3, 1, 1]);
+  assert.equal(along[0].at, ago(18), 'a merged line carries its latest time');
+  const failed = m.alongTheWay([e(0, 'grep a'), e(1, 'grep b', { failed: true })]);
+  assert.deepEqual(failed.map((x) => x.text), ['Ran grep', 'Ran grep (failed)'], 'a failure never merges into a success');
+  assert.equal(m.alongLabel(3), 'Along the way (3)');
+});
+
+// ---------------------------------------------------------------------------
+// The reply box, Updates, actions
+// ---------------------------------------------------------------------------
+
+test('reply: item / idle PTY / busy / no PTY; Send is next unless Allow shows', () => {
+  assert.equal(m.replyMode({ replyItem: {}, ptyId: 3, working: true }), 'item', 'an item that takes text wins, even mid-turn');
+  assert.equal(m.replyMode({ replyItem: {}, ptyId: null, working: false }), 'item');
+  assert.equal(m.replyMode({ replyItem: null, ptyId: 3, working: false }), 'pty');
+  assert.equal(m.replyMode({ replyItem: null, ptyId: 3, working: true }), 'busy');
+  assert.equal(m.replyMode({ replyItem: null, ptyId: null, working: false }), 'none');
+  assert.equal(m.sendIsNext('item', false), true);
+  assert.equal(m.sendIsNext('pty', false), true);
+  assert.equal(m.sendIsNext('pty', true), false, 'Allow wins');
+  assert.equal(m.sendIsNext('busy', false), false);
+  assert.equal(m.sendIsNext('none', false), false);
+  assert.equal(m.tabSendError('busy'), m.REPLY_BUSY_LINE);
+  assert.match(m.tabSendError('awaiting_input'), /answer that first/);
+  assert.equal(m.tabSendError('weird'), 'weird');
+  assert.equal(m.tabSendError(undefined), 'failed');
+});
+
+const lee = (over = {}) => ({ status: 'done', summary: null, blockers: null, files: [], next: null, ...over });
+
+test('updates: newest first, status words, lee summary else first sentence, next, cap 10', () => {
+  const ups = [
+    { at: ago(30), summary: 'Looked at the login flow. It uses cookies.', lee_status: null },
+    { at: ago(20), summary: 'long text', lee_status: lee({ status: 'in-progress', summary: 'Halfway through the refactor', next: 'wire the tests' }) },
+    { at: ago(10), summary: 'x', lee_status: lee({ status: 'blocked', summary: 'Need the API key' }) },
+    { at: ago(5), summary: 'y', lee_status: lee({ status: 'waiting', summary: 'Which branch?' }) },
+  ];
+  const feed = m.updatesFeed(ups);
+  assert.deepEqual(feed.map((u) => u.text), ['Which branch?', 'Need the API key', 'Halfway through the refactor', 'Looked at the login flow.']);
+  assert.deepEqual(feed.map((u) => u.status), ['waiting', 'blocked', 'in progress', null]);
+  assert.deepEqual(feed.map((u) => u.needsYou), [true, true, false, false], 'ember only for blocked or waiting');
+  assert.equal(feed[2].next, 'wire the tests');
+  assert.equal(feed[3].next, null);
+  assert.match(feed[0].time, /^\d\d:\d\d$/);
+  const many = Array.from({ length: 14 }, (_, i) => ({ at: ago(60 - i), summary: `Step ${i}.`, lee_status: null }));
+  const capped = m.updatesFeed(many);
+  assert.equal(capped.length, 10);
+  assert.equal(capped[0].text, 'Step 13.');
+  assert.equal(m.firstSentence('**Done.** Tests pass.\n\n```lee-status\nstatus: done\n```'), 'Done.');
+  assert.equal(m.updatesFeed(null).length, 0);
+});
+
+test('updates: the newest is skipped when "It said" shows the same words', () => {
+  const said = 'Fixed the bug.\n\nAll tests pass.';
+  const ups = [
+    { at: ago(20), summary: 'Earlier turn.', lee_status: null },
+    { at: ago(5), summary: 'Fixed the bug.\n\nAll tests pass.\n\n```lee-status\nstatus: done\nsummary: Fixed it\n```', lee_status: lee({ summary: 'Fixed it' }) },
+  ];
+  assert.deepEqual(m.updatesFeed(ups, said).map((u) => u.text), ['Earlier turn.']);
+  assert.deepEqual(m.updatesFeed(ups, 'Something else').map((u) => u.text), ['Fixed it', 'Earlier turn.']);
+  assert.deepEqual(m.updatesFeed(ups, 'Fixed it').map((u) => u.text), ['Earlier turn.'], 'the same lee-status summary counts too');
+  assert.deepEqual(m.updatesFeed([ups[0], ups[0]], 'Earlier turn.').map((u) => u.text), ['Earlier turn.'], 'only the newest is skipped');
+});
+
+test('actions: icons for the common ones, the rest in ⋯, per task state', () => {
+  const t = (over = {}) => ({ confirmed: true, status: 'running', workstream: null, ...over });
+  const agent = { checkin: null, canCheckin: true, task: null };
+  let a = m.detailActions({ tile: agent, ptyId: 3, task: null });
+  assert.deepEqual(a.icons, ['checkin', 'rename', 'terminal', 'close']);
+  assert.deepEqual(a.more, ['assign']);
+  a = m.detailActions({ tile: { ...agent, checkin: { state: 'queued' } }, ptyId: 3, task: null });
+  assert.equal(a.icons[0], 'cancel-checkin');
+  a = m.detailActions({ tile: { ...agent, task: {} }, ptyId: 3, task: t({ confirmed: false }) });
+  assert.deepEqual(a.icons, ['checkin', 'rename', 'terminal', 'confirm', 'close']);
+  assert.deepEqual(a.more, ['link', 'priority', 'promote', 'escalate', 'hester-view']);
+  a = m.detailActions({ tile: { ...agent, task: {} }, ptyId: 3, task: t({ status: 'review', workstream: 'ws1' }) });
+  assert.deepEqual(a.icons, ['checkin', 'rename', 'terminal', 'accept', 'discard', 'close']);
+  assert.deepEqual(a.more, ['link', 'priority', 'escalate', 'hester-view'], 'no Promote… once in a workstream');
+  a = m.detailActions({ tile: null, ptyId: null, task: t({ status: 'done' }) });
+  assert.deepEqual(a.icons, ['rename']);
+  assert.deepEqual(a.more, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -511,6 +606,66 @@ test('render: the detail’s Allow is its next step while an approval is pending
   assert.match(html, /started 18m ago/);
 });
 
+const replyBox = (html) => /class="work-reply/.test(html);
+const sendKind = (html) => (/ui-btn is-(next|plain)"[^>]*>Send/.exec(html) ?? [])[1] ?? null;
+
+test('render: an idle agent with no item still gets the reply box, Send as the next step', () => {
+  const html = render.detail(fixtureCtx(), subject({ tile: tile(3) }));
+  assert.ok(replyBox(html));
+  assert.equal(chipCount(html), 4);
+  assert.equal(sendKind(html), 'next');
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /Sent exactly as written/);
+});
+
+test('render: a busy agent’s reply box is disabled with the quiet line; no next step', () => {
+  const html = render.detail(fixtureCtx(), subject({ tile: tile(3, { working: true }) }));
+  assert.ok(replyBox(html));
+  assert.match(html, /It&#x27;s working; reply when it finishes\./);
+  assert.match(html, /<textarea[^>]*disabled/);
+  assert.equal(sendKind(html), 'plain');
+  assert.equal(nextCount(html), 0);
+});
+
+test('render: no PTY (agent gone) means no reply box', () => {
+  const task = { id: 't9', title: 'Old', name: null, status: 'running', confirmed: true, serves: [], workstream: null, created_at: ago(30), overrides: null, urgency: null };
+  const html = render.detail(fixtureCtx(), subject({ id: 'work:task:t9', task, tile: null, ptyId: null }));
+  assert.ok(!replyBox(html));
+  assert.equal(nextCount(html), 0);
+});
+
+test('render: an approval on an idle agent keeps Allow the one next step; Send is plain', () => {
+  const html = render.detail(fixtureCtx(), subject({ item: approvalItem, tile: tile(3, { approval: approvalItem }) }));
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /is-next[^>]*>Allow/);
+  assert.equal(sendKind(html), 'plain');
+});
+
+test('render: Updates below the reply box, newest first; Along the way folded below it; icon actions with ⋯', () => {
+  const recent = [
+    { at: ago(4), tool: 'Bash', preview: 'grep a', files: [], writes: false, phase: 'post' },
+    { at: ago(3), tool: 'Bash', preview: 'grep b', files: [], writes: false, phase: 'post' },
+  ];
+  const updates = [
+    { at: ago(30), summary: 'Read the code.', lee_status: lee({ status: 'blocked', summary: 'Need a key', next: 'ask Ben' }) },
+    { at: ago(10), summary: 'Summary words.', lee_status: null },
+  ];
+  const html = render.detail(fixtureCtx(), subject({ tile: tile(3), agent: { pty_id: 3, recent, updates } }));
+  const at = (re) => html.search(re);
+  assert.ok(at(/class="work-reply/) < at(/Updates/), 'Updates below the reply box');
+  assert.ok(at(/Updates/) < at(/Along the way \(1\)/), 'Along the way below Updates');
+  assert.ok(at(/Summary words\./) < at(/Need a key/), 'newest first');
+  assert.match(html, /next: ask Ben/);
+  assert.match(html, /aria-label="blocked"/, 'an ember dot for blocked');
+  assert.match(html, /aria-expanded="false"[^>]*>.*Along the way \(1\)/, 'folded by default');
+  assert.ok(!html.includes('Ran grep ×2'), 'the lines stay folded');
+  for (const label of ['Check in', 'Rename', 'Open terminal in Manual', 'Close agent', 'More actions']) {
+    assert.match(html, new RegExp(`class="ui-icon-action[^"]*"[^>]*aria-label="${label}"`), label);
+  }
+  assert.ok(!/ui-quiet-links/.test(html), 'no quiet links row');
+  assert.equal(nextCount(html), 1);
+});
+
 test('render: a text item’s detail shows all four quick replies, the reply box and Send as the next step', () => {
   const recent = [{ at: ago(3), tool: 'Edit', preview: 'a.ts', files: ['src/a.ts'], writes: true, phase: 'post' }];
   const html = render.detail(
@@ -521,19 +676,18 @@ test('render: a text item’s detail shows all four quick replies, the reply box
   assert.equal(nextCount(html), 1);
   assert.match(html, /Sent exactly as written/);
   assert.match(html, /It asked/);
-  assert.match(html, /Along the way/);
-  assert.match(html, /Edited a\.ts/);
-  assert.match(html, /Assign…/, 'an agent with no task offers Assign…');
+  assert.match(html, /Along the way \(1\)/);
+  assert.match(html, /aria-label="More actions"/, 'Assign… and the rest sit behind ⋯');
 });
 
-test('render: an open task’s detail keeps Tasks’ actions as quiet links (Promote…, Escalate → Explore, Hester’s view, Priority…)', () => {
-  const task = { id: 't1', title: 'Fix login', name: null, status: 'running', confirmed: true, serves: [], workstream: null, created_at: ago(30), overrides: null, urgency: null };
+test('render: a task in review shows Accept and Discard as icons; its rarer actions stay behind ⋯ (closed menu)', () => {
+  const task = { id: 't1', title: 'Fix login', name: null, status: 'review', confirmed: false, serves: [], workstream: null, created_at: ago(30), overrides: null, urgency: null };
   const html = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task, tile: tile(3, { task }) }));
-  for (const label of ['Promote…', 'Escalate → Explore', 'Hester&#x27;s view', 'Priority…', 'Link to a goal…']) assert.ok(html.includes(label), label);
-  const inStream = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, workstream: 'ws1' }, tile: tile(3) }));
-  assert.ok(!inStream.includes('Promote…'), 'no Promote… once it is in a workstream');
+  for (const label of ['Confirm task', 'Accept', 'Discard', 'More actions']) assert.match(html, new RegExp(`aria-label="${label}"`), label);
+  for (const label of ['Promote…', 'Escalate → Explore', 'Priority…', 'Link to a goal…']) assert.ok(!html.includes(label), `${label} is in the closed menu`);
   const closed = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, status: 'done' }, tile: null, ptyId: null }));
-  for (const label of ['Promote…', 'Escalate → Explore', 'Priority…']) assert.ok(!closed.includes(label), `closed: no ${label}`);
+  assert.ok(!closed.includes('More actions'), 'a closed task has no ⋯');
+  assert.equal(nextCount(closed), 0);
 });
 
 test('render: Library has no next step', () => {

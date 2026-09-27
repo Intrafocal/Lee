@@ -11,7 +11,7 @@
 
 import type { AgentSummary, AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 import type { CockpitTask, OperationInfo, TabRuntimeInfo } from '../../shared/cockpit';
-import { QUICK_REPLIES, describeActivity, type AgentActivity } from '../../shared/cockpit';
+import { QUICK_REPLIES, describeActivity, type AgentActivity, type AgentUpdate } from '../../shared/cockpit';
 import { formatDuration, plainLine, taskTitle, type TileModel } from './cockpitModel';
 
 // ---------------------------------------------------------------------------
@@ -366,22 +366,205 @@ export function stepItem(ids: readonly string[], current: string | null, delta: 
 
 export interface AlongEntry {
   at: string;
+  /** The phrase, with " ×n" when n identical lines in a row were merged. */
   text: string;
   failed: boolean;
+  /** How many identical consecutive lines this one stands for (1 when alone). */
+  count: number;
 }
 
 /**
- * "Along the way" (§4.2): the last `limit` activity entries, oldest first. A
- * pre entry whose post came later reads once, in the past tense.
+ * "Along the way" (§4.2): the last `limit` activity lines, oldest first. A
+ * pre entry whose post came later reads once, in the past tense; identical
+ * consecutive lines merge into one ("Ran grep ×3", at the latest's time).
  */
 export function alongTheWay(recent: readonly AgentActivity[] | null | undefined, limit = 8): AlongEntry[] {
   const list = recent ?? [];
-  const out: AlongEntry[] = [];
+  const out: Array<AlongEntry & { phrase: string }> = [];
   list.forEach((e, i) => {
     if (e.phase === 'pre' && list.slice(i + 1).some((p) => p.phase === 'post' && p.tool === e.tool && p.preview === e.preview)) return;
-    out.push({ at: e.at, text: describeActivity(e, e.phase === 'post' ? 'past' : 'now'), failed: !!e.failed });
+    const phrase = describeActivity(e, e.phase === 'post' ? 'past' : 'now');
+    const prev = out[out.length - 1];
+    if (prev && prev.phrase === phrase) {
+      prev.count++;
+      prev.at = e.at;
+      prev.text = `${phrase} ×${prev.count}`;
+      return;
+    }
+    out.push({ at: e.at, text: phrase, phrase, failed: !!e.failed, count: 1 });
   });
-  return out.slice(-limit);
+  return out.slice(-limit).map(({ phrase: _p, ...rest }) => rest);
+}
+
+/** The fold's label: "Along the way (n)", n the lines it holds. */
+export function alongLabel(n: number): string {
+  return `Along the way (${n})`;
+}
+
+// ---------------------------------------------------------------------------
+// The detail's reply box (§4.2): always there while the agent is
+// ---------------------------------------------------------------------------
+
+/**
+ * Which reply box the detail shows: 'item' answers the attention item that
+ * takes text; 'pty' types into the idle agent's terminal (purpose 'reply');
+ * 'busy' shows the box disabled until its turn ends; 'none' when there is
+ * no item and no live terminal.
+ */
+export type ReplyMode = 'item' | 'pty' | 'busy' | 'none';
+
+export function replyMode(input: { replyItem: unknown; ptyId: number | null | undefined; working: boolean | null | undefined }): ReplyMode {
+  if (input.replyItem) return 'item';
+  if (input.ptyId == null) return 'none';
+  return input.working ? 'busy' : 'pty';
+}
+
+/** Send is the view's one next step unless an approval's Allow is shown (Allow wins, §0 rule 1). */
+export function sendIsNext(mode: ReplyMode, approvalShown: boolean): boolean {
+  return !approvalShown && (mode === 'item' || mode === 'pty');
+}
+
+/** The quiet line under a disabled (busy) reply box. */
+export const REPLY_BUSY_LINE = "It's working; reply when it finishes.";
+
+/** A tabs.send refusal in words. */
+export function tabSendError(error: string | null | undefined): string {
+  switch (error) {
+    case 'busy':
+      return REPLY_BUSY_LINE;
+    case 'awaiting_input':
+      return 'It is waiting on a prompt in its terminal; answer that first.';
+    case 'state_unknown':
+      return "Can't tell whether it's ready for input; reply in its terminal.";
+    case 'not_found':
+      return 'That agent is gone.';
+    case 'forbidden':
+      return 'Not allowed to type into that terminal.';
+    case 'invalid':
+      return 'That reply is empty or too long.';
+    default:
+      return error || 'failed';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The detail's Updates feed (§4.2): the agent's recent turn summaries
+// ---------------------------------------------------------------------------
+
+export interface UpdateEntry {
+  at: string;
+  /** "14:05". */
+  time: string;
+  /** done / in progress / blocked / waiting; null without a lee-status. */
+  status: string | null;
+  /** Blocked or waiting: the one ember dot. */
+  needsYou: boolean;
+  text: string;
+  /** lee_status.next, shown as "next: …". */
+  next: string | null;
+}
+
+const STATUS_WORDS: Record<string, string> = { done: 'done', 'in-progress': 'in progress', blocked: 'blocked', waiting: 'waiting' };
+
+const LEE_STATUS_FENCE = /(^|\n)[ \t]*(`{3,}|~{3,})[ \t]*lee-status[\s\S]*?(\n[ \t]*\2[ \t]*(?=\n|$)|$)/g;
+
+function squash(text: string | null | undefined): string {
+  return (text ?? '').replace(LEE_STATUS_FENCE, '$1').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** The first sentence of an agent's message, plain (markdown and code dropped). */
+export function firstSentence(text: string | null | undefined, max = 200): string {
+  const line = plainLine((text ?? '').replace(LEE_STATUS_FENCE, '$1'), 2000);
+  if (!line) return '';
+  const m = /^(.+?[.!?])(\s|$)/.exec(line);
+  const sentence = m ? m[1] : line;
+  return sentence.length > max ? `${sentence.slice(0, max - 1).trimEnd()}…` : sentence;
+}
+
+/**
+ * The Updates list: newest first, up to `limit`. Each shows its time, a
+ * status word, lee_status.summary (else the message's first sentence) and
+ * lee_status.next. The newest is left out when "It said" above already
+ * shows the same words.
+ */
+export function updatesFeed(updates: readonly AgentUpdate[] | null | undefined, said?: string | null, limit = 10): UpdateEntry[] {
+  const list = [...(updates ?? [])].reverse();
+  const saidKey = squash(said);
+  if (saidKey && list.length) {
+    const newest = list[0];
+    if (squash(newest.summary) === saidKey || squash(newest.lee_status?.summary) === saidKey) list.shift();
+  }
+  const out: UpdateEntry[] = [];
+  for (const u of list) {
+    const lee = u.lee_status;
+    const text = lee?.summary?.trim() || firstSentence(u.summary);
+    if (!text && !lee?.next) continue;
+    const status = lee?.status ? STATUS_WORDS[lee.status] ?? null : null;
+    out.push({
+      at: u.at,
+      time: clockTime(u.at),
+      status,
+      needsYou: lee?.status === 'blocked' || lee?.status === 'waiting',
+      text,
+      next: lee?.next?.trim() || null,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The detail's actions (§4.2): icons for the common ones, ⋯ for the rest
+// ---------------------------------------------------------------------------
+
+export type DetailActionId =
+  | 'checkin'
+  | 'cancel-checkin'
+  | 'rename'
+  | 'terminal'
+  | 'confirm'
+  | 'accept'
+  | 'discard'
+  | 'close'
+  | 'link'
+  | 'priority'
+  | 'promote'
+  | 'escalate'
+  | 'hester-view'
+  | 'assign';
+
+export interface DetailActionsInput {
+  /** A tile (a live agent) is shown. */
+  tile: { checkin: unknown; canCheckin: boolean; task: unknown } | null;
+  ptyId: number | null;
+  task: { confirmed: boolean; status: string; workstream: string | null } | null;
+}
+
+/**
+ * Which actions the detail offers, in order: `icons` as IconActions, `more`
+ * in the ⋯ menu. Check in (or Cancel check-in), Rename, Open terminal,
+ * Confirm, Accept / Discard, Close agent; then Link to a goal…, Priority…,
+ * Promote…, Escalate → Explore, Hester's view (an open task) and Assign…
+ * (an agent with no task).
+ */
+export function detailActions(input: DetailActionsInput): { icons: DetailActionId[]; more: DetailActionId[] } {
+  const { tile, ptyId, task } = input;
+  const icons: DetailActionId[] = [];
+  const more: DetailActionId[] = [];
+  if (tile?.checkin) icons.push('cancel-checkin');
+  else if (tile?.canCheckin) icons.push('checkin');
+  if (ptyId != null || task) icons.push('rename');
+  if (ptyId != null) icons.push('terminal');
+  if (task && !task.confirmed) icons.push('confirm');
+  if (task?.status === 'review') icons.push('accept', 'discard');
+  if (tile) icons.push('close');
+  if (task && task.status !== 'done' && task.status !== 'discarded') {
+    more.push('link', 'priority');
+    if (!task.workstream) more.push('promote');
+    more.push('escalate', 'hester-view');
+  }
+  if (tile && !tile.task && ptyId != null) more.push('assign');
+  return { icons, more };
 }
 
 /** A time of day for the timeline ("14:05"). */

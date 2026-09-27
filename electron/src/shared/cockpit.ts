@@ -990,6 +990,17 @@ export interface AgentActivity {
   phase: 'pre' | 'post';
 }
 
+/**
+ * One finished turn of an agent session, for Work's "Updates" feed: when it
+ * ended, the agent's last message (clipped to 600 chars) and its parsed
+ * lee-status block. The queue keeps the last 10 per session, in memory only.
+ */
+export interface AgentUpdate {
+  at: string;
+  summary: string | null;
+  lee_status: LeeStatusBlock | null;
+}
+
 /** What an agent is doing now (§7.1): the open tool, else the last entry within 60s. */
 export interface AgentNow {
   tool: string;
@@ -1021,8 +1032,19 @@ function onFiles(verb: string, files: readonly string[], preview: string): strin
   return one ? `${verb} ${baseName(one)}` : verb;
 }
 
+/** Leading `cd <dir> &&` / `cd <dir>;` segments: they say where, not what. */
+const LEADING_CD = /^\s*cd(?:\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+))?\s*(?:&&|;)\s*/;
+
+/** The command after any leading `cd <dir> &&` / `cd <dir>;` segments (the whole command when nothing follows). */
+export function stripLeadingCd(command: string): string {
+  let rest = command;
+  for (let m = LEADING_CD.exec(rest); m && rest.slice(m[0].length).trim(); m = LEADING_CD.exec(rest)) rest = rest.slice(m[0].length);
+  return rest;
+}
+
 /** A Bash command in words: tests, builds and git by name, else its first word. */
-function describeCommand(command: string, past: boolean): string {
+function describeCommand(full: string, past: boolean): string {
+  const command = stripLeadingCd(full);
   const words = command.trim().split(/\s+/).filter((w) => w && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
   const first = words[0] ? baseName(words[0]) : '';
   if (first === 'git') return past ? 'Used git' : 'Using git';

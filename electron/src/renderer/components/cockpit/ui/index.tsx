@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useRef } from 'react';
+import { Icon, type IconName } from '../../Icon';
 import { nextGuard, viewRootOf } from './nextGuard';
 import './ui.css';
 
@@ -246,6 +247,58 @@ export const QuietLinks: React.FC<{ items: QuietLink[]; className?: string }> = 
     ))}
   </nav>
 );
+
+// ---------------------------------------------------------------------------
+// IconAction
+// ---------------------------------------------------------------------------
+
+export interface IconActionProps {
+  icon: IconName;
+  /** The accessible name, and the text that slides out. */
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  /** Tooltip; the label when omitted. */
+  title?: string;
+  /** Key hint shown after the label while it is out. */
+  kbd?: string;
+  /** Keep the label out (a two-step confirm reading its question). */
+  open?: boolean;
+  /** 'danger' for a destructive step (a close that needs confirming). */
+  tone?: 'default' | 'danger';
+  /** Set when it opens a menu: aria-haspopup="menu" with this aria-expanded. */
+  expanded?: boolean;
+  className?: string;
+}
+
+/**
+ * An icon button whose label slides out on hover, keyboard focus or while
+ * `open` (reduced motion: it appears without sliding). Never phosphor: a
+ * view's next step is a Btn.
+ */
+export const IconAction = React.forwardRef<HTMLButtonElement, IconActionProps>(function IconAction(
+  { icon, label, onClick, disabled, title, kbd, open, tone = 'default', expanded, className },
+  ref,
+) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={cx('ui-icon-action', open && 'is-open', tone === 'danger' && 'is-danger', className)}
+      disabled={disabled}
+      title={title ?? (kbd ? `${label} (${kbd})` : label)}
+      aria-label={label}
+      {...(expanded !== undefined ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': expanded } : {})}
+      onClick={onClick}
+    >
+      <Icon name={icon} size={14} />
+      <span className="ui-icon-action-label" aria-hidden="true">
+        {label}
+        {kbd && <span className="ui-kbd">{kbd}</span>}
+      </span>
+    </button>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // WritingQuote

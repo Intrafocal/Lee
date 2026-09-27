@@ -1038,6 +1038,21 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     assert.equal(now(''), 'Running a command');
   });
 
+  test('describeActivity: Bash skips leading `cd <dir> &&` / `cd <dir>;` and classifies what follows', () => {
+    const now = (cmd) => describeActivity(act('Bash', cmd));
+    const past = (cmd) => describeActivity(act('Bash', cmd), 'past');
+    assert.equal(now('cd electron && npm test'), 'Running tests');
+    assert.equal(past('cd electron && npm test'), 'Ran tests');
+    assert.equal(past('cd electron && npm run build'), 'Built');
+    assert.equal(now('cd /Users/ben/Development/Lee && git status'), 'Using git');
+    assert.equal(past('cd "my dir"; grep -rn foo .'), 'Ran grep');
+    assert.equal(past('cd a && cd b; ls -la'), 'Ran ls', 'several cd segments');
+    assert.equal(past('cd tests && ls'), 'Ran ls', 'the directory name is not the command');
+    assert.equal(past('cd electron && git commit -m "fix the test"'), 'Used git');
+    assert.equal(past('cd electron'), 'Ran cd', 'a bare cd is still a command');
+    assert.equal(past('cdk deploy'), 'Ran cdk', 'only the cd builtin');
+  });
+
   test('describeActivity: web, subagents, questions, anything else', () => {
     assert.equal(describeActivity(act('WebFetch', 'https://example.com')), 'Reading the web');
     assert.equal(describeActivity(act('WebSearch', 'newsreader font')), 'Reading the web');

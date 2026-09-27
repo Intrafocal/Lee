@@ -3,12 +3,15 @@
  * (cockpit-design §4.2): the header, "It asked" / "It said" as prose, the
  * pending action (an approval's command with Allow and Deny, a question's
  * options), the reply box (all four quick replies, a textarea sent exactly
- * as written, C3), "Along the way" from the agent's activity (§7.1) and the
- * quiet links: Check in, Rename, Open terminal in Manual, Accept / Discard,
- * Link to a goal…, and for an open task Promote… (to a workstream),
- * Escalate → Explore (an exploration seeded from it, shown in the Library),
- * Hester's view (/suggest, answered inline with its proposals) and
- * Priority… (the Important / Urgent overrides); then Assign… and Close agent.
+ * as written, C3: it answers the item that takes text, else types into the
+ * idle agent's terminal, and waits disabled while the agent works), the
+ * Updates feed (its recent turn summaries and lee-status), "Along the way"
+ * from its activity (§7.1, folded) and the actions: icons for Check in,
+ * Rename, Open terminal in Manual, Confirm, Accept / Discard and Close
+ * agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
+ * workstream), Escalate → Explore (an exploration seeded from it, shown in
+ * the Library), Hester's view (/suggest, answered inline with its
+ * proposals) and Assign….
  *
  * Esc and ↑/↓ are Work's (WorkSection): back to the list, or the previous or
  * next item without going back.
@@ -20,20 +23,30 @@ import { CHECKIN_PROMPT, type CockpitTask, type StewardAnswer } from '../../../.
 import { taskTitle, type TileModel } from '../../../lib/cockpitModel';
 import { closeTask, confirmTask, escalateTask, promoteTask, suggestTask } from '../../../lib/hesterCockpit';
 import {
+  REPLY_BUSY_LINE,
+  alongLabel,
   alongTheWay,
   approvalLine,
   canTextReply,
   clockTime,
+  detailActions,
   providerLabel,
   quickReplies,
+  replyMode,
+  sendIsNext,
   shortAge,
+  tabSendError,
+  updatesFeed,
   workspaceName,
+  type DetailActionId,
 } from '../../../lib/workModel';
-import { Btn, Chip, Dot, Eyebrow, QuietLinks, type DotKind, type QuietLink } from '../ui';
+import type { IconName } from '../../Icon';
+import { Btn, Chip, Dot, Eyebrow, IconAction, type DotKind } from '../ui';
 import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
 import type { CockpitCtx } from '../CockpitHost';
 import { choosable, choose, decide, sendText } from './actions';
+import { MoreMenu, type MoreItem } from './MoreMenu';
 import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
 
 /** What the detail view shows, resolved from the list id by WorkSection. */
@@ -133,11 +146,30 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const approval = item?.kind === 'approval' && item.actions.includes('approve') ? item : tile?.approval ?? null;
   const question = item?.kind === 'question' ? item.question?.questions[0] ?? null : null;
   const replyItem = item && canTextReply(item) ? item : tile?.replyItem ?? null;
+  const working = tile ? tile.working : agent?.state === 'busy';
+  const mode = replyMode({ replyItem, ptyId, working });
+  const cleared = () => {
+    if (alive.current) setText('');
+  };
   const send = (body: string) => {
-    if (!replyItem) return;
-    act(() => sendText(ctx, replyItem, body), () => {
-      if (alive.current) setText('');
-    });
+    if (replyItem) {
+      act(() => sendText(ctx, replyItem, body), cleared);
+      return;
+    }
+    const api = ctx.api;
+    const typed = body.trim();
+    if (mode !== 'pty' || !api || ptyId == null || !typed) return;
+    // No item takes text: type it into the idle agent's terminal (the main side refuses busy / awaiting states).
+    act(async () => {
+      try {
+        const r = await api.tabs.send(ptyId, { text: typed, submit: true, purpose: 'reply' });
+        if (!r.success) ctx.notify(tabSendError(r.error), 'error');
+        return r.success;
+      } catch {
+        ctx.notify('failed', 'error');
+        return false;
+      }
+    }, cleared);
   };
 
   const dot: DotKind = item ? 'needs' : tile?.working ? 'working' : task?.status === 'review' ? 'done' : tile?.needsYou ? 'needs' : 'idle';
@@ -153,97 +185,149 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const words = item?.text || tile?.summary?.text || task?.summary || '';
   const along = alongTheWay(agent?.recent);
 
-  const links: QuietLink[] = [];
-  if (tile?.checkin && ctx.api) {
+  const updates = updatesFeed(agent?.updates, item ? null : words);
+  const [alongOpen, setAlongOpen] = useState(false);
+
+  const { icons, more } = detailActions({ tile, ptyId, task });
+  const checkinCancel = () => {
     const api = ctx.api;
-    links.push({
-      label: 'Cancel check-in',
-      onClick: () =>
-        act(async () => {
-          const r = await api.checkinCancel(tile.ptyId);
-          if (!r.success) ctx.notify(r.error || 'failed', 'error');
-          return r.success;
-        }),
+    if (!tile || !api) return;
+    act(async () => {
+      const r = await api.checkinCancel(tile.ptyId);
+      if (!r.success) ctx.notify(r.error || 'failed', 'error');
+      return r.success;
     });
-  } else if (tile?.canCheckin) {
-    links.push({ label: 'Check in', kbd: '⇧⌘.', onClick: () => ctx.openCheckin(tile.ptyId, subject.name) });
-  }
-  if (ptyId != null || task) {
-    links.push({
-      label: 'Rename',
-      kbd: '⌘E',
-      onClick: () => ctx.openRename({ ptyId, taskId: task?.id ?? null, current: subject.name, provider: subject.provider }),
+  };
+  const hesterView = () => {
+    if (!task || view.phase === 'loading') return;
+    const seq = ++viewSeq.current;
+    setView({ phase: 'loading' });
+    void suggestTask(ctx.workspace, task.id).then((r) => {
+      if (!alive.current || seq !== viewSeq.current) return;
+      setView(r.ok ? { phase: 'done', answer: r.data } : { phase: 'error', error: r.error });
     });
-  }
-  if (ptyId != null) links.push({ label: 'Open terminal in Manual', kbd: '⌥⌘0', onClick: () => ctx.goInto(ptyId, 'tile') });
-  if (task && !task.confirmed) {
-    links.push({
-      label: 'Confirm task',
-      onClick: () => {
-        ctx.copilotApi?.logCeremony('confirm', 'task-confirm');
-        taskAct(() => confirmTask(ctx.workspace, task.id), 'Confirmed');
-      },
+  };
+  const escalate = () => {
+    if (!task) return;
+    act(async () => {
+      const r = await escalateTask(ctx.workspace, task.id);
+      if (!r.ok) {
+        ctx.notify(r.error, 'error');
+        return false;
+      }
+      ctx.hester.refresh();
+      ctx.notify(`Exploration started: ${r.data.exploration.title}`);
+      // The task stays open; its exploration is in the Library.
+      ctx.setSection('library');
+      ctx.selectRow(`explore:${r.data.exploration.id}`);
+      return true;
     });
-  }
-  if (task?.status === 'review') {
-    links.push({ label: 'Accept', onClick: () => taskAct(() => closeTask(ctx.workspace, task.id, { status: 'done', accepted: true }), 'Accepted') });
-    links.push({ label: 'Discard', onClick: () => taskAct(() => closeTask(ctx.workspace, task.id, { status: 'discarded' }), 'Discarded') });
-  }
-  if (task && task.status !== 'done' && task.status !== 'discarded') {
-    links.push({ label: 'Link to a goal…', onClick: () => setPanel((p) => (p === 'link' ? null : 'link')) });
-    if (!task.workstream) {
-      links.push({
-        label: 'Promote…',
-        onClick: () => taskAct(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream'),
-      });
+  };
+  const closeAgent = () => {
+    if (!tile) return;
+    if (tile.working && !confirmClose) {
+      setConfirmClose(true);
+      return;
     }
-    links.push({
-      label: 'Escalate → Explore',
-      onClick: () =>
-        act(async () => {
-          const r = await escalateTask(ctx.workspace, task.id);
-          if (!r.ok) {
-            ctx.notify(r.error, 'error');
-            return false;
-          }
-          ctx.hester.refresh();
-          ctx.notify(`Exploration started: ${r.data.exploration.title}`);
-          // The task stays open; its exploration is in the Library.
-          ctx.setSection('library');
-          ctx.selectRow(`explore:${r.data.exploration.id}`);
-          return true;
-        }),
-    });
-    links.push({
-      label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view",
-      onClick: () => {
-        if (view.phase === 'loading') return;
-        const seq = ++viewSeq.current;
-        setView({ phase: 'loading' });
-        void suggestTask(ctx.workspace, task.id).then((r) => {
-          if (!alive.current || seq !== viewSeq.current) return;
-          setView(r.ok ? { phase: 'done', answer: r.data } : { phase: 'error', error: r.error });
-        });
-      },
-    });
-    links.push({ label: 'Priority…', onClick: () => setPanel((p) => (p === 'priority' ? null : 'priority')) });
+    setConfirmClose(false);
+    ctx.closeAgent(tile.ptyId, tile.tabId);
+    ctx.notify(`Closed ${subject.name}`);
+    onBack();
+  };
+  const togglePanel = (p: Exclude<Panel, null>) => setPanel((cur) => (cur === p ? null : p));
+
+  interface ActionSpec {
+    icon: IconName;
+    label: string;
+    onClick: () => void;
+    kbd?: string;
+    title?: string;
+    open?: boolean;
+    danger?: boolean;
+    disabled?: boolean;
   }
-  if (tile && !tile.task && ptyId != null) links.push({ label: 'Assign…', onClick: () => setPanel((p) => (p === 'assign' ? null : 'assign')) });
-  if (tile) {
-    links.push({
-      label: confirmClose ? 'Agent is working — close anyway?' : 'Close agent',
-      onClick: () => {
-        if (tile.working && !confirmClose) {
-          setConfirmClose(true);
-          return;
-        }
-        setConfirmClose(false);
-        ctx.closeAgent(tile.ptyId, tile.tabId);
-        ctx.notify(`Closed ${subject.name}`);
-        onBack();
-      },
-    });
-  }
+  const spec = (id: DetailActionId): ActionSpec | null => {
+    switch (id) {
+      case 'cancel-checkin':
+        return {
+          icon: 'stop',
+          label: 'Cancel check-in',
+          title: tile?.checkin?.state === 'queued' ? 'Cancel the queued check-in (nothing has been typed)' : 'Stop waiting for the reply',
+          disabled: busy || !ctx.api,
+          onClick: checkinCancel,
+        };
+      case 'checkin':
+        return tile ? { icon: 'chat', label: 'Check in', kbd: '⇧⌘.', title: `Check in (⇧⌘.): types exactly “${CHECKIN_PROMPT}”`, onClick: () => ctx.openCheckin(tile.ptyId, subject.name) } : null;
+      case 'rename':
+        return {
+          icon: 'edit',
+          label: 'Rename',
+          kbd: '⌘E',
+          onClick: () => ctx.openRename({ ptyId, taskId: task?.id ?? null, current: subject.name, provider: subject.provider }),
+        };
+      case 'terminal':
+        return ptyId != null ? { icon: 'terminal', label: 'Open terminal in Manual', kbd: '⌥⌘0', onClick: () => ctx.goInto(ptyId, 'tile') } : null;
+      case 'confirm':
+        return task
+          ? {
+              icon: 'check',
+              label: 'Confirm task',
+              disabled: busy,
+              onClick: () => {
+                ctx.copilotApi?.logCeremony('confirm', 'task-confirm');
+                taskAct(() => confirmTask(ctx.workspace, task.id), 'Confirmed');
+              },
+            }
+          : null;
+      case 'accept':
+        return task
+          ? {
+              icon: 'check',
+              label: 'Accept',
+              title: "Accept this task's work",
+              disabled: busy,
+              onClick: () => taskAct(() => closeTask(ctx.workspace, task.id, { status: 'done', accepted: true }), 'Accepted'),
+            }
+          : null;
+      case 'discard':
+        return task
+          ? {
+              icon: 'trash',
+              label: 'Discard',
+              title: "Discard this task's work",
+              disabled: busy,
+              onClick: () => taskAct(() => closeTask(ctx.workspace, task.id, { status: 'discarded' }), 'Discarded'),
+            }
+          : null;
+      case 'close':
+        return tile
+          ? {
+              icon: 'power',
+              label: confirmClose ? 'Working — close anyway?' : 'Close agent',
+              title: tile.working ? 'Close this agent (it is working: asks once more)' : 'Close this agent and its tab',
+              open: confirmClose,
+              danger: confirmClose,
+              onClick: closeAgent,
+            }
+          : null;
+      default:
+        return null;
+    }
+  };
+  const moreSpec: Partial<Record<DetailActionId, { label: string; onClick: () => void; disabled?: boolean }>> = {
+    link: { label: 'Link to a goal…', onClick: () => togglePanel('link') },
+    priority: { label: 'Priority…', onClick: () => togglePanel('priority') },
+    promote: {
+      label: 'Promote…',
+      disabled: busy,
+      onClick: () => task && taskAct(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream'),
+    },
+    escalate: { label: 'Escalate → Explore', disabled: busy, onClick: escalate },
+    'hester-view': { label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view", disabled: view.phase === 'loading', onClick: hesterView },
+    assign: { label: 'Assign…', onClick: () => togglePanel('assign') },
+  };
+  const moreItems: MoreItem[] = more.map((id) => moreSpec[id]).filter((x): x is MoreItem => !!x);
+  const iconItems = icons.map((id) => ({ id, spec: spec(id) })).filter((x): x is { id: DetailActionId; spec: ActionSpec } => !!x.spec);
 
   return (
     <div ref={rootRef} className="work-detail" tabIndex={-1} aria-label={subject.name}>
@@ -306,11 +390,11 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         </div>
       )}
 
-      {replyItem && (
-        <div className="work-reply">
+      {mode !== 'none' && (
+        <div className={`work-reply${mode === 'busy' ? ' is-waiting' : ''}`}>
           <div className="work-chips">
             {quickReplies('detail').map((q) => (
-              <Chip key={q} label={q} disabled={busy} onClick={() => send(q)} />
+              <Chip key={q} label={q} disabled={busy || mode === 'busy'} onClick={() => send(q)} />
             ))}
           </div>
           <textarea
@@ -318,6 +402,7 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
             className="work-reply-field"
             value={text}
             rows={3}
+            disabled={mode === 'busy'}
             placeholder="Or write a reply"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -328,9 +413,9 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
             }}
           />
           <div className="work-reply-foot">
-            <span className="work-hint">Sent exactly as written</span>
+            <span className="work-hint">{mode === 'busy' ? REPLY_BUSY_LINE : 'Sent exactly as written'}</span>
             {/* Allow is this view's next step while an approval is pending (§0 rule 1). */}
-            <Btn kind={approval ? 'plain' : 'next'} kbd="⌘⏎" disabled={busy || !text.trim()} onClick={() => send(text)}>
+            <Btn kind={sendIsNext(mode, !!approval) ? 'next' : 'plain'} kbd="⌘⏎" disabled={busy || mode === 'busy' || !text.trim()} onClick={() => send(text)}>
               Send
             </Btn>
           </div>
@@ -343,21 +428,68 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         </div>
       )}
 
-      {along.length > 0 && (
+      {updates.length > 0 && (
         <>
-          <Eyebrow>Along the way</Eyebrow>
-          <ol className="work-along">
-            {along.map((a, i) => (
-              <li key={`${a.at}:${i}`} className={a.failed ? 'is-failed' : undefined}>
-                <span className="work-along-time">{clockTime(a.at)}</span>
-                <span className="work-along-text">{a.text}</span>
+          <Eyebrow>Updates</Eyebrow>
+          <ol className="work-updates">
+            {updates.map((u, i) => (
+              <li key={`${u.at}:${i}`}>
+                <span className="work-along-time">{u.time}</span>
+                <span className="work-update-body">
+                  {u.status && (
+                    <span className="work-update-status">
+                      {u.needsYou && <Dot kind="needs" label={u.status} />}
+                      {u.status}
+                    </span>
+                  )}
+                  {u.text && <span className="work-update-text">{u.text}</span>}
+                  {u.next && <span className="work-update-next">next: {u.next}</span>}
+                </span>
               </li>
             ))}
           </ol>
         </>
       )}
 
-      {links.length > 0 && <QuietLinks items={links} />}
+      {along.length > 0 && (
+        <div className="work-along-fold">
+          <button type="button" className="work-fold-toggle" aria-expanded={alongOpen} onClick={() => setAlongOpen((o) => !o)}>
+            <span className="work-fold-chevron" aria-hidden="true">
+              {alongOpen ? '▾' : '▸'}
+            </span>
+            {alongLabel(along.length)}
+          </button>
+          {alongOpen && (
+            <ol className="work-along">
+              {along.map((a, i) => (
+                <li key={`${a.at}:${i}`} className={a.failed ? 'is-failed' : undefined}>
+                  <span className="work-along-time">{clockTime(a.at)}</span>
+                  <span className="work-along-text">{a.text}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+
+      {(iconItems.length > 0 || moreItems.length > 0) && (
+        <nav className="ui-icon-actions work-detail-actions" aria-label="Actions">
+          {iconItems.map(({ id, spec: a }) => (
+            <IconAction
+              key={id}
+              icon={a.icon}
+              label={a.label}
+              kbd={a.kbd}
+              title={a.title}
+              open={a.open}
+              tone={a.danger ? 'danger' : 'default'}
+              disabled={a.disabled}
+              onClick={a.onClick}
+            />
+          ))}
+          <MoreMenu items={moreItems} icon="more" label="More actions" />
+        </nav>
+      )}
       {panel === 'assign' && tile && ptyId != null && (
         <AssignPicker
           ctx={ctx}
