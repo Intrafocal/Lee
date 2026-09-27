@@ -8,6 +8,10 @@ Deep D1: the files inside an exploration's directory (contract section 3).
       answers.jsonl       deep-ask questions and answers (deep_ask.py runs them)
       sessions.jsonl      Deep sessions: stopped-at note, depth rating, questions kept
 
+Desk D2: a Page card (``.hester/desk/pages/<pg-id>/``) has the same files
+and the same rules; every function here takes its ``desk.PageStore`` in place
+of an ``ExplorationStore``. A card's questions live in ``questions.jsonl``.
+
 Everything here is deterministic; no model runs. Hester never writes
 ``page.md``: only ``write_page`` does, for a PUT from the renderer (the user's
 own text), and ``ExplorationStore.create`` for an initial page the user typed.
@@ -44,6 +48,8 @@ logger = logging.getLogger("hester.daemon.cockpit.deep")
 REFERENCES_FILE = "references.jsonl"
 ANSWERS_FILE = "answers.jsonl"
 SESSIONS_FILE = "sessions.jsonl"
+# Desk D2: a Page card keeps its questions here (an exploration kept them in frontmatter).
+QUESTIONS_FILE = "questions.jsonl"
 MAX_RECORDS = 5000
 
 REF_ID_RE = re.compile(r"^ref-[0-9a-f]{8}$")
@@ -63,6 +69,8 @@ PENDING = ("queued", "running")
 ANSWER_FLAGS = {"read": "read_at", "dismissed": "dismissed_at", "inserted": "inserted_at", "kept": "kept_at"}
 QUESTION_SOURCES = ("page", "ask")
 SESSION_REASONS = ("ritual", "esc", "away", "quit")
+# Desk D2: a Desk session can also be ended from a device (End and rate).
+DESK_SESSION_REASONS = SESSION_REASONS + ("device",)
 RATINGS = ("deep", "mixed", "shallow")
 
 MAX_QUOTE = 4000
@@ -661,12 +669,17 @@ def handoff_template(kind: str) -> str:
 
 
 def handoff_brief(kind: str, section_text: str, exploration_title: str, exploration_id: str) -> str:
-    """The template, the section word for word, then "From the exploration '<title>' (<id>)", blank-line separated."""
+    """
+    The template, the section word for word, then "From the Page '<title>'
+    (<id>)" for a Page card (Desk D2), else "From the exploration '<title>'
+    (<id>)", blank-line separated.
+    """
     section = section_text if isinstance(section_text, str) else ""
     parts = [handoff_template(kind)]
     if section.strip():
         parts.append(section.strip("\n"))
-    parts.append(f"From the exploration '{exploration_title}' ({exploration_id})")
+    noun = "Page" if str(exploration_id).startswith("pg-") else "exploration"
+    parts.append(f"From the {noun} '{exploration_title}' ({exploration_id})")
     return "\n\n".join(parts)
 
 
@@ -675,7 +688,14 @@ def handoff_brief(kind: str, section_text: str, exploration_title: str, explorat
 # ---------------------------------------------------------------------------
 
 
+def _in_file(store) -> bool:
+    """A Page card's store (``desk.PageStore``) keeps questions in ``questions.jsonl``."""
+    return bool(getattr(store, "questions_in_file", False))
+
+
 def list_questions(store: ExplorationStore, exp_id: str) -> List[Dict[str, Any]]:
+    if _in_file(store):
+        return read_jsonl(_dir(store, exp_id) / QUESTIONS_FILE)
     return list(store.require(exp_id).get("questions") or [])
 
 
@@ -692,6 +712,18 @@ def add_question(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now
     }
     if body.get("anchor") is not None:
         question["anchor"] = norm_anchor(body["anchor"])
+    if _in_file(store):
+        path = _dir(store, exp_id) / QUESTIONS_FILE
+        with _LOCK:
+            rows = read_jsonl(path)
+            if len(rows) < MAX_QUESTIONS:
+                append_jsonl(path, question)
+                return question
+            drop = next((q for q in rows if q.get("status") == "closed"), rows[0])
+            logger.warning(f"{exp_id} has {MAX_QUESTIONS} questions; dropping {drop.get('id')}")
+            rows.remove(drop)
+            write_jsonl(path, rows + [question])
+        return question
     exp, text_body = store._open(exp_id)
     questions = list(exp.get("questions") or [])
     if len(questions) >= MAX_QUESTIONS:
@@ -713,6 +745,20 @@ def patch_question(store: ExplorationStore, exp_id: str, question_id: str, body:
         raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
     if body.get("status") not in ("open", "closed"):
         raise ExplorationError("status must be open or closed")
+    if _in_file(store):
+        def apply(q: Dict[str, Any]) -> Dict[str, Any]:
+            if q.get("status") != body["status"]:
+                q["status"] = body["status"]
+                if body["status"] == "closed":
+                    q["closed_at"] = iso_s(now)
+                else:
+                    q.pop("closed_at", None)
+            return q
+
+        row = update_jsonl(_dir(store, exp_id) / QUESTIONS_FILE, question_id, apply)
+        if row is None:
+            raise ExplorationNotFound(f"{exp_id}/{question_id}")
+        return row
     exp, text_body = store._open(exp_id)
     for q in exp.get("questions") or []:
         if q["id"] == question_id:

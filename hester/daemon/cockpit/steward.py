@@ -37,7 +37,7 @@ logger = logging.getLogger("hester.daemon.cockpit.steward")
 
 SURFACES = ("launch-suggest", "what-next", "evaluate", "lint-ask", "rail-steer", "rail-ask", "goal-edit", "palette", "tui")
 STEER_SURFACES = frozenset({"launch-suggest", "what-next", "evaluate", "lint-ask", "rail-steer", "goal-edit"})
-ABOUT_KINDS = ("task", "exploration", "goal", "lint", "feed", "tile", "operation")
+ABOUT_KINDS = ("task", "exploration", "page", "goal", "lint", "feed", "tile", "operation")
 STEER_PREFIXES = (
     "keep going", "continue", "go ahead", "stop", "wait", "tell it", "tell the agent", "ask it", "ask the agent",
     "have it", "get it to", "start", "now", "please", "instead", "don't", "do not", "switch to", "focus on",

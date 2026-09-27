@@ -681,9 +681,11 @@ def create_cockpit_router() -> APIRouter:
             request, lambda ctx, store, b: exploration_to_api(deep.explore_child(store, exp_id, b)), 201,
         )
 
+    from .desk_routes import create_desk_router
     from .steward_routes import create_steward_router
 
     router.include_router(create_steward_router())
+    router.include_router(create_desk_router())
     return router
 
 
@@ -721,5 +723,5 @@ async def _sync_spike(ctx, task: Dict[str, Any]) -> None:
     kind = (task.get("origin") or {}).get("kind")
     if kind == "explore":
         await asyncio.to_thread(spikes.sync, ctx, task)
-    elif kind == handoffs.ORIGIN_KIND:
+    elif kind in handoffs.ORIGIN_KINDS:
         await asyncio.to_thread(handoffs.sync, ctx, task)

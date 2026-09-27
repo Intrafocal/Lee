@@ -92,9 +92,11 @@ def build_context(
     R2, ``section_text`` when the Ask sent one); the anchor's section and the
     quote with ±1 000 chars around it; the rest of the Page (cut from the far end); open
     questions; the last 20 references; the followed-up question and answer.
-    The Page gets whatever the other parts leave of ``cap``.
+    The Page gets whatever the other parts leave of ``cap``. A Page card (Desk
+    D2) is headed ``### Page``; its title and seed play the same part.
     """
-    head = f"### Exploration\n\nTitle: {exp.get('title') or ''}"
+    noun = "Page" if str(exp.get("id") or "").startswith("pg-") else "Exploration"
+    head = f"### {noun}\n\nTitle: {exp.get('title') or ''}"
     if exp.get("seed"):
         head += f"\n\nSeed:\n{exp['seed']}"
 
@@ -169,8 +171,8 @@ def context_for(store: ExplorationStore, exp_id: str, answer: Dict[str, Any]) ->
 
 @dataclass
 class Job:
-    ctx: Any                      # the WorkspaceContext (path, lock, explorations())
-    exp_id: str
+    ctx: Any                      # the WorkspaceContext (path, lock, explorations(), desk())
+    exp_id: str                   # an exploration id, or a Page card's (``pg-``; Desk D2)
     answer_id: str
     trigger: Dict[str, Any] = field(default_factory=dict)
 
@@ -196,16 +198,22 @@ class DeepAskRunner:
     def _key(ctx) -> str:
         return str(Path(ctx.path))
 
-    async def ensure_recovered(self, ctx) -> int:
-        """Once per workspace per process: answers left queued/running by a previous daemon become interrupted."""
+    async def ensure_recovered(self, ctx, which: str = "explore") -> int:
+        """
+        Once per workspace per store per process: answers left queued/running
+        by a previous daemon become interrupted. ``which`` is ``explore`` (the
+        explorations) or ``desk`` (Page cards), so a Desk read never writes
+        into ``.hester/explore/``.
+        """
         key = self._key(ctx)
-        if key in self._recovered:
+        if (key, which) in self._recovered:
             return 0
-        self._recovered.add(key)
+        self._recovered.add((key, which))
+        store = ctx.desk().pages if which == "desk" else ctx.explorations()
         async with ctx.lock:
-            n = await asyncio.to_thread(deep.interrupt_pending, ctx.explorations(), set(self._tracked.get(key, ())))
+            n = await asyncio.to_thread(deep.interrupt_pending, store, set(self._tracked.get(key, ())))
         if n:
-            logger.info(f"deep-ask: marked {n} unfinished answer(s) interrupted in {key}")
+            logger.info(f"deep-ask: marked {n} unfinished answer(s) interrupted in {key} ({which})")
         return n
 
     def schedule(self, job: Job) -> None:
@@ -244,8 +252,10 @@ class DeepAskRunner:
 
 
 async def run_job(job: Job) -> Optional[Dict[str, Any]]:
+    from .desk import is_page_id, store_for
+
     ctx, exp_id, aid = job.ctx, job.exp_id, job.answer_id
-    store = ctx.explorations()
+    store = store_for(ctx, exp_id)
     async with ctx.lock:
         answer = await asyncio.to_thread(deep.update_answer, store, exp_id, aid, {"status": "running"})
         if answer is None:
@@ -269,9 +279,10 @@ async def run_job(job: Job) -> Optional[Dict[str, Any]]:
     async with ctx.lock:
         answer = await asyncio.to_thread(deep.update_answer, store, exp_id, aid, fields)
     try:
-        lee_events.ingest("deep.answer", {
-            "workspace": str(ctx.path), "exploration_id": exp_id, "answer_id": aid, "status": fields["status"],
-        }, workspace=str(ctx.path), actor={"kind": "hester"})
+        data = {"workspace": str(ctx.path), "exploration_id": exp_id, "answer_id": aid, "status": fields["status"]}
+        if is_page_id(exp_id):
+            data["card_id"] = exp_id  # Desk D2 §5.3: both, so a Lee main from before the Desk still forwards it
+        lee_events.ingest("deep.answer", data, workspace=str(ctx.path), actor={"kind": "hester"})
     except Exception as e:  # never fail a run over telemetry
         logger.debug(f"could not log deep.answer: {e}")
     return answer
@@ -341,7 +352,9 @@ async def draft_from_readme(ctx, exp_id: str) -> Dict[str, Any]:
     ``goals-readme`` (not a steer surface: no steward.md; Hester's hybrid
     routing). Returns ``{text}``; never writes the Page.
     """
-    store = ctx.explorations()
+    from .desk import store_for
+
+    store = store_for(ctx, exp_id)
     async with ctx.lock:
         await asyncio.to_thread(store.require, exp_id)
     sources = await asyncio.to_thread(readme_sources, Path(ctx.path))

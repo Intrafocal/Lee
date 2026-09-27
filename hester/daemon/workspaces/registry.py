@@ -74,6 +74,7 @@ class WorkspaceContext:
     _readings: Any = field(default=None, repr=False)
     _someday: Any = field(default=None, repr=False)
     _explorations: Any = field(default=None, repr=False)
+    _desk: Any = field(default=None, repr=False)
     _config: Optional[dict] = field(default=None, repr=False)
     _config_key: Optional[tuple] = field(default=None, repr=False)
 
@@ -106,6 +107,12 @@ class WorkspaceContext:
             from ..cockpit.explorations import ExplorationStore
             self._explorations = ExplorationStore(self.path)
         return self._explorations
+
+    def desk(self):
+        if self._desk is None:
+            from ..cockpit.desk import DeskStore
+            self._desk = DeskStore(self.path)
+        return self._desk
 
     def config(self) -> dict:
         key = _mtimes(_config_candidates(self.path))

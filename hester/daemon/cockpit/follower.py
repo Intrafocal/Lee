@@ -73,7 +73,7 @@ FOLLOW_TYPES = {
 }
 
 # Origins whose ref points back at what launched them (a spike node, a hand-off record).
-REF_ORIGINS = ("explore", "exploration")
+REF_ORIGINS = ("explore", "exploration", "page")
 
 LEE_STATUS_MAP = {"done": "review", "blocked": "waiting", "waiting": "waiting", "in-progress": "running"}
 
@@ -757,7 +757,7 @@ class EventFollower:
         for task_id in removed:
             store.delete(task_id)
         # Spike nodes follow their explore-origin tasks (launch, status, evidence);
-        # hand-off records their exploration-origin tasks (state, result).
+        # hand-off records their page- or exploration-origin tasks (state, result).
         for task_id in dirty:
             task = cache.get(task_id)
             if task_id in removed or task is None:
@@ -765,7 +765,7 @@ class EventFollower:
             kind = (task.get("origin") or {}).get("kind")
             if kind == "explore":
                 spikes.sync(ctx, task, turn_end=task_id in turn_ends)
-            elif kind == handoffs.ORIGIN_KIND:
+            elif kind in handoffs.ORIGIN_KINDS:
                 handoffs.sync(ctx, task, turn_end=task_id in turn_ends)
         for kind, task_id, text, at in notes:
             if task_id in cache and task_id not in removed:

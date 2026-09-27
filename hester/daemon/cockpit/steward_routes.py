@@ -319,6 +319,13 @@ def create_steward_router() -> APIRouter:
                 data.pop("nodes", None)
                 sections.append(context_json("Exploration", data))
                 sections.append("### Exploration outline\n\n" + store.outline(str(about_id))[: steward.MAX_CONTEXT])
+            elif kind == "page":
+                # Desk D2: a Page card, read like an exploration (its card and its Page).
+                desk = ctx.desk()
+                card = await asyncio.to_thread(desk.get_card, str(about_id))
+                sections.append(context_json("Page card", {k: v for k, v in card.items() if k != "summary"}))
+                page = await asyncio.to_thread(desk.pages.page_text, card["id"])
+                sections.append("### The Page\n\n" + page[: steward.MAX_CONTEXT])
             elif kind == "goal":
                 goal_id = str(about_id or "")
                 status = await asyncio.to_thread(goal_status.build_status, Path(ctx.path), 7)
