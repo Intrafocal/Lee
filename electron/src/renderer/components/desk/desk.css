@@ -455,6 +455,13 @@
   animation: desk-zoom-in 180ms ease-out;
 }
 
+/* Out of Deep: an explicit `visible` above beats the overlay's inherited
+   hidden, which left a zoomed card over the Cockpit and Manual. */
+.deep-overlay.is-hidden .desk-card-layer.is-zoomed {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 @keyframes desk-zoom-in {
   from {
     opacity: 0;
