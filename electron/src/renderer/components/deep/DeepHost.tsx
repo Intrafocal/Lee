@@ -1153,6 +1153,16 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   const onHandOff = (sel: PageSelection & { anchor: Anchor; sectionText: string }, provider?: string) =>
     void openHandoff(sel.sectionText || sel.text, sel.anchor, provider);
   const onReplyHandoff = (aid: string, body: string) => void replyHandoff(aid, body);
+  // RA's margin cards: "Open in Work" for a hand-off. The prop lands with RA's
+  // branch (PageEditorProps.onOpenInWork); spread untyped until the merge.
+  // TODO(deep-next merge): pass onOpenInWork as a plain prop.
+  const seamExtras = {
+    onOpenInWork: (aid: string) => {
+      const taskId = answersRef.current.find((a) => a.id === aid)?.handoff?.task_id;
+      if (taskId) openInWork(taskId);
+      else say('That hand-off has no task yet', 'warn');
+    },
+  } as unknown as Record<string, never>;
   const mentionTargets = useMemo(() => mentionTargetsFor(answers), [answers]);
   const files = useMemo(
     () => ({
@@ -1467,6 +1477,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           files={files}
           onQuote={(q) => void onQuote(q)}
           marginPrompts={isGoals ? GOALS_PROMPTS : undefined}
+          {...seamExtras}
         />
       ) : (
         <div className="deep-loading deep-muted">Opening the Page…</div>

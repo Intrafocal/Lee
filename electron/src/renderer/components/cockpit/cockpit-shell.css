@@ -1659,3 +1659,26 @@ button.cockpit-quadrant:hover {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ---------------------------------------------------------------------- */
+/* Goals with no goals yet (Deep next R12): the question, in your words.   */
+/* ---------------------------------------------------------------------- */
+
+.goals-start {
+  max-width: var(--col-home);
+  margin: var(--space-5) 0 var(--space-4);
+}
+
+.goals-start-question {
+  font-size: 30px;
+}
+
+.goals-start-note {
+  margin-top: var(--space-3);
+  font-size: 13px;
+}
+
+.cockpit-goal-unmeasured {
+  margin-top: var(--space-1);
+  font-size: 12px;
+}

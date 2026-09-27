@@ -15,9 +15,17 @@
  * goal that needs you: nothing serving it, or its evaluation due. At most
  * one next step: Evaluate on the first goal whose evaluation is due; every
  * other action is plain or quiet. No count badges.
+ *
+ * Deep next R12: with no goals (no GOALS.md, or no `### G…`), the section
+ * asks "What is this project for?" in the writing face, with a field; Enter
+ * opens the Goals Page in Deep with your text as its first line. A goal with
+ * no metrics reads "not measured yet", neutrally. Projects with goals can
+ * still open the Goals Page ("Think it through on a Page").
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { goalNotMeasured, goalsEntryShown } from '../../../lib/hesterDeep';
+import { openGoalsPage } from './HomeSection';
 import type { OperationInfo } from '../../../../shared/cockpit';
 import {
   balanceSegments,
@@ -250,6 +258,11 @@ const GoalRow: React.FC<{
             ))}
           </div>
         )}
+        {goal.metrics.length === 0 && goalNotMeasured(goal) && (
+          <div className="cockpit-muted cockpit-goal-unmeasured" title="No metric yet. Evaluate or Guided edit can suggest one.">
+            not measured yet
+          </div>
+        )}
         <div className="cockpit-goal-meta">
           {servingCount === 0 && !goal.flagged ? (
             'Nothing serving'
@@ -418,6 +431,58 @@ const BalanceStrip: React.FC<{ balance: GoalsStatusResponse['human_balance'] }> 
   );
 };
 
+/**
+ * R12's empty state: the question in the writing face and the same field as
+ * Home's; Enter opens the Goals Page with your text as its first line.
+ */
+const GoalsStart: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await openGoalsPage(ctx.workspace, text.trim());
+      setText('');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="goals-start">
+      <label htmlFor="goals-start-field" className="home-question goals-start-question">
+        What is this project for?
+      </label>
+      <div className="home-field">
+        <input
+          id="goals-start-field"
+          className="home-input"
+          value={text}
+          disabled={busy}
+          placeholder="Just start writing…"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.stopPropagation();
+              void submit();
+            }
+          }}
+        />
+        <span className="home-enter" aria-hidden="true">
+          ↵
+        </span>
+      </div>
+      <div className="cockpit-muted goals-start-note">
+        Enter opens a Goals Page to think it through; Draft goals there writes GOALS.md when you're ready.{' '}
+        <Btn kind="quiet" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
+          Open GOALS.md
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
 export const GoalsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const { data, error, loading, refresh } = ctx.goals;
   // Fresh on open (the host also refreshes every 5 minutes).
@@ -445,21 +510,21 @@ export const GoalsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         title="Goals"
         summary={data ? `${goals.length} goal${goals.length === 1 ? '' : 's'} · from GOALS.md` : 'GOALS.md'}
         right={
-          <Btn kind="quiet" onClick={refresh} disabled={loading} title="Refresh goal status">
-            Refresh
-          </Btn>
+          <>
+            {goals.length > 0 && (
+              <Btn kind="quiet" onClick={() => void openGoalsPage(ctx.workspace, '')} title="Open the Goals Page in Deep">
+                Think it through on a Page
+              </Btn>
+            )}
+            <Btn kind="quiet" onClick={refresh} disabled={loading} title="Refresh goal status">
+              Refresh
+            </Btn>
+          </>
         }
       />
       {error && !data && <div className="cockpit-offline">{error}: goal status needs Hester.</div>}
       {!data && !error && <div className="cockpit-muted">Loading…</div>}
-      {data && goals.length === 0 && (
-        <div className="cockpit-empty">
-          No goals in GOALS.md.{' '}
-          <Btn kind="quiet" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
-            Open GOALS.md
-          </Btn>
-        </div>
-      )}
+      {goalsEntryShown(data) && <GoalsStart ctx={ctx} />}
       <div className="cockpit-goal-list">
         {goals.map((g, i) => (
           // Keyed by workspace too: a switch drops that goal's Evaluate/draft state.

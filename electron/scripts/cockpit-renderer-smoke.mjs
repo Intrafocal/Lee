@@ -1521,6 +1521,23 @@ const leeRows = [
     'history (usage)': h(v.HistorySection, { ctx, initialTab: 'usage', usageSeed }),
     'launcher (limits)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(91) } }, onClose: noop, onExplore: noop, onRun: noop }),
     'launcher (limits low)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(84) } }, onClose: noop, onExplore: noop, onRun: noop }),
+    // Deep next R12: no GOALS.md (or no ### G… goals): the entry points.
+    'home (no goals)': h(v.HomeSection, { ctx: { ...ctx, goals: { ...ctx.goals, data: { ...ctx.goals.data, goals: [] } } }, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
+    'goals (no goals)': h(v.GoalsSection, { ctx: { ...ctx, goals: { ...ctx.goals, data: { ...ctx.goals.data, goals: [], constraints: [], tensions: [] } } } }),
+    'goals (loading)': h(v.GoalsSection, { ctx: { ...ctx, goals: { data: null, error: null, loading: true, refresh: noop } } }),
+    'goals (unmeasured)': h(v.GoalsSection, {
+      ctx: {
+        ...ctx,
+        goals: {
+          ...ctx.goals,
+          data: {
+            ...ctx.goals.data,
+            goals: [{ id: 'G1', title: 'Deep time', priority: 1, prose: 'Just a paragraph.', metrics: [], measured: false, serving: { tasks: [], workstreams: [], explorations: [] }, flagged: false, last_evaluated_at: fresh, focus_ms_7d: 0 }],
+            constraints: [],
+          },
+        },
+      },
+    }),
   };
   const html = {};
   for (const [name, el] of Object.entries(views)) {
@@ -1590,6 +1607,31 @@ const leeRows = [
     assert.match(html.ops, /ui-eyebrow is-needs/, 'the proposal is Waiting on you');
     assert.ok((html.ops.match(/ui-dot is-needs/g) ?? []).length >= 2, 'the failed op and the proposal');
     assert.match(html.ops, /Work lint/);
+  });
+
+  test('Deep next R12: goals entry points show only without goals', () => {
+    const lead = 'This project doesn’t have goals yet';
+    const home = html['home (no goals)'];
+    assert.ok(home.includes(lead), 'Home leads Or start from with it');
+    assert.ok(home.indexOf(lead) < home.indexOf('A blank page'), 'first in the list, above the other links');
+    assert.ok(!html.home.includes(lead), 'not with goals');
+    assert.ok(!html['home (nothing to pick up)'].includes(lead));
+    const goals = html['goals (no goals)'];
+    assert.match(goals, /class="home-question goals-start-question"[^>]*>What is this project for\?</, 'the question in the writing face');
+    assert.match(goals, /id="goals-start-field" class="home-input"/, 'with Home’s field');
+    assert.ok(!goals.includes('No goals in GOALS.md'), 'the old empty state is gone');
+    assert.equal(nextCount(goals), 0);
+    assert.ok(!html.goals.includes('What is this project for?'), 'not with goals');
+    assert.ok(!html['goals (loading)'].includes('What is this project for?'), 'not while loading');
+    assert.ok(html.goals.includes('Think it through on a Page'), 'projects with goals can still open the Goals Page');
+    assert.equal(nextCount(html['home (no goals)']), 1, 'still just Continue');
+  });
+
+  test('Deep next R12: a goal with no metrics reads "not measured yet", never as a problem', () => {
+    const s = html['goals (unmeasured)'];
+    assert.ok(s.includes('not measured yet'));
+    assert.equal((s.match(/ui-dot is-needs/g) ?? []).length, 0, 'no ember');
+    assert.ok(!s.includes('a metric is failing'), 'never flagged');
   });
 
   test('History: Activity and Usage tabs; Activity first', () => {
