@@ -519,6 +519,70 @@ void LeeConnection::capture(const std::string& text,
 }
 
 // ---------------------------------------------------------------------------
+// Carry and check-in
+// ---------------------------------------------------------------------------
+
+std::string LeeConnection::followedWorkspace() const {
+    const LeeWindow* w = activeWindow();
+    return w ? w->workspace : std::string();
+}
+
+void LeeConnection::fetchCarry(std::function<void(int, const CarryState*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    std::string url = buildHttpUrl("/carry");
+    const std::string ws = followedWorkspace();
+    if (!ws.empty()) url += "?workspace=" + url_encode(ws);
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        CarryState carry;
+        const bool ok = status >= 200 && status < 300 && carry_parse(resp, carry);
+        cb(status, ok ? &carry : nullptr);
+    });
+}
+
+void LeeConnection::carryCapture(const std::string& text, const std::string& exploration_id,
+                                 std::function<void(const CaptureOutcome&)> cb) {
+    if (!http_) {
+        CaptureOutcome r;
+        capture_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "text", text.c_str());
+    if (!exploration_id.empty()) cJSON_AddStringToObject(body, "exploration_id", exploration_id.c_str());
+    const std::string ws = followedWorkspace();
+    if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
+    http_->post(buildHttpUrl("/carry/capture"), body, [cb](int status, cJSON* resp) {
+        CaptureOutcome r;
+        capture_outcome_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::carryOpenNext(const std::string& exploration_id,
+                                  std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "exploration_id", exploration_id.c_str());
+    const std::string ws = followedWorkspace();
+    if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
+    postAction("/carry/open-next", body, std::move(cb));
+}
+
+void LeeConnection::agentCheckin(int pty_id, std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "domain", "tab");
+    cJSON_AddStringToObject(body, "action", "checkin");
+    cJSON* params = cJSON_AddObjectToObject(body, "params");
+    cJSON_AddNumberToObject(params, "pty_id", pty_id);
+    postAction("/command", body, std::move(cb));
+}
+
+// ---------------------------------------------------------------------------
 // Health check
 // ---------------------------------------------------------------------------
 

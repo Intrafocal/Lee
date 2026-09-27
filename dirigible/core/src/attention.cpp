@@ -85,6 +85,9 @@ int64_t get_time(cJSON* obj, const char* key) {
     return (item && cJSON_IsString(item)) ? iso8601_to_ms(item->valuestring) : -1;
 }
 
+/// agents[], limits, deep and mode (defined below the item parsers).
+void parse_agents_and_more(cJSON* snap, int64_t generated, AttentionSnapshot& s);
+
 }  // namespace
 
 int64_t iso8601_to_ms(const char* s) {
@@ -239,6 +242,7 @@ bool attention_snapshot_parse(cJSON* json, AttentionSnapshot& out) {
     if (cJSON* away = get(snap, "away"); cJSON_IsObject(away)) {
         s.away_active = get_bool(away, "active");
     }
+    parse_agents_and_more(snap, generated, s);
 
     out = std::move(s);
     return true;
@@ -268,7 +272,147 @@ const char* attention_kind_name(AttentionKind k) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agents, limits, deep
+// ---------------------------------------------------------------------------
+
+int AttentionSnapshot::working() const {
+    int n = 0;
+    for (const auto& a : agents) {
+        if (a.state == AgentState::Busy) n++;
+    }
+    return n;
+}
+
 namespace {
+
+AgentState parse_agent_state(const std::string& s) {
+    if (s == "busy")    return AgentState::Busy;
+    if (s == "idle")    return AgentState::Idle;
+    if (s == "waiting") return AgentState::Waiting;
+    return AgentState::Unknown;
+}
+
+/// `generated - <key>`, never negative; -1 when either is unknown.
+int64_t age_of(cJSON* obj, const char* key, int64_t generated) {
+    const int64_t t = get_time(obj, key);
+    if (generated < 0 || t < 0) return -1;
+    return generated > t ? generated - t : 0;
+}
+
+void parse_files(cJSON* arr, std::vector<std::string>& out) {
+    out.clear();
+    if (!cJSON_IsArray(arr)) return;
+    cJSON* f = nullptr;
+    cJSON_ArrayForEach(f, arr) {
+        if (out.size() >= AGENT_MAX_FILES) break;
+        if (cJSON_IsString(f) && f->valuestring) {
+            std::string s = f->valuestring;
+            if (s.size() > AGENT_MAX_PREVIEW) s = s.substr(s.size() - AGENT_MAX_PREVIEW);   // keep the name
+            out.push_back(std::move(s));
+        }
+    }
+}
+
+int64_t get_int64(cJSON* obj, const char* key, int64_t def) {
+    cJSON* item = get(obj, key);
+    return (item && cJSON_IsNumber(item)) ? (int64_t)item->valuedouble : def;
+}
+
+}  // namespace
+
+bool agent_summary_parse(cJSON* a, int64_t generated, AgentSummary& out) {
+    if (!cJSON_IsObject(a)) return false;
+    cJSON* pty = get(a, "pty_id");
+    if (!cJSON_IsNumber(pty)) return false;
+    AgentSummary s;
+    s.pty_id        = pty->valueint;
+    s.window_id     = get_int(a, "window_id", -1);
+    s.tab_id        = get_int(a, "tab_id", -1);
+    s.label         = get_str(a, "label", ATTENTION_MAX_LABEL);
+    s.provider      = get_str(a, "provider", 24);
+    s.workspace     = get_str(a, "workspace", 160);
+    s.state         = parse_agent_state(get_str(a, "state", 16));
+    s.busy_ms       = age_of(a, "busy_since", generated);
+    s.idle_ms       = age_of(a, "idle_since", generated);
+    s.last_tool     = get_str(a, "last_tool", 48);
+    s.last_summary  = get_str(a, "last_summary", AGENT_MAX_SUMMARY);
+    s.files_touched = get_int(a, "files_touched_count");
+
+    if (cJSON* now = get(a, "now"); cJSON_IsObject(now)) {
+        s.now.tool    = get_str(now, "tool", 48);
+        s.now.preview = get_str(now, "preview", AGENT_MAX_PREVIEW);
+        parse_files(get(now, "files"), s.now.files);
+        s.now.age_ms  = age_of(now, "since", generated);
+        s.has_now     = !s.now.tool.empty();
+    }
+
+    // The newest entries matter most: keep the tail of each ring.
+    if (cJSON* recent = get(a, "recent"); cJSON_IsArray(recent)) {
+        const int n = cJSON_GetArraySize(recent);
+        for (int i = n > (int)AGENT_MAX_RECENT ? n - (int)AGENT_MAX_RECENT : 0; i < n; i++) {
+            cJSON* e = cJSON_GetArrayItem(recent, i);
+            if (!cJSON_IsObject(e)) continue;
+            AgentActivityEntry entry;
+            entry.tool    = get_str(e, "tool", 48);
+            if (entry.tool.empty()) continue;
+            entry.preview = get_str(e, "preview", AGENT_MAX_PREVIEW);
+            parse_files(get(e, "files"), entry.files);
+            entry.failed  = get_bool(e, "failed");
+            entry.past    = get_str(e, "phase", 8) == "post";
+            entry.age_ms  = age_of(e, "at", generated);
+            s.recent.push_back(std::move(entry));
+        }
+    }
+    if (cJSON* updates = get(a, "updates"); cJSON_IsArray(updates)) {
+        const int n = cJSON_GetArraySize(updates);
+        for (int i = n > (int)AGENT_MAX_UPDATES ? n - (int)AGENT_MAX_UPDATES : 0; i < n; i++) {
+            cJSON* u = cJSON_GetArrayItem(updates, i);
+            if (!cJSON_IsObject(u)) continue;
+            AgentUpdateEntry entry;
+            entry.summary = get_str(u, "summary", AGENT_MAX_SUMMARY);
+            if (entry.summary.empty()) continue;   // a lee-status-only turn
+            entry.age_ms  = age_of(u, "at", generated);
+            s.updates.push_back(std::move(entry));
+        }
+    }
+    if (cJSON* usage = get(a, "usage"); cJSON_IsObject(usage)) {
+        s.usage.shown_tokens = get_int64(usage, "shown_tokens", -1);
+        s.usage.cost_basis   = get_str(usage, "cost_basis", 16);
+        s.has_usage          = s.usage.shown_tokens >= 0;
+    }
+    out = std::move(s);
+    return true;
+}
+
+namespace {
+
+void parse_agents_and_more(cJSON* snap, int64_t generated, AttentionSnapshot& s) {
+    if (cJSON* agents = get(snap, "agents"); cJSON_IsArray(agents)) {
+        cJSON* a = nullptr;
+        cJSON_ArrayForEach(a, agents) {
+            if (s.agents.size() >= ATTENTION_MAX_AGENTS) break;
+            AgentSummary one;
+            if (agent_summary_parse(a, generated, one)) s.agents.push_back(std::move(one));
+        }
+    }
+    if (cJSON* limits = get(snap, "limits"); cJSON_IsObject(limits)) {
+        auto pct = [&](const char* key) {
+            cJSON* w = get(limits, key);
+            cJSON* p = cJSON_IsObject(w) ? get(w, "used_pct") : nullptr;
+            return cJSON_IsNumber(p) ? (int)(p->valuedouble + 0.5) : -1;
+        };
+        s.limits.five_hour_pct = pct("five_hour");
+        s.limits.seven_day_pct = pct("seven_day");
+        s.has_limits = s.limits.five_hour_pct >= 0 || s.limits.seven_day_pct >= 0;
+    }
+    if (cJSON* deep = get(snap, "deep"); cJSON_IsObject(deep)) {
+        s.deep_active = true;
+        s.deep_title = get_str(deep, "title", ATTENTION_MAX_TITLE);
+        s.deep_exploration_id = get_str(deep, "exploration_id", ATTENTION_MAX_ID);
+    }
+    s.mode = get_str(snap, "mode", 16);
+}
 
 std::string error_of(int status, cJSON* resp) {
     if (resp) {
