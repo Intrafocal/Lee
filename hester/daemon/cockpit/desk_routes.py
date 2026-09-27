@@ -115,6 +115,16 @@ def create_desk_router() -> APIRouter:
     async def desk_card_patch(card_id: str, request: Request):
         return await _op(request, lambda ctx, desk, b: desk.patch_card(card_id, b))
 
+    # ------------------------------------------------------------ strokes (lines that mean nothing)
+
+    @router.post("/desk/strokes")
+    async def desk_stroke_create(request: Request):
+        return await _op(request, lambda ctx, desk, b: desk.create_stroke(b), 201)
+
+    @router.delete("/desk/strokes/{stroke_id}")
+    async def desk_stroke_delete(stroke_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: desk.delete_stroke(stroke_id))
+
     @router.post("/desk/pages")
     async def desk_page_create(request: Request):
         """201 with the new card and its Page; 200 with ``created: false`` for the existing Goals card."""

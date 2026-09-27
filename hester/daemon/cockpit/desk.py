@@ -3,7 +3,7 @@ The Desk (docs/16-Desk.md; contract docs/plans/2026-09-27-desk-foundation-contra
 
 One store per workspace at ``<workspace>/.hester/desk/`` (0700)::
 
-    desk.json                   layout: Areas, card positions, Drawers, the Goals card, last, migration
+    desk.json                   layout: Areas, card positions, Drawers, the Goals card, strokes, last, migration
     sessions.jsonl              Desk session records, one per line
     pages/<pg-id>/
       card.json                 {id, kind: 'page', title, purpose, seed, goals, origin, created_at,
@@ -57,6 +57,7 @@ logger = logging.getLogger("hester.daemon.cockpit.desk")
 PAGE_ID_RE = re.compile(r"^pg-[0-9a-f]{8}$")
 AREA_ID_RE = re.compile(r"^area-[0-9a-f]{8}$")
 DRAWER_ID_RE = re.compile(r"^(put-away|ideas|drw-[0-9a-f]{8})$")
+STROKE_ID_RE = re.compile(r"^stk-[0-9a-f]{8}$")
 IDEAS_DRAWER = "ideas"
 PUT_AWAY_DRAWER = "put-away"
 CARD_KINDS = ("page",)
@@ -75,6 +76,10 @@ MAX_STOPPED = 160
 MAX_SESSIONS = 200
 DEFAULT_SESSIONS = 20
 MAX_COORD = 10_000_000
+MAX_STROKE_POINTS = 2000
+MAX_STROKES = 2000
+MAX_STROKE_WIDTH = 64
+DEFAULT_STROKE_WIDTH = 2
 IN_FLIGHT = ("launching", "running", "waiting", "review")
 DEFAULT_TITLE = "Untitled"
 GOALS_TITLE = "Goals"
@@ -168,6 +173,28 @@ def _overlaps(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
         a["x"] < b["x"] + b["w"] and b["x"] < a["x"] + a["w"]
         and a["y"] < b["y"] + b["h"] and b["y"] < a["y"] + a["h"]
     )
+
+
+def _points(value: Any) -> List[List[float]]:
+    """A stroke's points: 2 to ``MAX_STROKE_POINTS`` ``[x, y]`` pairs of finite numbers, rounded to 0.01."""
+    if not isinstance(value, list) or len(value) < 2:
+        raise DeskError("points must be a list of at least 2 [x, y] pairs")
+    if len(value) > MAX_STROKE_POINTS:
+        raise DeskError(f"a stroke has at most {MAX_STROKE_POINTS} points")
+    out = []
+    for p in value:
+        if (
+            not isinstance(p, (list, tuple)) or len(p) != 2
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or abs(v) > MAX_COORD for v in p)
+        ):
+            raise DeskError("points must be [x, y] pairs of numbers")
+        out.append([_round(p[0]), _round(p[1])])
+    return out
+
+
+def _round(v: float) -> float:
+    r = round(float(v), 2)
+    return int(r) if r.is_integer() else r
 
 
 def area_slot(i: int) -> Tuple[int, int]:
@@ -313,7 +340,7 @@ def new_card(card_id: str, title: str, now: datetime, **fields: Any) -> Dict[str
 def _empty_raw() -> Dict[str, Any]:
     return {
         "version": 1, "areas": [], "cards": [],
-        "drawers": [{"id": PUT_AWAY_DRAWER, "name": "Put away"}],
+        "drawers": [{"id": PUT_AWAY_DRAWER, "name": "Put away"}], "strokes": [],
         "goals_card_id": None, "last": None,
         "migration": {"map": {}, "last_report": None},
     }
@@ -337,6 +364,8 @@ class DeskStore:
                 raw[k] = v
         raw["areas"] = [a for a in raw["areas"] if isinstance(a, dict) and AREA_ID_RE.match(str(a.get("id") or ""))]
         raw["cards"] = [c for c in raw["cards"] if isinstance(c, dict) and is_page_id(c.get("id"))]
+        raw["strokes"] = [s for s in raw["strokes"] if isinstance(s, dict) and STROKE_ID_RE.match(str(s.get("id") or ""))
+                          and isinstance(s.get("points"), list)]
         raw["drawers"] = [d for d in raw["drawers"] if isinstance(d, dict) and DRAWER_ID_RE.match(str(d.get("id") or ""))
                           and d.get("id") != IDEAS_DRAWER]
         if not any(d["id"] == PUT_AWAY_DRAWER for d in raw["drawers"]):
@@ -482,6 +511,10 @@ class DeskStore:
     def area_api(a: Dict[str, Any]) -> Dict[str, Any]:
         return {k: a.get(k) for k in ("id", "name", "x", "y", "w", "h", "drawer_id", "created_at", "updated_at", "migrated_from")}
 
+    @staticmethod
+    def stroke_api(s: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: s.get(k) for k in ("id", "area_id", "points", "width", "created_at")}
+
     def drawers_api(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         from ..copilot.someday import SomedayStore
 
@@ -516,6 +549,7 @@ class DeskStore:
             "areas": [self.area_api(a) for a in raw["areas"]],
             "cards": cards,
             "drawers": self.drawers_api(raw),
+            "strokes": [self.stroke_api(s) for s in raw["strokes"]],
             "goals_card_id": raw["goals_card_id"],
             "last": raw["last"],
             "migration": raw["migration"].get("last_report"),
@@ -589,7 +623,7 @@ class DeskStore:
         return self.area_api(area)
 
     def delete_area(self, area_id: str, now: Optional[datetime] = None, with_cards: bool = False) -> Dict[str, Any]:
-        """An empty Area; with ``with_cards`` (the user confirmed), its cards go too. Not undoable."""
+        """An empty Area; with ``with_cards`` (the user confirmed), its cards go too. Its lines always go. Not undoable."""
         with _LOCK:
             raw = self.load(now)
             area = self._area(raw, area_id)
@@ -598,6 +632,7 @@ class DeskStore:
                 raise DeskConflict("not_empty")
             for card_id in cards:
                 self._drop_card(raw, card_id)
+            raw["strokes"] = [s for s in raw["strokes"] if s.get("area_id") != area_id]
             raw["areas"].remove(area)
             self._write(raw)
         return {"deleted": True, "cards": len(cards)}
@@ -679,6 +714,8 @@ class DeskStore:
             if layout and raw.get("goals_card_id") == card_id:
                 raise DeskError("the Goals card doesn't move")
             if "area_id" in body:
+                if not isinstance(body["area_id"], str) or not AREA_ID_RE.match(body["area_id"]):
+                    raise DeskError("area_id must be an Area id")
                 area = self._area(raw, body["area_id"])
                 if area.get("drawer_id"):
                     raise DeskError("that Area is put away")
@@ -694,6 +731,52 @@ class DeskStore:
             if layout:
                 self._write(raw)
             return self.card_api(entry, card, raw)
+
+    # ---------------------------------------------------------------- strokes
+
+    def create_stroke(self, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        POST /desk/strokes: a freehand line, ``points`` relative to its Area
+        (or to the Desk when ``area_id`` is null). Lines mean nothing: Hester
+        stores them and never reads, places or connects them.
+        """
+        now = now or utc_now()
+        unknown = set(body) - {"area_id", "points", "width"}
+        if unknown:
+            raise DeskError(f"unknown field {', '.join(sorted(unknown))}")
+        area_id = body.get("area_id")
+        if area_id is not None and (not isinstance(area_id, str) or not AREA_ID_RE.match(area_id)):
+            raise DeskError("area_id must be an Area id or null")
+        points = _points(body.get("points"))
+        width = _num(body, "width", positive=True)
+        if width is None:
+            width = DEFAULT_STROKE_WIDTH
+        if width > MAX_STROKE_WIDTH:
+            raise DeskError(f"width is more than {MAX_STROKE_WIDTH}")
+        with _LOCK:
+            raw = self.load(now)
+            if area_id is not None and self._area(raw, area_id).get("drawer_id"):
+                raise DeskError("that Area is put away")
+            if len(raw["strokes"]) >= MAX_STROKES:
+                raise DeskError(f"the Desk has {MAX_STROKES} lines; delete some first")
+            stroke = {
+                "id": self._unique("stk", {x["id"] for x in raw["strokes"]}), "area_id": area_id,
+                "points": points, "width": width, "created_at": iso_s(now),
+            }
+            raw["strokes"].append(stroke)
+            self._write(raw)
+        return self.stroke_api(stroke)
+
+    def delete_stroke(self, stroke_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+        if not isinstance(stroke_id, str) or not STROKE_ID_RE.match(stroke_id):
+            raise DeskError("invalid stroke id")
+        with _LOCK:
+            raw = self.load(now)
+            if not any(s["id"] == stroke_id for s in raw["strokes"]):
+                raise DeskNotFound(stroke_id)
+            raw["strokes"] = [s for s in raw["strokes"] if s["id"] != stroke_id]
+            self._write(raw)
+        return {"deleted": True}
 
     def create_page(self, body: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
         """POST /desk/pages -> (card, {text, version}, created)."""
