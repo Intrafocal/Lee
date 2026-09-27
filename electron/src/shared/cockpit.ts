@@ -770,13 +770,30 @@ export type Anchor =
   | { kind: 'none' };
 export interface DeepReference {
   id: string; kind: 'quote' | 'link'; quote?: string; url?: string; title?: string; note?: string;
-  section?: string | null; source?: { kind: 'page' | 'palette' | 'answer'; ref?: string };
+  section?: string | null; source?: { kind: 'page' | 'palette' | 'answer' | 'file'; ref?: string };
   at: string; opened_at?: string;
+  /** Deep next R10: a quote or link from a workspace file ([[ ), with its line range. */
+  file?: string; lines?: [number, number];
 }
 export type AnswerStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted';
+/** Deep next R3: what a hand-off asks an agent to do. */
+export type HandoffKind = 'spike' | 'docs' | 'research';
+/** Where a hand-off's agent is (from its Cockpit task); 'done' when its result is in `answer`. */
+export type HandoffState = 'launching' | 'running' | 'waiting' | 'review' | 'done' | 'error';
+export interface DeepHandoff {
+  kind: HandoffKind;
+  provider: string;
+  /** The brief exactly as sent (C3). */
+  brief: string;
+  task_id: string | null;
+  state: HandoffState;
+}
 export interface DeepAnswer {
   id: string; anchor: Anchor; question: string; status: AnswerStatus; answer?: string; error?: string;
-  surface: 'deep-ask'; model?: { location: 'local' | 'cloud'; name: string };
+  surface: 'deep-ask' | 'deep-handoff'; model?: { location: 'local' | 'cloud'; name: string };
+  /** Deep next R3/R5: 'handoff' records share the answers store and the margin; absent = 'ask'. */
+  kind?: 'ask' | 'handoff';
+  handoff?: DeepHandoff;
   asked_at: string; answered_at?: string; read_at?: string; dismissed_at?: string;
   inserted_at?: string; kept_at?: string; follow_up_of?: string;
 }

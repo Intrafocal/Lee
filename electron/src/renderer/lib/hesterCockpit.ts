@@ -410,7 +410,7 @@ export function proposalOutcome(workspace: string, proposalId: string, outcome: 
 // ---------------------------------------------------------------------------
 
 export type ExplorationStatus = 'active' | 'archived';
-export type ExplorationOriginKind = 'cockpit' | 'someday' | 'hester' | 'library' | 'task';
+export type ExplorationOriginKind = 'cockpit' | 'someday' | 'hester' | 'library' | 'task' | 'exploration' | 'opener';
 
 export type ExploreNodeKind = 'thought' | 'source_file' | 'source_web' | 'source_db' | 'decision' | 'spike' | 'evidence';
 export type SpikeStatus = 'pending' | 'running' | 'review' | 'done' | 'discarded' | 'failed';
@@ -479,6 +479,8 @@ export interface ExplorationPromotion {
 }
 
 export interface Exploration {
+  /** Deep next R12: 'goals' marks the workspace's Goals Page (one per workspace). */
+  purpose?: 'goals' | null;
   id: string;
   workspace: string;
   title: string;

@@ -22,6 +22,7 @@
  * The component owns the view; DeepHost owns the data and the calls.
  */
 
+import type { DeepAnswer } from '../../../shared/cockpit';
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { Annotation, EditorSelection, EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
 import {
@@ -212,6 +213,24 @@ interface PageEditorProps {
   onAction: (action: DeepRowAction, sel: PageSelection, question?: string) => void;
   onAffordance: (opt: AffordanceOption, aff: Affordance, line: { from: number; to: number; text: string }) => void;
   onAffordanceShown: (aff: Affordance, outcome: 'accepted' | 'ignored') => void;
+
+  // ---- Deep next seam (docs/plans/2026-09-27-deep-next-contract.md §3). RA implements; RB passes. ----
+  /** All answers and hand-offs, for the per-section margin marks (R5). */
+  answers?: readonly DeepAnswer[];
+  /** R2: Ask Hester on a selection that holds questions: one ask per question, each with its section. */
+  onAskMany?: (asks: Array<{ question: string; anchor: Anchor; sectionText: string }>) => void;
+  /** R3: Hand off the selection, or the section the cursor is in. `provider` from an @mention. */
+  onHandOff?: (sel: PageSelection & { anchor: Anchor; sectionText: string }, provider?: string) => void;
+  /** R11: a sent @mention to one of this exploration's hand-offs (reply with that text). */
+  onReplyHandoff?: (answerId: string, text: string) => void;
+  /** R11: who @ can reach: Hester, the providers, this exploration's hand-offs. */
+  mentionTargets?: ReadonlyArray<{ id: string; label: string; kind: 'hester' | 'provider' | 'handoff' }>;
+  /** R10: the workspace file list for [[ and a reader for the source panel. */
+  files?: { list: () => Promise<string[]>; read: (path: string) => Promise<string | null> };
+  /** R10: a quote was inserted from a file (record it as a reference). */
+  onQuote?: (q: { file: string; lines: [number, number]; text: string; label: string }) => void;
+  /** R12: quiet prompts in the margin (the Goals Page), faded once answered. */
+  marginPrompts?: readonly string[];
 }
 
 /** The action row slot's width (deep.css .deep-row-slot). */
