@@ -68,6 +68,9 @@ export const strokeIcons = {
   'document': 'M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h4',
   'minimize': 'M6 12h12',
   'maximize': 'M6 6h12v12H6z',
+  'pointer': 'M5 3l13 7.5-5.5 2-2.5 5.5zM12.5 12.5L18 18',
+  'move': 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
+  'draw': 'M3 17c3-6 5-8 7-6s-1 6 2 6 5-8 9-9',
 } as const;
 
 export type IconName = keyof typeof strokeIcons;

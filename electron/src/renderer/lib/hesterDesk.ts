@@ -1,7 +1,7 @@
 /**
  * Typed client for Hester's Desk routes (D2 contract §4): the Desk, its
- * Areas, Drawers and cards, Page cards, sessions, `/desk/last` and Ideas to
- * a Page. Same `call` as lib/hesterDeep.ts (workspace as `?workspace=` and
+ * Areas, Drawers and cards, strokes, Page cards, sessions, `/desk/last` and
+ * Ideas to a Page. Same `call` as lib/hesterDeep.ts (workspace as `?workspace=` and
  * `X-Lee-Workspace`, the bearer token, the copilot envelope, the error body
  * kept for 409s).
  *
@@ -29,6 +29,8 @@ import type {
   DeskPageCreated,
   DeskSessionCreate,
   DeskSessionRecord,
+  DeskStroke,
+  DeskStrokeCreate,
   IdeaToPage,
   IdeaToPageResult,
 } from '../../shared/desk';
@@ -92,6 +94,16 @@ export function patchDrawer(workspace: string, id: string, name: string): Promis
 
 export function patchCard(workspace: string, id: string, body: DeskCardPatch): Promise<DeepResult<DeskCard>> {
   return call<DeskCard>(workspace, 'PATCH', `/desk/cards/${seg(id)}`, body);
+}
+
+// ---- strokes (lines that mean nothing) ----
+
+export function createStroke(workspace: string, body: DeskStrokeCreate): Promise<DeepResult<DeskStroke>> {
+  return call<DeskStroke>(workspace, 'POST', '/desk/strokes', body);
+}
+
+export function deleteStroke(workspace: string, id: string): Promise<DeepResult<{ deleted: true }>> {
+  return call<{ deleted: true }>(workspace, 'DELETE', `/desk/strokes/${seg(id)}`);
 }
 
 /** 201 created; 200 with created: false for an existing Goals card. */

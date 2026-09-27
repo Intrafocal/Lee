@@ -11,6 +11,10 @@ export const DESK_CARD_KINDS: readonly DeskCardKind[] = ['page'];
 export const PAGE_ID_RE = /^pg-[0-9a-f]{8}$/;
 export const AREA_ID_RE = /^area-[0-9a-f]{8}$/;
 export const DRAWER_ID_RE = /^(put-away|ideas|drw-[0-9a-f]{8})$/;
+export const STROKE_ID_RE = /^stk-[0-9a-f]{8}$/;
+/** Hester's caps: points per stroke, strokes per Desk. */
+export const MAX_STROKE_POINTS = 2000;
+export const MAX_STROKES = 2000;
 /** The two built-in Drawers. 'ideas' is the Someday store; 'put-away' holds Areas. */
 export const IDEAS_DRAWER = 'ideas';
 export const PUT_AWAY_DRAWER = 'put-away';
@@ -67,6 +71,21 @@ export interface DeskDrawer {
   count: number;
 }
 
+/**
+ * A freehand line you drew. It means nothing: Hester stores it and never
+ * reads, places or connects it. Points are relative to its Area's top-left,
+ * or to the Desk when area_id is null; it moves, is put away and is deleted
+ * with its Area.
+ */
+export interface DeskStroke {
+  id: string;
+  area_id: string | null;
+  points: Array<[number, number]>;
+  /** Screen px, the same at every zoom. */
+  width: number;
+  created_at: string;
+}
+
 export interface DeskMigrationReport {
   at: string;
   migrated: number;
@@ -84,6 +103,8 @@ export interface Desk {
   cards: DeskCard[];
   /** Always both built-ins first: [ideas, put-away], then any others. */
   drawers: DeskDrawer[];
+  /** Every stroke, put-away Areas' too. Absent from a Hester older than the Desk's tools. */
+  strokes?: DeskStroke[];
   goals_card_id: string | null;
   last: { card_id: string; at: string } | null;
   /** The last migration run that migrated anything; null when none ever did. */
@@ -136,6 +157,7 @@ export interface DeskLast {
 
 export interface DeskAreaCreate { name: string; x?: number; y?: number; w?: number; h?: number }
 export interface DeskAreaPatch { name?: string; x?: number; y?: number; w?: number; h?: number }
+export interface DeskStrokeCreate { area_id: string | null; points: Array<[number, number]>; width?: number }
 export interface DeskCardPatch { x?: number; y?: number; w?: number; h?: number; area_id?: string; title?: string }
 
 export interface DeskPageCreate {

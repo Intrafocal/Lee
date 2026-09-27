@@ -6,7 +6,10 @@
  *   zoom about a point), the landing target (DeskLast × saved cursor × null
  *   line), the Esc rule, touched-card accumulation and order, the empty-spot
  *   hit test and new-card placement, the Goals corner, the drawer counts,
- *   the card count line and waiting cards, and the exp → pg key migration.
+ *   the card count line and waiting cards, and the exp → pg key migration;
+ *   the tools: their keys and Esc, the pointer's shape, drag-to-move maths
+ *   and which Area a card lands in, edits shown before Hester answers, and
+ *   strokes (simplification, the cap, Area-relative coordinates, the path).
  * - lib/hesterDesk.ts: every route's method, path, workspace (query and
  *   percent-encoded header), token and envelope, with a stub fetch; a Page
  *   card's own routes (hesterDeep by card id) go to /desk/pages/{id}/….
@@ -197,6 +200,115 @@ await test('placement: at the click, inside the Area, nudged clear of cards and 
 });
 
 // ---------------------------------------------------------------------------
+// deskModel: tools (Cursor, Move, Draw)
+// ---------------------------------------------------------------------------
+
+await test('tools: V, M, D pick one; never with a modifier or while typing; Esc goes back to Cursor after closing things', () => {
+  assert.deepEqual(model.DESK_TOOLS.map((t) => [t.tool, t.key, t.icon]), [['cursor', 'V', 'pointer'], ['move', 'M', 'move'], ['draw', 'D', 'draw']]);
+  assert.equal(model.toolForKey({ key: 'v' }, false), 'cursor');
+  assert.equal(model.toolForKey({ key: 'M' }, false), 'move');
+  assert.equal(model.toolForKey({ key: 'd' }, false), 'draw');
+  assert.equal(model.toolForKey({ key: 'd' }, true), null, 'typing into something');
+  assert.equal(model.toolForKey({ key: 'd', metaKey: true }, false), null);
+  assert.equal(model.toolForKey({ key: 'v', ctrlKey: true }, false), null);
+  assert.equal(model.toolForKey({ key: 'm', altKey: true }, false), null);
+  assert.equal(model.toolForKey({ key: 'x' }, false), null);
+  assert.deepEqual(model.deskEscapeStep(['selection'], 'area', 'draw'), { kind: 'close', layer: 'selection' }, 'the innermost thing first');
+  assert.deepEqual(model.deskEscapeStep([], 'area', 'draw'), { kind: 'tool', to: 'cursor' });
+  assert.deepEqual(model.deskEscapeStep([], 'overview', 'move'), { kind: 'tool', to: 'cursor' });
+  assert.deepEqual(model.deskEscapeStep([], 'area', 'cursor'), { kind: 'zoom', to: 'overview' }, 'then zoom out, as before');
+  assert.deepEqual(model.deskEscapeStep([], 'overview', 'cursor'), { kind: 'none' });
+  assert.equal(model.toolCursor('cursor', false), 'default');
+  assert.equal(model.toolCursor('move', false), 'grab');
+  assert.equal(model.toolCursor('move', true), 'grabbing');
+  assert.equal(model.toolCursor('draw', false), 'crosshair');
+});
+
+await test('move: a drag in screen px is Desk px; a card lands in the Area under the pointer, kept inside it', () => {
+  assert.deepEqual(model.dragDelta({ x: 10, y: 10 }, { x: 60, y: -10 }, 0.5), { x: 100, y: -40 });
+  assert.equal(model.movedEnough({ x: 0, y: 0 }, { x: 2, y: 2 }), false, 'a click');
+  assert.equal(model.movedEnough({ x: 0, y: 0 }, { x: 4, y: 0 }), true);
+  const on = model.areasOnDesk(DESK);
+  // Within its Area.
+  assert.deepEqual(model.dropCard(C1, A1, { x: 100, y: 50 }, on, { x: 300, y: 300 }), { area_id: A1.id, x: 148, y: 146 });
+  // Into A2 (x 1400): the same Desk spot, now relative to A2.
+  const into = model.dropCard(C1, A1, { x: 1500, y: 100 }, on, { x: 1600, y: 300 });
+  assert.deepEqual(into, { area_id: A2.id, x: 48 + 1500 - 1400, y: 196 });
+  // Past the edge: clamped inside, below the name strip.
+  assert.deepEqual(model.dropCard(C1, A1, { x: 5000, y: -500 }, on, { x: 700, y: 10 }), { area_id: A1.id, x: A1.w - 360, y: model.AREA_HEAD });
+  // Dropped on bare Desk: back in its own Area.
+  assert.equal(model.dropCard(C1, A1, { x: 1200, y: 0 }, on, { x: 1300, y: 300 }).area_id, A1.id, 'the gap between Areas');
+  // Onto a put-away Area's old spot: not on the Desk, so its own.
+  assert.equal(model.dropCard(C1, A1, { x: 0, y: 1000 }, on, { x: 100, y: 1200 }).area_id, A1.id);
+  assert.deepEqual(model.dropArea(A2, { x: -100.4, y: 30.6 }), { x: 1300, y: 31 });
+});
+
+await test('edits: shown over the Desk until Hester has them, then dropped one by one', () => {
+  assert.equal(model.withEdits(DESK, model.NO_EDITS), DESK, 'the same object with none');
+  const S = { id: 'stk-0000000a', area_id: A1.id, points: [[0, 0], [5, 5]], width: 2, created_at: '' };
+  const base = { ...DESK, strokes: [S] };
+  const tmp = { ...S, id: 'tmp-1', area_id: null };
+  const e = { cards: { [C1.id]: { area_id: A2.id, x: 10, y: 60 } }, areas: { [A2.id]: { x: 5, y: 6 } }, added: [tmp], removed: [S.id] };
+  const shown = model.withEdits(base, e);
+  const c1 = shown.cards.find((c) => c.id === C1.id);
+  assert.deepEqual([c1.area_id, c1.x, c1.y, c1.title], [A2.id, 10, 60, C1.title]);
+  assert.deepEqual([shown.areas[1].x, shown.areas[1].y, shown.areas[1].name], [5, 6, 'Board']);
+  assert.deepEqual(shown.strokes.map((s) => s.id), ['tmp-1'], 'drawn in, deleted out');
+  assert.equal(base.cards.find((c) => c.id === C1.id).area_id, A1.id, 'the Desk itself untouched');
+  assert.deepEqual(model.withEdits({ ...DESK, strokes: undefined }, { ...model.NO_EDITS, added: [tmp] }).strokes, [tmp], 'an older Hester: no strokes yet');
+  let left = model.dropEdit(e, { card: C1.id });
+  assert.deepEqual(Object.keys(left.cards), []);
+  left = model.dropEdit(left, { area: A2.id, added: 'tmp-1', removed: S.id });
+  assert.deepEqual(left, model.NO_EDITS);
+  assert.equal(model.dropEdit(e, { card: 'pg-00000000' }).cards, e.cards, 'nothing to drop');
+});
+
+await test('strokes: simplified within a screen pixel, capped, in the Area they start in, relative to it', () => {
+  // A straight line of 100 points is its two ends.
+  const straight = Array.from({ length: 100 }, (_, i) => ({ x: i, y: 2 * i }));
+  assert.deepEqual(model.simplifyPoints(straight, 0.5), [straight[0], straight[99]]);
+  // A corner keeps its corner.
+  const corner = [...Array.from({ length: 10 }, (_, i) => ({ x: i * 10, y: 0 })), ...Array.from({ length: 10 }, (_, i) => ({ x: 90, y: (i + 1) * 10 }))];
+  assert.deepEqual(model.simplifyPoints(corner, 0.5), [{ x: 0, y: 0 }, { x: 90, y: 0 }, { x: 90, y: 100 }]);
+  near(model.segmentDistance({ x: 5, y: 5 }, { x: 0, y: 0 }, { x: 10, y: 0 }), 5);
+  near(model.segmentDistance({ x: 20, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }), 10);
+  // Tolerance is a screen px: zoomed out (scale 0.1), a 5-Desk-px wobble goes.
+  const wobble = Array.from({ length: 50 }, (_, i) => ({ x: 200 + i * 10, y: 300 + (i % 2) * 5 }));
+  const far = model.strokeFromDrag(wobble, 0.1, model.areasOnDesk(DESK));
+  const close = model.strokeFromDrag(wobble, 2, model.areasOnDesk(DESK));
+  assert.equal(far.points.length, 2);
+  assert.equal(close.points.length, 50, 'zoomed in, every wobble is kept');
+  assert.equal(far.area_id, A1.id);
+  assert.deepEqual(far.points[0], [200, 300], 'relative to A1 (at 0,0)');
+  assert.equal(far.width, model.STROKE_WIDTH);
+  // In A2: relative to its corner; on bare Desk: Desk-level, as drawn.
+  const inA2 = model.strokeFromDrag([{ x: 1450.123, y: 100 }, { x: 1500, y: 150 }], 1, model.areasOnDesk(DESK));
+  assert.deepEqual(inA2, { area_id: A2.id, points: [[50.12, 100], [100, 150]], width: model.STROKE_WIDTH });
+  const bare = model.strokeFromDrag([{ x: 1300, y: 100 }, { x: 1500, y: 150 }], 1, model.areasOnDesk(DESK));
+  assert.deepEqual(bare.area_id, null, 'starts in the gap: on the Desk, even if it crosses an Area');
+  assert.deepEqual(bare.points, [[1300, 100], [1500, 150]]);
+  // A click isn't a line.
+  assert.equal(model.strokeFromDrag([{ x: 1, y: 1 }], 1, []), null);
+  assert.equal(model.strokeFromDrag([{ x: 1, y: 1 }, { x: 1, y: 1 }], 1, []), null);
+  // Hester's cap: a long, busy line is simplified until it fits.
+  const busy = Array.from({ length: 6000 }, (_, i) => ({ x: i, y: (i % 2) * 3 }));
+  assert.ok(model.strokeFromDrag(busy, 4, []).points.length <= 2000);
+});
+
+await test('strokes: back on the Desk from their Area, hidden when it is put away; a smoothed path', () => {
+  const on = model.areasOnDesk(DESK);
+  assert.deepEqual(model.strokeOnDesk({ area_id: A2.id, points: [[10, 20], [30, 40]] }, on), [{ x: 1410, y: 20 }, { x: 1430, y: 40 }]);
+  assert.deepEqual(model.strokeOnDesk({ area_id: null, points: [[10, 20]] }, on), [{ x: 10, y: 20 }]);
+  assert.equal(model.strokeOnDesk({ area_id: A3.id, points: [[10, 20]] }, on), null, 'put away');
+  // Round trip: drawn in A2, back where it was drawn.
+  const drawn = [{ x: 1450, y: 100 }, { x: 1600, y: 180 }];
+  assert.deepEqual(model.strokeOnDesk(model.strokeFromDrag(drawn, 1, on), on), drawn);
+  assert.equal(model.strokePath([]), '');
+  assert.equal(model.strokePath([{ x: 0, y: 0 }, { x: 10.126, y: 5 }]), 'M0 0L10.13 5');
+  assert.equal(model.strokePath([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]), 'M0 0Q10 0 10 5L10 10');
+});
+
+// ---------------------------------------------------------------------------
 // deskModel: landing, Esc, touched cards
 // ---------------------------------------------------------------------------
 
@@ -330,6 +442,10 @@ await test('hesterDesk: every route, method, path, body; workspace and token on 
     [() => desk.createDrawer(WS, 'Later'), 'POST', '/desk/drawers', { name: 'Later' }],
     [() => desk.patchDrawer(WS, 'drw-00000001', 'Soon'), 'PATCH', '/desk/drawers/drw-00000001', { name: 'Soon' }],
     [() => desk.patchCard(WS, P, { x: 5, y: 6 }), 'PATCH', `/desk/cards/${P}`, { x: 5, y: 6 }],
+    [() => desk.patchCard(WS, P, { area_id: A, x: 5, y: 60 }), 'PATCH', `/desk/cards/${P}`, { area_id: A, x: 5, y: 60 }],
+    [() => desk.createStroke(WS, { area_id: A, points: [[0, 0], [1, 2]], width: 2 }), 'POST', '/desk/strokes', { area_id: A, points: [[0, 0], [1, 2]], width: 2 }],
+    [() => desk.createStroke(WS, { area_id: null, points: [[0, 0], [1, 2]] }), 'POST', '/desk/strokes', { area_id: null, points: [[0, 0], [1, 2]] }],
+    [() => desk.deleteStroke(WS, 'stk-0000000a'), 'DELETE', '/desk/strokes/stk-0000000a', undefined],
     [() => desk.createDeskPage(WS, { area_id: A, x: 1, y: 2, text: 'hi' }), 'POST', '/desk/pages', { area_id: A, x: 1, y: 2, text: 'hi' }],
     [() => desk.getDeskPage(WS, P), 'GET', `/desk/pages/${P}`, undefined],
     [() => desk.patchDeskPage(WS, P, { title: 'T' }), 'PATCH', `/desk/pages/${P}`, { title: 'T' }],

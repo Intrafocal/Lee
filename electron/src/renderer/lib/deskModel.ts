@@ -11,11 +11,15 @@
  * - The Esc rule: the innermost open thing first, then zoom out.
  * - Sessions: touched cards per focus session, in first-touched order.
  * - Drawers: the strip's counts. Cards: the quiet count line, waiting cards.
+ * - Tools (Cursor, Move, Draw): the keys, Esc back to Cursor, the pointer's
+ *   shape, where a dragged card or Area lands, edits shown before Hester
+ *   answers, and strokes (simplified, relative to their Area, smoothed).
  * - Local memory: the one-time exp-<hex> → pg-<hex> key migration.
  */
 
-import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, PUT_AWAY_DRAWER } from '../../shared/desk';
-import type { Desk, DeskArea, DeskCard, DeskCardSummary, DeskLast, DeskRect } from '../../shared/desk';
+import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS, PUT_AWAY_DRAWER } from '../../shared/desk';
+import type { Desk, DeskArea, DeskCard, DeskCardSummary, DeskLast, DeskRect, DeskStroke, DeskStrokeCreate } from '../../shared/desk';
+import type { IconName } from '../icons/iconData.generated';
 import type { TaskOrigin, TaskStatus } from '../../shared/cockpit';
 
 // ---------------------------------------------------------------------------
@@ -288,6 +292,216 @@ export function escapeStep(open: ReadonlySet<EscLayer> | readonly EscLayer[], zo
   for (const l of ESC_LAYERS) if (has(l)) return { kind: 'close', layer: l };
   if (zoom === 'card' || zoom === 'area') return { kind: 'zoom', to: 'overview' };
   return { kind: 'none' };
+}
+
+// ---------------------------------------------------------------------------
+// Tools: Cursor, Move, Draw
+// ---------------------------------------------------------------------------
+
+export type DeskTool = 'cursor' | 'move' | 'draw';
+
+export const DESK_TOOLS: ReadonlyArray<{ tool: DeskTool; key: string; label: string; icon: IconName }> = [
+  { tool: 'cursor', key: 'V', label: 'Cursor', icon: 'pointer' },
+  { tool: 'move', key: 'M', label: 'Move', icon: 'move' },
+  { tool: 'draw', key: 'D', label: 'Draw', icon: 'draw' },
+];
+
+export interface KeyLike {
+  key: string;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  isComposing?: boolean;
+}
+
+/** V, M or D picks a tool; never with ⌘, ctrl or ⌥, and never while you type into something. */
+export function toolForKey(e: KeyLike, typing: boolean): DeskTool | null {
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return null;
+  const k = e.key.toLowerCase();
+  return DESK_TOOLS.find((t) => t.key.toLowerCase() === k)?.tool ?? null;
+}
+
+export type DeskEscStep = EscStep | { kind: 'tool'; to: 'cursor' };
+
+/** The Desk's Esc: the innermost open thing, then Move or Draw back to Cursor, then zoom out. */
+export function deskEscapeStep(open: ReadonlySet<EscLayer> | readonly EscLayer[], zoom: DeskZoom, tool: DeskTool): DeskEscStep {
+  const step = escapeStep(open, zoom);
+  if (step.kind === 'close') return step;
+  return tool !== 'cursor' ? { kind: 'tool', to: 'cursor' } : step;
+}
+
+/** The pointer's shape: grab (grabbing while dragging) in Move, a crosshair in Draw. */
+export function toolCursor(tool: DeskTool, dragging: boolean): 'default' | 'grab' | 'grabbing' | 'crosshair' {
+  if (tool === 'move') return dragging ? 'grabbing' : 'grab';
+  return tool === 'draw' ? 'crosshair' : 'default';
+}
+
+/** Screen px a press may wander and still be a click. */
+export const DRAG_SLOP = 4;
+
+export function movedEnough(from: Point, to: Point): boolean {
+  return Math.hypot(to.x - from.x, to.y - from.y) >= DRAG_SLOP;
+}
+
+/** A drag in screen px as Desk px. */
+export function dragDelta(from: Point, to: Point, scale: number): Point {
+  return { x: (to.x - from.x) / scale, y: (to.y - from.y) / scale };
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(Math.max(n, lo), Math.max(lo, hi));
+}
+
+/**
+ * Where a dragged card lands: in the Area under the pointer (`pointer`, a
+ * Desk point), else back in its own, its top-left moved by `delta` and kept
+ * inside that Area below the name strip.
+ */
+export function dropCard(
+  card: Pick<DeskCard, 'x' | 'y' | 'w' | 'h'>,
+  from: DeskArea,
+  delta: Point,
+  areas: readonly DeskArea[],
+  pointer: Point,
+): { area_id: string; x: number; y: number } {
+  const to = areaAt(areas, pointer) ?? from;
+  const w = card.w || CARD_W;
+  const h = card.h || CARD_H;
+  const x = from.x + card.x + delta.x - to.x;
+  const y = from.y + card.y + delta.y - to.y;
+  return { area_id: to.id, x: Math.round(clamp(x, 0, to.w - w)), y: Math.round(clamp(y, AREA_HEAD, to.h - h)) };
+}
+
+/** A dragged Area's new top-left; its cards and lines are relative to it, so they come along. */
+export function dropArea(area: Pick<DeskRect, 'x' | 'y'>, delta: Point): { x: number; y: number } {
+  return { x: Math.round(area.x + delta.x), y: Math.round(area.y + delta.y) };
+}
+
+/** What you changed here and Hester hasn't answered yet: shown at once, dropped once GET /desk has it. */
+export interface DeskEdits {
+  cards: Readonly<Record<string, { area_id: string; x: number; y: number }>>;
+  areas: Readonly<Record<string, { x: number; y: number }>>;
+  /** Strokes drawn and not yet in the Desk (temporary ids). */
+  added: readonly DeskStroke[];
+  /** Strokes deleted and maybe still in the Desk. */
+  removed: readonly string[];
+}
+
+export const NO_EDITS: DeskEdits = { cards: {}, areas: {}, added: [], removed: [] };
+
+/** The Desk with your edits on top; the same object when there are none. */
+export function withEdits<D extends Pick<Desk, 'areas' | 'cards' | 'strokes'>>(desk: D, e: DeskEdits): D {
+  const none = !Object.keys(e.cards).length && !Object.keys(e.areas).length && !e.added.length && !e.removed.length;
+  if (none) return desk;
+  const removed = new Set(e.removed);
+  return {
+    ...desk,
+    areas: desk.areas.map((a) => (e.areas[a.id] ? { ...a, ...e.areas[a.id] } : a)),
+    cards: desk.cards.map((c) => (e.cards[c.id] ? { ...c, ...e.cards[c.id] } : c)),
+    strokes: [...(desk.strokes ?? []), ...e.added].filter((s) => !removed.has(s.id)),
+  };
+}
+
+function omitKey<T>(r: Readonly<Record<string, T>>, k: string | undefined): Readonly<Record<string, T>> {
+  if (!k || !(k in r)) return r;
+  const rest = { ...r };
+  delete rest[k];
+  return rest;
+}
+
+/** One edit less (the one Hester now has, or that failed). */
+export function dropEdit(e: DeskEdits, what: { card?: string; area?: string; added?: string; removed?: string }): DeskEdits {
+  return {
+    cards: omitKey(e.cards, what.card),
+    areas: omitKey(e.areas, what.area),
+    added: what.added ? e.added.filter((s) => s.id !== what.added) : e.added,
+    removed: what.removed ? e.removed.filter((id) => id !== what.removed) : e.removed,
+  };
+}
+
+// ---- strokes ----
+
+/** Screen px: the line's width, and how far apart the points you draw are kept. */
+export const STROKE_WIDTH = 2;
+export const STROKE_STEP_PX = 2;
+/** Screen px a simplified line may stray from what you drew. */
+export const STROKE_TOLERANCE_PX = 0.75;
+
+/** Ramer–Douglas–Peucker: the fewest points within `tolerance` of the line. Endpoints are kept. */
+export function simplifyPoints(points: readonly Point[], tolerance: number): Point[] {
+  if (points.length < 3) return points.slice();
+  const keep = new Uint8Array(points.length);
+  keep[0] = keep[points.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop() as [number, number];
+    let far = -1;
+    let dist = tolerance;
+    for (let i = a + 1; i < b; i++) {
+      const d = segmentDistance(points[i], points[a], points[b]);
+      if (d > dist) {
+        dist = d;
+        far = i;
+      }
+    }
+    if (far >= 0) {
+      keep[far] = 1;
+      stack.push([a, far], [far, b]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+/** The distance from `p` to the segment a–b. */
+export function segmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = dx * dx + dy * dy;
+  const t = len ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len, 0, 1) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * A drawn line (Desk points, at camera `scale`) as a stroke to save:
+ * simplified to within a screen pixel (looser until it fits Hester's cap),
+ * in the Area where it starts (relative to it), else on the Desk. Null for
+ * a click, which isn't a line.
+ */
+export function strokeFromDrag(points: readonly Point[], scale: number, areas: readonly DeskArea[]): DeskStrokeCreate | null {
+  if (points.length < 2 || !points.some((p) => p.x !== points[0].x || p.y !== points[0].y)) return null;
+  let tol = STROKE_TOLERANCE_PX / scale;
+  let pts = simplifyPoints(points, tol);
+  while (pts.length > MAX_STROKE_POINTS) pts = simplifyPoints(points, (tol *= 2));
+  const area = areaAt(areas, points[0]);
+  const ox = area?.x ?? 0;
+  const oy = area?.y ?? 0;
+  return { area_id: area?.id ?? null, points: pts.map((p): [number, number] => [round(p.x - ox), round(p.y - oy)]), width: STROKE_WIDTH };
+}
+
+/** A stroke's points on the Desk; null when its Area isn't on the Desk (put away, or gone). */
+export function strokeOnDesk(stroke: Pick<DeskStroke, 'area_id' | 'points'>, areas: ReadonlyArray<Pick<DeskArea, 'id' | 'x' | 'y'>>): Point[] | null {
+  let ox = 0;
+  let oy = 0;
+  if (stroke.area_id) {
+    const a = areas.find((x) => x.id === stroke.area_id);
+    if (!a) return null;
+    ox = a.x;
+    oy = a.y;
+  }
+  return stroke.points.map(([x, y]) => ({ x: x + ox, y: y + oy }));
+}
+
+/** A smoothed SVG path through the points: quadratic curves between midpoints. */
+export function strokePath(points: ReadonlyArray<Point>): string {
+  if (!points.length) return '';
+  const f = (p: Point) => `${round(p.x)} ${round(p.y)}`;
+  if (points.length < 3) return `M${f(points[0])}` + (points[1] ? `L${f(points[1])}` : '');
+  let d = `M${f(points[0])}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const mid = { x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 };
+    d += `Q${f(points[i])} ${f(mid)}`;
+  }
+  return `${d}L${f(points[points.length - 1])}`;
 }
 
 // ---------------------------------------------------------------------------
