@@ -8,6 +8,11 @@
  * --font-write at 20/1.65, a quiet header with no fill, margin notes with no
  * border or card, and no phosphor anywhere but the caret, the selection and
  * the new-answer dot. Focus is the global rule (§1.4).
+ *
+ * Deep next (2026-09-27 contract §4): the margin's section marks add a
+ * running hand-off's small phosphor agent mark and a waiting hand-off's
+ * ember dot (R5: the one place ember shows in Deep); live formatting, the
+ * [[ / @ pickers and the source panel (R9–R11) use neutral grounds only.
  */
 
 /* ---- overlay ---- */
@@ -357,8 +362,16 @@
 
 /* ---- the Page ---- */
 
+/* The Page and, when a [[file]] is open, its source panel (≤ half width). */
+.deep-page-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .deep-page-scroller {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
 }
@@ -394,23 +407,94 @@
   font-size: 1.1em;
 }
 
-.deep-page-cm .cm-editor .cm-line.deep-quote {
+.deep-page-cm .cm-editor .cm-line.deep-quote,
+.deep-source-cm .cm-editor .cm-line.deep-quote {
+  color: var(--text-2);
+  border-left: 2px solid var(--ground-4);
+  padding-left: var(--space-3);
+}
+
+/* ---- live formatting (Deep next R9) ---- */
+
+.deep-source-cm .cm-editor .cm-line.deep-h {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.deep-source-cm .cm-editor .cm-line.deep-h1 {
+  font-size: 1.4em;
+}
+
+.deep-source-cm .cm-editor .cm-line.deep-h2 {
+  font-size: 1.2em;
+}
+
+/* Fenced code: the machine's words in mono on a slightly raised ground. */
+.deep-page-cm .cm-editor .cm-line.deep-code,
+.deep-source-cm .cm-editor .cm-line.deep-code {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--ground-1);
+  padding: 0 var(--space-3);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-code-open,
+.deep-source-cm .cm-editor .cm-line.deep-code-open {
+  border-radius: 6px 6px 0 0;
+  color: var(--text-3);
+  padding-top: var(--space-1);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-code-close,
+.deep-source-cm .cm-editor .cm-line.deep-code-close {
+  border-radius: 0 0 6px 6px;
+  color: var(--text-3);
+  padding-bottom: var(--space-1);
+}
+
+/* A [[file]] link off the cursor's line: its label, quietly underlined. */
+.deep-wiki {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.deep-wiki:hover {
+  text-decoration-color: var(--text-1);
+}
+
+.deep-wiki-src {
   color: var(--text-2);
 }
 
-.deep-page-preview {
-  padding: var(--space-5) 0 40vh;
-  outline: none;
-  font-family: var(--font-write);
-  font-size: 20px;
-  line-height: 1.65;
+/* A GFM table while the cursor is outside it. */
+.deep-table-wrap {
+  margin: var(--space-2) 0;
+  overflow-x: auto;
+  cursor: text;
 }
 
-.deep-preview-hint {
-  font-family: var(--font-ui);
-  font-size: 12px;
-  color: var(--text-3);
-  margin-bottom: var(--space-3);
+.deep-table {
+  border-collapse: collapse;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.deep-table th,
+.deep-table td {
+  border: 1px solid var(--ground-4);
+  padding: var(--space-1) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  min-width: 4ch;
+}
+
+.deep-table th {
+  font-weight: 500;
+  background: var(--ground-1);
 }
 
 /* ---- the margin ---- */
@@ -520,6 +604,119 @@
   }
 }
 
+/* Section marks (Deep next R5): answers are dots, hand-offs a small agent
+   mark (a diamond). Phosphor only for the new-answer dot and a running
+   agent; ember only for a hand-off waiting on you. */
+.deep-mark {
+  display: inline-block;
+  position: relative;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.deep-mark.is-unread {
+  background: var(--accent-next);
+}
+
+.deep-mark.is-read {
+  border: 1px solid var(--text-3);
+}
+
+.deep-mark.is-error {
+  border: 1px solid var(--text-2);
+}
+
+.deep-mark.is-waiting {
+  background: var(--needs-you);
+}
+
+.deep-mark.is-running,
+.deep-mark.is-done {
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.deep-mark.is-running {
+  background: var(--accent-next);
+}
+
+.deep-mark.is-done {
+  border: 1px solid var(--text-3);
+}
+
+.deep-mark .deep-marker-spin {
+  position: absolute;
+  inset: -1px;
+}
+
+.deep-mark-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.deep-mark-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0 var(--space-3);
+}
+
+.deep-handoff-result {
+  white-space: pre-wrap;
+}
+
+/* The Goals Page's prompts (R12): quiet, in the margin, never in your text. */
+.deep-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.deep-prompt {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-family: var(--font-write);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text-3);
+  max-height: 6em;
+  overflow: hidden;
+  transition:
+    opacity 0.6s ease,
+    max-height 0.6s ease;
+}
+
+.deep-prompt.is-faded {
+  opacity: 0;
+  max-height: 0;
+  pointer-events: none;
+}
+
+.deep-prompt-x {
+  font: inherit;
+  font-style: normal;
+  font-size: 13px;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.deep-prompt:hover .deep-prompt-x {
+  opacity: 1;
+}
+
+.deep-prompt-x:hover {
+  color: var(--text-1);
+}
+
 /* The expanded note: the answer in the system sans at 14px, quiet actions. */
 .deep-card {
   margin-top: var(--space-1);
@@ -558,10 +755,10 @@
 .deep-row-slot {
   position: absolute;
   z-index: 4;
-  width: 380px; /* ROW_WIDTH in PageEditor */
+  width: 500px; /* ROW_WIDTH in PageEditor */
 }
 
-/* The action row: four plain buttons, each with its key letter. No phosphor. */
+/* The action row (Deep next R1): plain buttons with words only. No phosphor. */
 .deep-row {
   display: inline-flex;
   gap: var(--space-1);
@@ -591,19 +788,119 @@
   outline: none;
 }
 
-/* The letters show only once the keyboard is in the row (⌘.), like menu
-   mnemonics; a mouse never focuses these buttons (tabIndex -1, mousedown
-   prevented), so clicking never shows them. A lone letter beside a label
-   otherwise reads as a shortcut to press from the Page. */
-.deep-row-key {
-  display: none;
+/* The letters are underlined only once the keyboard is in the row (⌘.),
+   like menu mnemonics; a mouse never focuses these buttons (tabIndex -1,
+   mousedown prevented), so clicking never shows them. */
+.deep-row:focus-within .deep-row-mn {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---- [[ and @ pickers (R10, R11) ---- */
+
+.deep-picker {
+  position: absolute;
+  z-index: 6;
+  width: 320px;
+  max-height: 280px;
+  overflow: auto;
+  padding: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.6);
+}
+
+.deep-picker-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.deep-picker-row.is-on {
+  background: var(--ground-4);
+}
+
+.deep-picker-label {
+  white-space: nowrap;
+}
+
+.deep-picker-sub {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
   font-size: 12px;
-  font-weight: 400;
   color: var(--text-3);
 }
 
-.deep-row:focus-within .deep-row-key {
-  display: inline;
+.deep-picker-empty {
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-3);
+}
+
+/* ---- the source panel (R10): read-only, beside the Page, ≤ half width ---- */
+
+.deep-source {
+  display: flex;
+  flex-direction: column;
+  width: min(50%, 720px);
+  flex-shrink: 0;
+  min-height: 0;
+  border-left: 1px solid var(--ground-3);
+  background: var(--ground-0);
+}
+
+.deep-source-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-4);
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+}
+
+.deep-source-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.deep-source-note {
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px;
+}
+
+.deep-source-cm {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.deep-source-cm .cm-editor {
+  height: 100%;
+}
+
+.deep-source-cm.is-code .cm-scroller {
+  font-family: var(--font-mono);
+}
+
+.deep-source-cm.is-code .cm-content {
+  font-size: 13px;
 }
 
 /* ---- typing affordances (§7): dim, inline, never a popup ---- */

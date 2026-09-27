@@ -9,6 +9,16 @@
  * - anchorFor / locateAnchor / sectionAt: Ask anchors and their re-location (§3.3, §4.2).
  * - answerInsertion: Insert's blockquote below the anchor's paragraph (§4.2).
  * - answersTray / pageMirrorKey / deepMemoryKey and a few small helpers.
+ *
+ * Deep next (docs/plans/2026-09-27-deep-next-contract.md §4):
+ * - sectionsOf / sectionAtPos: sections (R4), computed, never stored.
+ * - askPlan: a selection's question lines, one Ask each (R2).
+ * - sectionMarkState / aggregateMarks / handoffLabel: the margin marks (R5).
+ * - mentionQuery / mentionSlug / findMention: `@` mentions (R11).
+ * - wikiQuery / parseWikiLinks / rankFiles / quoteBlock / quoteLabel: `[[` (R10).
+ * - wrapToggle / codeBlockToggle / TABLE_STARTER / parseTable / touchesActive /
+ *   liveHidden: live formatting (R9).
+ * - promptAnswered: the Goals Page's margin prompts (R12).
  */
 
 import type { AffordancePattern, Anchor, DeepAnswer } from '../../shared/cockpit';
@@ -18,7 +28,7 @@ import type { AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 // Selection action row (§5)
 // ---------------------------------------------------------------------------
 
-export type DeepRowAction = 'capture' | 'keep' | 'ask' | 'explore';
+export type DeepRowAction = 'capture' | 'keep' | 'ask' | 'explore' | 'handoff' | 'table';
 export type DeepRowKey = { kind: 'action'; action: DeepRowAction } | { kind: 'escape' } | { kind: 'move'; delta: 1 | -1 };
 
 export interface DeepRowKeyContext {
@@ -27,7 +37,11 @@ export interface DeepRowKeyContext {
   alt?: boolean;
 }
 
-/** The row's keys once ⌘. moved focus into it: c k a e pick, Esc returns, arrows move. */
+/**
+ * The row's keys once ⌘. moved focus into it (the letters show, underlined,
+ * only then: R1): a h k c e pick (Ask Hester, Hand off, Keep, Capture,
+ * Explore), t inserts a table when nothing is selected; Esc returns, arrows move.
+ */
 export function deepRowKey(key: string, ctx: DeepRowKeyContext = {}): DeepRowKey | null {
   if (key === 'Escape') return { kind: 'escape' };
   if (ctx.meta || ctx.ctrl || ctx.alt) return null;
@@ -40,6 +54,10 @@ export function deepRowKey(key: string, ctx: DeepRowKeyContext = {}): DeepRowKey
       return { kind: 'action', action: 'ask' };
     case 'e':
       return { kind: 'action', action: 'explore' };
+    case 'h':
+      return { kind: 'action', action: 'handoff' };
+    case 't':
+      return { kind: 'action', action: 'table' };
     case 'ArrowRight':
       return { kind: 'move', delta: 1 };
     case 'ArrowLeft':
@@ -366,4 +384,657 @@ export function wokenItem(snapshot: Pick<AttentionSnapshot, 'items' | 'away'> | 
 export function waitingCount(snapshot: Pick<AttentionSnapshot, 'items'> | null | undefined): number {
   if (!snapshot) return 0;
   return snapshot.items.filter((i) => i.state === 'open' && i.severity !== 'ambient' && i.kind !== 'summary').length;
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R4: sections
+// ---------------------------------------------------------------------------
+
+export interface PageSection {
+  /** Offset of the section's first character (its heading line, or its block's first line). */
+  from: number;
+  /** Offset just past its last non-blank line. */
+  to: number;
+  /** The heading's text, or null for a paragraph block. */
+  heading: string | null;
+  /** 1–6 for a heading section, 0 for a paragraph block. */
+  level: number;
+  /** doc.slice(from, to): the section word for word, heading included. */
+  text: string;
+}
+
+/** The section text sent with an Ask (B caps `section_text` at 6 000 chars). */
+export const SECTION_TEXT_MAX = 6000;
+
+const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
+
+interface ScanLine {
+  from: number;
+  to: number;
+  text: string;
+  blank: boolean;
+  inFence: boolean;
+  heading: { level: number; text: string } | null;
+}
+
+function scanLines(md: string): ScanLine[] {
+  const out: ScanLine[] = [];
+  let off = 0;
+  let fence: string | null = null;
+  for (const text of md.split('\n')) {
+    const from = off;
+    const to = off + text.length;
+    off = to + 1;
+    const f = FENCE_RE.exec(text);
+    let inFence = fence != null;
+    let heading: ScanLine['heading'] = null;
+    if (f) {
+      if (fence == null) {
+        fence = f[1];
+        inFence = true;
+      } else if (f[1][0] === fence[0] && f[1].length >= fence.length && !text.trim().slice(f[1].length).trim()) {
+        fence = null;
+        inFence = true;
+      }
+    } else if (fence == null) {
+      const h = HEADING_RE.exec(text);
+      if (h) heading = { level: /^#+/.exec(text)![0].length, text: h[1].trim() };
+    }
+    out.push({ from, to, text, blank: !inFence && !text.trim(), inFence, heading });
+  }
+  return out;
+}
+
+/**
+ * The Page's sections (R4), in document order. A heading section runs to the
+ * next heading of the same or a higher level (so sections nest: an `##`
+ * inside a `#` is its own section and part of the `#` one). Text that isn't
+ * under a heading is split into paragraph blocks at blank lines; a list joins
+ * the block before it when that block ends with `:` (or is itself a list).
+ * Fenced code is never split and never holds headings.
+ */
+export function sectionsOf(md: string): PageSection[] {
+  const lines = scanLines(md);
+  const out: PageSection[] = [];
+  const make = (a: number, b: number, heading: string | null, level: number): PageSection => {
+    // a..b are line indexes (inclusive); trailing blank lines are trimmed.
+    let end = b;
+    while (end > a && !lines[end].text.trim()) end--;
+    const from = lines[a].from;
+    const to = lines[end].to;
+    return { from, to, heading, level, text: md.slice(from, to) };
+  };
+
+  const firstHeading = lines.findIndex((l) => l.heading);
+  const blockEnd = firstHeading < 0 ? lines.length : firstHeading;
+
+  // Paragraph blocks: the whole Page with no headings, or the text before the first.
+  type Block = { a: number; b: number; list: boolean };
+  const isItem = (i: number) => !lines[i].inFence && LIST_ITEM_RE.test(lines[i].text);
+  const blocks: Block[] = [];
+  let cur: Block | null = null;
+  for (let i = 0; i < blockEnd; i++) {
+    if (lines[i].blank) {
+      if (cur) blocks.push(cur);
+      cur = null;
+      continue;
+    }
+    if (!cur) cur = { a: i, b: i, list: isItem(i) };
+    else {
+      cur.b = i;
+      if (isItem(i)) cur.list = true;
+    }
+  }
+  if (cur) blocks.push(cur);
+  const merged: Block[] = [];
+  for (const blk of blocks) {
+    const prev = merged[merged.length - 1];
+    if (prev && isItem(blk.a) && (prev.list || lines[prev.b].text.trim().endsWith(':'))) {
+      prev.b = blk.b;
+      prev.list = true;
+    } else merged.push({ ...blk });
+  }
+  for (const blk of merged) out.push(make(blk.a, blk.b, null, 0));
+
+  // Heading sections.
+  for (let i = blockEnd; i < lines.length; i++) {
+    const h = lines[i].heading;
+    if (!h) continue;
+    let j = i + 1;
+    while (j < lines.length && !(lines[j].heading && lines[j].heading!.level <= h.level)) j++;
+    out.push(make(i, j - 1, h.text, h.level));
+  }
+  return out.sort((x, y) => x.from - y.from || y.to - x.to);
+}
+
+/**
+ * The section `pos` is in: the innermost one holding it, else the nearest one
+ * before it (blank lines between blocks), else the first; null for an empty Page.
+ */
+export function sectionAtPos(sections: readonly PageSection[], pos: number): PageSection | null {
+  let inner: PageSection | null = null;
+  for (const s of sections) if (s.from <= pos && pos <= s.to && (!inner || s.from >= inner.from)) inner = s;
+  if (inner) return inner;
+  let before: PageSection | null = null;
+  for (const s of sections) if (s.from <= pos && (!before || s.from >= before.from)) before = s;
+  return before ?? sections[0] ?? null;
+}
+
+/** The section text for an Ask or a Hand off at `pos` (≤ SECTION_TEXT_MAX chars). */
+export function sectionTextAt(doc: string, pos: number): string {
+  return (sectionAtPos(sectionsOf(doc), pos)?.text ?? '').slice(0, SECTION_TEXT_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R2: Ask what's highlighted, as written
+// ---------------------------------------------------------------------------
+
+export interface PlannedAsk {
+  question: string;
+  anchor: Anchor;
+  sectionText: string;
+}
+
+/**
+ * The selection's question lines (trimmed, list/quote/heading marks off,
+ * ending in `?`), one Ask each, anchored on that line and carrying its
+ * section. Empty when the selection holds no question ("Ask about this…").
+ */
+export function askPlan(doc: string, from: number, to: number): PlannedAsk[] {
+  const a = Math.max(0, Math.min(from, to));
+  const b = Math.min(doc.length, Math.max(from, to));
+  if (a === b) return [];
+  const sections = sectionsOf(doc);
+  const out: PlannedAsk[] = [];
+  let lineStart = a;
+  for (const raw of doc.slice(a, b).split('\n')) {
+    const body = stripLinePrefix(raw);
+    if (body.length > 1 && body.endsWith('?')) {
+      const at = lineStart + raw.indexOf(body);
+      out.push({
+        question: body,
+        anchor: anchorFor(doc, at, at + body.length),
+        sectionText: (sectionAtPos(sections, at)?.text ?? body).slice(0, SECTION_TEXT_MAX),
+      });
+    }
+    lineStart += raw.length + 1;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R5: the margin marks
+// ---------------------------------------------------------------------------
+
+export type SectionMarkState = 'waiting' | 'unread' | 'error' | 'pending' | 'running' | 'read' | 'done';
+
+/** Most urgent first: a hand-off waiting on you, then a new answer, … a finished hand-off last. */
+export const MARK_URGENCY: readonly SectionMarkState[] = ['waiting', 'unread', 'error', 'pending', 'running', 'read', 'done'];
+
+/**
+ * An answer's or hand-off's mark (R5). Asks: pending, unread, read (or
+ * error). Hand-offs: running (the phosphor agent mark), waiting (ember),
+ * done (hollow agent mark); a result in review you haven't opened reads as
+ * a new answer.
+ */
+export function sectionMarkState(a: Pick<DeepAnswer, 'status' | 'read_at' | 'kind' | 'handoff'>): SectionMarkState {
+  if (a.kind === 'handoff' || a.handoff) {
+    const st = a.handoff?.state ?? (isPending(a) ? 'running' : a.status === 'done' ? 'done' : 'error');
+    if (st === 'launching' || st === 'running') return 'running';
+    if (st === 'waiting') return 'waiting';
+    if (st === 'review') return a.read_at ? 'done' : 'unread';
+    if (st === 'done') return 'done';
+    return 'error';
+  }
+  return markerState(a);
+}
+
+export interface SectionMark {
+  /** Stable while the section keeps its first item: that item's id. */
+  key: string;
+  /** Where the mark sits: the section's first line. */
+  from: number;
+  heading: string | null;
+  /** The most urgent state among the section's items. */
+  state: SectionMarkState;
+  count: number;
+  /** The section's items, most urgent first (input order within a state). */
+  ids: string[];
+}
+
+/**
+ * One mark per section with items: each item goes to the section its
+ * re-anchored position is in; the mark shows the most urgent state and a count.
+ */
+export function aggregateMarks(
+  sections: readonly PageSection[],
+  items: ReadonlyArray<{ id: string; state: SectionMarkState; pos: number }>,
+): SectionMark[] {
+  const groups = new Map<number, { from: number; heading: string | null; items: Array<{ id: string; state: SectionMarkState; i: number }> }>();
+  items.forEach((it, i) => {
+    const s = sectionAtPos(sections, it.pos);
+    const from = s ? s.from : 0;
+    const g = groups.get(from) ?? { from, heading: s ? s.heading : null, items: [] };
+    g.items.push({ id: it.id, state: it.state, i });
+    groups.set(from, g);
+  });
+  const rank = (st: SectionMarkState) => MARK_URGENCY.indexOf(st);
+  return Array.from(groups.values())
+    .sort((x, y) => x.from - y.from)
+    .map((g) => {
+      const sorted = [...g.items].sort((x, y) => rank(x.state) - rank(y.state) || x.i - y.i);
+      return { key: g.items[0].id, from: g.from, heading: g.heading, state: sorted[0].state, count: g.items.length, ids: sorted.map((x) => x.id) };
+    });
+}
+
+const HANDOFF_KIND_LABEL: Record<string, string> = { spike: 'Spike', docs: 'Docs', research: 'Research' };
+const HANDOFF_STATE_LABEL: Record<string, string> = {
+  launching: 'starting…',
+  running: 'working',
+  waiting: 'waiting on you',
+  review: 'result in',
+  done: 'done',
+  error: 'stopped',
+};
+
+/** A hand-off's small line in the margin: "Spike · working", "Research · waiting on you". */
+export function handoffLabel(h: { kind: string; state: string } | null | undefined): string {
+  if (!h) return 'Hand-off';
+  return `${HANDOFF_KIND_LABEL[h.kind] ?? 'Hand-off'} · ${HANDOFF_STATE_LABEL[h.state] ?? h.state}`;
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R11: @ mentions
+// ---------------------------------------------------------------------------
+
+export interface MentionTargetLike {
+  id: string;
+  label: string;
+  kind: 'hester' | 'provider' | 'handoff';
+}
+
+/** The word a target is mentioned by: "Board research" → "board-research". */
+export function mentionSlug(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+    .replace(/-+$/, '');
+}
+
+/** The `@partial` being typed at the end of `before` (the line up to the cursor), or null. */
+export function mentionQuery(before: string): { query: string; start: number } | null {
+  const m = /(^|[\s(])@([\w.-]*)$/.exec(before);
+  if (!m) return null;
+  return { query: m[2], start: m.index + m[1].length };
+}
+
+const KIND_ORDER = { hester: 0, provider: 1, handoff: 2 } as const;
+
+/** The @ list: Hester, the providers, then this exploration's hand-offs, filtered by what's typed. */
+export function mentionMatches<T extends MentionTargetLike>(query: string, targets: readonly T[]): T[] {
+  const q = query.toLowerCase();
+  return targets
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => !q || mentionSlug(t.label).startsWith(q) || t.id.toLowerCase().startsWith(q) || t.label.toLowerCase().includes(q))
+    .sort((x, y) => KIND_ORDER[x.t.kind] - KIND_ORDER[y.t.kind] || x.i - y.i)
+    .map(({ t }) => t);
+}
+
+/**
+ * The first mention of a known target in a line, with the line's text
+ * without it (what gets sent), or null. `@` must start the line or follow a
+ * space or `(`, so an email address isn't a mention.
+ */
+export function findMention<T extends MentionTargetLike>(
+  line: string,
+  targets: readonly T[],
+): { target: T; from: number; to: number; text: string } | null {
+  const re = /(^|[\s(])@([\w.-]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) {
+    const word = m[2].replace(/[.-]+$/, '');
+    const token = word.toLowerCase();
+    const target = targets.find((t) => mentionSlug(t.label) === token || t.id.toLowerCase() === token);
+    if (target) {
+      const from = m.index + m[1].length;
+      let to = from + 1 + word.length;
+      // Punctuation that only attached the mention ("@claude:", "…, @pi.") goes with it.
+      if (/[,:;.]/.test(line[to] ?? '')) to++;
+      const text = stripLinePrefix((line.slice(0, from) + line.slice(to)).replace(/\s+/g, ' ')).replace(/^[,:;]\s*/, '').trim();
+      return { target, from, to, text };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R10: [[ file references
+// ---------------------------------------------------------------------------
+
+/** The `[[partial` being typed at the end of `before`, or null (closed, or on another line). */
+export function wikiQuery(before: string): { query: string; start: number } | null {
+  const m = /\[\[([^[\]\n|#]*)$/.exec(before);
+  return m ? { query: m[1], start: m.index } : null;
+}
+
+export interface WikiLink {
+  /** Offsets within the line. */
+  from: number;
+  to: number;
+  path: string;
+  /** 1-based, inclusive; null for a whole-file link. */
+  lines: [number, number] | null;
+  label: string | null;
+}
+
+/** `[[path]]`, `[[path#L3-L9]]`, `[[path#L3-L9|label]]`, `[[path|label]]` in a line. */
+export function parseWikiLinks(line: string): WikiLink[] {
+  const out: WikiLink[] = [];
+  const re = /\[\[([^[\]\n|#]+)(?:#L(\d+)(?:-L?(\d+))?)?(?:\|([^[\]\n]+))?\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) {
+    const a = m[2] ? parseInt(m[2], 10) : null;
+    const b = m[3] ? parseInt(m[3], 10) : a;
+    out.push({
+      from: m.index,
+      to: m.index + m[0].length,
+      path: m[1].trim(),
+      lines: a != null && b != null ? [Math.min(a, b), Math.max(a, b)] : null,
+      label: m[4]?.trim() || null,
+    });
+  }
+  return out;
+}
+
+function basename(path: string): string {
+  const parts = path.split('/');
+  return parts[parts.length - 1] || path;
+}
+
+/** What a link shows when it isn't being edited: its label, else the file's name. */
+export function wikiDisplay(link: Pick<WikiLink, 'path' | 'label'>): string {
+  return link.label || basename(link.path);
+}
+
+const isMarkdownPath = (p: string) => /\.(md|mdx|markdown)$/i.test(p);
+
+/** Lower is better; null when `q` isn't a subsequence of the path. */
+function fuzzyScore(q: string, path: string): number | null {
+  if (!q) return 0;
+  const p = path.toLowerCase();
+  const bi = basename(p).indexOf(q);
+  if (bi >= 0) return bi;
+  const pi = p.indexOf(q);
+  if (pi >= 0) return 100 + pi;
+  let gaps = 0;
+  let j = 0;
+  for (let i = 0; i < p.length && j < q.length; i++) {
+    if (p[i] === q[j]) j++;
+    else if (j > 0) gaps++;
+  }
+  return j === q.length ? 1000 + gaps : null;
+}
+
+/** The `[[` picker's list: fuzzy over the paths, markdown first, then everything else. */
+export function rankFiles(query: string, files: readonly string[], limit = 50): string[] {
+  const q = query.trim().toLowerCase();
+  const scored: Array<{ p: string; md: number; s: number; i: number }> = [];
+  files.forEach((p, i) => {
+    const s = fuzzyScore(q, p);
+    if (s != null) scored.push({ p, md: isMarkdownPath(p) ? 0 : 1, s, i });
+  });
+  scored.sort((a, b) => a.md - b.md || a.s - b.s || a.p.length - b.p.length || a.i - b.i);
+  return scored.slice(0, limit).map((x) => x.p);
+}
+
+/** The blockquote Quote it inserts: the text, then `> — [[path#La-Lb|label]]`. */
+export function quoteBlock(text: string, path: string, lines: [number, number], label: string): string {
+  const body = text
+    .replace(/\s+$/, '')
+    .split('\n')
+    .map((l) => (l.trim() ? `> ${l}` : '>'))
+    .join('\n');
+  return `${body}\n> — [[${path}#L${lines[0]}-L${lines[1]}|${label}]]`;
+}
+
+/**
+ * A quote's short label: the file's name without extension, then `§` and the
+ * nearest heading at or above the first quoted line (its number when it has
+ * one: "## 6. Answers" → "§6"): "14-Deep-Work §6".
+ */
+export function quoteLabel(path: string, source: string, startLine: number): string {
+  const stem = basename(path).replace(/\.[^.]+$/, '') || path;
+  const lines = source.split('\n');
+  for (let i = Math.min(startLine, lines.length) - 1; i >= 0; i--) {
+    const h = HEADING_RE.exec(lines[i]);
+    if (!h) continue;
+    const text = h[1].trim();
+    const num = /^(\d+(?:\.\d+)*)\.?(?:\s|$)/.exec(text);
+    const tag = num ? num[1] : text.length > 40 ? `${text.slice(0, 39).trimEnd()}…` : text;
+    return `${stem} §${tag}`;
+  }
+  return stem;
+}
+
+/** 1-based line numbers of a range in a text. */
+export function lineRangeOf(text: string, from: number, to: number): [number, number] {
+  const a = Math.max(0, Math.min(from, to));
+  let b = Math.min(text.length, Math.max(from, to));
+  // A selection that ends at the start of a line doesn't include that line.
+  if (b > a && text[b - 1] === '\n') b--;
+  const count = (n: number) => text.slice(0, n).split('\n').length;
+  return [count(a), count(b)];
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R9: live formatting
+// ---------------------------------------------------------------------------
+
+export interface TextEdit {
+  changes: Array<{ from: number; to: number; insert: string }>;
+  /** The selection afterwards, in the new document. */
+  selFrom: number;
+  selTo: number;
+}
+
+function runOf(doc: string, pos: number, ch: string, dir: 1 | -1): number {
+  let n = 0;
+  for (let i = dir === 1 ? pos : pos - 1; i >= 0 && i < doc.length && doc[i] === ch; i += dir) n++;
+  return n;
+}
+
+/** Whether runs of the marker's character on both sides make `marker` a wrap (`*` inside `**` isn't). */
+function wrappedBy(before: number, after: number, marker: string): boolean {
+  if (marker.length === 2) return before >= 2 && after >= 2;
+  if (marker === '*' || marker === '_') return before % 2 === 1 && after % 2 === 1;
+  return before >= 1 && after >= 1;
+}
+
+/**
+ * ⌘B / ⌘I / ⌘⇧K: wrap the selection in `marker`, or unwrap it when it's
+ * already wrapped (outside or inside the selection). Whitespace at the
+ * selection's ends stays outside. An empty selection inserts the pair with
+ * the cursor between (or steps out of an empty pair).
+ */
+export function wrapToggle(doc: string, from: number, to: number, marker: string): TextEdit {
+  let a = Math.max(0, Math.min(from, to));
+  let b = Math.min(doc.length, Math.max(from, to));
+  const m = marker.length;
+  const ch = marker[0];
+  if (a === b) {
+    if (doc.slice(a - m, a) === marker && doc.slice(a, a + m) === marker && wrappedBy(runOf(doc, a, ch, -1), runOf(doc, a, ch, 1), marker)) {
+      return { changes: [{ from: a - m, to: a + m, insert: '' }], selFrom: a - m, selTo: a - m };
+    }
+    return { changes: [{ from: a, to: a, insert: marker + marker }], selFrom: a + m, selTo: a + m };
+  }
+  while (a < b && /\s/.test(doc[a])) a++;
+  while (b > a && /\s/.test(doc[b - 1])) b--;
+  // Wrapped outside the selection: **|text|**
+  if (doc.slice(a - m, a) === marker && doc.slice(b, b + m) === marker && wrappedBy(runOf(doc, a, ch, -1), runOf(doc, b, ch, 1), marker)) {
+    return { changes: [{ from: a - m, to: a, insert: '' }, { from: b, to: b + m, insert: '' }], selFrom: a - m, selTo: b - m };
+  }
+  // Wrapped inside it: |**text**|
+  const inner = doc.slice(a, b);
+  if (inner.length >= 2 * m + 1 && inner.startsWith(marker) && inner.endsWith(marker)) {
+    if (wrappedBy(runOf(inner, 0, ch, 1), runOf(inner, inner.length, ch, -1), marker)) {
+      return { changes: [{ from: a, to: a + m, insert: '' }, { from: b - m, to: b, insert: '' }], selFrom: a, selTo: b - 2 * m };
+    }
+  }
+  return { changes: [{ from: a, to: a, insert: marker }, { from: b, to: b, insert: marker }], selFrom: a + m, selTo: b + m };
+}
+
+/**
+ * ⌘⌥C: fence the selection's lines as a code block, or unfence them when
+ * they're already fenced. With nothing on the line, an empty block with the
+ * cursor inside.
+ */
+export function codeBlockToggle(doc: string, from: number, to: number): TextEdit {
+  const a = Math.max(0, Math.min(from, to));
+  const b = Math.min(doc.length, Math.max(from, to));
+  const lineStart = doc.lastIndexOf('\n', a - 1) + 1;
+  let lineEnd = doc.indexOf('\n', b > a && doc[b - 1] === '\n' ? b - 1 : b);
+  if (lineEnd < 0) lineEnd = doc.length;
+  const prevStart = lineStart > 0 ? doc.lastIndexOf('\n', lineStart - 2) + 1 : -1;
+  const prevLine = prevStart >= 0 ? doc.slice(prevStart, lineStart - 1) : null;
+  let nextEnd = -1;
+  if (lineEnd < doc.length) {
+    nextEnd = doc.indexOf('\n', lineEnd + 1);
+    if (nextEnd < 0) nextEnd = doc.length;
+  }
+  const nextLine = nextEnd >= 0 ? doc.slice(lineEnd + 1, nextEnd) : null;
+  if (prevLine != null && nextLine != null && /^\s*```/.test(prevLine) && /^\s*```\s*$/.test(nextLine)) {
+    const removed = lineStart - prevStart;
+    return {
+      changes: [{ from: prevStart, to: lineStart, insert: '' }, { from: lineEnd, to: nextEnd, insert: '' }],
+      selFrom: a - removed,
+      selTo: b - removed,
+    };
+  }
+  if (!doc.slice(lineStart, lineEnd).trim()) {
+    return { changes: [{ from: lineStart, to: lineEnd, insert: '```\n\n```' }], selFrom: lineStart + 4, selTo: lineStart + 4 };
+  }
+  return {
+    changes: [{ from: lineStart, to: lineStart, insert: '```\n' }, { from: lineEnd, to: lineEnd, insert: '\n```' }],
+    selFrom: a + 4,
+    selTo: b + 4,
+  };
+}
+
+/** Insert table's 3×2 starter (R9). */
+export const TABLE_STARTER = '| Column | Column | Column |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |';
+
+/** Insert table at `pos`: its own block (on an empty line, or after the cursor's line), first header cell selected. */
+export function tableInsertion(doc: string, pos: number): TextEdit {
+  const p = Math.max(0, Math.min(pos, doc.length));
+  let lineEnd = doc.indexOf('\n', p);
+  if (lineEnd < 0) lineEnd = doc.length;
+  const lineStart = doc.lastIndexOf('\n', p - 1) + 1;
+  const emptyLine = !doc.slice(lineStart, lineEnd).trim();
+  const at = emptyLine ? lineStart : lineEnd;
+  const lead = emptyLine ? (lineStart === 0 || doc.slice(0, lineStart).endsWith('\n\n') ? '' : '\n') : '\n\n';
+  const rest = doc.slice(lineEnd);
+  const tail = !rest ? '\n' : rest.startsWith('\n\n') || !rest.trim() ? '' : '\n';
+  const insert = `${lead}${TABLE_STARTER}${tail}`;
+  const cell = at + lead.length + 2;
+  return { changes: [{ from: at, to: lineEnd, insert }], selFrom: cell, selTo: cell + 'Column'.length };
+}
+
+export interface ParsedTable {
+  head: string[];
+  align: Array<'left' | 'center' | 'right' | null>;
+  rows: string[][];
+}
+
+function tableCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith('|')) t = t.slice(1);
+  if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1);
+  const cells: string[] = [];
+  let cur = '';
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === '\\' && t[i + 1] === '|') {
+      cur += '|';
+      i++;
+    } else if (t[i] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+    } else cur += t[i];
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+/** A GFM table's cells (for rendering it while the cursor is outside), or null. */
+export function parseTable(text: string): ParsedTable | null {
+  const lines = text.split('\n').filter((l) => l.trim());
+  if (lines.length < 2 || !lines[0].includes('|')) return null;
+  const delim = tableCells(lines[1]);
+  if (!delim.length || !delim.every((c) => /^:?-+:?$/.test(c))) return null;
+  const head = tableCells(lines[0]);
+  const align = delim.map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : null));
+  const rows = lines.slice(2).map((l) => {
+    const cells = tableCells(l);
+    return head.map((_, i) => cells[i] ?? '');
+  });
+  return { head, align, rows };
+}
+
+/** Whether [from, to] touches any of the active (cursor or selection) line ranges. */
+export function touchesActive(from: number, to: number, active: ReadonlyArray<readonly [number, number]>): boolean {
+  return active.some(([a, b]) => a <= to && b >= from);
+}
+
+/**
+ * The live-formatting decision (R9): hide a markdown mark (a heading's `#`,
+ * `**`, `*`, inline code's backticks, a link's `[`, `](url)`, a quote's `>`,
+ * `~~`) unless it's on a line the cursor or selection touches. Code fences,
+ * list bullets and images stay visible.
+ */
+export function liveHidden(node: string, parent: string | null, from: number, to: number, active: ReadonlyArray<readonly [number, number]>): boolean {
+  let hideable = false;
+  switch (node) {
+    case 'HeaderMark':
+    case 'EmphasisMark':
+    case 'QuoteMark':
+    case 'StrikethroughMark':
+      hideable = true;
+      break;
+    case 'CodeMark':
+      hideable = parent === 'InlineCode';
+      break;
+    case 'LinkMark':
+    case 'URL':
+      hideable = parent === 'Link';
+      break;
+  }
+  return hideable && !touchesActive(from, to, active);
+}
+
+// ---------------------------------------------------------------------------
+// Deep next R12: margin prompts
+// ---------------------------------------------------------------------------
+
+const normWords = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * A margin prompt is answered once a heading that matches it (either is a
+ * case-insensitive substring of the other, punctuation ignored) has text
+ * under it.
+ */
+export function promptAnswered(prompt: string, sections: readonly PageSection[]): boolean {
+  const p = normWords(prompt);
+  if (!p) return false;
+  return sections.some((s) => {
+    if (s.heading == null) return false;
+    const h = normWords(s.heading);
+    if (h.length < 3 || !(p.includes(h) || h.includes(p))) return false;
+    return !!s.text.split('\n').slice(1).join('\n').trim();
+  });
 }
