@@ -115,21 +115,44 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
     if (close) quitLee();
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (handoff) return;
+  // Esc and Enter on window, in the capture phase: they work wherever focus
+  // has gone (body after a click on bare sheet space, or after Hand off…
+  // closes), not only inside the sheet (§0: Esc always works).
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keyRef.current = (e: KeyboardEvent) => {
+    if (handoff || e.isComposing) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       void finish('esc', false);
-    } else if (e.key === 'Enter' && !e.shiftKey && e.target instanceof HTMLTextAreaElement) {
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // Only from the sheet (or nowhere); a focused button, checkbox or link keeps its own Enter.
+      const t = e.target;
+      const onSheet = t === document.body || (t instanceof Node && !!sheetRef.current?.contains(t));
+      const own = t instanceof HTMLElement && t !== sheetRef.current && !!t.closest('button, input, a, select');
+      if (!onSheet || own) return;
       e.preventDefault();
+      e.stopPropagation();
       void finish('ritual', true);
     }
   };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyRef.current(e);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // Back from Hand off…: focus returns to the sheet so the keys keep a home.
+  const hadHandoff = useRef(false);
+  useEffect(() => {
+    if (hadHandoff.current && !handoff) sheetRef.current?.focus({ preventScroll: true });
+    hadHandoff.current = handoff;
+  }, [handoff]);
 
   return ReactDOM.createPortal(
-    <div className="deep-sheet-scrim" onKeyDown={onKeyDown}>
-      <div className="deep-sheet" role="dialog" aria-modal="true" aria-label="End session">
+    <div className="deep-sheet-scrim">
+      <div ref={sheetRef} className="deep-sheet" role="dialog" aria-modal="true" aria-label="End session" tabIndex={-1}>
         <div className="deep-sheet-head">
           <span>End session</span>
           <span className="deep-spacer" />

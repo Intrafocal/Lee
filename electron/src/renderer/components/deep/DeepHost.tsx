@@ -133,6 +133,53 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
     if (el) el.inert = !visible;
   }, [visible, explorationId]);
 
+  // ---- focus trap (C3, like CockpitHost's) ----
+  // With the wall gone, a tab activated under the overlay (Hester's focus_tab,
+  // a create-tab, ⌘1–9) focuses a hidden terminal; keys must stay on the Page.
+  useEffect(() => {
+    if (!visible || !explorationId) return;
+    let last: HTMLElement | null = null;
+    const inside = (el: EventTarget | null) => el instanceof Node && !!rootRef.current?.contains(el);
+    const underneath = (el: EventTarget | null) =>
+      el instanceof Element && !!el.closest('.main-content, .tab-bar') && !inside(el);
+    const refocus = () => {
+      const target =
+        last && last.isConnected && inside(last)
+          ? last
+          : (rootRef.current?.querySelector('.cm-content') as HTMLElement | null) ?? rootRef.current;
+      target?.focus({ preventScroll: true });
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      if (inside(e.target)) {
+        last = e.target as HTMLElement;
+        return;
+      }
+      if (!underneath(e.target)) return;
+      (e.target as HTMLElement).blur?.();
+      refocus();
+    };
+    const onKey = (e: Event) => {
+      if (!underneath(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('focusin', onFocusIn, true);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keypress', onKey, true);
+    window.addEventListener('paste', onKey, true);
+    const active = document.activeElement;
+    if (active && underneath(active)) {
+      (active as HTMLElement).blur?.();
+      refocus();
+    }
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keypress', onKey, true);
+      window.removeEventListener('paste', onKey, true);
+    };
+  }, [visible, explorationId]);
+
   const focus = copilot.focus ?? copilot.snapshot?.focus ?? null;
 
   if (!workspace) return null;
@@ -153,6 +200,7 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
   return ReactDOM.createPortal(
     <div
       ref={rootRef}
+      tabIndex={-1}
       className={`deep-overlay${visible ? '' : ' is-hidden'}`}
       style={{ top: box.top, bottom: box.bottom }}
       aria-hidden={!visible}

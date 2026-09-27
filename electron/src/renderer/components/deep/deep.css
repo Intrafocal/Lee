@@ -19,6 +19,7 @@
   font-family: var(--font-ui);
   font-size: 12px;
   overflow: hidden;
+  outline: none;
 }
 
 /* Hidden, not display:none: scroll, cursor, selection and undo survive a hop. */
@@ -791,4 +792,9 @@
   background: var(--ground-1);
   border: 1px solid var(--ground-3);
   border-radius: var(--radius-control);
+}
+
+/* The sheet takes focus back after Hand off… closes; no ring for that. */
+.deep-sheet:focus {
+  outline: none;
 }

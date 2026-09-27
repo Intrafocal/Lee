@@ -1352,7 +1352,9 @@ export class CopilotQueue {
     const handoffId = AwayPolicy.newHandoffId(now);
     const skipped: string[] = [];
 
-    this.focus.stop('handoff', now, actor);
+    // A Deep session outlives the handoff: the ending ritual's "Hand off…"
+    // (Deep D1 §9) sends deepEnd next, which carries the rating.
+    if (this.focus.source !== 'deep') this.focus.stop('handoff', now, actor);
 
     let sent = 0;
     for (const f of followups) {

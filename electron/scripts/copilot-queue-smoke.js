@@ -1001,6 +1001,21 @@ test('Deep: quitApp ends a Deep session with the given reason, then quits', () =
   delete electronStub.app.quit;
 });
 
+test('Deep: the ritual\'s Hand off leaves the Deep session to deepEnd, which carries the rating', () => {
+  const { q } = setup();
+  q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one' }, LEE, 'lee');
+  const ev = logged(() => q.handoffStart({}, LEE));
+  assert.ok(!ev.some((e) => e.type === 'focus.end'), 'handoff does not end Deep');
+  assert.strictEqual(q.focusState().source, 'deep');
+  const ev2 = logged(() => q.deepEnd({ reason: 'ritual', rating: 'deep', stopped_at_chars: 7 }, LEE));
+  const end = ev2.find((e) => e.type === 'focus.end');
+  assert.deepStrictEqual(
+    { reason: end.data.reason, source: end.data.source, deep_rating: end.data.deep_rating, stopped_at_chars: end.data.stopped_at_chars },
+    { reason: 'deep_end', source: 'deep', deep_rating: 'deep', stopped_at_chars: 7 },
+  );
+  q.endHandoff('manual');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

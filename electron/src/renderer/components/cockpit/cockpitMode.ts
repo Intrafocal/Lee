@@ -232,6 +232,27 @@ function flushOpener(): void {
   for (const fn of focusOpenerListeners) fn();
 }
 
+/**
+ * Deep was entered on the remembered exploration (⇧⌘0, the switcher, ⌥⌘1)
+ * with no Deep session running (after "Stay open" or a restart): start one,
+ * so the Page never shows without attention policy 'none' behind it (D1 §0,
+ * §2). A session started elsewhere arrives through the snapshot as usual.
+ */
+function startDeepIfNone(): void {
+  const d = state.deep;
+  if (state.deepActive || !d.exploration_id) return;
+  let api: CopilotAPI | undefined;
+  try {
+    api = window.lee?.copilot;
+  } catch {
+    /* no Electron */
+  }
+  if (!api) return;
+  void api
+    .deepStart({ workspace: workspaceKey, exploration_id: d.exploration_id, title: d.title, surface: 'lee' })
+    .catch(() => {});
+}
+
 const launcherListeners = new Set<() => void>();
 
 /**
@@ -359,8 +380,10 @@ export const cockpitModeStore = {
   apply(d: ModeDecision | null, goIntoInfo?: { agentState: AgentState | TabRunState; from: GoIntoFrom }): void {
     if (!d) return;
     if (d.goInto != null && goIntoInfo) logGoInto(d.goInto, goIntoInfo.agentState, goIntoInfo.from);
+    const from = state.mode;
     if (d.reason) cockpitModeStore.set(d.mode, d.reason);
     if (d.opener) cockpitModeStore.focusOpener();
+    if (from !== 'deep' && state.mode === 'deep') startDeepIfNone();
   },
   decide(trigger: ModeTrigger): ModeDecision | null {
     return nextMode(

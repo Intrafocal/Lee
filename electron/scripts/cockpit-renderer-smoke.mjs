@@ -854,6 +854,29 @@ async function bundle(rel, name) {
   });
   offOpener();
 
+  test('store: entering Deep on a remembered exploration with no session starts one', () => {
+    const calls = [];
+    globalThis.window = { lee: { copilot: { deepStart: (req) => (calls.push(req), Promise.resolve({})) } } };
+    try {
+      assert.equal(store.get().mode, 'cockpit');
+      assert.equal(store.get().deepActive, false);
+      store.toggleDeep();
+      assert.equal(store.get().mode, 'deep');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].exploration_id, 'exp-1');
+      assert.equal(calls[0].surface, 'lee');
+      store.toggleDeep();
+      assert.equal(store.get().mode, 'cockpit');
+      assert.equal(calls.length, 1, 'leaving Deep starts nothing');
+      store.switcher({ kind: 'chip', lastMode: store.get().lastMode });
+      store.switcher({ kind: 'click', to: 'deep' });
+      assert.equal(calls.length, 2, 'the switcher does the same');
+      store.set('cockpit', 'hop');
+    } finally {
+      delete globalThis.window;
+    }
+  });
+
   test('store: with the Cockpit off, Manual only (Deep unavailable)', () => {
     store.configure(false);
     assert.equal(store.get().mode, 'manual');
