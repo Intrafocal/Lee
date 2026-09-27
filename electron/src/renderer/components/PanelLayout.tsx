@@ -38,12 +38,6 @@ interface PanelLayoutProps {
   leftTabs: DockableTab[];
   rightTabs: DockableTab[];
   bottomTabs: DockableTab[];
-  /**
-   * Tabs behind the Cockpit wall (agents you did not go into). They stay
-   * mounted so their PTYs keep their size, but get no tab button and are
-   * never rendered active.
-   */
-  hiddenTabIds?: ReadonlySet<number>;
   activeLeftTabId: number | null;
   activeRightTabId: number | null;
   activeBottomTabId: number | null;
@@ -60,7 +54,6 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
   leftTabs,
   rightTabs,
   bottomTabs,
-  hiddenTabIds,
   activeLeftTabId,
   activeRightTabId,
   activeBottomTabId,
@@ -97,7 +90,6 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
               onRenameTab={onRenameTab}
               onToggleWatch={onToggleWatch}
               renderTab={renderTab}
-              hiddenTabIds={hiddenTabIds}
             />
           </Panel>
           <PanelResizeHandle className="resize-handle-h" />
@@ -127,7 +119,6 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
                 onRenameTab={onRenameTab}
                 onToggleWatch={onToggleWatch}
                 renderTab={renderTab}
-              hiddenTabIds={hiddenTabIds}
               />
             </Panel>
           </PanelGroup>
@@ -156,7 +147,6 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
               onRenameTab={onRenameTab}
               onToggleWatch={onToggleWatch}
               renderTab={renderTab}
-              hiddenTabIds={hiddenTabIds}
             />
           </Panel>
         </>
@@ -198,10 +188,7 @@ interface PanelTabsProps {
   onRenameTab?: (id: number, newLabel: string) => void;
   onToggleWatch?: (id: number) => void;
   renderTab: (tab: DockableTab, active: boolean) => React.ReactNode;
-  hiddenTabIds?: ReadonlySet<number>;
 }
-
-const NO_HIDDEN: ReadonlySet<number> = new Set();
 
 const PanelTabs: React.FC<PanelTabsProps> = ({
   tabs,
@@ -213,9 +200,7 @@ const PanelTabs: React.FC<PanelTabsProps> = ({
   onRenameTab,
   onToggleWatch,
   renderTab,
-  hiddenTabIds = NO_HIDDEN,
 }) => {
-  const shownTabs = hiddenTabIds.size ? tabs.filter((t) => !hiddenTabIds.has(t.id)) : tabs;
   const [contextMenu, setContextMenu] = React.useState<{
     tabId: number;
     x: number;
@@ -277,7 +262,7 @@ const PanelTabs: React.FC<PanelTabsProps> = ({
   return (
     <div className="panel-container">
       <div className="panel-tabs">
-        {shownTabs.map(tab => (
+        {tabs.map(tab => (
           <button
             key={tab.id}
             className={`panel-tab ${tab.id === activeTabId ? 'active' : ''}`}
@@ -322,7 +307,7 @@ const PanelTabs: React.FC<PanelTabsProps> = ({
         ))}
       </div>
       <div className="panel-content">
-        {tabs.map(tab => renderTab(tab, tab.id === activeTabId && !hiddenTabIds.has(tab.id)))}
+        {tabs.map(tab => renderTab(tab, tab.id === activeTabId))}
       </div>
 
       {/* Context menu for docking and renaming */}

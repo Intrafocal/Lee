@@ -1152,12 +1152,106 @@
   cursor: pointer;
 }
 
-.cockpit-mode-chip.is-workbench {
+.cockpit-mode-chip.is-manual,
+.cockpit-mode-chip.is-deep {
   color: var(--text-secondary);
 }
 
 .cockpit-mode-chip:hover {
   background: var(--bg-tertiary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The ⌘0 mode switcher (Deep D1 §1.3)                                     */
+/* ---------------------------------------------------------------------- */
+
+.mode-switcher-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay);
+  font-family: var(--font-ui);
+}
+
+.mode-switcher {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mode-switcher-cards {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mode-switcher-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 168px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-switcher-card.is-highlight {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.mode-switcher-name {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.mode-switcher-card.is-current .mode-switcher-name::after {
+  content: ' ·  now';
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.mode-switcher-detail {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.mode-switcher kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tdeck);
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.mode-switcher-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mode-switcher-hint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 /* ---------------------------------------------------------------------- */

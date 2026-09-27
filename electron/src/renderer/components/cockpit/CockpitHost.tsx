@@ -9,6 +9,8 @@
  * and editors below (C3).
  *
  * Also owns the create-tab bridge (cockpit:create-tab) and cockpit:go-into.
+ * Cockpit and Deep never show an agent terminal; Manual shows every tab
+ * (Deep D1 §1.4).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -37,7 +39,14 @@ import {
   type SectionId,
   type TileModel,
 } from '../../lib/cockpitModel';
-import { cockpitModeStore, useCockpitModeState, type CockpitModeHandle, type CockpitModeState, type StewardRequest } from './cockpitMode';
+import {
+  cockpitModeStore,
+  openExplorationInDeep,
+  useCockpitModeState,
+  type CockpitModeHandle,
+  type CockpitModeState,
+  type StewardRequest,
+} from './cockpitMode';
 import { CockpitHeader } from './CockpitHeader';
 import { CockpitNav, type NavBadges } from './CockpitNav';
 import { AgentTiles } from './AgentTiles';
@@ -55,7 +64,7 @@ import { TasksSection } from './sections/TasksSection';
 import { OperationsSection } from './sections/OperationsSection';
 import { SomedaySection } from './sections/SomedaySection';
 import { ExploreSection } from './sections/ExploreSection';
-import { openExploration, type Exploration } from '../../lib/hesterCockpit';
+import type { Exploration } from '../../lib/hesterCockpit';
 import { TabsSection } from './sections/TabsSection';
 import { HistorySection } from './sections/HistorySection';
 import { isControlTarget, isTypingTarget } from './dom';
@@ -115,13 +124,13 @@ export interface CockpitCtx {
   now: number;
   goInto: (ptyId: number, from: GoIntoFrom) => void;
   openOwnTab: (tabId: number) => void;
-  /** Open a file the way the Workbench does, then switch to the Workbench. */
+  /** Open a file the way Manual does, then switch to Manual. */
   openFile: (path: string) => void;
-  /** Seed an exploration's Hester session and open it as a Hester tab in the Workbench. */
+  /** Open an exploration in Deep: start the Deep session on it, then show its Page (D1 §8.3). */
   openExploration: (exp: Exploration) => Promise<void>;
-  /** Open (or refocus) the Library tab on this exploration's tree, then switch to the Workbench. */
+  /** Open (or refocus) the Library tab on this exploration's tree, then switch to Manual. */
   openLibrary: (expId: string) => void;
-  /** Open a workstream's tab, then switch to the Workbench. */
+  /** Open a workstream's tab, then switch to Manual. */
   openWorkstream: (id: string, title: string) => void;
   focusPty: (ptyId: number) => void;
   notify: (message: string, level?: 'info' | 'error') => void;
@@ -130,7 +139,7 @@ export interface CockpitCtx {
   openCheckin: (ptyId: number, label: string) => void;
   /** Rename an agent (by pty) and/or its task: your name wins over Claude's titles. */
   openRename: (target: RenameTarget) => void;
-  /** Close an agent: its tab here (the Workbench close path, which kills the PTY), else just its PTY. */
+  /** Close an agent: its tab here (Manual's close path, which kills the PTY), else just its PTY. */
   closeAgent: (ptyId: number, tabId: number | null) => void;
   registerRows: (rows: RowHandle[]) => void;
   selectRow: (id: string) => void;
@@ -146,7 +155,7 @@ export interface CockpitCtx {
 interface CockpitHostProps {
   mode: CockpitModeHandle;
   workspace: string;
-  config: { enabled?: boolean; default_mode?: string } | null;
+  config: { enabled?: boolean } | null;
   tabs: CockpitTab[];
   activeTabId: number | null;
   copilot: UseCopilotResult;
@@ -154,10 +163,8 @@ interface CockpitHostProps {
   onOpenTab: (tabId: number) => void;
   /** Close a tab in this window (App.closeTab: kills its PTY). */
   onCloseTab?: (tabId: number) => void | Promise<void>;
-  /** The Workbench's open-file path (App.handleFileOpen). */
+  /** Manual's open-file path (App.handleFileOpen). */
   onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
-  /** Open (or refocus) a Hester chat tab resumed on this session (App.handleOpenHesterTab). */
-  onOpenHesterSession?: (sessionId: string, label: string) => Promise<number | null> | void;
   /** Open (or refocus) the Library tab on an exploration (App: librarySessionId on the tab's data). */
   onOpenLibrary?: (expId: string) => void;
   /** Open a workstream tab (App.handleWorkstreamSelect). */
@@ -210,7 +217,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onOpenTab,
   onCloseTab,
   onOpenFile,
-  onOpenHesterSession,
   onOpenLibrary,
   onOpenWorkstream,
   onAskHester,
@@ -226,30 +232,35 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const notifyRef = useRef<(message: string, level?: 'info' | 'error') => void>(() => {});
 
   // Configure once the cockpit API was probed and the workspace is known; config may lag.
+  // Lee always opens in the Cockpit on Copilot (D1 §1.1: default_mode is gone).
   const enabledCfg = config?.enabled !== false;
-  const defaultMode = config?.default_mode === 'workbench' ? 'manual' : 'cockpit';
   useEffect(() => {
     if (!workspace || available == null) return;
     if (!available) {
-      cockpitModeStore.configure(false, 'manual');
+      cockpitModeStore.configure(false);
       return;
     }
     if (config) {
-      cockpitModeStore.configure(enabledCfg, defaultMode);
+      cockpitModeStore.configure(enabledCfg);
       return;
     }
-    const id = window.setTimeout(() => cockpitModeStore.configure(enabledCfg, defaultMode), 1500);
+    const id = window.setTimeout(() => cockpitModeStore.configure(enabledCfg), 1500);
     return () => window.clearTimeout(id);
-  }, [workspace, available, config, enabledCfg, defaultMode]);
+  }, [workspace, available, config, enabledCfg]);
 
   useEffect(() => {
     cockpitModeStore.setRuntimeAgents(runtimeAgentPtys(runtime));
     cockpitModeStore.setTabDisplay(tabDisplayFromRuntime(runtime));
   }, [runtime]);
 
+  // Back after an absence: the Cockpit on Copilot, unless you're deep in a
+  // Deep session, which a short absence doesn't end (D1 §8.3).
   const returnNonce = copilot.lastReturn?.nonce ?? 0;
   useEffect(() => {
-    if (returnNonce) cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'return' }));
+    if (!returnNonce) return;
+    cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'return' }));
+    const st = cockpitModeStore.get();
+    if (!(st.deepActive && st.mode === 'deep')) cockpitModeStore.setSection('copilot');
   }, [returnNonce]);
 
   // Async check-ins: toast the result of a check-in this window saw pending.
@@ -299,8 +310,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   }, []);
   const openFileRef = useRef(onOpenFile);
   openFileRef.current = onOpenFile;
-  const openHesterRef = useRef(onOpenHesterSession);
-  openHesterRef.current = onOpenHesterSession;
   const openLibraryRef = useRef(onOpenLibrary);
   openLibraryRef.current = onOpenLibrary;
   const openWorkstreamRef = useRef(onOpenWorkstream);
@@ -328,26 +337,15 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   const tilesRef = useRef(tiles);
   tilesRef.current = tiles;
 
-  // Remember the last own center tab, so entering the workbench other than by
-  // going into an agent never lands on an agent terminal you didn't enter.
-  const lastOwnTab = useRef<number | null>(null);
-  useEffect(() => {
-    const t = tabsRef.current.find((x) => x.id === activeTabId);
-    if (t && t.dockPosition === 'center' && !mode.isAgentTab(t)) lastOwnTab.current = t.id;
-  }, [activeTabId, mode]);
-
+  // Into Manual: hand focus back to the tab you were in (Manual keeps its own
+  // active tab; nothing is hidden, so there is nothing to fall back from).
   const prevMode = useRef(state.mode);
   useEffect(() => {
     const was = prevMode.current;
     prevMode.current = state.mode;
-    if (!state.enabled || was !== 'cockpit' || state.mode !== 'manual') return;
-    const active = tabsRef.current.find((x) => x.id === activeRef.current);
-    if (state.reason !== 'go_into' && active && mode.isAgentTab(active) && (active.ptyId == null || !state.enteredPtys.has(active.ptyId))) {
-      const fallback = tabsRef.current.find((x) => x.id === lastOwnTab.current) ?? ownTabs.find((x) => x.dockPosition === 'center');
-      if (fallback) openRef.current(fallback.id);
-    }
+    if (!state.enabled || was === 'manual' || state.mode !== 'manual') return;
     window.setTimeout(() => focusManager.refocus(), 0);
-  }, [state.mode, state.enabled, state.enteredPtys, state.reason, mode, ownTabs]);
+  }, [state.mode, state.enabled]);
 
   const feedRows = useMemo(
     () =>
@@ -413,8 +411,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         notify('Opening files is not available here', 'error');
         return;
       }
-      // Open first, then leave: the tab is active before the mode switch
-      // checks what the Workbench lands on.
+      // Open first, then leave: the tab is active before Manual shows.
       Promise.resolve(open(path))
         .then(() => cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' })))
         .catch(() => notify('Could not open that file', 'error'));
@@ -448,27 +445,11 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     [notify],
   );
 
-  const openExplorationTab = useCallback(
-    async (exp: Exploration) => {
-      const open = openHesterRef.current;
-      if (!open) {
-        notify('Hester tabs are not available here', 'error');
-        return;
-      }
-      const r = await openExploration(workspace, exp.id);
-      if (!r.ok) {
-        notify(r.error, 'error');
-        return;
-      }
-      try {
-        const tabId = await open(r.data.session_id, `Explore: ${exp.title}`.slice(0, 60));
-        if (tabId == null) return;
-        cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
-      } catch {
-        notify('Could not open the deep dive', 'error');
-      }
-    },
-    [workspace, notify],
+  // Dive in / Continue: the exploration's Page in Deep (D1 §8.3). The chat-tab
+  // dive-in is gone from here; the Library's per-node chats are unchanged.
+  const openExplorationDeep = useCallback(
+    (exp: Exploration) => openExplorationInDeep(copilot.api, workspace, exp.id, exp.title),
+    [copilot.api, workspace],
   );
 
   const focusPty = useCallback(
@@ -491,7 +472,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     try {
       unsub = api.onCreateTab(async (req) => {
         const prevActive = activeRef.current;
-        if (!req.activate) cockpitModeStore.hold(3500);
         let tabId: number | null = null;
         try {
           tabId = await createRef.current(
@@ -854,7 +834,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     goInto,
     openOwnTab,
     openFile,
-    openExploration: openExplorationTab,
+    openExploration: openExplorationDeep,
     openLibrary,
     openWorkstream,
     focusPty,
@@ -905,7 +885,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     >
       <CockpitHeader
         workspace={workspace}
-        focusActive={!!snapshot?.focus.active}
+        deepActive={state.deepActive}
         copilotApi={copilotApi}
         toast={toast}
         onLaunch={() => openLauncher()}

@@ -36,7 +36,8 @@ import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
 import { CockpitHost } from './components/cockpit/CockpitHost';
 import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
-import { fallbackTab, stripNeighbor } from './lib/cockpitModel';
+import { ModeSwitcher, switcherIntercept } from './components/cockpit/ModeSwitcher';
+import { DeepHost } from './components/deep/DeepHost';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -52,6 +53,14 @@ const BROWSER_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', '
 
 // Check if we're running inside Electron
 const isElectron = !!lee;
+
+/** Deep D1 §1.3 mode chords, bound here only while shared/shortcuts.ts lacks them. */
+const D1_MODE_CHORDS: ReadonlyArray<readonly [string, string]> = [
+  ['mode_switcher', 'meta+0'],
+  ['mode_deep', 'meta+shift+0'],
+  ['mode_manual', 'meta+alt+0'],
+  ['deep_view_page', 'meta+alt+1'],
+];
 
 
 export interface TabData extends Tab {
@@ -237,55 +246,22 @@ const App: React.FC = () => {
   );
 
   const centerTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'center'), [tabsWithAttention]);
-  const sideActiveTabIds = useMemo(
-    () => ({ left: activeLeftTabId, right: activeRightTabId, bottom: activeBottomTabId }),
-    [activeLeftTabId, activeRightTabId, activeBottomTabId],
-  );
+  // Cockpit / Deep / Manual (Deep D1 §1). Manual is the full tab layout:
+  // every tab shows in its dock, nothing is hidden (the wall is gone, §1.4).
   const cockpitMode = useCockpitMode({
     workspace,
     snapshot: copilot.snapshot,
-    activeTabId,
-    sideActiveTabIds,
     tabs: tabsWithAttention,
-    // Move a dock off a hidden agent (after session restore); setters are stable.
-    activate: (tabId: number) => {
-      const t = tabsRef.current.find((x) => x.id === tabId);
-      if (!t) return;
-      if (t.dockPosition === 'left') setActiveLeftTabId(tabId);
-      else if (t.dockPosition === 'right') setActiveRightTabId(tabId);
-      else if (t.dockPosition === 'bottom') setActiveBottomTabId(tabId);
-      else setActiveTabId(tabId);
-    },
   });
-  // The wall (contracts §3.1): each dock shows own tabs plus agents you went into.
-  // Identity when the Cockpit is disabled.
-  const stripTabs = useMemo(() => cockpitMode.stripTabs(centerTabs), [cockpitMode, centerTabs]);
   const leftTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'left'), [tabsWithAttention]);
   const rightTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'right'), [tabsWithAttention]);
   const bottomTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'bottom'), [tabsWithAttention]);
-  const leftStrip = useMemo(() => cockpitMode.stripTabs(leftTabs), [cockpitMode, leftTabs]);
-  const rightStrip = useMemo(() => cockpitMode.stripTabs(rightTabs), [cockpitMode, rightTabs]);
-  const bottomStrip = useMemo(() => cockpitMode.stripTabs(bottomTabs), [cockpitMode, bottomTabs]);
-  // Side-docked agents you did not go into stay mounted (PTY sizes) but are not shown.
-  const hiddenSideTabIds = useMemo(() => {
-    const hidden = new Set<number>();
-    const add = (all: TabData[], strip: TabData[]) => {
-      if (all === strip) return;
-      const shown = new Set(strip.map((t) => t.id));
-      for (const t of all) if (!shown.has(t.id)) hidden.add(t.id);
-    };
-    add(leftTabs, leftStrip);
-    add(rightTabs, rightStrip);
-    add(bottomTabs, bottomStrip);
-    return hidden;
-  }, [leftTabs, rightTabs, bottomTabs, leftStrip, rightStrip, bottomStrip]);
-  // The tab a dock falls back to when its active tab closes or moves: a visible
-  // one, marked quiet so the Cockpit does not read it as your activation.
-  const quietFallback = useCallback(
-    (visible: TabData[], leavingId: number, pick: 'first' | 'last'): number | null => {
-      const t = fallbackTab(visible, leavingId, pick);
-      if (t) cockpitModeStore.quiet(t.id);
-      return t ? t.id : null;
+  // The tab a dock falls back to when its active tab closes or moves: its plain neighbour.
+  const neighbourTab = useCallback(
+    (dockTabs: TabData[], leavingId: number, pick: 'first' | 'last'): number | null => {
+      const rest = dockTabs.filter((t) => t.id !== leavingId);
+      if (!rest.length) return null;
+      return (pick === 'first' ? rest[0] : rest[rest.length - 1]).id;
     },
     [],
   );
@@ -492,16 +468,16 @@ const App: React.FC = () => {
     // Clear active state from old position
     switch (oldPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) setActiveLeftTabId(quietFallback(leftStrip, tabId, 'first'));
+        if (activeLeftTabId === tabId) setActiveLeftTabId(neighbourTab(leftTabs, tabId, 'first'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) setActiveRightTabId(quietFallback(rightStrip, tabId, 'first'));
+        if (activeRightTabId === tabId) setActiveRightTabId(neighbourTab(rightTabs, tabId, 'first'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) setActiveBottomTabId(quietFallback(bottomStrip, tabId, 'first'));
+        if (activeBottomTabId === tabId) setActiveBottomTabId(neighbourTab(bottomTabs, tabId, 'first'));
         break;
       default:
-        if (activeTabId === tabId) setActiveTabId(quietFallback(stripTabs, tabId, 'first'));
+        if (activeTabId === tabId) setActiveTabId(neighbourTab(centerTabs, tabId, 'first'));
     }
 
     // Set active state for new position
@@ -522,7 +498,7 @@ const App: React.FC = () => {
     // Save session to localStorage
     const updatedTabs = tabs.map((t) => (t.id === tabId ? { ...t, dockPosition: newPosition } : t));
     saveSession(updatedTabs, workspace);
-  }, [tabs, stripTabs, leftStrip, rightStrip, bottomStrip, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
+  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, neighbourTab, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
 
   // ---------------------------------------------------------------------
   // C4: external-change detection
@@ -726,25 +702,22 @@ const App: React.FC = () => {
     // Clear active tab for the appropriate panel
     switch (tab.dockPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) setActiveLeftTabId(quietFallback(leftStrip, tabId, 'last'));
+        if (activeLeftTabId === tabId) setActiveLeftTabId(neighbourTab(leftTabs, tabId, 'last'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) setActiveRightTabId(quietFallback(rightStrip, tabId, 'last'));
+        if (activeRightTabId === tabId) setActiveRightTabId(neighbourTab(rightTabs, tabId, 'last'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) setActiveBottomTabId(quietFallback(bottomStrip, tabId, 'last'));
+        if (activeBottomTabId === tabId) setActiveBottomTabId(neighbourTab(bottomTabs, tabId, 'last'));
         break;
       default:
-        // Never fall back onto a hidden agent, and never treat the fallback as
-        // your activation: a background close while you are in the Cockpit must
-        // not pull you into a terminal (C3).
-        if (activeTabId === tabId) setActiveTabId(quietFallback(stripTabs, tabId, 'last'));
+        if (activeTabId === tabId) setActiveTabId(neighbourTab(centerTabs, tabId, 'last'));
     }
 
     // Save session to localStorage (without the closed tab)
     const remainingTabs = tabs.filter((t) => t.id !== tabId);
     saveSession(remainingTabs, workspace);
-  }, [tabs, stripTabs, leftStrip, rightStrip, bottomStrip, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
+  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, neighbourTab, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
 
   // Keep closeTabRef in sync for use in event handlers (avoids stale closures)
   useEffect(() => {
@@ -2474,7 +2447,15 @@ const App: React.FC = () => {
     // Agent tab launchers
     handlers['hester'] = () => createTab('agent' as Tab['type'], undefined, 'hester');
     handlers['claude'] = () => createTab('agent' as Tab['type'], undefined, 'claude');
-    handlers['cockpit_toggle'] = () => cockpitModeStore.toggle('manual');
+    // Modes (Deep D1 §1.3). ⌘0 feeds the switcher (tap, hold, cycle); its
+    // keyup and Esc are handled by switcherIntercept below.
+    handlers['mode_switcher'] = () => cockpitModeStore.switcher({ kind: 'zero', now: Date.now(), lastMode: cockpitModeStore.get().lastMode });
+    // A `keybindings:` override for the retired cockpit_toggle still binds the switcher.
+    handlers['cockpit_toggle'] = handlers['mode_switcher'];
+    handlers['mode_deep'] = () => cockpitModeStore.toggleDeep();
+    handlers['mode_manual'] = () => cockpitModeStore.toggleManual();
+    // The Page is D1's only Deep view: ⌥⌘1 shows Deep on it.
+    handlers['deep_view_page'] = () => cockpitModeStore.showDeepView('page');
     handlers['pi'] = () => createTab('agent' as Tab['type'], undefined, 'pi');
     handlers['devops'] = () => getOrCreateTab('devops');
     // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
@@ -2489,29 +2470,33 @@ const App: React.FC = () => {
     handlers['workstream'] = () => setShowWorkstreamPicker(true);
     handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
-    // Tab switching (Cmd+1-9)
-    handlers['tab_1'] = () => { activateTab(stripTabs[0]); setFocusedPanel('center'); };
-    handlers['tab_2'] = () => { activateTab(stripTabs[1]); setFocusedPanel('center'); };
-    handlers['tab_3'] = () => { activateTab(stripTabs[2]); setFocusedPanel('center'); };
-    handlers['tab_4'] = () => { activateTab(stripTabs[3]); setFocusedPanel('center'); };
-    handlers['tab_5'] = () => { activateTab(stripTabs[4]); setFocusedPanel('center'); };
-    handlers['tab_6'] = () => { activateTab(stripTabs[5]); setFocusedPanel('center'); };
-    handlers['tab_7'] = () => { activateTab(stripTabs[6]); setFocusedPanel('center'); };
-    handlers['tab_8'] = () => { activateTab(stripTabs[7]); setFocusedPanel('center'); };
-    handlers['tab_9'] = () => { activateTab(stripTabs[8]); setFocusedPanel('center'); };
+    // Tab switching (Cmd+1-9) over every center tab.
+    handlers['tab_1'] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
+    handlers['tab_2'] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
+    handlers['tab_3'] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
+    handlers['tab_4'] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
+    handlers['tab_5'] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
+    handlers['tab_6'] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
+    handlers['tab_7'] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
+    handlers['tab_8'] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
+    handlers['tab_9'] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
 
-    // Tab navigation
-    // ⌘1-9 and next/prev walk the strip you see (hidden agents excluded), so the
-    // ⌘N badges in TabBar match and cycling never counts as going into an agent.
+    // Tab navigation: the plain neighbour among the center tabs.
+    const neighbour = (delta: 1 | -1): TabData | null => {
+      if (centerTabs.length < 2 || activeTabId == null) return null;
+      const i = centerTabs.findIndex((t) => t.id === activeTabId);
+      if (i < 0) return delta > 0 ? centerTabs[0] : centerTabs[centerTabs.length - 1];
+      return centerTabs[(i + delta + centerTabs.length) % centerTabs.length];
+    };
     handlers['next_tab'] = () => {
-      const next = stripNeighbor(stripTabs, activeTabId, 1);
+      const next = neighbour(1);
       if (next) {
         setActiveTabId(next.id);
         setFocusedPanel('center');
       }
     };
     handlers['prev_tab'] = () => {
-      const prev = stripNeighbor(stripTabs, activeTabId, -1);
+      const prev = neighbour(-1);
       if (prev) {
         setActiveTabId(prev.id);
         setFocusedPanel('center');
@@ -2578,7 +2563,8 @@ const App: React.FC = () => {
     // Resolve each action to its chord. A chord bound to two actions is a
     // registry bug, so warn rather than silently letting one win.
     const map: Record<string, () => void> = {};
-    for (const shortcut of rendererShortcuts()) {
+    const shortcuts = rendererShortcuts();
+    for (const shortcut of shortcuts) {
       const handler = handlers[shortcut.action];
       if (!handler) continue;
       const chord = resolveChord(shortcut.action, config?.keybindings);
@@ -2595,12 +2581,25 @@ const App: React.FC = () => {
           }
         : handler;
     }
+    // The D1 mode chords, until the registry lists them (package M owns
+    // shared/shortcuts.ts): bound at their contract chords when free.
+    for (const [action, chord] of D1_MODE_CHORDS) {
+      if (shortcuts.some((sc) => sc.action === action) || map[chord]) continue;
+      map[chord] = handlers[action];
+    }
 
     return map;
-  }, [config, getKeybinding, statusMessages, workspace, centerTabs, stripTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
+  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
-  // Setup hotkeys
-  useHotkeys(hotkeyMap);
+  // While Deep shows an exploration, the palette can Keep its answer there (D1 §5).
+  const deepExplorationId = cockpitMode.state.mode === 'deep' ? cockpitMode.state.deep.exploration_id : null;
+  const paletteDeep = useMemo(
+    () => (deepExplorationId ? { exploration: { workspace, id: deepExplorationId } } : {}),
+    [deepExplorationId, workspace],
+  );
+
+  // Setup hotkeys; the ⌘0 switcher sees keys first while it is pending or open.
+  useHotkeys(hotkeyMap, { intercept: switcherIntercept });
 
   return (
     <div className="app">
@@ -2643,6 +2642,7 @@ const App: React.FC = () => {
         }}
       />
       <CommandPalette
+        {...paletteDeep}
         isOpen={showCommandPalette}
         onClose={() => setShowCommandPalette(false)}
         onOpenAsTab={handleOpenHesterTab}
@@ -2664,7 +2664,7 @@ const App: React.FC = () => {
       />
       <TitleBar />
       <TabBar
-        tabs={stripTabs}
+        tabs={centerTabs}
         activeTabId={activeTabId}
         tuiOptions={tuiOptions}
         onSelectTab={(tabId) => {
@@ -2689,7 +2689,6 @@ const App: React.FC = () => {
           leftTabs={leftTabs as DockableTab[]}
           rightTabs={rightTabs as DockableTab[]}
           bottomTabs={bottomTabs as DockableTab[]}
-          hiddenTabIds={hiddenSideTabIds}
           activeLeftTabId={activeLeftTabId}
           activeRightTabId={activeRightTabId}
           activeBottomTabId={activeBottomTabId}
@@ -2708,7 +2707,7 @@ const App: React.FC = () => {
               onSendToAgent for file/editor-panel, onCheckpointReadyChange for
               browser, and the missing-machineConfig guard for spyglass). */}
           {centerTabs.map((tab) => renderTab(tab as DockableTab, tab.id === activeTabId))}
-          {(centerTabs.length === 0 || (stripTabs.length === 0 && !centerTabs.some((t) => t.id === activeTabId))) && (
+          {centerTabs.length === 0 && (
             <div className="empty-state">
               {/* Content at top */}
               <div className="welcome-content">
@@ -2833,12 +2832,21 @@ const App: React.FC = () => {
           else handlePanelTabSelect(tabId, t.dockPosition);
         }}
         onOpenFile={(path: string) => handleFileOpenRef.current(path)}
-        onOpenHesterSession={(sessionId: string, label: string) => handleOpenHesterTab(sessionId, label)}
         onOpenLibrary={handleOpenLibrary}
         onOpenWorkstream={handleWorkstreamSelect}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
         onNotify={(message: string, level: 'info' | 'error') => notify(level === 'error' ? 'warn' : 'info', message, { id: 'cockpit-checkin' })}
       />
+      {cockpitMode.state.enabled && (
+        <DeepHost
+          workspace={workspace}
+          visible={cockpitMode.state.mode === 'deep'}
+          explorationId={cockpitMode.state.deep.exploration_id}
+          copilot={copilot}
+          onHop={(to) => cockpitModeStore.set(to, 'hop')}
+        />
+      )}
+      <ModeSwitcher />
       <StatusBar
         workspace={workspace}
         messages={statusMessages}

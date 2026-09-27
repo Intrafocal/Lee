@@ -1,25 +1,32 @@
 /**
- * Per-window Cockpit/Workbench mode store (contracts §3.1, §3.2), shared by
- * the overlay, the status-bar chip and App.tsx without prop drilling.
- * Transition rules live in the pure nextMode() (lib/cockpitModel.ts).
+ * Per-window Cockpit / Deep / Manual mode store (contracts §3.1, §3.2; Deep
+ * D1 §1.2), shared by the overlays, the status-bar chip, the ⌘0 switcher and
+ * App.tsx without prop drilling. Transition rules live in the pure nextMode()
+ * and switcherStep() (lib/cockpitModel.ts).
+ *
+ * Cockpit and Deep are overlays that never show an agent terminal; Manual is
+ * the full tab layout with nothing hidden (D1 §1.4: the wall is gone).
  */
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
-import type { AgentState, AttentionSnapshot } from '../../../shared/copilot';
+import type { AgentState, AttentionSnapshot, CopilotAPI, DeepEndRequest, DeepStartRequest, FocusState } from '../../../shared/copilot';
 import type { AboutRef, DeepView, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
 import {
   agentPtysFromSnapshot,
+  deepSessionOf,
   isAgentTab as isAgentTabPure,
   nextMode,
+  switcherStep,
   DEFAULT_SECTION,
-  SECTIONS,
-  stripTabs as stripTabsPure,
-  wallRepair,
+  SWITCHER_HOLD_MS,
+  SWITCHER_IDLE,
   type AgentSets,
   type ModelTab,
   type ModeDecision,
   type ModeTrigger,
   type SectionId,
+  type SwitcherEvent,
+  type SwitcherState,
 } from '../../lib/cockpitModel';
 
 export type { SectionId };
@@ -36,19 +43,27 @@ export interface CockpitModeState {
   mode: LeeMode;
   reason: ModeReason;
   since: number;
+  /** The mode before this one: the switcher's quick tap goes back to it. */
+  lastMode: LeeMode;
+  /** Cockpit's memory: the section it shows. */
   section: SectionId;
-  enteredPtys: ReadonlySet<number>;
   selected: CockpitSelection | null;
   /** pty ids A reports as agents (TabRuntimeInfo.kind), fed by CockpitHost. */
   runtimeAgents: ReadonlySet<number>;
   /** Per agent pty: what it runs and its session name (TabRuntimeInfo), for tab icons and labels. */
   tabDisplay: ReadonlyMap<number, TabDisplayInfo>;
-  /** Needs-you Feed count, for the workbench chip. */
+  /** Needs-you Feed count, for the chip and the switcher's Cockpit card. */
   needsCount: number;
-  /** Bumped when a hold() ends, so the wall re-checks the active tabs. */
-  holdEpoch: number;
+  /** Tabs open in this window, for the switcher's Manual card. */
+  tabCount: number;
+  /** A Deep focus session is active in this window's workspace (fed by useCockpitMode). */
+  deepActive: boolean;
+  /** The exploration that session is on (null: Deep with nothing open yet). */
+  deepSessionExploration: string | null;
   /** This window's Deep memory (Deep D1 §14): the open exploration and view. */
   deep: DeepNav;
+  /** The ⌘0 switcher (D1 §1.3). */
+  switcher: SwitcherState;
 }
 
 /** What Deep shows in this window (Deep D1 §4.4). */
@@ -66,66 +81,63 @@ export interface TabDisplayInfo {
 
 type Listener = () => void;
 
+const NO_DEEP: DeepNav = { exploration_id: null, title: '', view: 'page' };
+
 let state: CockpitModeState = {
   enabled: false,
   configured: false,
-  mode: 'manual',
+  mode: 'cockpit',
   reason: 'default',
   since: Date.now(),
+  lastMode: 'cockpit',
   section: DEFAULT_SECTION,
-  enteredPtys: new Set(),
   selected: null,
   runtimeAgents: new Set(),
   tabDisplay: new Map(),
   needsCount: 0,
-  holdEpoch: 0,
-  deep: { exploration_id: null, title: '', view: 'page' },
+  tabCount: 0,
+  deepActive: false,
+  deepSessionExploration: null,
+  deep: NO_DEEP,
+  switcher: SWITCHER_IDLE,
 };
 
 const listeners = new Set<Listener>();
-/** A Deep focus session is active in this window's workspace (fed by useCockpitMode). */
-let deepSessionActive = false;
 const endSessionListeners = new Set<() => void>();
 const focusOpenerListeners = new Set<() => void>();
-let holdUntil = 0;
-let holdTimer: ReturnType<typeof setTimeout> | null = null;
-/** Tab ids whose next activation Lee made, not you (close/dock fallbacks, wall redirects). */
-const quietTabs = new Map<number, number>();
-let sectionWorkspace = '';
+/** focusOpener() ran and no opener has taken the focus yet (it mounts after the switch). */
+let openerPending = false;
+let workspaceKey = '';
+let switcherTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** The part of the state App.tsx depends on; a new object only when one of these changes. */
-export type CockpitWallState = Pick<
-  CockpitModeState,
-  'enabled' | 'configured' | 'mode' | 'reason' | 'since' | 'enteredPtys' | 'runtimeAgents' | 'holdEpoch'
->;
+export type CockpitViewState = Pick<CockpitModeState, 'enabled' | 'configured' | 'mode' | 'reason' | 'since' | 'deep' | 'deepActive'>;
 
-function wallOf(s: CockpitModeState): CockpitWallState {
+function viewOf(s: CockpitModeState): CockpitViewState {
   return {
     enabled: s.enabled,
     configured: s.configured,
     mode: s.mode,
     reason: s.reason,
     since: s.since,
-    enteredPtys: s.enteredPtys,
-    runtimeAgents: s.runtimeAgents,
-    holdEpoch: s.holdEpoch,
+    deep: s.deep,
+    deepActive: s.deepActive,
   };
 }
 
-let wall: CockpitWallState = wallOf(state);
+let view: CockpitViewState = viewOf(state);
 
 function emit(next: Partial<CockpitModeState>): void {
   state = { ...state, ...next };
-  const w = wall;
+  const v = view;
   if (
-    w.enabled !== state.enabled ||
-    w.configured !== state.configured ||
-    w.mode !== state.mode ||
-    w.enteredPtys !== state.enteredPtys ||
-    w.runtimeAgents !== state.runtimeAgents ||
-    w.holdEpoch !== state.holdEpoch
+    v.enabled !== state.enabled ||
+    v.configured !== state.configured ||
+    v.mode !== state.mode ||
+    v.deep !== state.deep ||
+    v.deepActive !== state.deepActive
   ) {
-    wall = wallOf(state);
+    view = viewOf(state);
   }
   listeners.forEach((l) => l());
 }
@@ -138,18 +150,38 @@ function logMode(from: LeeMode, to: LeeMode, reason: ModeReason): void {
   }
 }
 
-function sectionKey(workspace: string): string {
-  return `lee:cockpit:${workspace}:section`;
+function logSwitcher(from: LeeMode, to: LeeMode, via: 'tap' | 'overlay' | 'chip'): void {
+  try {
+    window.lee?.cockpit?.logEvent({ type: 'deep.switcher', data: { from, to, via } });
+  } catch {
+    /* cockpit IPC not available */
+  }
 }
 
-function readSection(workspace: string): SectionId {
+function deepKey(workspace: string): string {
+  return `lee:deep:${workspace}`;
+}
+
+/** This window's Deep memory for a workspace, restored on app restart (D1 §4.4). */
+function readDeep(workspace: string): DeepNav {
   try {
-    const v = window.localStorage.getItem(sectionKey(workspace));
-    if (v && (SECTIONS as readonly string[]).includes(v)) return v as SectionId;
+    const raw = window.localStorage.getItem(deepKey(workspace));
+    if (!raw) return NO_DEEP;
+    const v = JSON.parse(raw) as Partial<DeepNav>;
+    if (typeof v.exploration_id !== 'string' || !v.exploration_id) return NO_DEEP;
+    return { exploration_id: v.exploration_id, title: typeof v.title === 'string' ? v.title : '', view: 'page' };
+  } catch {
+    return NO_DEEP;
+  }
+}
+
+function writeDeep(workspace: string, deep: DeepNav): void {
+  if (!workspace) return;
+  try {
+    window.localStorage.setItem(deepKey(workspace), JSON.stringify(deep));
   } catch {
     /* storage unavailable */
   }
-  return DEFAULT_SECTION;
 }
 
 function blurActive(): void {
@@ -182,6 +214,18 @@ export function logGoInto(ptyId: number, agentState: AgentState | TabRunState, f
   } catch {
     /* cockpit IPC not available */
   }
+}
+
+/** Hand the opener its focus once one is mounted and the Cockpit shows. */
+function flushOpener(): void {
+  if (!openerPending) return;
+  if (!state.enabled || state.mode !== 'cockpit') {
+    openerPending = false;
+    return;
+  }
+  if (!focusOpenerListeners.size) return;
+  openerPending = false;
+  for (const fn of focusOpenerListeners) fn();
 }
 
 const launcherListeners = new Set<() => void>();
@@ -235,8 +279,8 @@ export const cockpitModeStore = {
       launcherListeners.delete(fn);
     };
   },
-  getWall(): CockpitWallState {
-    return wall;
+  getView(): CockpitViewState {
+    return view;
   },
   subscribe(fn: Listener): () => void {
     listeners.add(fn);
@@ -246,63 +290,52 @@ export const cockpitModeStore = {
   },
   set(mode: LeeMode, reason: ModeReason): void {
     if (mode === state.mode) return;
-    if (mode === 'cockpit' && !state.enabled) return;
+    // No Cockpit means Manual only: Deep is unavailable too (D1 §1.1).
+    if (mode !== 'manual' && !state.enabled) return;
     const from = state.mode;
-    if (mode === 'cockpit') blurActive();
-    emit({ mode, reason, since: Date.now() });
+    if (mode !== 'manual') blurActive();
+    emit({ mode, reason, since: Date.now(), lastMode: from });
     logMode(from, mode, reason);
   },
-  toggle(reason: ModeReason): void {
-    const d = nextMode(state, { kind: 'toggle' });
-    if (d) cockpitModeStore.set(d.mode, reason);
+  /** ⇧⌘0: Cockpit ↔ Deep (from Manual, to Deep). */
+  toggleDeep(): void {
+    cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'toggle_deep' }));
   },
-  enter(ptyId: number): void {
-    if (state.enteredPtys.has(ptyId)) return;
-    const next = new Set(state.enteredPtys);
-    next.add(ptyId);
-    emit({ enteredPtys: next });
-  },
-  forget(ptyId: number): void {
-    if (!state.enteredPtys.has(ptyId)) return;
-    const next = new Set(state.enteredPtys);
-    next.delete(ptyId);
-    emit({ enteredPtys: next });
+  /** ⌥⌘0: Cockpit ↔ Manual (from Deep, to Manual). */
+  toggleManual(): void {
+    cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'toggle_manual' }));
   },
   select(sel: CockpitSelection | null): void {
     if (sel === state.selected || (sel && state.selected && sel.kind === state.selected.kind && sel.id === state.selected.id)) return;
     emit({ selected: sel });
   },
+  /** Cockpit's section memory lasts the session; every app start lands on Copilot (D1 §8.3). */
   setSection(section: SectionId): void {
     if (section === state.section) return;
-    try {
-      if (sectionWorkspace) window.localStorage.setItem(sectionKey(sectionWorkspace), section);
-    } catch {
-      /* storage unavailable */
-    }
     emit({ section, selected: null });
   },
-  /** Load the remembered section for this window's workspace. */
+  /** Load this window's Deep memory for the workspace. */
   useWorkspace(workspace: string): void {
-    if (workspace === sectionWorkspace) return;
-    sectionWorkspace = workspace;
-    emit({ section: readSection(workspace) });
+    if (workspace === workspaceKey) return;
+    workspaceKey = workspace;
+    emit({ deep: readDeep(workspace) });
   },
-  /** First call applies the default mode; later calls react only to enabled flipping. */
-  configure(enabled: boolean, defaultMode: LeeMode): void {
+  /** First call lands the window (Cockpit, or Manual when the Cockpit is off); later calls react only to enabled flipping. */
+  configure(enabled: boolean): void {
     if (state.configured && enabled === state.enabled) return;
     const first = !state.configured;
-    const d = nextMode(state, { kind: 'load', enabled, defaultMode });
+    const d = nextMode(state, { kind: 'load', enabled });
     if (!d) return;
     emit({ enabled, configured: true });
     if (first || !enabled) {
       if (d.mode !== state.mode) {
         const from = state.mode;
         if (d.mode === 'cockpit') blurActive();
-        emit({ mode: d.mode, reason: 'default', since: Date.now() });
+        emit({ mode: d.mode, reason: 'default', since: Date.now(), lastMode: from });
         logMode(from, d.mode, 'default');
       }
+      if (first && d.mode === 'cockpit') emit({ section: DEFAULT_SECTION });
     }
-    cockpitModeStore.hold(4000);
   },
   setRuntimeAgents(ptys: ReadonlySet<number>): void {
     if (setsEqual(ptys, state.runtimeAgents)) return;
@@ -315,62 +348,74 @@ export const cockpitModeStore = {
   setNeedsCount(n: number): void {
     if (n !== state.needsCount) emit({ needsCount: n });
   },
-  /** Ignore tab activations for a while (session restore, tabs the create-tab bridge opens). */
-  hold(ms: number): void {
-    holdUntil = Math.max(holdUntil, Date.now() + ms);
-    if (holdTimer != null) clearTimeout(holdTimer);
-    const fire = () => {
-      holdTimer = null;
-      const left = holdUntil - Date.now();
-      if (left > 0) {
-        holdTimer = setTimeout(fire, left + 10);
-        return;
-      }
-      emit({ holdEpoch: state.holdEpoch + 1 });
-    };
-    holdTimer = setTimeout(fire, holdUntil - Date.now() + 10);
+  setTabCount(n: number): void {
+    if (n !== state.tabCount) emit({ tabCount: n });
   },
-  holding(): boolean {
-    return Date.now() < holdUntil;
-  },
-  /** The next activation of this tab is Lee's doing (a fallback after a close), not a go-into or an open. */
-  quiet(tabId: number): void {
-    quietTabs.set(tabId, Date.now() + 1000);
-  },
-  /** Consume a quiet() mark. */
-  takeQuiet(tabId: number): boolean {
-    const until = quietTabs.get(tabId);
-    quietTabs.delete(tabId);
-    return until != null && Date.now() < until;
-  },
-  /** Apply a nextMode() decision: mode, entered set, tile selection, go_into log. */
+  /** Apply a nextMode() decision: mode, go_into log, the opener. */
   apply(d: ModeDecision | null, goIntoInfo?: { agentState: AgentState | TabRunState; from: GoIntoFrom }): void {
     if (!d) return;
-    if (d.enter != null) {
-      cockpitModeStore.enter(d.enter);
-      if (d.goInto && goIntoInfo) logGoInto(d.enter, goIntoInfo.agentState, goIntoInfo.from);
-    }
-    if (d.selectTile != null) cockpitModeStore.select({ kind: 'tile', id: String(d.selectTile) });
+    if (d.goInto != null && goIntoInfo) logGoInto(d.goInto, goIntoInfo.agentState, goIntoInfo.from);
     if (d.reason) cockpitModeStore.set(d.mode, d.reason);
+    if (d.opener) cockpitModeStore.focusOpener();
   },
   decide(trigger: ModeTrigger): ModeDecision | null {
-    return nextMode(state, trigger);
+    return nextMode(
+      { enabled: state.enabled, mode: state.mode, deepActive: state.deepActive, hasExploration: !!state.deep.exploration_id },
+      trigger,
+    );
+  },
+  /**
+   * Feed the ⌘0 switcher (D1 §1.3). Keydown/keyup wiring lives in App and
+   * ModeSwitcher; the rules live in switcherStep().
+   */
+  switcher(ev: SwitcherEvent): void {
+    if (!state.enabled) return;
+    const was = state.switcher;
+    const step = switcherStep(was, ev);
+    if (step.state !== was) emit({ switcher: step.state });
+    if (step.state.phase === 'pending' && was.phase !== 'pending') {
+      if (switcherTimer != null) clearTimeout(switcherTimer);
+      switcherTimer = setTimeout(() => {
+        switcherTimer = null;
+        cockpitModeStore.switcher({ kind: 'tick', now: Date.now() });
+      }, SWITCHER_HOLD_MS);
+    } else if (step.state.phase !== 'pending' && switcherTimer != null) {
+      clearTimeout(switcherTimer);
+      switcherTimer = null;
+    }
+    if (step.commit) {
+      const from = state.mode;
+      cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'switcher', to: step.commit.to }));
+      if (state.mode !== from) logSwitcher(from, state.mode, step.commit.via);
+    }
   },
   /** Remember the exploration and show it in Deep (reason 'hop' when a Deep session is already active). */
   openDeep(exploration_id: string, title: string): void {
     const d = state.deep;
     if (d.exploration_id !== exploration_id || d.title !== title) {
-      emit({ deep: { exploration_id, title, view: d.exploration_id === exploration_id ? d.view : 'page' } });
+      const next: DeepNav = { exploration_id, title, view: d.exploration_id === exploration_id ? d.view : 'page' };
+      emit({ deep: next });
+      writeDeep(workspaceKey, next);
     }
     if (!state.enabled) return;
-    cockpitModeStore.set('deep', deepSessionActive ? 'hop' : 'deep_start');
+    cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
+  },
+  /** ⌥⌘1 (D1: the Page is the only view): show Deep on that view. */
+  showDeepView(v: DeepView): void {
+    const d = state.deep;
+    if (d.view !== v) emit({ deep: { ...d, view: v } });
+    if (state.mode !== 'deep') cockpitModeStore.toggleDeep();
   },
   /** This window's Deep memory. */
   getDeep(): DeepNav {
     return state.deep;
   },
-  /** The mode chip's "End session": the Deep surface opens the ending ritual. */
+  /**
+   * The mode chip's "End session": the Deep surface opens the ending ritual.
+   * Deep shows first, since the ritual's sheet lives there.
+   */
   requestEndSession(): void {
+    if (state.mode !== 'deep' && state.deep.exploration_id) cockpitModeStore.set('deep', 'hop');
     for (const fn of endSessionListeners) fn();
   },
   onEndSessionRequest(cb: () => void): () => void {
@@ -379,20 +424,93 @@ export const cockpitModeStore = {
       endSessionListeners.delete(cb);
     };
   },
+  /** Anyone listening for End session (the Deep surface is mounted). */
+  canRequestEndSession(): boolean {
+    return endSessionListeners.size > 0 && !!state.deep.exploration_id;
+  },
   /** Show the Cockpit on Copilot and focus the opener's field (Go deep with nothing open). */
   focusOpener(): void {
     if (!state.enabled) return;
-    if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'manual');
+    if (state.mode !== 'cockpit') cockpitModeStore.set('cockpit', 'hop');
     cockpitModeStore.setSection('copilot');
-    for (const fn of focusOpenerListeners) fn();
+    openerPending = true;
+    // After the Cockpit (and its Copilot section) has rendered and taken focus.
+    setTimeout(flushOpener, 50);
   },
   onFocusOpener(cb: () => void): () => void {
     focusOpenerListeners.add(cb);
+    if (openerPending) setTimeout(flushOpener, 50);
     return () => {
       focusOpenerListeners.delete(cb);
     };
   },
 };
+
+// ---------------------------------------------------------------------------
+// Go deep, Dive in, End session (Deep D1 §2.1, §8.3, §14)
+// ---------------------------------------------------------------------------
+
+/** The Deep calls on CopilotAPI (package M adds them; absent on an older main). */
+interface DeepCalls {
+  deepStart?: (req: DeepStartRequest) => Promise<FocusState>;
+  deepEnd?: (req: DeepEndRequest) => Promise<FocusState>;
+}
+
+function deepCalls(api: CopilotAPI | null | undefined): DeepCalls {
+  return (api ?? {}) as DeepCalls;
+}
+
+/**
+ * Open an exploration in Deep: start (or move) the Deep session on it, then
+ * show it in this window. The Page opens even when the session call fails.
+ */
+export async function openExplorationInDeep(
+  api: CopilotAPI | null | undefined,
+  workspace: string,
+  exploration_id: string,
+  title: string,
+): Promise<void> {
+  const start = deepCalls(api).deepStart;
+  const s = state;
+  const onIt = s.deepActive && s.deepSessionExploration === exploration_id;
+  if (start && !onIt) {
+    try {
+      await start({ workspace, exploration_id, title, surface: 'lee' });
+    } catch {
+      /* the Page still opens; M logs the failure */
+    }
+  }
+  cockpitModeStore.openDeep(exploration_id, title);
+}
+
+/**
+ * Go deep (retired manual Focus): the exploration this window has open, else
+ * the opener on Copilot.
+ */
+export function goDeep(api: CopilotAPI | null | undefined, workspace: string): void {
+  if (!state.enabled) return;
+  const d = state.deep;
+  if (!d.exploration_id) {
+    cockpitModeStore.focusOpener();
+    return;
+  }
+  void openExplorationInDeep(api, workspace, d.exploration_id, d.title);
+}
+
+/**
+ * End session from outside the Deep surface (the chip, the status bar):
+ * the ritual when Deep can show it, else an unrated end (the same as Esc on
+ * the sheet).
+ */
+export function endDeepSession(api: CopilotAPI | null | undefined): void {
+  if (cockpitModeStore.canRequestEndSession()) {
+    cockpitModeStore.requestEndSession();
+    return;
+  }
+  const end = deepCalls(api).deepEnd;
+  if (end) void end({ reason: 'esc', rating: null }).catch(() => {});
+  cockpitModeStore.set('cockpit', 'deep_end');
+}
 
 function getTabDisplay(): ReadonlyMap<number, TabDisplayInfo> {
   return state.tabDisplay;
@@ -407,64 +525,60 @@ export function useCockpitModeState(): CockpitModeState {
   return useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.get, cockpitModeStore.get);
 }
 
-export type Dock = 'center' | 'left' | 'right' | 'bottom';
-
 export interface UseCockpitModeOptions {
   workspace: string;
   snapshot: AttentionSnapshot | null;
-  activeTabId: number | null;
-  /** Active tabs of the side panels: agents docked there are behind the wall too (user decision 2026-09-25). */
-  sideActiveTabIds?: { left: number | null; right: number | null; bottom: number | null };
+  /** All tabs in this window (the switcher's Manual card counts them). */
   tabs: readonly ModelTab[];
-  /** Make this tab active in its dock (used to move off a hidden agent after a restore). */
-  activate?: (tabId: number) => void;
 }
 
 export interface CockpitModeHandle {
-  state: CockpitWallState;
+  state: CockpitViewState;
   sets: AgentSets;
-  /** The tabs of one dock you can see in the workbench (center strip or a side panel). */
-  stripTabs: <T extends ModelTab>(dockTabs: T[]) => T[];
   isAgentTab: (tab: ModelTab) => boolean;
 }
 
-function dockOf(tab: ModelTab): Dock {
-  const d = tab.dockPosition;
-  return d === 'left' || d === 'right' || d === 'bottom' ? d : 'center';
-}
-
-/** Subscribes to the store, wires the automatic transitions (§3.2) and returns the wall helpers. */
+/** Subscribes to the store and wires the automatic transitions (D1 §1.2). */
 export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
-  const s = useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.getWall, cockpitModeStore.getWall);
-  const { workspace, snapshot, activeTabId, tabs } = opts;
-  const activeLeft = opts.sideActiveTabIds?.left ?? null;
-  const activeRight = opts.sideActiveTabIds?.right ?? null;
-  const activeBottom = opts.sideActiveTabIds?.bottom ?? null;
-  const activateRef = useRef(opts.activate);
-  activateRef.current = opts.activate;
+  const s = useSyncExternalStore(cockpitModeStore.subscribe, cockpitModeStore.getView, cockpitModeStore.getView);
+  const runtimeAgents = useSyncExternalStore(cockpitModeStore.subscribe, getRuntimeAgents, getRuntimeAgents);
+  const { workspace, snapshot, tabs } = opts;
 
   useEffect(() => {
     if (workspace) cockpitModeStore.useWorkspace(workspace);
   }, [workspace]);
 
+  useEffect(() => {
+    cockpitModeStore.setTabCount(tabs.length);
+  }, [tabs.length]);
+
   const agentKey = Array.from(agentPtysFromSnapshot(snapshot)).sort((a, b) => a - b).join(',');
   const snapshotAgents = useMemo(() => new Set(agentKey ? agentKey.split(',').map(Number) : []), [agentKey]);
-  const sets = useMemo<AgentSets>(() => ({ snapshotAgents, runtimeAgents: s.runtimeAgents }), [snapshotAgents, s.runtimeAgents]);
+  const sets = useMemo<AgentSets>(() => ({ snapshotAgents, runtimeAgents }), [snapshotAgents, runtimeAgents]);
 
-  const deepActive = !!snapshot?.focus.active && snapshot.focus.source === 'deep';
+  // A Deep session in this workspace: Deep when it starts, Cockpit when it ends.
+  const session = snapshot ? deepSessionOf(snapshot, workspace) : undefined;
+  const deepActive = session === undefined ? null : !!session;
+  const sessionId = session?.exploration_id ?? null;
+  const sessionTitle = session?.title ?? '';
+  const prevDeep = useRef<boolean | null>(null);
   useEffect(() => {
-    deepSessionActive = deepActive;
-  }, [deepActive]);
-
-  const focusActive = snapshot ? snapshot.focus.active : null;
-  const prevFocus = useRef<boolean | null>(null);
-  useEffect(() => {
-    if (focusActive == null) return;
-    const prev = prevFocus.current;
-    prevFocus.current = focusActive;
-    if (prev == null || prev === focusActive) return;
-    cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'focus', active: focusActive }));
-  }, [focusActive]);
+    if (deepActive == null) return;
+    const st = cockpitModeStore.get();
+    if (st.deepActive !== deepActive || st.deepSessionExploration !== sessionId) {
+      emit({ deepActive, deepSessionExploration: sessionId });
+    }
+    const prev = prevDeep.current;
+    prevDeep.current = deepActive;
+    if (prev == null || prev === deepActive) return;
+    // Started elsewhere (a device, another window) on an exploration: show that one.
+    if (deepActive && sessionId && st.deep.exploration_id !== sessionId) {
+      const next: DeepNav = { exploration_id: sessionId, title: sessionTitle, view: 'page' };
+      emit({ deep: next });
+      writeDeep(workspaceKey, next);
+    }
+    cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'deep_session', active: deepActive }));
+  }, [deepActive, sessionId, sessionTitle]);
 
   const awayActive = snapshot ? snapshot.away.active : null;
   const prevAway = useRef<boolean | null>(null);
@@ -475,126 +589,16 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
     if (prev === false && awayActive) cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'handoff' }));
   }, [awayActive]);
 
-  // "New" = the tab id did not exist 2 s earlier.
-  const firstSeen = useRef(new Map<number, number>());
-  const tabCount = useRef(0);
-  useEffect(() => {
-    const now = Date.now();
-    const ids = new Set<number>();
-    for (const t of tabs) {
-      ids.add(t.id);
-      if (!firstSeen.current.has(t.id)) firstSeen.current.set(t.id, now);
-    }
-    for (const id of Array.from(firstSeen.current.keys())) if (!ids.has(id)) firstSeen.current.delete(id);
-    // Session restore opens tabs one by one; keep holding while it does.
-    if (tabs.length > tabCount.current && cockpitModeStore.holding()) cockpitModeStore.hold(1500);
-    tabCount.current = tabs.length;
-    const alive = new Set(tabs.map((t) => t.ptyId).filter((p): p is number => p != null));
-    for (const p of cockpitModeStore.get().enteredPtys) if (!alive.has(p)) cockpitModeStore.forget(p);
-  }, [tabs]);
-
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
-  const setsRef = useRef(sets);
-  setsRef.current = sets;
-  const snapshotRef = useRef(snapshot);
-  snapshotRef.current = snapshot;
-
-  // Whether each tab was an agent when last seen active (to spot a terminal that becomes one).
-  const agentWhenSeen = useRef(new Map<number, boolean>());
-  // The last own tab you had active per dock, where a wall redirect goes.
-  const lastOwn = useRef(new Map<Dock, number>());
-
-  const onActivated = (tabId: number | null, dock: Dock) => {
-    if (tabId == null) return;
-    const tab = tabsRef.current.find((t) => t.id === tabId);
-    if (!tab || dockOf(tab) !== dock) return;
-    const isAgent = isAgentTabPure(tab, setsRef.current);
-    agentWhenSeen.current.set(tab.id, isAgent);
-    if (!isAgent) lastOwn.current.set(dock, tab.id);
-    const quiet = cockpitModeStore.takeQuiet(tab.id);
-    const st = cockpitModeStore.get();
-    if (!st.enabled || quiet || cockpitModeStore.holding()) return;
-    // Side panels never switched modes for own tabs; only their agents go through the wall.
-    if (dock !== 'center' && !isAgent) return;
-    const seen = firstSeen.current.get(tab.id) ?? Date.now();
-    const isNew = Date.now() - seen < 2000;
-    const d = nextMode(st, {
-      kind: 'tab_activated',
-      isAgent,
-      isNew,
-      ptyId: tab.ptyId,
-      entered: tab.ptyId != null && st.enteredPtys.has(tab.ptyId),
-    });
-    const agent = snapshotRef.current?.agents?.find((x) => x.pty_id === tab.ptyId);
-    cockpitModeStore.apply(d, { agentState: agent?.state ?? 'unknown', from: 'hotkey' });
-  };
-  const onActivatedRef = useRef(onActivated);
-  onActivatedRef.current = onActivated;
-
-  useEffect(() => onActivatedRef.current(activeTabId, 'center'), [activeTabId]);
-  useEffect(() => onActivatedRef.current(activeLeft, 'left'), [activeLeft]);
-  useEffect(() => onActivatedRef.current(activeRight, 'right'), [activeRight]);
-  useEffect(() => onActivatedRef.current(activeBottom, 'bottom'), [activeBottom]);
-
-  const activeIdsRef = useRef<Array<[number | null, Dock]>>([]);
-  activeIdsRef.current = [
-    [activeTabId, 'center'],
-    [activeLeft, 'left'],
-    [activeRight, 'right'],
-    [activeBottom, 'bottom'],
-  ];
-
-  // Re-check the active tabs when the agent sets change (a terminal you are
-  // in became an agent) or when a hold ends (session restore, background launch).
-  const lastHoldEpoch = useRef(s.holdEpoch);
-  useEffect(() => {
-    const holdEnded = s.holdEpoch !== lastHoldEpoch.current;
-    lastHoldEpoch.current = s.holdEpoch;
-    const st = cockpitModeStore.get();
-    for (const [id, dock] of activeIdsRef.current) {
-      if (id == null) continue;
-      const tab = tabsRef.current.find((t) => t.id === id);
-      if (!tab || dockOf(tab) !== dock) continue;
-      const isAgent = isAgentTabPure(tab, sets);
-      const was = agentWhenSeen.current.get(tab.id);
-      if (cockpitModeStore.holding()) continue;
-      agentWhenSeen.current.set(tab.id, isAgent);
-      const action = wallRepair({
-        enabled: st.enabled,
-        mode: st.mode,
-        isAgent,
-        entered: tab.ptyId != null && st.enteredPtys.has(tab.ptyId),
-        ptyId: tab.ptyId,
-        becameAgent: was === false && isAgent,
-        holdEnded,
-      });
-      if (action === 'enter' && tab.ptyId != null) {
-        cockpitModeStore.enter(tab.ptyId);
-      } else if (action === 'redirect') {
-        const visible = stripTabsPure(
-          tabsRef.current.filter((t) => dockOf(t) === dock),
-          { enabled: st.enabled, enteredPtys: st.enteredPtys, sets },
-        );
-        const remembered = lastOwn.current.get(dock);
-        const target = visible.find((t) => t.id === remembered) ?? visible[visible.length - 1];
-        if (target && activateRef.current) {
-          cockpitModeStore.quiet(target.id);
-          activateRef.current(target.id);
-        }
-        // No visible tab in that dock: the agent stays hidden.
-      }
-    }
-  }, [sets, s.holdEpoch]);
-
   return useMemo<CockpitModeHandle>(
     () => ({
       state: s,
       sets,
-      stripTabs: <T extends ModelTab>(dockTabs: T[]) =>
-        stripTabsPure(dockTabs, { enabled: s.enabled, enteredPtys: s.enteredPtys, sets }),
       isAgentTab: (tab: ModelTab) => isAgentTabPure(tab, sets),
     }),
     [s, sets],
   );
+}
+
+function getRuntimeAgents(): ReadonlySet<number> {
+  return state.runtimeAgents;
 }

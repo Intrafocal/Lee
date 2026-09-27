@@ -7,7 +7,7 @@
  * to list, click to select), "Nothing serving" when flagged, and when it was
  * last evaluated. Actions: Evaluate (a steward answer with proposals; offers
  * to run a stale measure first), Build toward (a workstream serving it),
- * Edit (GOALS.md in the Workbench) and Guided edit… (a proposed diff; Apply
+ * Edit (GOALS.md in Manual) and Guided edit… (a proposed diff; Apply
  * writes only on that click, never commits). Below: tensions, constraints
  * and the human_balance strip. Sections have no keys (click only).
  */
