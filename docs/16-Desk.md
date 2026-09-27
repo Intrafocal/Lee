@@ -25,7 +25,8 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 - **One Desk per workspace.** Deep mode is *being at the Desk*.
 - **Areas** are named regions of the one Desk surface: zoom out to see them all, zoom in to work in one. They replace explorations as the way thinking is grouped by topic.
 - **Drawers** hold whole Areas you've put away (archived or parked). Cards always travel with their Area. You can take an Area back out.
-- **Goals** are pinned to every Area: a small Goals card fixed in a corner of whichever Area you're in. Zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
+- **Goals** are one card, pinned to the Desk's top-right corner at every zoom, so it's there whichever Area you're in (*revised 2026-09-27*: first drawn once per Area, which read as separate goals). It lists GOALS.md's goals; zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
+- **An Area's menu** (its ⋯, or a right-click on the Area): Rename, New Page here, Put away in a Drawer.
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything. Revisit when there's a reason.
 - **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
 - **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Put away** (Areas). An Area's cards go with it.

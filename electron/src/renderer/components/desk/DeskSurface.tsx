@@ -1,7 +1,7 @@
 /**
  * DeskSurface - the Desk below a zoomed card (docs/16-Desk.md §2, §3; D2
  * contract §7.2): the overview (every Area on the Desk), an Area (it fills
- * the view), the Goals card in every Area's corner, and the Drawers.
+ * the view), the Goals card pinned once to its corner, and the Drawers.
  *
  * - Pan and zoom are CSS transforms on one layer; the maths is pure in
  *   lib/deskModel.ts. Wheel pans, pinch (or ⌘/ctrl + wheel) zooms about the
@@ -12,8 +12,10 @@
  *   focused card or a double-click zooms in. Nothing is editable here.
  * - A click on an empty spot in an Area starts a Page there: an in-memory
  *   Page, zoomed in, created only once it has text (Deep next R8).
- * - The Goals card sits in every Area's top-right corner; with none yet it
- *   asks "What is this project for?", and typing there creates it.
+ * - The Goals card is pinned once to the Desk's top-right corner, the same
+ *   at every zoom: GOALS.md's goals, else the Goals Page's first line, else
+ *   "What is this project for?", where typing creates it.
+ * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Put away.
  * - Drawers are a strip along the bottom of the overview: Ideas (Someday)
  *   and Put away (Areas). Each opens a one-column panel at the side, so an
  *   idea can be dragged onto an Area.
@@ -31,7 +33,7 @@ import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { Btn, IconAction } from '../cockpit/ui';
-import { listSomeday, triageSomeday, type SomedayItem } from '../../lib/hesterCockpit';
+import { fetchGoalsStatus, listSomeday, triageSomeday, type SomedayItem } from '../../lib/hesterCockpit';
 import { createArea, ideaToPage, patchArea, putAwayArea, takeOutArea } from '../../lib/hesterDesk';
 import { newDraft } from '../../lib/hesterDeep';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
@@ -47,7 +49,6 @@ import {
   escapeStep,
   fitRect,
   focusRect,
-  goalsCorner,
   isEmptySpot,
   panBy,
   placeNewCard,
@@ -70,6 +71,7 @@ interface DeskSurfaceProps {
 }
 
 const HOVER_MS = 300;
+const GOALS_SHOWN = 5;
 const IDEA_MIME = 'application/x-lee-idea';
 type Drawer = 'ideas' | 'put-away';
 
@@ -122,6 +124,10 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     const t = e.target as Element;
+    if (menuFor && !t.closest('.desk-area-menu')) {
+      setMenuFor(null);
+      return;
+    }
     if (t.closest('.desk-card, .desk-goals, button, input, textarea, .desk-area-menu')) return;
     drag.current = { x: e.clientX, y: e.clientY, cam, moved: false, id: e.pointerId };
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -309,6 +315,19 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const areaInView = zoom !== 'overview' ? onDesk.find((a) => a.id === nav.area_id) ?? null : null;
   const goalsCard = desk?.goals_card_id ? desk.cards.find((c) => c.id === desk.goals_card_id) ?? null : null;
 
+  // GOALS.md's goals, for the pinned Goals card (the Goals Page may not exist yet).
+  const [goals, setGoals] = useState<Array<{ id: string; title: string }>>([]);
+  useEffect(() => {
+    if (!visible || !workspace) return;
+    let cancelled = false;
+    void fetchGoalsStatus(workspace).then((r) => {
+      if (!cancelled && r.ok) setGoals([...r.data.goals].sort((a, b) => a.priority - b.priority).map((g) => ({ id: g.id, title: g.title })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, workspace]);
+
   return (
     <div ref={rootRef} className={`desk${zoom === 'card' ? ' is-behind' : ''}`} tabIndex={-1} aria-hidden={!visible}>
       <header className="deep-header desk-header">
@@ -380,13 +399,17 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             style={{ transform: cameraTransform(cam), ['--desk-scale' as string]: String(cam.scale) }}
           >
             {onDesk.map((area) => {
-              const g = goalsCorner(area);
               return (
                 <section
                   key={area.id}
                   className={`desk-area${area.id === nav.area_id && zoom !== 'overview' ? ' is-current' : ''}`}
                   style={{ left: area.x, top: area.y, width: area.w, height: area.h }}
                   aria-label={area.name}
+                  onContextMenu={(e) => {
+                    if ((e.target as Element).closest('.desk-card, input, textarea')) return;
+                    e.preventDefault();
+                    setMenuFor(area.id);
+                  }}
                   onDragOver={(e) => {
                     if (e.dataTransfer.types.includes(IDEA_MIME)) e.preventDefault();
                   }}
@@ -429,8 +452,18 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           >
                             Rename
                           </button>
-                          <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)}>
-                            Put away
+                          <button
+                            className="deep-pop-row"
+                            role="menuitem"
+                            onClick={() => {
+                              setMenuFor(null);
+                              startPage(area, { x: 0, y: AREA_HEAD });
+                            }}
+                          >
+                            New Page here
+                          </button>
+                          <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)} title="Into the Put away Drawer; take it out from there">
+                            Put away in a Drawer
                           </button>
                         </div>
                       )}
@@ -448,19 +481,19 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                       onLeave={hoverOut}
                     />
                   ))}
-
-                  <GoalsCorner
-                    workspace={workspace}
-                    card={goalsCard}
-                    style={{ left: g.x, top: g.y, width: g.w, height: g.h }}
-                    onZoom={() => goalsCard && zoomCard(goalsCard, area, 'click')}
-                    onHover={(el) => goalsCard && hoverIn(goalsCard, el)}
-                    onLeave={hoverOut}
-                  />
                 </section>
               );
             })}
           </div>
+
+          <GoalsPin
+            workspace={workspace}
+            card={goalsCard}
+            goals={goals}
+            onZoom={() => goalsCard && zoomCard(goalsCard, areaInView, 'click')}
+            onHover={(el) => goalsCard && hoverIn(goalsCard, el)}
+            onLeave={hoverOut}
+          />
 
           {preview && (
             <div className="desk-preview" style={{ left: preview.x, top: preview.y }} role="tooltip">
@@ -598,50 +631,66 @@ function DeskCardView({
   );
 }
 
-/** The pinned Goals card in an Area's corner; with none yet, the question that starts it. */
-function GoalsCorner({
+/**
+ * The Goals card, pinned once to the Desk's corner whatever the zoom (one
+ * card, not a copy per Area): GOALS.md's goals, else the Goals Page's first
+ * line, else the question that starts it. Zooming it opens the Goals Page.
+ */
+function GoalsPin({
   workspace,
   card,
-  style,
+  goals,
   onZoom,
   onHover,
   onLeave,
 }: {
   workspace: string;
   card: DeskCard | null;
-  style: React.CSSProperties;
+  goals: Array<{ id: string; title: string }>;
   onZoom: () => void;
   onHover: (el: HTMLElement) => void;
   onLeave: () => void;
 }): JSX.Element {
   const [typed, setTyped] = useState('');
-  if (card) {
-    const first = card.summary.excerpt.split('\n').find((l) => l.trim() && !/^\s*#/.test(l)) ?? '';
+  const open = () => (card ? onZoom() : void openDesk(null, workspace, { kind: 'goals' }));
+  const first = card ? card.summary.excerpt.split('\n').find((l) => l.trim() && !/^\s*#/.test(l)) ?? '' : '';
+  if (goals.length || first) {
     return (
       <div
         className="desk-goals"
-        style={style}
         tabIndex={0}
         role="button"
         aria-label="Goals"
-        onClick={onZoom}
+        title="Open the Goals Page"
+        onClick={open}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            onZoom();
+            open();
           }
         }}
-        onMouseEnter={(e) => onHover(e.currentTarget)}
+        onMouseEnter={(e) => card && onHover(e.currentTarget)}
         onMouseLeave={onLeave}
       >
         <div className="desk-goals-label">Goals</div>
-        {first && <div className="desk-goals-line">{first.trim()}</div>}
+        {goals.length ? (
+          <ol className="desk-goals-list">
+            {goals.slice(0, GOALS_SHOWN).map((g) => (
+              <li key={g.id} className="desk-goals-line">
+                <span className="desk-goals-id">{g.id}</span> {g.title}
+              </li>
+            ))}
+            {goals.length > GOALS_SHOWN && <li className="deep-muted">{goals.length - GOALS_SHOWN} more</li>}
+          </ol>
+        ) : (
+          <div className="desk-goals-line">{first.trim()}</div>
+        )}
       </div>
     );
   }
   return (
-    <div className="desk-goals is-empty" style={style}>
-      <button className="desk-goals-label" onClick={() => void openDesk(null, workspace, { kind: 'goals' })} title="Open the Goals card">
+    <div className="desk-goals is-empty">
+      <button className="desk-goals-label" onClick={open} title="Open the Goals Page">
         What is this project for?
       </button>
       <input
