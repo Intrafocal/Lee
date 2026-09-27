@@ -46,7 +46,7 @@ export const CockpitNav: React.FC<CockpitNavProps> = ({ section, dots, onSelect 
           onClick={() => onSelect(id)}
           aria-label={dots[id] ? `${label}, needs you` : label}
           aria-current={active ? 'page' : undefined}
-          title={label}
+          data-tip={label}
         >
           <Icon name={SECTION_ICONS[id]} size={18} />
           {dots[id] && <span className="cockpit-rail-dot" aria-hidden="true" />}

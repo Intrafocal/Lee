@@ -597,10 +597,19 @@
   outline: none;
 }
 
+/* The letters show only once the keyboard is in the row (⌘.), like menu
+   mnemonics; a mouse never focuses these buttons (tabIndex -1, mousedown
+   prevented), so clicking never shows them. A lone letter beside a label
+   otherwise reads as a shortcut to press from the Page. */
 .deep-row-key {
+  display: none;
   font-size: 12px;
   font-weight: 400;
   color: var(--text-3);
+}
+
+.deep-row:focus-within .deep-row-key {
+  display: inline;
 }
 
 /* ---- typing affordances (§7): dim, inline, never a popup ---- */

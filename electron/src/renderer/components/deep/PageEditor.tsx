@@ -220,7 +220,7 @@ const ROW_WIDTH = 380;
 const ROW_ACTIONS: Array<{ action: DeepRowAction; key: string; label: string; title: string }> = [
   { action: 'capture', key: 'c', label: 'Capture', title: 'Save to Someday with where it came from' },
   { action: 'keep', key: 'k', label: 'Keep', title: 'Add to this exploration’s references' },
-  { action: 'ask', key: 'a', label: 'Ask', title: 'Ask Hester; the answer arrives quietly in the margin' },
+  { action: 'ask', key: 'a', label: 'Ask Hester', title: 'Ask Hester; the answer arrives quietly in the margin' },
   { action: 'explore', key: 'e', label: 'Explore', title: 'Start a linked exploration (doesn’t switch)' },
 ];
 

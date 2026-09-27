@@ -1513,7 +1513,7 @@ const leeRows = [
     assert.equal((s.match(/class="cockpit-rail-item/g) ?? []).length, 6);
     assert.equal((s.match(/class="cockpit-rail-dot"/g) ?? []).length, 2);
     assert.match(s, /aria-label="Work, needs you"/);
-    assert.match(s, /title="Library"/);
+    assert.match(s, /data-tip="Library"/);
     assert.match(s, /class="cockpit-rail-item is-active"[^>]*aria-label="Home"/);
     assert.ok(!/\d<\/span>/.test(s.replace(/<svg[\s\S]*?<\/svg>/g, '')), 'no counts');
   });
