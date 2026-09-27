@@ -167,6 +167,13 @@ export function registerQueueRoutes(app: Application, deps: { ptyManager: PTYMan
     send(res, q().deepEnd(req.body ?? null, actor));
   });
 
+  // Desk D2 §9.2: the idle-end push's Extend, or End and rate (DeepIdleEndRequest).
+  app.post('/deep/idle-end', (req: Request, res: Response) => {
+    const actor = requireHuman(res);
+    if (!actor) return;
+    send(res, q().deepIdleEnd(req.body ?? null, actor));
+  });
+
   app.get('/away', (_req: Request, res: Response) => {
     res.json({ success: true, data: q().awayState() });
   });

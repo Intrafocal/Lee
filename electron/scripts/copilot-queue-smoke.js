@@ -833,11 +833,11 @@ test('Deep: a Deep start replaces an inferred session (switch), then a second de
     q.focus.start({ kind: 'files', workspace: '/work/api', paths: ['/work/api/a.py'] }, 'inferred', 'auto', { kind: 'system' }, Date.now());
     const inferredId = q.focus.sessionId;
     const ev = logged(() => {
-      const r = q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one', title: 'One' }, LEE, 'lee');
+      const r = q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: 'pg-00000001', card_kind: 'page', title: 'One' }, LEE, 'lee');
       assert.strictEqual(r.status, 200);
       assert.strictEqual(r.body.source, 'deep');
       assert.strictEqual(r.body.policy, 'none');
-      assert.deepStrictEqual(r.body.deep, { exploration_id: 'exp-one', title: 'One', workspace: '/work/api' });
+      assert.deepStrictEqual(r.body.deep, { exploration_id: 'pg-00000001', title: 'One', workspace: '/work/api', card_id: 'pg-00000001', card_kind: 'page' });
     });
     const end = ev.find((e) => e.type === 'focus.end');
     assert.strictEqual(end.data.session_id, inferredId);
@@ -847,10 +847,10 @@ test('Deep: a Deep start replaces an inferred session (switch), then a second de
     assert.strictEqual(start.data.policy, 'none');
     const deepId = q.focus.sessionId;
 
-    const ev2 = logged(() => q.deepStart({ workspace: '/work/api', exploration_id: 'exp-two', title: 'Two' }, LEE, 'lee'));
+    const ev2 = logged(() => q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: 'pg-00000002', title: 'Two' }, LEE, 'lee'));
     assert.strictEqual(q.focus.sessionId, deepId, 'same session');
     assert.deepStrictEqual(ev2.map((e) => e.type), ['focus.item']);
-    assert.strictEqual(q.focusState().deep.exploration_id, 'exp-two');
+    assert.strictEqual(q.focusState().deep.card_id, 'pg-00000002');
     // A manual (lee) focus start leaves the Deep session alone.
     q.focusStart({ kind: 'agent', pty_id: 1, window_id: null, label: 'x' }, LEE, 'lee');
     assert.strictEqual(q.focusState().source, 'deep');
@@ -866,6 +866,8 @@ test('Deep: a Deep start replaces an inferred session (switch), then a second de
     assert.strictEqual(q.deepEnd({ reason: 'later' }, LEE).status, 400);
     assert.strictEqual(q.deepEnd({ reason: 'esc', rating: 'great' }, LEE).status, 400);
     assert.strictEqual(q.deepStart({ exploration_id: '../x' }, LEE, 'lee').status, 400);
+    assert.strictEqual(q.deepStart({ exploration_id: null, card_id: 'exp-1a2b3c4d' }, LEE, 'lee').status, 400, 'card ids are page ids');
+    assert.strictEqual(q.deepStart({ exploration_id: null, card_id: 'pg-00000001', card_kind: 'board' }, LEE, 'lee').status, 400);
   } finally {
     unreg();
   }
@@ -987,7 +989,7 @@ test('Deep: a device POST /focus/start is Go deep with exploration_id null; /foc
       const r = call(app.routes['POST /focus/start'], { body: { item: { kind: 'agent', pty_id: 1, window_id: null, label: 'x' } }, principal: dev });
       assert.strictEqual(r.statusCode, 200);
       assert.strictEqual(r.body.data.source, 'deep');
-      assert.deepStrictEqual(r.body.data.item, { kind: 'exploration', workspace: '/work/api', exploration_id: null, title: 'Deep' });
+      assert.deepStrictEqual(r.body.data.item, { kind: 'card', workspace: '/work/api', card_id: null, card_kind: null, title: 'Deep' });
     });
     const start = ev.find((e) => e.type === 'focus.start');
     assert.strictEqual(start.data.surface, 'device');
@@ -996,15 +998,16 @@ test('Deep: a device POST /focus/start is Go deep with exploration_id null; /foc
     const snap = call(app.routes['GET /attention'], { principal: dev }).body.data;
     assert.strictEqual(snap.focus.active, true, 'devices still see focus active during Deep');
     assert.strictEqual(snap.mode, 'cockpit');
-    assert.deepStrictEqual(snap.deep, { exploration_id: null, title: 'Deep' });
+    assert.deepStrictEqual(snap.deep, { exploration_id: null, title: 'Deep', card_id: null, card_kind: null });
     q.onBusEvent({ type: 'cockpit.mode', window_id: 1, data: { from: 'cockpit', to: 'deep', reason: 'deep_start' }, ts: new Date().toISOString() });
     assert.strictEqual(q.snapshot({ compact: true }).mode, 'deep');
 
-    // Go deep from the renderer while the device session has nothing open picks the exploration.
-    q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one', title: 'One' }, LEE, 'lee', 1);
-    // A second device Go deep keeps the open exploration.
+    // Zooming into a card from the renderer while the device session has none picks the card.
+    q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: 'pg-00000001', title: 'One' }, LEE, 'lee', 1);
+    // A second device Go deep keeps the open card.
     call(app.routes['POST /deep/start'], { body: { exploration_id: null }, principal: dev });
-    assert.strictEqual(q.focusState().deep.exploration_id, 'exp-one');
+    assert.strictEqual(q.focusState().deep.card_id, 'pg-00000001');
+    assert.strictEqual(q.focusState().deep.exploration_id, 'pg-00000001', 'exploration_id repeats card_id for older devices');
 
     const ev2 = logged(() => assert.strictEqual(call(app.routes['POST /focus/stop'], { principal: dev }).statusCode, 200));
     const end = ev2.find((e) => e.type === 'focus.end');
@@ -1090,6 +1093,297 @@ test('Deep: the ritual\'s Hand off leaves the Deep session to deepEnd, which car
     { reason: 'deep_end', source: 'deep', deep_rating: 'deep', stopped_at_chars: 7 },
   );
   q.endHandoff('manual');
+});
+
+// ---------------------------------------------------------------------------
+// Desk D2 (docs/plans/2026-09-27-desk-foundation-contract.md §5, §9.1, §9.2, §9.5)
+// ---------------------------------------------------------------------------
+
+const PG_A = 'pg-0000000a';
+const PG_B = 'pg-0000000b';
+const DEV = { kind: 'device', device_id: 'dev1', name: 'Aeronaut', device_kind: 'aeronaut', ip: '192.168.1.5' };
+
+/** A queue whose Desk session records land in `records` instead of Hester. */
+function deskSetup() {
+  const ctx = setup();
+  const records = [];
+  ctx.q.deskSessionSink = (workspace, record) => records.push({ workspace, record });
+  return { ...ctx, records };
+}
+
+const zoom = (q, card_id, title = card_id) => q.deepStart({ workspace: '/work/api', exploration_id: null, card_id, card_kind: 'page', title }, LEE, 'lee');
+const awayFor = (now, minutes) => ({ at_machine: false, engaged: false, away_since: new Date(now - minutes * MIN).toISOString() });
+const idleItem = (q) => q.snapshot({ all: false }).items.find((i) => i.kind === 'deep_idle' && i.state === 'open');
+
+test('Desk: card focus items: focus.item only when zooming into a different card; touched cards in first-touched order', () => {
+  const { q } = deskSetup();
+  const ev = logged(() => q.deepStart({ workspace: '/work/api', exploration_id: null }, LEE, 'lee'));
+  const start = ev.find((e) => e.type === 'focus.start');
+  assert.deepStrictEqual(start.data.item, { kind: 'card', workspace: '/work/api', card_id: null, card_kind: null, title: 'Deep' });
+  const types = (fn) => logged(fn).filter((e) => e.type.startsWith('focus.')).map((e) => e.type);
+  assert.deepStrictEqual(types(() => zoom(q, PG_A, 'A')), ['focus.item'], 'into the first card');
+  assert.deepStrictEqual(types(() => zoom(q, PG_A, 'A, retitled')), [], 'a retitle is not a new item');
+  assert.strictEqual(q.focusState().deep.title, 'A, retitled');
+  assert.deepStrictEqual(types(() => q.deepStart({ workspace: '/work/api', exploration_id: null }, DEV_ACTOR, 'device')), [], 'Go deep with null keeps the card');
+  assert.strictEqual(q.focusState().deep.card_id, PG_A);
+  assert.deepStrictEqual(types(() => zoom(q, PG_B, 'B')), ['focus.item']);
+  const back = logged(() => zoom(q, PG_A, 'A'));
+  assert.deepStrictEqual(back.map((e) => e.type), ['focus.item'], 'back into A is a different card from B');
+  assert.deepStrictEqual(back[0].data.item, { kind: 'card', workspace: '/work/api', card_id: PG_A, card_kind: 'page', title: 'A' });
+  assert.deepStrictEqual(q.focus.deepCards, { touched: [PG_A, PG_B], last: PG_A });
+  // The compact snapshot's deep carries the card (and exploration_id = card_id for older devices).
+  assert.deepStrictEqual(q.snapshot({ compact: true }).deep, { exploration_id: PG_A, title: 'A', card_id: PG_A, card_kind: 'page' });
+  q.deepEnd({ reason: 'esc' }, LEE);
+});
+
+test('Desk: deepStart with a legacy exploration_id: a page id is the card, anything else is the Desk with no card', () => {
+  const { q } = deskSetup();
+  q.deepStart({ workspace: '/work/api', exploration_id: 'exp-1a2b3c4d', title: 'Old' }, LEE, 'lee');
+  assert.deepStrictEqual(q.focusState().item, { kind: 'card', workspace: '/work/api', card_id: null, card_kind: null, title: 'Old' });
+  q.deepStart({ workspace: '/work/api', exploration_id: 'pg-1a2b3c4d', title: 'Page' }, LEE, 'lee');
+  assert.deepStrictEqual(q.focusState().item, { kind: 'card', workspace: '/work/api', card_id: 'pg-1a2b3c4d', card_kind: 'page', title: 'Page' });
+  // card_id wins over exploration_id.
+  q.deepStart({ workspace: '/work/api', exploration_id: 'pg-1a2b3c4d', card_id: PG_B, title: 'B' }, LEE, 'lee');
+  assert.strictEqual(q.focusState().deep.card_id, PG_B);
+  q.deepEnd({ reason: 'esc' }, LEE);
+});
+
+test('Desk: the idle-end push goes out at 40 of 45, once per session, as a devices-only needs-you item Deep does not park', () => {
+  const { q } = deskSetup();
+  const cfg = COPILOT_DEFAULTS;
+  assert.strictEqual(cfg.deep.idle_warn_minutes, 5);
+  const t0 = Date.now();
+  zoom(q, PG_A, 'Mesh sync');
+  const sid = q.focus.sessionId;
+  q.tickFocus(t0, awayFor(t0, 39), cfg);
+  assert.strictEqual(idleItem(q), undefined, 'not before 40');
+  const ev = logged(() => q.tickFocus(t0, awayFor(t0, 40), cfg));
+  const item = idleItem(q);
+  assert.ok(item, 'pushed at 40');
+  assert.strictEqual(item.title, 'Still thinking?');
+  assert.strictEqual(item.text, 'Mesh sync');
+  assert.strictEqual(item.severity, 'needs-you');
+  assert.strictEqual(item.parked, false);
+  assert.strictEqual(item.notify, true, 'the one exception to Deep\'s none policy');
+  assert.strictEqual(item.source.kind, 'lee');
+  assert.deepStrictEqual(item.actions, ['extend', 'end_rate', 'capture', 'dismiss']);
+  assert.deepStrictEqual(item.deep_idle, { session_id: sid, ends_at: new Date(t0 + 5 * MIN).toISOString(), card: { card_id: PG_A, title: 'Mesh sync' } });
+  const push = ev.find((e) => e.type === 'deep.idle_push');
+  assert.deepStrictEqual(push.data, { session_id: sid, ends_at: item.deep_idle.ends_at });
+  assert.strictEqual(q.focusState().quiet_count, 0, 'not an agent waiting');
+  // An agent's approval opened now does not supersede it, and it survives the waiting limit.
+  openApproval(q);
+  q.queue.recompute(t0 + 30 * MIN);
+  assert.ok(idleItem(q), 'still open');
+  assert.strictEqual(idleItem(q).parked, false);
+  // Once per session: still away, no second push.
+  const again = logged(() => q.tickFocus(t0 + MIN, awayFor(t0 + MIN, 41), cfg));
+  assert.ok(!again.some((e) => e.type === 'deep.idle_push'));
+  assert.strictEqual(q.snapshot({ all: true }).items.filter((i) => i.kind === 'deep_idle').length, 1);
+  // Back at the machine: resolved.
+  q.tickFocus(t0 + 2 * MIN, { at_machine: true, engaged: true, away_since: null }, cfg);
+  assert.strictEqual(idleItem(q), undefined, 'resolved on return');
+  // Away again in the same session: still no second push.
+  q.tickFocus(t0 + 3 * MIN, awayFor(t0 + 3 * MIN, 42), cfg);
+  assert.strictEqual(idleItem(q), undefined, 'once per session');
+  q.deepEnd({ reason: 'esc' }, LEE);
+});
+
+test('Desk: no idle-end push at the machine, in quiet hours, or outside Deep', () => {
+  const { q } = deskSetup();
+  const t0 = Date.now();
+  q.tickFocus(t0, awayFor(t0, 42), COPILOT_DEFAULTS);
+  assert.strictEqual(idleItem(q), undefined, 'no Deep session');
+  zoom(q, PG_A);
+  q.tickFocus(t0, { at_machine: true, engaged: true, away_since: null }, COPILOT_DEFAULTS);
+  assert.strictEqual(idleItem(q), undefined, 'at the machine');
+  const quiet = { ...COPILOT_DEFAULTS, attention: { ...COPILOT_DEFAULTS.attention, quiet_hours: '00:00-23:59' } };
+  q.tickFocus(t0, awayFor(t0, 42), quiet);
+  assert.strictEqual(idleItem(q), undefined, 'quiet hours');
+  // Quiet hours didn't use up the one push.
+  q.tickFocus(t0, awayFor(t0, 42), COPILOT_DEFAULTS);
+  assert.ok(idleItem(q));
+  // The session ends some other way: the push goes with it.
+  q.deepEnd({ reason: 'esc' }, LEE);
+  q.tickFocus(t0, awayFor(t0, 42), COPILOT_DEFAULTS);
+  assert.strictEqual(idleItem(q), undefined, 'resolved at the session\'s end');
+});
+
+test('Desk: Extend moves the idle end to now + 45 from the extension; no second push; stale and unknown items refused', () => {
+  const unreg = withWindow([]);
+  try {
+    const { registerQueueRoutes } = require(path.join(dist, 'copilot', 'queue-routes.js'));
+    const { getCopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
+    const pty = new FakePty();
+    const app = fakeApp();
+    registerQueueRoutes(app, { ptyManager: pty });
+    const q = getCopilotQueue(pty);
+    const records = [];
+    q.deskSessionSink = (workspace, record) => records.push(record);
+    const now = Date.now();
+    zoom(q, PG_A);
+    const away = awayFor(now, 41);
+    q.tickFocus(now, away, COPILOT_DEFAULTS);
+    const item = idleItem(q);
+    const route = app.routes['POST /deep/idle-end'];
+    assert.strictEqual(call(route, { body: { item_id: item.id, version: item.version, action: 'extend' }, principal: { kind: 'shared', loopback: true, ip: '127.0.0.1' } }).statusCode, 403, 'a person only');
+    assert.strictEqual(call(route, { body: { item_id: item.id, version: item.version, action: 'snooze' }, principal: DEV }).statusCode, 400);
+    assert.strictEqual(call(route, { body: { item_id: 'att_nope', version: 1, action: 'extend' }, principal: DEV }).statusCode, 404);
+    assert.strictEqual(call(route, { body: { item_id: item.id, version: item.version + 1, action: 'extend' }, principal: DEV }).statusCode, 409, 'stale version');
+    const ev = logged(() => {
+      const r = call(route, { body: { item_id: item.id, version: item.version, action: 'extend' }, principal: DEV });
+      assert.strictEqual(r.statusCode, 200);
+      assert.strictEqual(r.body.data.source, 'deep', 'the session goes on');
+    });
+    const ext = ev.find((e) => e.type === 'deep.extend');
+    assert.deepStrictEqual(ext.data, { session_id: q.focus.sessionId, minutes: 45, surface: 'aeronaut' });
+    assert.strictEqual(idleItem(q), undefined, 'the item resolves');
+    assert.strictEqual(call(route, { body: { item_id: item.id, version: item.version, action: 'extend' }, principal: DEV }).statusCode, 409, 'answered already');
+    // Measured from the extension, not from away_since (which was 41 min ago).
+    const ends = q.focus.deepIdleEndsAt(away, COPILOT_DEFAULTS.deep);
+    assert.ok(Math.abs(ends - (now + 45 * MIN)) < 5_000, 'now + 45');
+    q.tickFocus(now + 44 * MIN, away, COPILOT_DEFAULTS);
+    assert.strictEqual(q.focus.source, 'deep', 'still going at +44');
+    assert.strictEqual(idleItem(q), undefined, 'no second push');
+    q.tickFocus(now + 46 * MIN, away, COPILOT_DEFAULTS);
+    assert.strictEqual(q.focus.source, null, 'ends away at the new deadline');
+    assert.deepStrictEqual(records, [], 'an answered push leaves the away record to Hester');
+  } finally {
+    unreg();
+  }
+});
+
+test('Desk: End and rate from a device ends the session (ended_via device) and writes the Desk session record', () => {
+  const { q, records } = deskSetup();
+  const now = Date.now();
+  zoom(q, PG_A);
+  zoom(q, PG_B);
+  const sid = q.focus.sessionId;
+  q.tickFocus(now, awayFor(now, 40), COPILOT_DEFAULTS);
+  const item = idleItem(q);
+  assert.strictEqual(q.deepIdleEnd({ item_id: item.id, version: item.version, action: 'end_rate', rating: 'great' }, DEV_ACTOR).status, 400);
+  const ev = logged(() => {
+    const r = q.deepIdleEnd({ item_id: item.id, version: item.version, action: 'end_rate', rating: 'deep', stopped_at: '  Where the clocks disagree  ' }, DEV_ACTOR);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.active, false);
+  });
+  const end = ev.find((e) => e.type === 'focus.end');
+  assert.deepStrictEqual(
+    { reason: end.data.reason, deep_rating: end.data.deep_rating, ended_via: end.data.ended_via, stopped_at_chars: end.data.stopped_at_chars },
+    { reason: 'deep_end', deep_rating: 'deep', ended_via: 'device', stopped_at_chars: 25 },
+  );
+  assert.ok(!JSON.stringify(ev).includes('clocks'), 'the stopped-at text never reaches the event log');
+  assert.strictEqual(records.length, 1);
+  const { workspace, record } = records[0];
+  assert.strictEqual(workspace, '/work/api');
+  assert.deepStrictEqual(
+    { ...record, started_at: typeof record.started_at, ended_at: typeof record.ended_at },
+    {
+      focus_session_id: sid, started_at: 'string', ended_at: 'string', reason: 'device', stopped_at: 'Where the clocks disagree',
+      stopped_card_id: PG_B, rating: 'deep', questions_kept: [], cards_touched: [PG_A, PG_B],
+    },
+  );
+  assert.strictEqual(idleItem(q), undefined);
+});
+
+test('Desk: an ignored push ends the session unrated at the deadline and writes an away record', () => {
+  const { q, records } = deskSetup();
+  const t0 = Date.now();
+  zoom(q, PG_A);
+  const sid = q.focus.sessionId;
+  q.tickFocus(t0, awayFor(t0, 40), COPILOT_DEFAULTS);
+  assert.ok(idleItem(q));
+  const ev = logged(() => q.tickFocus(t0 + 5 * MIN, awayFor(t0 + 5 * MIN, 45), COPILOT_DEFAULTS));
+  const end = ev.find((e) => e.type === 'focus.end');
+  assert.deepStrictEqual({ reason: end.data.reason, deep_rating: end.data.deep_rating }, { reason: 'away', deep_rating: null });
+  assert.strictEqual(idleItem(q), undefined, 'resolved with the session');
+  assert.strictEqual(records.length, 1);
+  assert.deepStrictEqual(
+    { reason: records[0].record.reason, rating: records[0].record.rating, stopped_at: records[0].record.stopped_at, fs: records[0].record.focus_session_id, cards: records[0].record.cards_touched },
+    { reason: 'away', rating: null, stopped_at: null, fs: sid, cards: [PG_A] },
+  );
+});
+
+test('Desk: DeskSessionRelay posts to /desk/sessions, spools while Hester is offline (or older), drains in order', async () => {
+  const { DeskSessionRelay } = require(path.join(dist, 'copilot', 'desk-sessions.js'));
+  const spoolFile = path.join(tmpHome, '.lee', 'spool', 'desk-sessions-test.jsonl');
+  const calls = [];
+  let mode = 'offline';
+  const hester = async (method, route, workspace, body) => {
+    calls.push({ method, route, workspace, body });
+    if (mode === 'offline') return { offline: true };
+    if (mode === 'old') return { offline: false, status: 404, body: { detail: 'Not Found' } };
+    if (mode === 'bad') return { offline: false, status: 400, body: { error: 'bad' } };
+    return { offline: false, status: 201, body: { success: true, data: { id: 'ses-1', ...body } } };
+  };
+  const relay = new DeskSessionRelay({ spoolFile, hester, retryMs: 3_600_000 });
+  const rec = (n) => ({
+    focus_session_id: `fs_${n}`, started_at: '2026-09-27T09:00:00Z', ended_at: '2026-09-27T10:00:00Z', reason: 'device',
+    stopped_at: null, stopped_card_id: PG_A, rating: 'mixed', questions_kept: [], cards_touched: [PG_A],
+  });
+  try {
+    assert.strictEqual(await relay.relay('/work/api', rec(1)), 'spooled');
+    mode = 'old';
+    assert.strictEqual(await relay.relay('/work/api', rec(2)), 'spooled', 'a pre-Desk Hester keeps it for after the reinstall');
+    assert.strictEqual(relay.pending(), 2);
+    const line = JSON.parse(fs.readFileSync(spoolFile, 'utf8').split('\n')[0]);
+    assert.deepStrictEqual(line, { workspace: '/work/api', record: rec(1) });
+    assert.strictEqual((fs.statSync(spoolFile).mode & 0o777).toString(8), '600');
+    mode = 'ok';
+    calls.length = 0;
+    assert.strictEqual(await relay.drain(), 2);
+    assert.deepStrictEqual(calls.map((c) => [c.method, c.route, c.workspace, c.body.focus_session_id]), [
+      ['POST', '/desk/sessions', '/work/api', 'fs_1'],
+      ['POST', '/desk/sessions', '/work/api', 'fs_2'],
+    ]);
+    assert.strictEqual(relay.pending(), 0);
+    assert.ok(!fs.existsSync(spoolFile));
+    assert.strictEqual(await relay.relay('/work/api', rec(3)), 'sent');
+    mode = 'bad';
+    assert.strictEqual(await relay.relay('/work/api', rec(4)), 'rejected', 'a 400 is never retried');
+    assert.strictEqual(relay.pending(), 0);
+  } finally {
+    relay.stop();
+  }
+});
+
+test('Desk: deepAnswerEvent takes card_id, exploration_id or both, and emits both', () => {
+  const { deepAnswerEvent } = require(path.join(dist, 'copilot', 'core-routes.js'));
+  const base = { workspace: '/ws', answer_id: 'ans-1', status: 'done' };
+  assert.deepStrictEqual(deepAnswerEvent({ ...base, card_id: PG_A, exploration_id: PG_A }), { ...base, exploration_id: PG_A, card_id: PG_A });
+  assert.deepStrictEqual(deepAnswerEvent({ ...base, card_id: PG_A }), { ...base, exploration_id: PG_A, card_id: PG_A });
+  assert.deepStrictEqual(deepAnswerEvent({ ...base, exploration_id: PG_A }), { ...base, exploration_id: PG_A, card_id: PG_A }, 'a page id is the card');
+  assert.deepStrictEqual(deepAnswerEvent({ ...base, exploration_id: 'exp-one' }), { ...base, exploration_id: 'exp-one' }, 'pre-Desk: no card');
+  assert.strictEqual(deepAnswerEvent({ ...base }), null);
+});
+
+test('Desk: the deep.* validator takes card_id or the legacy exploration_id; desk.zoom; everything else is dropped', () => {
+  const { validRendererEvent } = require(path.join(dist, 'cockpit', 'tabs-main.js'));
+  const counts = { view: 'page', keys: 3, clicks: 1, wheels: 0, span_ms: 5000 };
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.input', data: { card_id: PG_A, card_kind: 'page', ...counts, text: 'secret' } }).data,
+    { card_id: PG_A, card_kind: 'page', ...counts });
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.input', data: { exploration_id: PG_A, ...counts } }).data,
+    { card_id: PG_A, card_kind: 'page', ...counts }, 'a page id under the legacy name is the card');
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.input', data: { exploration_id: 'exp-1', ...counts } }).data,
+    { exploration_id: 'exp-1', ...counts }, 'pre-Desk renderers keep their id');
+  assert.strictEqual(validRendererEvent({ type: 'deep.input', data: { card_id: 'exp-1', ...counts } }), null, 'card ids are page ids');
+  assert.strictEqual(validRendererEvent({ type: 'deep.input', data: { ...counts } }), null, 'no id');
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.action', data: { action: 'ask', card_id: PG_B, chars: 12, quote: 'x' } }).data,
+    { action: 'ask', card_id: PG_B, card_kind: 'page', chars: 12 });
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.view', data: { card_id: PG_B, view: 'page' } }).data, { card_id: PG_B, card_kind: 'page', view: 'page' });
+  assert.deepStrictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: PG_A, card_kind: 'page', via: 'key', title: 'x' } }),
+    { type: 'desk.zoom', data: { card_id: PG_A, card_kind: 'page', via: 'key' } });
+  assert.deepStrictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: null, card_kind: null, via: 'land' } }).data,
+    { card_id: null, card_kind: null, via: 'land' }, 'zooming out to the overview');
+  assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: PG_A, via: 'teleport' } }), null);
+  assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: 'area-00000001', via: 'click' } }), null);
+  assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: PG_A, card_kind: 'board', via: 'click' } }), null);
+});
+
+test('Desk: the launcher accepts the page origin', () => {
+  const { validOrigin } = require(path.join(dist, 'cockpit', 'launcher.js'));
+  assert.deepStrictEqual(validOrigin({ kind: 'page', ref: `${PG_A}#ans-1` }), { kind: 'page', ref: `${PG_A}#ans-1` });
+  assert.deepStrictEqual(validOrigin({ kind: 'exploration', ref: 'exp-1#ans-1' }), { kind: 'exploration', ref: 'exp-1#ans-1' });
 });
 
 // ---------------------------------------------------------------------------

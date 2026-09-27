@@ -87,7 +87,10 @@ export type LeeEventType =
   // docs/15-Usage.md §4.2 (Lee main): agent.usage {session_id, pty_id?, provider, by_model};
   // limits.snapshot {source, five_hour?, seven_day?, session_id} on change
   | 'agent.usage'
-  | 'limits.snapshot';
+  | 'limits.snapshot'
+  // Desk D2 §5.1 (Lee main): deep.idle_push {session_id, ends_at}; deep.extend {session_id, minutes, surface}
+  | 'deep.idle_push'
+  | 'deep.extend';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 

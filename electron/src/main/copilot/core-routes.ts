@@ -12,6 +12,7 @@
 import type { Application, Request, Response } from 'express';
 import type { AnswerStatus, DeepAnswerEvent } from '../../shared/cockpit';
 import { COPILOT_IPC } from '../../shared/copilot';
+import { PAGE_ID_RE } from '../../shared/desk';
 import type { Actor, CaptureRequest, LeeEventType, Principal } from '../../shared/copilot';
 import { windowRegistry } from '../window-registry';
 import { copilotBus, logEvent } from './bus';
@@ -49,14 +50,24 @@ const DEEP_WORKSPACE_MAX = 4096;
 /**
  * The ids-only DeepAnswerEvent in an ingested deep.answer's data, or null when
  * malformed. `data.workspace` wins; the event's own workspace is the fallback.
+ * Desk D2 §5.3: Hester sends `card_id` (and the same id as `exploration_id`);
+ * either one is enough, and the event carries both.
  */
 export function deepAnswerEvent(data: unknown, eventWorkspace?: unknown): DeepAnswerEvent | null {
   if (!isPlainObject(data)) return null;
-  const { exploration_id, answer_id, status } = data;
+  const { answer_id, status } = data;
+  const explorationId = isStr(data.exploration_id, DEEP_ID_MAX) ? data.exploration_id : isStr(data.card_id, DEEP_ID_MAX) ? data.card_id : null;
+  const cardId = isStr(data.card_id, DEEP_ID_MAX) ? data.card_id : explorationId && PAGE_ID_RE.test(explorationId) ? explorationId : null;
   const workspace = data.workspace ?? eventWorkspace;
-  if (!isStr(workspace, DEEP_WORKSPACE_MAX) || !isStr(exploration_id, DEEP_ID_MAX) || !isStr(answer_id, DEEP_ID_MAX)) return null;
+  if (!isStr(workspace, DEEP_WORKSPACE_MAX) || !explorationId || !isStr(answer_id, DEEP_ID_MAX)) return null;
   if (!ANSWER_STATUSES.has(status as AnswerStatus)) return null;
-  return { workspace, exploration_id, answer_id, status: status as AnswerStatus };
+  return {
+    workspace,
+    exploration_id: explorationId,
+    answer_id,
+    status: status as AnswerStatus,
+    ...(cardId ? { card_id: cardId } : {}),
+  };
 }
 
 /**

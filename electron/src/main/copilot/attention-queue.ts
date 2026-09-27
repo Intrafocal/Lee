@@ -3,7 +3,8 @@
  * notify and snapshots (full and compact). Pure: no Electron.
  *
  * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.1, §5.2, §5.4, §7.2;
- * attention policy 'none' during Deep: docs/plans/2026-09-26-deep-d1-contracts.md §2.3.
+ * attention policy 'none' during Deep: docs/plans/2026-09-26-deep-d1-contracts.md §2.3;
+ * the idle-end push (deep_idle): docs/plans/2026-09-27-desk-foundation-contract.md §9.2.
  */
 
 import * as crypto from 'crypto';
@@ -30,7 +31,7 @@ export const COMPACT_TEXT_MAX = 280;
 const CLOSED_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_ITEM_FILES = 50;
 
-export type Resolution = 'reply' | 'answered_in_tab' | 'superseded' | 'agent_exit' | 'dismissed' | 'expired';
+export type Resolution = 'reply' | 'answered_in_tab' | 'superseded' | 'agent_exit' | 'dismissed' | 'expired' | 'returned';
 
 /** Display name for an agent provider key; "Agent" when unknown. */
 export function providerLabel(provider: string | null | undefined): string {
@@ -111,6 +112,8 @@ export interface NewItem {
   lee_status?: LeeStatusBlock | null;
   files?: string[];
   wake?: boolean;
+  /** kind 'deep_idle' only. */
+  deep_idle?: AttentionItem['deep_idle'];
 }
 
 export interface QueueDeps {
@@ -224,7 +227,9 @@ export class AttentionQueue {
 
   open(spec: NewItem, now: number): AttentionItem {
     const key = sourceKey(spec.source);
-    const siblings = spec.kind === 'summary' ? [] : this.live().filter((e) => e.key === key);
+    // A summary or an idle-end push stands alone: it never supersedes an agent's item.
+    const standalone = spec.kind === 'summary' || spec.kind === 'deep_idle';
+    const siblings = standalone ? [] : this.live().filter((e) => e.key === key);
     for (const e of siblings) {
       const kind = e.item.kind;
       if (isPromptKind(spec.kind) && kind === spec.kind) {
@@ -278,13 +283,14 @@ export class AttentionQueue {
       files: (spec.files ?? []).slice(-MAX_ITEM_FILES),
       tool: spec.tool ?? null,
       ...(spec.kind === 'question' ? { question: spec.question ?? null } : {}),
+      ...(spec.kind === 'deep_idle' ? { deep_idle: spec.deep_idle ?? null } : {}),
       lee_status: spec.lee_status ?? null,
       actions: actionsFor(spec.kind, spec.source.pty_id, !!spec.choosable),
       snoozed_until: null,
     };
     const entry: Entry = {
       item,
-      key: spec.kind === 'summary' ? `summary:${id}` : key,
+      key: standalone ? `${spec.kind}:${id}` : key,
       createdMs: now,
       waitAccum: 0,
       waitSince: now,
@@ -504,6 +510,26 @@ export class AttentionQueue {
         continue;
       }
 
+      if (item.kind === 'deep_idle') {
+        // Desk D2 §9.2: the one exception to Deep's 'none' policy (and to
+        // away parking). Never escalates; notifies unless in quiet hours.
+        const notify = !quiet && item.state === 'open';
+        if (item.parked || item.severity !== 'needs-you' || item.notify !== notify) {
+          const changes = [
+            ...(item.severity !== 'needs-you' ? ['severity'] : []),
+            ...(item.parked ? ['parked'] : []),
+            ...(item.notify !== notify ? ['notify'] : []),
+          ];
+          item.severity = 'needs-you';
+          item.parked = false;
+          item.notify = notify;
+          this.bump(e, now);
+          this.logUpdate(e, changes);
+          changed = true;
+        }
+        continue;
+      }
+
       const base = baseSeverity(item.kind);
       const woken = this.deps.away.isWoken(item);
       const deep = this.deps.focus.policy === 'none';
@@ -599,7 +625,7 @@ export class AttentionQueue {
     const deep = this.deps.focus.policy === 'none';
     let n = 0;
     for (const e of this.live()) {
-      if (e.item.state !== 'open') continue;
+      if (e.item.state !== 'open' || e.item.kind === 'deep_idle') continue;
       if (deep ? baseSeverity(e.item.kind) === 'needs-you' : e.item.severity !== 'blocking' && !e.item.related_to_focus) n++;
     }
     return n;

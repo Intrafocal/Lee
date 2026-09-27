@@ -50,6 +50,8 @@ export interface CopilotConfig {
   deep: {
     /** A Deep session ends (reason 'away') after this long not at the machine. */
     idle_end_minutes: number;
+    /** Desk D2 §9.2: the one idle-end push goes to devices this long before that end. */
+    idle_warn_minutes: number;
   };
 }
 
@@ -87,6 +89,7 @@ export const COPILOT_DEFAULTS: CopilotConfig = {
   },
   deep: {
     idle_end_minutes: 45,
+    idle_warn_minutes: 5,
   },
 };
 

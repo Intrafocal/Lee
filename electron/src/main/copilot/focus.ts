@@ -3,13 +3,15 @@
  * input buckets, Deep sessions, and the end rules. Pure: no Electron.
  *
  * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.3;
- * Deep sessions: docs/plans/2026-09-26-deep-d1-contracts.md §2.2.
+ * Deep sessions: docs/plans/2026-09-26-deep-d1-contracts.md §2.2;
+ * card items at the Desk: docs/plans/2026-09-27-desk-foundation-contract.md §9.1.
  */
 
 import * as crypto from 'crypto';
 import * as path from 'path';
 import type { DepthRating } from '../../shared/cockpit';
 import type { Actor, FocusEndReason, FocusItem, FocusSource, FocusState, LeeEventInput } from '../../shared/copilot';
+import { PAGE_ID_RE } from '../../shared/desk';
 import { COPILOT_DEFAULTS, type CopilotConfig } from './config';
 
 export const MAX_FOCUS_PATHS = 50;
@@ -48,6 +50,10 @@ interface Session {
   started_at: number;
   item: FocusItem;
   interruptions: number;
+  /** Desk D2: card ids this Deep session zoomed into, in first-touched order. */
+  cards: string[];
+  /** Desk D2 §9.2: when a device last extended the session; the idle end counts from here, not away_since. */
+  extended_at: number | null;
 }
 
 export interface FocusDeps {
@@ -71,6 +77,8 @@ export interface PresenceLike {
 export interface DeepEndInfo {
   deep_rating?: DepthRating | null;
   stopped_at_chars?: number;
+  /** Desk D2 §9.2: a device ended it (End and rate from the idle-end push). */
+  ended_via?: 'device';
 }
 
 export interface TickOptions {
@@ -93,7 +101,19 @@ export function focusItemKey(item: FocusItem | null): string | null {
   if (item.kind === 'files') return `files:${item.workspace ?? ''}`;
   if (item.kind === 'task') return `task:${item.workspace}:${item.task_id}`;
   if (item.kind === 'exploration') return `exploration:${item.workspace}:${item.exploration_id ?? ''}`;
+  if (item.kind === 'card') return `card:${item.workspace}:${item.card_id ?? ''}`;
   return null;
+}
+
+/** A Desk card id (Desk D2: only Page cards this round); null/absent is null, anything else undefined. */
+export function parseCardId(v: unknown): string | null | undefined {
+  if (v === null || v === undefined) return null;
+  return typeof v === 'string' && PAGE_ID_RE.test(v) ? v : undefined;
+}
+
+/** The card id a focus item names, or null. */
+function cardOf(item: FocusItem | null | undefined): string | null {
+  return item && item.kind === 'card' ? item.card_id : null;
 }
 
 /** An exploration id as Hester writes them; anything else is dropped. */
@@ -141,6 +161,18 @@ export function parseFocusItem(v: unknown): FocusItem | null {
       title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 200) : 'Deep',
     };
   }
+  if (o.kind === 'card' && typeof o.workspace === 'string' && o.workspace) {
+    const id = parseCardId(o.card_id);
+    if (id === undefined) return null;
+    if (o.card_kind !== undefined && o.card_kind !== null && o.card_kind !== 'page') return null;
+    return {
+      kind: 'card',
+      workspace: o.workspace,
+      card_id: id,
+      card_kind: id ? 'page' : o.card_kind === 'page' ? 'page' : null,
+      title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 200) : 'Deep',
+    };
+  }
   return null;
 }
 
@@ -178,11 +210,23 @@ export class FocusTracker {
     return this.session?.source === 'deep' ? 'none' : 'normal';
   }
 
-  /** The Deep session's exploration, or null outside Deep. */
+  /**
+   * The Deep session's card (or D1 exploration), or null outside Deep. For a
+   * card, exploration_id repeats card_id for device builds before the Desk.
+   */
   get deep(): FocusState['deep'] {
     const item = this.session?.source === 'deep' ? this.session.item : null;
+    if (item?.kind === 'card') {
+      return { exploration_id: item.card_id, title: item.title, workspace: item.workspace, card_id: item.card_id, card_kind: item.card_kind };
+    }
     if (!item || item.kind !== 'exploration') return null;
     return { exploration_id: item.exploration_id, title: item.title, workspace: item.workspace };
+  }
+
+  /** Desk D2: the Deep session's touched cards, in first-touched order (the last card zoomed into is `last`). */
+  get deepCards(): { touched: string[]; last: string | null } {
+    const s = this.session?.source === 'deep' ? this.session : null;
+    return { touched: s ? [...s.cards] : [], last: s ? cardOf(s.item) ?? s.cards[s.cards.length - 1] ?? null : null };
   }
 
   state(quietCount: number): FocusState {
@@ -203,8 +247,8 @@ export class FocusTracker {
   isRelated(ptyId: number | null, filesWritten: string[]): boolean {
     const item = this.session?.item;
     if (!item) return false;
-    // No agent is related to a Deep session (spin-offs come in D2).
-    if (item.kind === 'exploration') return false;
+    // No agent is related to a Deep session.
+    if (item.kind === 'exploration' || item.kind === 'card') return false;
     if (item.kind === 'agent') return ptyId != null && ptyId === item.pty_id;
     if (item.kind === 'files') {
       return filesWritten.some((f) => item.paths.some((p) => samePath(f, p)));
@@ -220,6 +264,27 @@ export class FocusTracker {
       return !!t && t.task_id === item.task_id && (t.workspace == null || samePath(t.workspace, item.workspace));
     }
     return false;
+  }
+
+  /**
+   * When a Deep session ends for being away (Desk D2 §9.2): idle_end_minutes
+   * after away_since, or after the last Extend when that is later. Null
+   * outside Deep or while at the machine.
+   */
+  deepIdleEndsAt(presence: PresenceLike | null, deepCfg: CopilotConfig['deep'] = COPILOT_DEFAULTS.deep): number | null {
+    const s = this.session;
+    if (!s || s.source !== 'deep' || !presence || presence.at_machine || !presence.away_since) return null;
+    const awaySince = Date.parse(presence.away_since);
+    if (!Number.isFinite(awaySince)) return null;
+    const base = s.extended_at !== null ? Math.max(awaySince, s.extended_at) : awaySince;
+    return base + deepCfg.idle_end_minutes * MINUTE;
+  }
+
+  /** Extend from a device: the idle end moves to now + idle_end_minutes. False outside Deep. */
+  extendDeep(now: number): boolean {
+    if (!this.session || this.session.source !== 'deep') return false;
+    this.session.extended_at = now;
+    return true;
   }
 
   noteInterruption(): void {
@@ -297,7 +362,15 @@ export class FocusTracker {
       if (s.source === 'deep') {
         const changedItem = JSON.stringify(s.item) !== JSON.stringify(item);
         if (!changedItem) return false;
+        const prevCard = cardOf(s.item);
         s.item = cloneItem(item);
+        // Desk D2 §5.1: at the Desk, focus.item only when zooming into a
+        // different card (a retitle or a null card is not a new item).
+        const card = cardOf(item);
+        if (item.kind === 'card') {
+          if (card && !s.cards.includes(card)) s.cards.push(card);
+          if (!card || card === prevCard) return true;
+        }
         this.deps.log({ type: 'focus.item', actor, data: { session_id: s.session_id, item: cloneItem(item) } });
         return true;
       }
@@ -318,6 +391,8 @@ export class FocusTracker {
       started_at: now,
       item: cloneItem(item),
       interruptions: 0,
+      cards: cardOf(item) ? [cardOf(item) as string] : [],
+      extended_at: null,
     };
     this.deps.log({
       type: 'focus.start',
@@ -347,6 +422,7 @@ export class FocusTracker {
           ? {
               deep_rating: deep?.deep_rating ?? null,
               ...(typeof stoppedAt === 'number' && Number.isInteger(stoppedAt) && stoppedAt >= 0 ? { stopped_at_chars: stoppedAt } : {}),
+              ...(deep?.ended_via ? { ended_via: deep.ended_via } : {}),
             }
           : {}),
       },
@@ -359,12 +435,12 @@ export class FocusTracker {
     const cur = Math.floor(now / MINUTE);
     const s = this.session;
     if (s) {
-      if (presence && !presence.at_machine && presence.away_since) {
+      if (s.source === 'deep') {
+        const endsAt = this.deepIdleEndsAt(presence, opts.deep ?? COPILOT_DEFAULTS.deep);
+        if (endsAt !== null && now >= endsAt) return this.stop('away', now);
+      } else if (presence && !presence.at_machine && presence.away_since) {
         const awayMs = now - Date.parse(presence.away_since);
-        const minutes =
-          s.source === 'deep'
-            ? (opts.deep ?? COPILOT_DEFAULTS.deep).idle_end_minutes
-            : s.source === 'manual' ? cfg.manual_end_away_minutes : cfg.inferred_end_away_minutes;
+        const minutes = s.source === 'manual' ? cfg.manual_end_away_minutes : cfg.inferred_end_away_minutes;
         if (Number.isFinite(awayMs) && awayMs >= minutes * MINUTE) return this.stop('away', now);
       }
       if (s.source === 'inferred' && cfg.switch_minutes > 0) {
