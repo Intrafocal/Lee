@@ -1237,64 +1237,118 @@ button.cockpit-tag.is-goal:hover {
   font-size: 11px;
 }
 
-/* Goals section */
+/* Goals (cockpit-design §6.3): a Card per goal, the primitives' type scale,
+   ember only as the Dot on a goal that needs you. */
 
-.cockpit-goal.is-flagged {
-  border-left: 2px solid var(--ember);
+.cockpit-goal-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.cockpit-goal-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cockpit-goal-head .ui-dot {
+  align-self: center;
 }
 
 .cockpit-goal-id {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--accent-light);
+  font-size: 12px;
+  color: var(--text-3);
   min-width: 22px;
 }
 
+.cockpit-goal-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cockpit-goal-when {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-goal-meta {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.cockpit-goal-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.cockpit-goal-link:hover {
+  color: var(--text-1);
+}
+
+.cockpit-goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.cockpit-goals-line {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 .cockpit-metrics {
-  margin: var(--space-1) 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 .cockpit-metric {
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
-  padding: 1px 6px;
-  font-size: 11px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text-secondary);
+  padding: 1px 8px;
+  font-size: 12px;
+  border: 1px solid var(--ground-4);
+  border-radius: 16px;
+  color: var(--text-2);
 }
 
 .cockpit-metric-name {
   font-family: var(--font-mono);
-  color: var(--text-primary);
-}
-
-.cockpit-metric.is-ok {
-  border-color: var(--phosphor-deep);
+  color: var(--text-1);
 }
 
 .cockpit-metric.is-ok .cockpit-metric-trend {
-  color: var(--accent-light);
+  color: var(--text-3);
 }
 
 .cockpit-metric.is-bad {
-  border-color: rgba(var(--ember-rgb), 0.6);
+  border-color: var(--ground-5);
 }
 
 .cockpit-metric.is-bad .cockpit-metric-trend {
-  color: var(--ember);
+  color: var(--error);
 }
 
 .cockpit-goal-serving {
   display: flex;
   flex-direction: column;
-  margin: var(--space-1) 0;
-}
-
-.cockpit-goal-serving .cockpit-menu-item {
-  justify-content: flex-start;
-  align-items: center;
+  margin: var(--space-2) 0 0;
+  border-top: 1px solid var(--ground-3);
 }
 
 .cockpit-diff {
@@ -1312,13 +1366,13 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .cockpit-diff .is-add {
-  color: var(--lit);
-  background: rgba(var(--phosphor-rgb), 0.1);
+  color: var(--text-1);
+  background: rgba(var(--text-1-rgb), 0.06);
 }
 
 .cockpit-diff .is-del {
-  color: var(--ember);
-  background: rgba(var(--ember-rgb), 0.08);
+  color: var(--error);
+  background: rgba(var(--error-rgb), 0.08);
 }
 
 .cockpit-diff .is-hunk,
@@ -1326,10 +1380,11 @@ button.cockpit-tag.is-goal:hover {
   color: var(--text-muted);
 }
 
-/* human_balance strip. Play has its own positive colour. */
+/* human_balance strip: a neutral ramp (ember and phosphor are roles, not
+   chart colours); play keeps the brightest. */
 
 .cockpit-balance {
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
 }
 
 .cockpit-balance-bar {
@@ -1367,15 +1422,15 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .band-Q1 {
-  background: var(--ember);
+  background: var(--error);
 }
 
 .band-Q2 {
-  background: var(--phosphor);
+  background: var(--info);
 }
 
 .band-Q3 {
-  background: var(--info);
+  background: var(--text-2);
 }
 
 .band-Q4 {
@@ -1383,7 +1438,7 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .band-play {
-  background: var(--lit);
+  background: var(--text-1);
 }
 
 .band-unclassified {
