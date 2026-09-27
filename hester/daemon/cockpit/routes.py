@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from ...shared.workspace import request_workspace
 from ..workspaces.registry import WorkspaceError, get_registry, validate_workspace
-from . import deep, deep_ask, explore_ops, spikes
+from . import deep, deep_ask, explore_ops, handoffs, spikes
 from .explorations import ExplorationError, ExplorationNotFound, open_session
 from .explorations import to_api as exploration_to_api
 from .explorations import to_api_with_conversations
@@ -371,12 +371,12 @@ def create_cockpit_router() -> APIRouter:
     # ------------------------------------------------------------ explorations
 
     @router.get("/cockpit/explorations")
-    async def cockpit_explorations(status: str = "active", limit: Optional[str] = None):
+    async def cockpit_explorations(status: str = "active", limit: Optional[str] = None, purpose: Optional[str] = None):
         try:
             ctx = context_for()
             n = _int(limit, 100, 0, 1000, "limit")
             await deep_ask.get_runner().ensure_recovered(ctx)
-            items = await asyncio.to_thread(ctx.explorations().list, status, n)
+            items = await asyncio.to_thread(ctx.explorations().list, status, n, purpose or None)
             return _ok(ctx, [exploration_to_api(e) for e in items])
         except BadRequest as e:
             return _err(str(e), e.status)
@@ -389,12 +389,13 @@ def create_cockpit_router() -> APIRouter:
             body = await _body(request)
             ctx = context_for(body.pop("workspace", None))
             async with ctx.lock:
-                exp = ctx.explorations().create(body)
+                # purpose 'goals': one per workspace, so an existing one comes back (200)
+                exp, created = ctx.explorations().create_or_get(body)
         except BadRequest as e:
             return _err(str(e), e.status)
         except ExplorationError as e:
             return _err(str(e))
-        return _ok(ctx, exploration_to_api(exp), 201)
+        return _ok(ctx, exploration_to_api(exp), 201 if created else 200)
 
     @router.get("/cockpit/explorations/{exp_id}")
     async def cockpit_exploration(exp_id: str):
@@ -402,6 +403,8 @@ def create_cockpit_router() -> APIRouter:
             ctx = context_for()
             await deep_ask.get_runner().ensure_recovered(ctx)
             store = ctx.explorations()
+            async with ctx.lock:
+                await asyncio.to_thread(store.backfill_page, exp_id)
             exp = store.require(exp_id)
             body = store.body(exp_id)
             data = to_api_with_conversations(exp, body)
@@ -413,6 +416,24 @@ def create_cockpit_router() -> APIRouter:
             return _err(str(e))
         except ExplorationNotFound:
             return _err("not found", 404)
+
+    @router.delete("/cockpit/explorations/{exp_id}")
+    async def cockpit_exploration_delete(exp_id: str, request: Request):
+        """Deep next R8: only an empty, still-Untitled exploration goes; anything else is 409 not_empty."""
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                data = await asyncio.to_thread(deep.delete_empty, ctx.explorations(), exp_id)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except deep.NotEmpty:
+            return JSONResponse(status_code=409, content={"success": False, "error": "not_empty"})
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, data)
 
     @router.patch("/cockpit/explorations/{exp_id}")
     async def cockpit_exploration_patch(exp_id: str, request: Request):
@@ -437,6 +458,7 @@ def create_cockpit_router() -> APIRouter:
             ctx = context_for(body.pop("workspace", None))
             store = ctx.explorations()
             async with ctx.lock:
+                store.backfill_page(exp_id)
                 exp = store.touch(exp_id)
             opened = await open_session(store, exp_id)
         except BadRequest as e:
@@ -575,7 +597,49 @@ def create_cockpit_router() -> APIRouter:
 
     @router.patch("/cockpit/explorations/{exp_id}/answers/{answer_id}")
     async def cockpit_exploration_answer_patch(exp_id: str, answer_id: str, request: Request):
-        return await _exp_op(request, lambda ctx, store, b: deep.patch_answer(store, exp_id, answer_id, b))
+        def op(ctx, store, b):
+            row = deep.patch_answer(store, exp_id, answer_id, b)
+            if "task_id" in b or "status" in b:
+                # The task may already be ahead of the record (the relay beats this PATCH).
+                task = ctx.tasks().get(row["handoff"]["task_id"]) if (row.get("handoff") or {}).get("task_id") else None
+                if task is not None:
+                    row = handoffs.sync(ctx, task) or row
+            return row
+        return await _exp_op(request, op)
+
+    @router.post("/cockpit/explorations/{exp_id}/handoffs")
+    async def cockpit_exploration_handoff(exp_id: str, request: Request):
+        """Deep next R3: a hand-off record in state 'launching'; the renderer then launches the task through Lee."""
+        return await _exp_op(request, lambda ctx, store, b: deep.new_handoff(store, exp_id, b), 201)
+
+    @router.get("/cockpit/handoff-template")
+    async def cockpit_handoff_template(kind: Optional[str] = None):
+        try:
+            ctx = context_for()
+            return _ok(ctx, {"template": deep.handoff_template(kind or "")})
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+
+    @router.post("/cockpit/explorations/{exp_id}/draft-from-readme")
+    async def cockpit_exploration_draft_from_readme(exp_id: str, request: Request):
+        """Deep next R12 (a user action): a first guess at the Goals Page's four prompts from README.md / CLAUDE.md."""
+        from .steward import StewardError
+
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            data = await deep_ask.draft_from_readme(ctx, exp_id)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except StewardError as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, data)
 
     @router.post("/cockpit/explorations/{exp_id}/answers/{answer_id}/retry")
     async def cockpit_exploration_answer_retry(exp_id: str, answer_id: str, request: Request):
@@ -650,6 +714,12 @@ def _log_override(ctx, task: Dict[str, Any], request: Request) -> None:
 
 
 async def _sync_spike(ctx, task: Dict[str, Any]) -> None:
-    """A task with an ``explore`` origin moves its spike node along (never raises)."""
-    if (task.get("origin") or {}).get("kind") == "explore":
+    """
+    A task with an ``explore`` origin moves its spike node along; one with an
+    ``exploration`` origin its hand-off record (never raises).
+    """
+    kind = (task.get("origin") or {}).get("kind")
+    if kind == "explore":
         await asyncio.to_thread(spikes.sync, ctx, task)
+    elif kind == handoffs.ORIGIN_KIND:
+        await asyncio.to_thread(handoffs.sync, ctx, task)

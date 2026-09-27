@@ -41,7 +41,7 @@ def test_empty_workspace_is_just_blank(tmp_path, events_dir):
 
 def test_pick_up_falls_back_to_the_latest_page(tmp_path, events_dir):
     store = ExplorationStore(tmp_path)
-    store.create({"seed": "No page yet"}, now=ago(hours=1))
+    store.create({"title": "No page yet"}, now=ago(hours=1))  # a seed would open the Page on it
     written = store.create({"seed": "Mesh sync", "page": "First thought\n\nthe vector clock only helps if every write\n\n"}, now=ago(days=2))
     op = opener.build_opener(tmp_path, now=NOW, events_dir=events_dir)
     assert op["pick_up"]["exploration"]["id"] == written["id"]

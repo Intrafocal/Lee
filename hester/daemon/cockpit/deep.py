@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +37,7 @@ from .explorations import (
     _clip,
     utc_now,
 )
-from .tasks import atomic_write, iso_s
+from .tasks import TASK_ID_RE, atomic_write, iso_s
 
 logger = logging.getLogger("hester.daemon.cockpit.deep")
 
@@ -51,8 +52,13 @@ QUESTION_ID_RE = re.compile(r"^q-[0-9a-f]{8}$")
 SESSION_ID_RE = re.compile(r"^ses-[0-9a-f]{8}$")
 
 REF_KINDS = ("quote", "link")
-REF_SOURCE_KINDS = ("page", "palette", "answer")
+REF_SOURCE_KINDS = ("page", "palette", "answer", "file")
 ANSWER_STATUSES = ("queued", "running", "done", "error", "interrupted")
+# Deep next R3: hand-offs share the answers store (``kind: 'handoff'``).
+HANDOFF_KINDS = ("spike", "docs", "research")
+HANDOFF_PROVIDERS = ("claude", "pi")
+HANDOFF_STATES = ("launching", "running", "waiting", "review", "done", "error")
+HANDOFF_SURFACE = "deep-handoff"
 PENDING = ("queued", "running")
 ANSWER_FLAGS = {"read": "read_at", "dismissed": "dismissed_at", "inserted": "inserted_at", "kept": "kept_at"}
 QUESTION_SOURCES = ("page", "ask")
@@ -69,6 +75,9 @@ MAX_QUESTION = 2000
 MAX_QUESTION_TEXT = 500
 MAX_STOPPED_AT = 1000
 MAX_ERROR = 300
+MAX_SECTION_TEXT = 6000
+MAX_BRIEF = 100_000  # Lee's launch prompt cap
+MAX_FILE_REF = 1000
 MAX_QUESTIONS = 500
 MAX_KEPT = 200
 # A PUT /page touches the exploration's last_touched_at at most this often, so
@@ -272,7 +281,9 @@ def read_page_text(store: ExplorationStore, exp_id: str) -> str:
 
 
 def read_page(store: ExplorationStore, exp_id: str) -> Dict[str, Any]:
+    """GET /page (under the workspace lock): an empty Page with a seed is filled from it, once."""
     _dir(store, exp_id)
+    store.backfill_page(exp_id)
     text = read_page_text(store, exp_id)
     return {"text": text, "version": page_version(text)}
 
@@ -312,6 +323,40 @@ def write_page(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now: 
 # ---------------------------------------------------------------------------
 
 
+def norm_file_ref(workspace: Path, value: Any) -> str:
+    """
+    Deep next R10: a workspace-relative path to an existing file inside the
+    workspace (symlinks resolved), as posix. The file isn't read.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_FILE_REF or "\0" in value:
+        raise ExplorationError("file must be a workspace-relative path")
+    rel = value.strip().replace("\\", "/")
+    if rel.startswith("/") or re.match(r"^[A-Za-z]:", rel):
+        raise ExplorationError("file must be a workspace-relative path")
+    root = Path(workspace).resolve()
+    try:
+        target = (root / rel).resolve()
+        target.relative_to(root)
+    except (OSError, ValueError):
+        raise ExplorationError("file must be inside the workspace")
+    if not target.is_file():
+        raise ExplorationError("file must be an existing file in the workspace")
+    return target.relative_to(root).as_posix()
+
+
+def norm_lines(value: Any) -> List[int]:
+    """``[start, end]``, 1-based, ``start <= end``."""
+    if (
+        not isinstance(value, (list, tuple)) or len(value) != 2
+        or any(isinstance(n, bool) or not isinstance(n, int) for n in value)
+    ):
+        raise ExplorationError("lines must be [start, end]")
+    start, end = value
+    if start < 1 or end < start:
+        raise ExplorationError("lines must be 1-based with start <= end")
+    return [start, end]
+
+
 def list_references(store: ExplorationStore, exp_id: str) -> List[Dict[str, Any]]:
     return newest_first(read_jsonl(_dir(store, exp_id) / REFERENCES_FILE), "at")
 
@@ -332,11 +377,15 @@ def add_reference(store: ExplorationStore, exp_id: str, body: Dict[str, Any], no
         if not is_http_url(url) or len(url.strip()) > MAX_URL:
             raise ExplorationError("url must be an http(s) URL")
         url = url.strip()
+    file = norm_file_ref(store.workspace, body.get("file")) if body.get("file") is not None else None
+    lines = norm_lines(body.get("lines")) if body.get("lines") is not None else None
+    if lines is not None and file is None:
+        raise ExplorationError("lines need file")
     if kind == "quote" and not quote:
         raise ExplorationError("a quote reference needs quote")
-    if kind == "link" and not url:
-        raise ExplorationError("a link reference needs url")
-    for key, value in (("quote", quote), ("url", url)):
+    if kind == "link" and not url and not file:
+        raise ExplorationError("a link reference needs url or file")
+    for key, value in (("quote", quote), ("url", url), ("file", file), ("lines", lines)):
         if value:
             ref[key] = value
     for key, limit in (("title", MAX_TITLE), ("note", MAX_NOTE), ("section", MAX_SECTION)):
@@ -416,6 +465,15 @@ def new_answer(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now: 
         "id": _new_id("ans"), "anchor": anchor, "question": question, "status": "queued",
         "surface": "deep-ask", "asked_at": iso_s(now),
     }
+    section_text = body.get("section_text")
+    if section_text is not None:
+        if not isinstance(section_text, str):
+            raise ExplorationError("section_text must be a string")
+        if len(section_text) > MAX_SECTION_TEXT:
+            # A long section is cut, not refused: the Ask still goes.
+            section_text = section_text[: MAX_SECTION_TEXT - 1] + "…"
+        if section_text.strip():
+            answer["section_text"] = section_text
     follow = body.get("follow_up_of")
     if follow is not None:
         if not isinstance(follow, str) or not ANSWER_ID_RE.match(follow) or get_answer(store, exp_id, follow) is None:
@@ -423,6 +481,49 @@ def new_answer(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now: 
         answer["follow_up_of"] = follow
     append_jsonl(_dir(store, exp_id) / ANSWERS_FILE, answer)
     return answer
+
+
+def is_handoff(row: Optional[Dict[str, Any]]) -> bool:
+    return bool(row) and row.get("kind") == "handoff"
+
+
+def first_line(text: str) -> str:
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def new_handoff(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    POST /handoffs ``{kind, provider, brief, anchor}`` (Deep next R3): an answer
+    record with ``kind: 'handoff'`` in state ``launching``. Lee launches the
+    task; PATCH ``{task_id}`` links it and the follower keeps it in step.
+    """
+    now = now or utc_now()
+    kind = body.get("kind")
+    if kind not in HANDOFF_KINDS:
+        raise ExplorationError(f"kind must be one of {', '.join(HANDOFF_KINDS)}")
+    provider = body.get("provider")
+    if provider is None:
+        provider = "claude"
+    if provider not in HANDOFF_PROVIDERS:
+        raise ExplorationError(f"provider must be one of {', '.join(HANDOFF_PROVIDERS)}")
+    brief = body.get("brief")
+    if not isinstance(brief, str) or not brief.strip():
+        raise ExplorationError("brief must be a non-empty string")
+    if len(brief) > MAX_BRIEF:
+        raise ExplorationError(f"brief is longer than {MAX_BRIEF} characters")
+    if "anchor" not in body:
+        raise ExplorationError("anchor is required")
+    anchor = norm_anchor(body.get("anchor"))
+    record: Dict[str, Any] = {
+        "id": _new_id("ans"), "kind": "handoff", "anchor": anchor, "question": _clip(first_line(brief), MAX_QUESTION),
+        "status": "queued", "surface": HANDOFF_SURFACE, "asked_at": iso_s(now),
+        "handoff": {"kind": kind, "provider": provider, "brief": brief, "task_id": None, "state": "launching"},
+    }
+    append_jsonl(_dir(store, exp_id) / ANSWERS_FILE, record)
+    return record
 
 
 def update_answer(store: ExplorationStore, exp_id: str, answer_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -439,19 +540,52 @@ def update_answer(store: ExplorationStore, exp_id: str, answer_id: str, fields: 
 
 
 def patch_answer(store: ExplorationStore, exp_id: str, answer_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
-    """PATCH ``{read?, dismissed?, inserted?, kept?}`` (each ``true``): sets ``<flag>_at`` once."""
+    """
+    PATCH ``{read?, dismissed?, inserted?, kept?}`` (each ``true``): sets ``<flag>_at`` once.
+
+    Hand-offs also take ``{task_id}`` (the launched task: ``handoff.task_id``,
+    and ``launching`` becomes ``running``; a state the follower already moved
+    on is kept) and ``{status: 'error', error?}`` (the launch failed).
+    """
     now = now or utc_now()
     if not ANSWER_ID_RE.match(answer_id or ""):
         raise ExplorationError("invalid answer id")
-    unknown = set(body) - set(ANSWER_FLAGS)
+    unknown = set(body) - set(ANSWER_FLAGS) - {"task_id", "status", "error"}
     if unknown:
         raise ExplorationError(f"cannot patch {', '.join(sorted(unknown))}")
-    for k, v in body.items():
-        if v is not True:
+    flags = [k for k in body if k in ANSWER_FLAGS]
+    for k in flags:
+        if body[k] is not True:
             raise ExplorationError(f"{k} must be true")
+    task_id = body.get("task_id")
+    if "task_id" in body and (not isinstance(task_id, str) or not TASK_ID_RE.match(task_id)):
+        raise ExplorationError("task_id must be a task id")
+    if "status" in body and body["status"] != "error":
+        raise ExplorationError("status can only be set to error")
+    if "error" in body and "status" not in body:
+        raise ExplorationError("error needs status: error")
+    error = _opt_text(body, "error", MAX_ERROR) if "error" in body else None
 
     def apply(row: Dict[str, Any]) -> Dict[str, Any]:
-        for flag in body:
+        if ("task_id" in body or "status" in body) and not is_handoff(row):
+            raise ExplorationError("only a hand-off takes task_id or status")
+        handoff = dict(row.get("handoff") or {})
+        if "task_id" in body:
+            if handoff.get("task_id") not in (None, task_id):
+                raise ExplorationError("this hand-off is linked to another task")
+            handoff["task_id"] = task_id
+            if handoff.get("state") == "launching":
+                handoff["state"] = "running"
+                row["status"] = "running"
+        if body.get("status") == "error":
+            if handoff.get("state") in ("done",):
+                raise ExplorationError("this hand-off is done")
+            handoff["state"] = "error"
+            row["status"] = "error"
+            row["error"] = error or "launch failed"
+        if handoff:
+            row["handoff"] = handoff
+        for flag in flags:
             if not row.get(ANSWER_FLAGS[flag]):
                 row[ANSWER_FLAGS[flag]] = iso_s(now)
         return row
@@ -469,6 +603,8 @@ def requeue_answer(store: ExplorationStore, exp_id: str, answer_id: str) -> Dict
     current = get_answer(store, exp_id, answer_id)
     if current is None:
         raise ExplorationNotFound(f"{exp_id}/{answer_id}")
+    if is_handoff(current):
+        raise ExplorationError("a hand-off can't be retried here; hand it off again")
     if current.get("status") not in ("error", "interrupted"):
         raise ExplorationError(f"only an errored or interrupted answer can be retried (this one is {current.get('status')})")
     row = update_answer(store, exp_id, answer_id, {"status": "queued", "error": None, "answered_at": None})
@@ -476,7 +612,10 @@ def requeue_answer(store: ExplorationStore, exp_id: str, answer_id: str) -> Dict
 
 
 def interrupt_pending(store: ExplorationStore, keep: Optional[set] = None) -> int:
-    """Every ``queued``/``running`` answer in the workspace not in ``keep`` becomes ``interrupted``."""
+    """
+    Every ``queued``/``running`` answer in the workspace not in ``keep`` becomes
+    ``interrupted``. Hand-offs are left alone: their agents run in Lee, not here.
+    """
     keep = keep or set()
     n = 0
     for exp_id in store.ids():
@@ -485,13 +624,50 @@ def interrupt_pending(store: ExplorationStore, keep: Optional[set] = None) -> in
             rows = read_jsonl(path)
             changed = False
             for row in rows:
-                if row.get("status") in PENDING and row.get("id") not in keep:
+                if row.get("status") in PENDING and row.get("id") not in keep and not is_handoff(row):
                     row["status"] = "interrupted"
                     changed = True
                     n += 1
             if changed:
                 write_jsonl(path, rows)
     return n
+
+
+# ---------------------------------------------------------------------------
+# Hand-off briefs (the Hand off sheet renders the same text client-side)
+# ---------------------------------------------------------------------------
+
+HANDOFF_TEMPLATES = {
+    "spike": (
+        "Spike: build a throwaway prototype for the section below, in this worktree, within the timebox. "
+        "It won't be merged. When you stop, report the evidence: what you tried, what worked and what didn't, "
+        "and the size and constraints you found. Don't recommend merging it."
+    ),
+    "docs": (
+        "Docs: write or update this repository's docs for the section below, as a diff in this worktree. "
+        "First name the target file (or propose a new one under docs/), then change that file and nothing else."
+    ),
+    "research": (
+        "Research: make no code changes. Compare the options for the section below against the criteria "
+        "the section gives, and cite your sources (links or file paths) for each claim."
+    ),
+}
+
+
+def handoff_template(kind: str) -> str:
+    if kind not in HANDOFF_TEMPLATES:
+        raise ExplorationError(f"kind must be one of {', '.join(HANDOFF_KINDS)}")
+    return HANDOFF_TEMPLATES[kind]
+
+
+def handoff_brief(kind: str, section_text: str, exploration_title: str, exploration_id: str) -> str:
+    """The template, the section word for word, then "From the exploration '<title>' (<id>)", blank-line separated."""
+    section = section_text if isinstance(section_text, str) else ""
+    parts = [handoff_template(kind)]
+    if section.strip():
+        parts.append(section.strip("\n"))
+    parts.append(f"From the exploration '{exploration_title}' ({exploration_id})")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +773,45 @@ def add_session(store: ExplorationStore, exp_id: str, body: Dict[str, Any]) -> D
     record = norm_session(body)
     append_jsonl(_dir(store, exp_id) / SESSIONS_FILE, record)
     return record
+
+
+# ---------------------------------------------------------------------------
+# Deleting an empty exploration (Deep next R8)
+# ---------------------------------------------------------------------------
+
+UNTITLED_RE = re.compile(r"^Untitled(?:\s+·.*)?$")
+
+
+class NotEmpty(Exception):
+    """DELETE of an exploration that has a title, text, answers, references or questions."""
+
+
+def is_empty(store: ExplorationStore, exp_id: str) -> bool:
+    """Still ``Untitled · …``, a blank Page, and nothing asked, kept, questioned or said in chat."""
+    exp = store.require(exp_id)
+    if not UNTITLED_RE.match(str(exp.get("title") or "").strip()):
+        return False
+    if read_page_text(store, exp_id).strip():
+        return False
+    if exp.get("questions") or int(exp.get("turns") or 0) > 0 or len(exp.get("nodes") or []) > 1:
+        return False
+    d = store.exp_dir(exp_id)
+    return not read_jsonl(d / ANSWERS_FILE) and not read_jsonl(d / REFERENCES_FILE)
+
+
+def delete_empty(store: ExplorationStore, exp_id: str) -> Dict[str, Any]:
+    """DELETE ``/cockpit/explorations/{id}``: removes the directory only when ``is_empty``; else NotEmpty."""
+    with _LOCK:
+        if not is_empty(store, exp_id):
+            raise NotEmpty(exp_id)
+        d = store.exp_dir(exp_id)
+        shutil.rmtree(d, ignore_errors=True)
+        legacy = store.dir / f"{exp_id}.md"
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+    return {"id": exp_id, "deleted": True}
 
 
 # ---------------------------------------------------------------------------

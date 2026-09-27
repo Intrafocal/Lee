@@ -44,6 +44,8 @@ export interface TaskRecord {
   context?: TaskContextRef | null;
   /** The launch's git worktree (contract v3 §4). */
   worktree?: TaskWorktree | null;
+  /** Minutes; omitted = Hester's default. */
+  timebox_min?: number | null;
 }
 
 /** A name change for a task (by id) or an agent session (by session id). */
