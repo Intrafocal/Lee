@@ -87,8 +87,11 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     window.clearTimeout(pending.timer);
     timers.current.delete(itemId);
     const { s } = pending;
-    setGone((g) => new Set(g).add(itemId));
     setSwiped(({ [itemId]: _done, ...rest }) => rest);
+    // Handled elsewhere during the Undo window: nothing left to send.
+    const still = ctxRef.current.snapshot?.items.some((i) => i.id === itemId && i.state === 'open');
+    if (!still) return;
+    setGone((g) => new Set(g).add(itemId));
     const send = s.action === 'snooze' ? snoozeItem : dismissItem;
     void send(ctxRef.current, s.item).then((ok) => {
       if (!ok)
@@ -122,6 +125,16 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     timers.current.delete(itemId);
     setSwiped(({ [itemId]: _undone, ...rest }) => rest);
   }, []);
+
+  // Forget sent items once the queue no longer has them open.
+  const openKey = (snapshot?.items ?? []).filter((i) => i.state === 'open').map((i) => i.id).join('\n');
+  useEffect(() => {
+    const openIds = new Set(openKey.split('\n'));
+    setGone((g) => {
+      const next = new Set([...g].filter((id) => openIds.has(id)));
+      return next.size === g.size ? g : next;
+    });
+  }, [openKey]);
 
   // Leaving Work sends what's still in its Undo window.
   useEffect(
@@ -195,7 +208,8 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
 
   // The detail follows the selection (↑/↓ in the Cockpit keymap); the
   // keymap's Esc (focus outside Work) clears it: back to the list, selected.
-  const prevSel = useRef(sel);
+  // Null at mount, so a task link that switched to Work opens its detail.
+  const prevSel = useRef<string | null>(null);
   useEffect(() => {
     const was = prevSel.current;
     prevSel.current = sel;

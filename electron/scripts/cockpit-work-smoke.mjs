@@ -6,7 +6,9 @@
  * back, ignoring vertical), the quick replies shown (3 in the list, 4 in the
  * detail), stepping to the next and previous item in the detail view, and
  * Library's word estimate and "quiet". Compiles the real source with
- * esbuild, no React, no DOM.
+ * esbuild, no React, no DOM. Then renders WorkSection, WorkDetail and
+ * LibrarySection to static HTML with fixture data (react-dom/server) and
+ * checks the one-next-step rule and the chips each place shows.
  *
  * Run: node scripts/cockpit-work-smoke.mjs
  */
@@ -373,6 +375,162 @@ test('library: the Page’s last line, newest touched first, find', () => {
   assert.equal(m.matchesFind('parser zebra', ['A new parser']), false);
   assert.equal(m.isDeviceCapture('aeronaut'), true);
   assert.equal(m.isDeviceCapture('lee'), false);
+});
+
+// ---------------------------------------------------------------------------
+// Rendered sections (static HTML, fixture data): the one next step (§0 rule 1)
+// ---------------------------------------------------------------------------
+
+const renderEntry = `
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { WorkSection } from './components/cockpit/sections/WorkSection';
+import { WorkDetail } from './components/cockpit/work/WorkDetail';
+import { LibrarySection } from './components/cockpit/sections/LibrarySection';
+export const render = {
+  work: (ctx) => renderToStaticMarkup(React.createElement(WorkSection, { ctx })),
+  detail: (ctx, subject) => renderToStaticMarkup(React.createElement(WorkDetail, { ctx, subject, focusReply: false, openLink: false, onBack: () => {} })),
+  library: (ctx) => renderToStaticMarkup(React.createElement(LibrarySection, { ctx, focusCreateNonce: 0 })),
+};
+`;
+const rendered = await esbuild.build({
+  stdin: { contents: renderEntry, resolveDir: join(__dirname, '../src/renderer'), loader: 'tsx' },
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  write: false,
+  jsx: 'automatic',
+  loader: { '.css': 'empty' },
+  define: { 'import.meta.env': '{"DEV":false}', 'process.env.NODE_ENV': '"production"' },
+  logLevel: 'silent',
+});
+const renderDir = mkdtempSync(join(tmpdir(), 'lee-work-render-'));
+const renderFile = join(renderDir, 'render.mjs');
+// Bundled CommonJS (react) inside ESM needs a require for node built-ins.
+writeFileSync(renderFile, `import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\n${rendered.outputFiles[0].text}`);
+let render;
+try {
+  ({ render } = await import(pathToFileURL(renderFile).href));
+} finally {
+  rmSync(renderDir, { recursive: true, force: true });
+}
+
+const noop = () => {};
+function fixtureCtx(over = {}) {
+  return {
+    workspace: WS,
+    api: null,
+    copilotApi: null,
+    snapshot: { items: [], agents: [], counts: {}, focus: {}, away: {}, generated_at: ago(0) },
+    runtime: [],
+    ops: { operations: [], suggestions: [], proposals: [] },
+    hester: { snapshot: { tasks: { open: [], recent_closed: [] } }, offline: null, refresh: noop },
+    tiles: [],
+    feedRows: [],
+    tabs: [],
+    mode: { selected: null },
+    isAgentTab: () => false,
+    now: NOW,
+    goInto: noop,
+    openOwnTab: noop,
+    openFile: noop,
+    openExploration: async () => {},
+    openLibrary: noop,
+    openWorkstream: noop,
+    focusPty: noop,
+    notify: noop,
+    openLauncher: noop,
+    openReply: noop,
+    openCheckin: noop,
+    openRename: noop,
+    closeAgent: noop,
+    registerRows: noop,
+    selectRow: noop,
+    setSection: noop,
+    goals: { data: null, error: null, loading: false, refresh: noop },
+    requestSteward: noop,
+    pendingSteward: null,
+    ...over,
+  };
+}
+const nextCount = (html) => (html.match(/ui-btn is-next/g) ?? []).length;
+const chipCount = (html) => (html.match(/class="ui-chip/g) ?? []).length;
+const approvalItem = item('ap', {
+  kind: 'approval',
+  created_at: ago(20),
+  actions: ['approve', 'deny'],
+  tool: { name: 'Bash', preview: 'rm -rf build', signature: 's' },
+  source: { ...item('x').source, pty_id: 3 },
+});
+const textItem = item('tx', { created_at: ago(5), text: 'Should I also update the docs?', source: { ...item('x').source, pty_id: 4 } });
+const withItems = (items, over = {}) => fixtureCtx({ snapshot: { ...fixtureCtx().snapshot, items }, ...over });
+
+test('render: the raised approval’s Allow is the list’s one next step; a list card shows 3 quick replies', () => {
+  const html = render.work(withItems([textItem, approvalItem], { tiles: [tile(3), tile(4), tile(5, { working: true })] }));
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /Waiting on you/);
+  assert.match(html, /rm -rf build/);
+  assert.match(html, /In flight/);
+  assert.equal(chipCount(html), 3);
+  assert.ok(html.indexOf('rm -rf build') < html.indexOf('Should I also update'), 'the older approval comes first');
+});
+
+test('render: a raised text card has no next step; an approval below it is plain', () => {
+  const html = render.work(withItems([{ ...textItem, created_at: ago(40) }, approvalItem]));
+  assert.match(html, /rm -rf build/);
+  assert.match(html, /ui-btn is-plain[^>]*>Allow/);
+  assert.equal(nextCount(html), 0);
+});
+
+test('render: nothing waiting shows "Nothing needs you." with Continue as the next step', () => {
+  const html = render.work(fixtureCtx({ tiles: [tile(5, { working: true })] }));
+  assert.match(html, /Nothing needs you\./);
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /Continue/);
+});
+
+const subject = (over) => ({
+  id: 'work:item:x',
+  name: 'Agent 3',
+  item: null,
+  tile: tile(3),
+  task: null,
+  agent: null,
+  ptyId: 3,
+  provider: 'claude',
+  workspace: WS,
+  busySince: ago(18),
+  sessionId: null,
+  ...over,
+});
+
+test('render: the detail’s Allow is its next step while an approval is pending (Send is plain)', () => {
+  const html = render.detail(fixtureCtx(), subject({ item: approvalItem, tile: tile(3, { approval: approvalItem, replyItem: textItem }) }));
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /is-next[^>]*>Allow/);
+  assert.match(html, /started 18m ago/);
+});
+
+test('render: a text item’s detail shows all four quick replies, the reply box and Send as the next step', () => {
+  const recent = [{ at: ago(3), tool: 'Edit', preview: 'a.ts', files: ['src/a.ts'], writes: true, phase: 'post' }];
+  const html = render.detail(
+    fixtureCtx(),
+    subject({ id: 'work:item:tx', item: textItem, tile: tile(4, { replyItem: textItem }), ptyId: 4, agent: { pty_id: 4, recent } }),
+  );
+  assert.equal(chipCount(html), 4);
+  assert.equal(nextCount(html), 1);
+  assert.match(html, /Sent exactly as written/);
+  assert.match(html, /It asked/);
+  assert.match(html, /Along the way/);
+  assert.match(html, /Edited a\.ts/);
+  assert.match(html, /Assign…/, 'an agent with no task offers Assign…');
+});
+
+test('render: Library has no next step', () => {
+  const html = render.library(fixtureCtx());
+  assert.equal(nextCount(html), 0);
+  assert.match(html, /Explorations/);
+  assert.match(html, /New exploration/);
 });
 
 console.log(`cockpit-work-smoke: ${passed} tests passed`);
