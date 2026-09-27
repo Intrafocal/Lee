@@ -157,6 +157,12 @@ export interface ModeDecision {
    * Copilot and focus the opener's field instead of an empty Deep.
    */
   opener?: true;
+  /**
+   * Deep was asked for by a key or the switcher with nothing open: open
+   * Deep on a blank Page (a new untitled exploration). The mode changes
+   * once it exists.
+   */
+  blank?: true;
 }
 
 export interface DeepSessionInfo {
@@ -189,9 +195,12 @@ export function nextMode(state: ModeInput, trigger: ModeTrigger): ModeDecision |
   if (!state.enabled) return null;
   const to = (mode: LeeMode, reason: ModeReason): ModeDecision | null =>
     mode === state.mode ? null : { mode, reason };
-  // Entering Deep: the open exploration, else the opener on Copilot.
-  const toDeep = (reason: ModeReason): ModeDecision | null => {
+  // Entering Deep: the open exploration; with nothing open, a key or the
+  // switcher gets a blank Page, and a session started elsewhere (a device's
+  // Go deep) gets the opener on Copilot.
+  const toDeep = (reason: ModeReason, nothingOpen: 'blank' | 'opener' = 'blank'): ModeDecision | null => {
     if (state.hasExploration) return to('deep', reason);
+    if (nothingOpen === 'blank') return { mode: state.mode, reason: null, blank: true };
     return { mode: 'cockpit', reason: state.mode === 'cockpit' ? null : reason, opener: true };
   };
   const deepReason: ModeReason = state.deepActive ? 'hop' : 'deep_start';
@@ -204,7 +213,7 @@ export function nextMode(state: ModeInput, trigger: ModeTrigger): ModeDecision |
     case 'toggle_manual':
       return to(state.mode === 'manual' ? 'cockpit' : 'manual', 'hop');
     case 'deep_session':
-      if (trigger.active) return toDeep('deep_start');
+      if (trigger.active) return toDeep('deep_start', 'opener');
       return state.mode === 'deep' ? to('cockpit', 'deep_end') : null;
     case 'handoff':
     case 'return':

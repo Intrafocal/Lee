@@ -28,6 +28,8 @@ import {
   type SwitcherEvent,
   type SwitcherState,
 } from '../../lib/cockpitModel';
+import { untitledTitle } from '../../lib/deepModel';
+import { createDeepExploration } from '../../lib/hesterDeep';
 
 export type { SectionId };
 
@@ -383,6 +385,7 @@ export const cockpitModeStore = {
     const from = state.mode;
     if (d.reason) cockpitModeStore.set(d.mode, d.reason);
     if (d.opener) cockpitModeStore.focusOpener();
+    if (d.blank) void openBlankDeep();
     if (from !== 'deep' && state.mode === 'deep') startDeepIfNone();
   },
   decide(trigger: ModeTrigger): ModeDecision | null {
@@ -507,10 +510,43 @@ export function goDeep(api: CopilotAPI | null | undefined, workspace: string): v
   if (!state.enabled) return;
   const d = state.deep;
   if (!d.exploration_id) {
-    cockpitModeStore.focusOpener();
+    void openBlankDeep(api, workspace);
     return;
   }
   void openExplorationInDeep(api, workspace, d.exploration_id, d.title);
+}
+
+let blankPending = false;
+
+/**
+ * Deep with nothing open in this window: the Deep session's exploration if
+ * one is running here, else a new untitled exploration, opened on its Page.
+ * If Hester can't create one, fall back to the opener.
+ */
+export async function openBlankDeep(api?: CopilotAPI | null, workspace: string = workspaceKey): Promise<void> {
+  if (!state.enabled || blankPending || !workspace) return;
+  if (api === undefined) {
+    try {
+      api = window.lee?.copilot ?? null;
+    } catch {
+      api = null;
+    }
+  }
+  if (state.deepActive && state.deepSessionExploration) {
+    await openExplorationInDeep(api, workspace, state.deepSessionExploration, state.deep.title);
+    return;
+  }
+  blankPending = true;
+  try {
+    const r = await createDeepExploration(workspace, { title: untitledTitle(new Date()), origin: { kind: 'opener' } });
+    if (!r.ok) {
+      cockpitModeStore.focusOpener();
+      return;
+    }
+    await openExplorationInDeep(api, workspace, r.data.id, r.data.title);
+  } finally {
+    blankPending = false;
+  }
 }
 
 /**

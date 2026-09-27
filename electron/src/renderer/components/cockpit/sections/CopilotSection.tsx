@@ -227,7 +227,7 @@ export const CopilotSection: React.FC<CopilotSectionProps> = ({ ctx, about, onCl
     <section className="cockpit-sec cockpit-copilot">
       <header className="cockpit-sec-head">
         <h2>Copilot</h2>
-        <span className="cockpit-muted">Hester, in steward mode: what happened, and what to ask</span>
+        <span className="cockpit-muted">Something to think about, then what happened while you were away</span>
         <span className="cockpit-header-spacer" />
         {steward && !steward.enabled && <span className="cockpit-muted">Steward off (config)</span>}
         {steward && steward.enabled && (

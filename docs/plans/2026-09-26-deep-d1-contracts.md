@@ -70,7 +70,7 @@
 | `open_tab` (Files, Explore "Open file", Library, own tab from the drawer) | `manual` |
 | `tab_activated` | no change (the wall is gone) |
 
-Entering Deep with no exploration open (§3.1 of 14) switches to **Cockpit, section Copilot, with the opener's field focused** rather than an empty Deep. Once an exploration is chosen, the mode is `deep`.
+Entering Deep with no exploration open (§3.1 of 14) never shows an empty Deep. From a key, the switcher or Go deep it opens a **blank Page**: the running Deep session's exploration, else a new untitled exploration (`origin: opener`), then the mode is `deep` (*revised 2026-09-27*). A `deep_session` start with nothing open (a device's Go deep) switches to **Cockpit, section Copilot, with the opener's field focused**.
 
 ### 1.3 Keys (M registry, R handling)
 

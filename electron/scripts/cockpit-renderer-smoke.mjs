@@ -497,13 +497,13 @@ test('D1 §1.2 load → cockpit always (Manual only when the Cockpit is off)', (
   assert.equal(Object.values(MODE_LABELS).includes('Workbench'), false);
 });
 
-test('D1 §1.2 switcher {to} → to, reason switcher; Deep with nothing open → the opener', () => {
+test('D1 §1.2 switcher {to} → to, reason switcher; Deep with nothing open → a blank Page', () => {
   assert.deepEqual(nextMode(C, { kind: 'switcher', to: 'manual' }), { mode: 'manual', reason: 'switcher' });
   assert.deepEqual(nextMode(M, { kind: 'switcher', to: 'cockpit' }), { mode: 'cockpit', reason: 'switcher' });
   assert.deepEqual(nextMode(withExp(C), { kind: 'switcher', to: 'deep' }), { mode: 'deep', reason: 'switcher' });
   assert.equal(nextMode(C, { kind: 'switcher', to: 'cockpit' }), null);
-  assert.deepEqual(nextMode(M, { kind: 'switcher', to: 'deep' }), { mode: 'cockpit', reason: 'switcher', opener: true });
-  assert.deepEqual(nextMode(C, { kind: 'switcher', to: 'deep' }), { mode: 'cockpit', reason: null, opener: true });
+  assert.deepEqual(nextMode(M, { kind: 'switcher', to: 'deep' }), { mode: 'manual', reason: null, blank: true });
+  assert.deepEqual(nextMode(C, { kind: 'switcher', to: 'deep' }), { mode: 'cockpit', reason: null, blank: true });
 });
 
 test('D1 §1.2 toggle_deep (⇧⌘0): cockpit ↔ deep, manual → deep; hop when a session is active', () => {
@@ -511,7 +511,7 @@ test('D1 §1.2 toggle_deep (⇧⌘0): cockpit ↔ deep, manual → deep; hop whe
   assert.deepEqual(nextMode(withExp(C, true), { kind: 'toggle_deep' }), { mode: 'deep', reason: 'hop' });
   assert.deepEqual(nextMode(withExp(M, true), { kind: 'toggle_deep' }), { mode: 'deep', reason: 'hop' });
   assert.deepEqual(nextMode(withExp(D, true), { kind: 'toggle_deep' }), { mode: 'cockpit', reason: 'hop' });
-  assert.deepEqual(nextMode(M, { kind: 'toggle_deep' }), { mode: 'cockpit', reason: 'deep_start', opener: true }, 'nothing open: Copilot, opener focused');
+  assert.deepEqual(nextMode(M, { kind: 'toggle_deep' }), { mode: 'manual', reason: null, blank: true }, 'nothing open: a blank Page (the mode changes once it exists)');
 });
 
 test('D1 §1.2 toggle_manual (⌥⌘0): cockpit ↔ manual, deep → manual; reason hop', () => {
@@ -783,11 +783,12 @@ async function bundle(rel, name) {
     store.setSection('copilot');
   });
 
-  test('store: ⇧⌘0 with nothing open lands on Copilot, not an empty Deep', () => {
+  test('store: ⇧⌘0 with nothing open never shows an empty Deep (it opens a blank Page once one exists)', () => {
     store.setSection('tasks');
     store.toggleDeep();
-    assert.equal(store.get().mode, 'cockpit');
-    assert.equal(store.get().section, 'copilot');
+    assert.equal(store.get().mode, 'cockpit', 'no Deep until the blank exploration exists');
+    assert.equal(store.get().section, 'tasks', 'the opener is not forced');
+    store.setSection('copilot');
   });
 
   test('store: openDeep remembers the exploration and shows Deep (deep_start, then hop)', () => {
