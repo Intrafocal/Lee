@@ -93,6 +93,73 @@ struct AttentionItem {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Running agents (AgentSummary in copilot.ts), for In flight.  Every field is
+// optional on the wire: an older Lee sends no agents[] at all, and one before
+// the Cockpit design sends no now / recent / updates / usage.
+// ---------------------------------------------------------------------------
+
+enum class AgentState : uint8_t { Busy, Idle, Waiting, Unknown };
+
+/// What an agent is doing now (AgentNow): the open tool, else the last entry
+/// within 60 s.  Feed it to describe_activity().
+struct AgentNow {
+    std::string              tool;
+    std::string              preview;
+    std::vector<std::string> files;
+    int64_t                  age_ms = -1;   // generated_at - since; -1 unknown
+};
+
+/// One activity entry (AgentActivity); `past` marks a post entry.
+struct AgentActivityEntry {
+    std::string              tool;
+    std::string              preview;
+    std::vector<std::string> files;
+    bool                     failed = false;
+    bool                     past   = false;
+    int64_t                  age_ms = -1;
+};
+
+/// One finished turn (AgentUpdate): the agent's last message then.
+struct AgentUpdateEntry {
+    std::string summary;
+    int64_t     age_ms = -1;
+};
+
+/// docs/15-Usage.md AgentUsage, as far as a device shows it.
+struct AgentUsageInfo {
+    int64_t     shown_tokens = -1;   // input + output + cache_write
+    std::string cost_basis;          // billed | subscription | estimate | local
+};
+
+struct AgentSummary {
+    int         pty_id    = -1;
+    int         window_id = -1;
+    int         tab_id    = -1;
+    std::string label;
+    std::string provider;
+    std::string workspace;
+    AgentState  state = AgentState::Unknown;
+    /// generated_at - busy_since / idle_since (host clock); -1 when absent.
+    int64_t     busy_ms = -1;
+    int64_t     idle_ms = -1;
+    std::string last_tool;
+    std::string last_summary;          // the agent's words (compact: ~280)
+    int         files_touched = 0;
+    bool        has_now = false;
+    AgentNow    now;
+    std::vector<AgentActivityEntry> recent;    // newest last
+    std::vector<AgentUpdateEntry>   updates;   // newest last
+    bool           has_usage = false;
+    AgentUsageInfo usage;
+};
+
+/// docs/15-Usage.md UsageLimits: the Claude subscription windows; -1 absent.
+struct UsageLimitsInfo {
+    int five_hour_pct = -1;
+    int seven_day_pct = -1;
+};
+
 struct AttentionSnapshot {
     std::vector<AttentionItem> items;
     int  blocking   = 0;
@@ -103,8 +170,21 @@ struct AttentionSnapshot {
     int  quiet_count  = 0;
     bool away_active  = false;
 
+    /// Running agents; empty against a Lee that sends none.
+    std::vector<AgentSummary> agents;
+    bool            has_limits = false;
+    UsageLimitsInfo limits;
+    /// Deep D1 §2.5: a Deep session is running at the machine ("In deep
+    /// work").  focus_active stays true alongside it, so notifications hold.
+    bool        deep_active = false;
+    std::string deep_title;
+    std::string deep_exploration_id;
+    std::string mode;          // cockpit | deep | manual; "" from an older Lee
+
     /// Items that want you now (what Lee's pill counts).
     int waiting() const { return blocking + needs_you; }
+    /// Agents busy in a turn.
+    int working() const;
     const AttentionItem* find(const std::string& id) const;
 };
 
@@ -119,6 +199,14 @@ inline constexpr size_t ATTENTION_MAX_QUESTIONS = 4;
 inline constexpr size_t ATTENTION_MAX_OPTIONS   = 8;
 /// Question strings kept per item.  Lee caps them at 300 (120 compact).
 inline constexpr size_t ATTENTION_MAX_QTEXT  = 300;
+/// Agents kept per snapshot, and what each keeps.  Lee's compact snapshot
+/// clips last_summary to ~280 and update summaries to 600.
+inline constexpr size_t ATTENTION_MAX_AGENTS = 12;
+inline constexpr size_t AGENT_MAX_SUMMARY    = 600;
+inline constexpr size_t AGENT_MAX_PREVIEW    = 160;
+inline constexpr size_t AGENT_MAX_FILES      = 8;
+inline constexpr size_t AGENT_MAX_RECENT     = 8;
+inline constexpr size_t AGENT_MAX_UPDATES    = 3;
 /// Question items in one snapshot that keep their questions; the rest get
 /// them from GET /attention/:id when shown.  Bounds a hostile snapshot.
 inline constexpr size_t ATTENTION_MAX_QUESTION_ITEMS = 6;
@@ -138,6 +226,10 @@ bool attention_notify_rose(const AttentionSnapshot& prev,
                            const AttentionSnapshot& next);
 
 const char* attention_kind_name(AttentionKind k);
+
+/// Parse one agents[] entry.  `generated_ms` (the snapshot's generated_at,
+/// -1 unknown) turns its timestamps into ages.  False without a pty_id.
+bool agent_summary_parse(cJSON* json, int64_t generated_ms, AgentSummary& out);
 
 /// "2026-09-25T14:03:11.512Z" -> ms since the epoch; -1 if unparseable.
 int64_t iso8601_to_ms(const char* s);

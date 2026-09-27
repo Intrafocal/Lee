@@ -1,0 +1,61 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+struct cJSON;
+
+namespace dirigible {
+
+// ---------------------------------------------------------------------------
+// Carry (docs/14-Deep-Work.md §8.1; Cockpit design §8.2): what to take away
+// from the last Deep session, from Lee's GET /carry?workspace=<ws>:
+//
+//   { workspace,
+//     pick_up: { exploration_id, title, stopped_at, last_touched_at } | null,
+//     open_questions: [{ exploration_id, question_id, text }]   (at most 5),
+//     captured_count, reading_count,
+//     open_next: { exploration_id?, someday_id?, set_at } | null }
+//
+// Lee forwards to Hester and answers 503 {error: 'hester_offline'} when it is
+// down.  A `{success, data}` envelope is accepted too.  Strings are capped so
+// a misbehaving host cannot grow the heap.
+// ---------------------------------------------------------------------------
+
+struct CarryQuestion {
+    std::string exploration_id;
+    std::string question_id;
+    std::string text;
+};
+
+struct CarryState {
+    std::string workspace;
+    bool        has_pick_up = false;
+    std::string pick_up_id;           // exploration_id
+    std::string pick_up_title;
+    std::string stopped_at;           // your last sentence ("You stopped at")
+    int64_t     last_touched_ms = -1; // ms since the epoch, -1 unknown
+    std::vector<CarryQuestion> questions;
+    int         captured_count = 0;
+    int         reading_count  = 0;
+    bool        has_open_next = false;
+    std::string open_next_exploration_id;
+    std::string open_next_someday_id;
+
+    /// The explorations there is something to carry for, in order: the
+    /// pick-up first, then each other exploration an open question names.
+    std::vector<std::string> explorations() const;
+    /// The first open question about `exploration_id`, or null.
+    const CarryQuestion* question_for(const std::string& exploration_id) const;
+};
+
+inline constexpr size_t CARRY_MAX_QUESTIONS = 5;
+inline constexpr size_t CARRY_MAX_TEXT      = 600;
+inline constexpr size_t CARRY_MAX_TITLE     = 120;
+inline constexpr size_t CARRY_MAX_ID        = 64;
+
+/// Parse a GET /carry body.  False (leaving `out` untouched) when it is not one.
+bool carry_parse(cJSON* json, CarryState& out);
+
+}  // namespace dirigible

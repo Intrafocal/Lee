@@ -18,6 +18,10 @@
 #include "lvgl.h"
 #include "theme_tokens.h"
 
+extern "C" {
+LV_FONT_DECLARE(dg_montserrat_italic_14)
+}
+
 namespace dirigible_app::dg {
 
 inline lv_color_t c(uint32_t hex) { return lv_color_hex(hex); }
@@ -67,9 +71,14 @@ inline lv_color_t info()  { return c(DG_INFO); }    // neutral notices
 //     mono_font      unscii_8:  8 px advance,  9 px line
 //     mono_font_big  unscii_16: 8 px advance, 17 px line (text entry)
 // ---------------------------------------------------------------------------
+//   One italic: ui_font_italic, Montserrat Medium Italic 14 (ASCII, generated
+//   into dg_montserrat_italic_14.c; falls back to ui_font for symbols) for
+//   your own words on Carry ("You stopped at"), where Lee and Aeronaut use
+//   Newsreader.  The T-Deck stays Montserrat only (Cockpit design §8.2).
 inline const lv_font_t* ui_font_small() { return &lv_font_montserrat_12; }
 inline const lv_font_t* ui_font()       { return &lv_font_montserrat_14; }
 inline const lv_font_t* ui_font_title() { return &lv_font_montserrat_16; }
+inline const lv_font_t* ui_font_italic() { return &dg_montserrat_italic_14; }
 inline const lv_font_t* mono_font()     { return &lv_font_unscii_8; }
 inline const lv_font_t* mono_font_big() { return &lv_font_unscii_16; }
 

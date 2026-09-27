@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dirigible/attention.hpp"
+#include "dirigible/carry.hpp"
 #include "dirigible/fs.hpp"
 #include "dirigible/models.hpp"
 #include "dirigible/transport.hpp"
@@ -163,6 +164,27 @@ public:
     void capture(const std::string& text,
                  std::function<void(const CaptureOutcome&)> cb);
 
+    // Carry (Cockpit design §8.2; 14 §8.1), for the followed window's
+    // workspace (Lee's default, the focused window's, until /windows answers).
+
+    /// GET /carry.  `carry` is null unless it parsed; 503 means Hester is
+    /// offline.  Valid only for the callback.
+    void fetchCarry(std::function<void(int status, const CarryState* carry)> cb);
+
+    /// POST /carry/capture {text, exploration_id?}: a thought captured into
+    /// an exploration (or, with an empty id, into Someday).
+    void carryCapture(const std::string& text, const std::string& exploration_id,
+                      std::function<void(const CaptureOutcome&)> cb);
+
+    /// POST /carry/open-next {exploration_id}: the next Deep session opens
+    /// this exploration first.
+    void carryOpenNext(const std::string& exploration_id,
+                       std::function<void(const ReplyResult&)> cb);
+
+    /// POST /command {domain:'tab', action:'checkin', params:{pty_id}}: ask a
+    /// running agent where it is.  The answer lands in the agent's words.
+    void agentCheckin(int pty_id, std::function<void(const ReplyResult&)> cb);
+
     // Health check
     void healthCheck(std::function<void(bool online)> cb);
 
@@ -181,6 +203,9 @@ private:
     /// report it as a ReplyResult.
     void postAction(const std::string& path, cJSON* body,
                     std::function<void(const ReplyResult&)> cb);
+
+    /// The followed window's workspace, "" until /windows answers.
+    std::string followedWorkspace() const;
 
     std::string buildWsUrl() const;
     std::string buildHttpUrl(const char* path) const;
