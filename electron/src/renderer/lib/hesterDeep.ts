@@ -12,9 +12,15 @@
  *
  * Every call here is data only; the one model call (POST /asks) runs only
  * because the user asked (C2).
+ *
+ * Desk D2 (contract §4, §7.1): the Page's own calls take a card id too. A
+ * `pg-` id goes to `/desk/pages/{id}/…` (pageRoute), anything else to the
+ * exploration routes as before, so the Page editor and its sheets work on a
+ * card unchanged. A hand-off from a card has origin `{kind: 'page'}`.
  */
 
 import { hesterHeaders, HESTER_DAEMON_URL, type Exploration, type GoalStatus } from './hesterCockpit';
+import type { DeskPageCreate } from '../../shared/desk';
 import type {
   Anchor,
   DeepAnswer,
@@ -59,7 +65,20 @@ async function call<T>(workspace: string, method: string, path: string, body?: u
   }
 }
 
+/** The shared call, for lib/hesterDesk.ts. */
+export const hesterCall = call;
+
 const expPath = (id: string, rest = '') => `/cockpit/explorations/${encodeURIComponent(id)}${rest}`;
+
+/** A Page card's id (Desk D2): `pg-` and 8 hex. */
+export function isCardId(id: string | null | undefined): boolean {
+  return !!id && /^pg-[0-9a-f]{8}$/.test(id);
+}
+
+/** Where a Page's calls go: a card's `/desk/pages/{id}…`, else the exploration's. */
+export function pageRoute(id: string, rest = ''): string {
+  return isCardId(id) ? `/desk/pages/${encodeURIComponent(id)}${rest}` : expPath(id, rest);
+}
 
 // ---------------------------------------------------------------------------
 // Page (§3.2, §4.3)
@@ -71,7 +90,7 @@ export interface PageDoc {
 }
 
 export function getPage(workspace: string, id: string): Promise<DeepResult<PageDoc>> {
-  return call<PageDoc>(workspace, 'GET', expPath(id, '/page'));
+  return call<PageDoc>(workspace, 'GET', pageRoute(id, '/page'));
 }
 
 export type PutPageResult =
@@ -81,7 +100,7 @@ export type PutPageResult =
 
 /** PUT /page with base_version; a 409 carries the current text and version back. */
 export async function putPage(workspace: string, id: string, text: string, baseVersion: string | null): Promise<PutPageResult> {
-  const r = await call<{ version: string }>(workspace, 'PUT', expPath(id, '/page'), { text, base_version: baseVersion });
+  const r = await call<{ version: string }>(workspace, 'PUT', pageRoute(id, '/page'), { text, base_version: baseVersion });
   if (r.ok) return { ok: true, version: r.data.version };
   if (r.status === 409) {
     const b = (r.body ?? {}) as { version?: unknown; text?: unknown; data?: { version?: unknown; text?: unknown } };
@@ -109,15 +128,15 @@ export interface ReferenceCreate {
 }
 
 export function listReferences(workspace: string, id: string): Promise<DeepResult<DeepReference[]>> {
-  return call<DeepReference[]>(workspace, 'GET', expPath(id, '/references'));
+  return call<DeepReference[]>(workspace, 'GET', pageRoute(id, '/references'));
 }
 
 export function addReference(workspace: string, id: string, body: ReferenceCreate): Promise<DeepResult<DeepReference>> {
-  return call<DeepReference>(workspace, 'POST', expPath(id, '/references'), body);
+  return call<DeepReference>(workspace, 'POST', pageRoute(id, '/references'), body);
 }
 
 export function patchReference(workspace: string, id: string, rid: string, body: { note?: string; opened?: true }): Promise<DeepResult<DeepReference>> {
-  return call<DeepReference>(workspace, 'PATCH', expPath(id, `/references/${encodeURIComponent(rid)}`), body);
+  return call<DeepReference>(workspace, 'PATCH', pageRoute(id, `/references/${encodeURIComponent(rid)}`), body);
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +144,7 @@ export function patchReference(workspace: string, id: string, rid: string, body:
 // ---------------------------------------------------------------------------
 
 export function listAnswers(workspace: string, id: string): Promise<DeepResult<DeepAnswer[]>> {
-  return call<DeepAnswer[]>(workspace, 'GET', expPath(id, '/answers'));
+  return call<DeepAnswer[]>(workspace, 'GET', pageRoute(id, '/answers'));
 }
 
 /** Queues a deep-ask (202). Only ever called from a user's Ask, Follow up or affordance click (C2). */
@@ -137,7 +156,7 @@ export function askDeep(
   const { section_text, ...rest } = body;
   // Deep next R2: the section the question is about (≤ 6 000 chars); omitted when empty.
   const section = section_text?.trim() ? section_text.slice(0, SECTION_TEXT_MAX) : null;
-  return call<DeepAnswer>(workspace, 'POST', expPath(id, '/asks'), section ? { ...rest, section_text: section } : rest);
+  return call<DeepAnswer>(workspace, 'POST', pageRoute(id, '/asks'), section ? { ...rest, section_text: section } : rest);
 }
 
 export function patchAnswer(
@@ -146,12 +165,12 @@ export function patchAnswer(
   aid: string,
   body: { read?: true; dismissed?: true; inserted?: true; kept?: true; task_id?: string; status?: 'error'; error?: string },
 ): Promise<DeepResult<DeepAnswer>> {
-  return call<DeepAnswer>(workspace, 'PATCH', expPath(id, `/answers/${encodeURIComponent(aid)}`), body);
+  return call<DeepAnswer>(workspace, 'PATCH', pageRoute(id, `/answers/${encodeURIComponent(aid)}`), body);
 }
 
 /** Re-queues an errored or interrupted answer (a user's Retry click). */
 export function retryAnswer(workspace: string, id: string, aid: string): Promise<DeepResult<DeepAnswer>> {
-  return call<DeepAnswer>(workspace, 'POST', expPath(id, `/answers/${encodeURIComponent(aid)}/retry`), {});
+  return call<DeepAnswer>(workspace, 'POST', pageRoute(id, `/answers/${encodeURIComponent(aid)}/retry`), {});
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +178,7 @@ export function retryAnswer(workspace: string, id: string, aid: string): Promise
 // ---------------------------------------------------------------------------
 
 export function listQuestions(workspace: string, id: string): Promise<DeepResult<DeepQuestion[]>> {
-  return call<DeepQuestion[]>(workspace, 'GET', expPath(id, '/questions'));
+  return call<DeepQuestion[]>(workspace, 'GET', pageRoute(id, '/questions'));
 }
 
 export function addQuestion(
@@ -167,11 +186,11 @@ export function addQuestion(
   id: string,
   body: { text: string; source: 'page' | 'ask'; anchor?: Anchor },
 ): Promise<DeepResult<DeepQuestion>> {
-  return call<DeepQuestion>(workspace, 'POST', expPath(id, '/questions'), body);
+  return call<DeepQuestion>(workspace, 'POST', pageRoute(id, '/questions'), body);
 }
 
 export function patchQuestion(workspace: string, id: string, qid: string, status: 'open' | 'closed'): Promise<DeepResult<DeepQuestion>> {
-  return call<DeepQuestion>(workspace, 'PATCH', expPath(id, `/questions/${encodeURIComponent(qid)}`), { status });
+  return call<DeepQuestion>(workspace, 'PATCH', pageRoute(id, `/questions/${encodeURIComponent(qid)}`), { status });
 }
 
 export function postSession(workspace: string, id: string, record: Omit<DeepSessionRecord, 'id'>): Promise<DeepResult<DeepSessionRecord>> {
@@ -203,7 +222,9 @@ export function createDeepExploration(workspace: string, input: DeepExplorationC
 
 export interface DeepCaptureSource {
   surface: 'lee';
-  exploration_id: string;
+  /** The exploration (pre-Desk); a card sends card_id instead. */
+  exploration_id?: string;
+  card_id?: string;
   section?: string | null;
   url?: string;
   context?: string;
@@ -234,7 +255,7 @@ export function createHandoff(
   id: string,
   body: { kind: HandoffKind; provider: string; brief: string; anchor: Anchor },
 ): Promise<DeepResult<DeepAnswer>> {
-  return call<DeepAnswer>(workspace, 'POST', expPath(id, '/handoffs'), body);
+  return call<DeepAnswer>(workspace, 'POST', pageRoute(id, '/handoffs'), body);
 }
 
 /** The fixed part of a kind's brief, as Hester renders it (`handoff_brief`). */
@@ -247,7 +268,7 @@ export function fetchHandoffTemplate(workspace: string, kind: HandoffKind): Prom
  * Page and nothing asked or kept; otherwise 409 `not_empty` (callers ignore it).
  */
 export function deleteExploration(workspace: string, id: string): Promise<DeepResult<unknown>> {
-  return call(workspace, 'DELETE', expPath(id));
+  return call(workspace, 'DELETE', pageRoute(id));
 }
 
 /**
@@ -255,7 +276,7 @@ export function deleteExploration(workspace: string, id: string): Promise<DeepRe
  * A user action; never writes the Page. 400 when the repo has neither file.
  */
 export function draftFromReadme(workspace: string, id: string): Promise<DeepResult<{ text: string; sources?: string[] }>> {
-  return call<{ text: string; sources?: string[] }>(workspace, 'POST', expPath(id, '/draft-from-readme'), {});
+  return call<{ text: string; sources?: string[] }>(workspace, 'POST', pageRoute(id, '/draft-from-readme'), {});
 }
 
 /** R12: the workspace's Goals Page, if there is one (filtered here too: an older Hester ignores `purpose`). */
@@ -301,9 +322,9 @@ export const HANDOFF_LAUNCH: Readonly<
   research: { kind: 'question', worktree: false, timebox_min: 20, tools: ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch'] },
 };
 
-/** The line that closes every brief: where it came from. */
+/** The line that closes every brief: where it came from (a Page card, or a pre-Desk exploration). */
 export function handoffFromLine(title: string, id: string): string {
-  return `From the exploration '${title}' (${id})`;
+  return isCardId(id) ? `From the Page '${title}' (${id})` : `From the exploration '${title}' (${id})`;
 }
 
 /** R3: template, then the section word for word, then where it came from. */
@@ -336,8 +357,8 @@ export function handoffLaunchRequest(input: {
 }): HandoffLaunchRequest {
   const how = HANDOFF_LAUNCH[input.kind];
   const label = HANDOFF_KINDS.find((k) => k.kind === input.kind)?.label ?? input.kind;
-  // TaskOrigin gains kind 'exploration' in package B (shared/); cast until then.
-  const origin = { kind: 'exploration', ref: `${input.explorationId}#${input.answerId}` } as unknown as TaskOrigin;
+  // Desk D2 §6.2: a card's hand-off is origin 'page'; an exploration's keeps 'exploration'.
+  const origin: TaskOrigin = { kind: isCardId(input.explorationId) ? 'page' : 'exploration', ref: `${input.explorationId}#${input.answerId}` };
   return {
     workspace: input.workspace,
     title: `${label}: ${input.title}`.slice(0, 120),
@@ -621,6 +642,8 @@ export interface DraftPage {
   sendTitle: boolean;
   origin: { kind: 'opener' | 'cockpit' | 'exploration'; ref?: string | null };
   purpose?: 'goals';
+  /** Desk D2: an in-memory Page card: created with POST /desk/pages where it was started. */
+  desk?: { area_id: string | null; x?: number; y?: number; from?: DeskPageCreate['from'] };
 }
 
 export const DRAFT_PREFIX = 'draft-';
@@ -654,6 +677,18 @@ export function draftCreateBody(d: DraftPage, page: string): DeepExplorationCrea
     page,
     origin: d.origin,
     ...(d.purpose ? { purpose: d.purpose } : {}),
+  };
+}
+
+/** The body that turns an in-memory Page card into a card (POST /desk/pages), with the Page as written now. */
+export function deskCreateBody(d: DraftPage, page: string): DeskPageCreate {
+  const at = d.desk ?? { area_id: null };
+  return {
+    ...(d.purpose === 'goals' ? { purpose: 'goals' as const } : at.area_id ? { area_id: at.area_id } : {}),
+    ...(d.purpose !== 'goals' && typeof at.x === 'number' && typeof at.y === 'number' ? { x: at.x, y: at.y } : {}),
+    ...(d.purpose !== 'goals' && at.from ? { from: at.from } : {}),
+    ...(d.sendTitle ? { title: d.title } : {}),
+    text: page,
   };
 }
 
