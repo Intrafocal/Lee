@@ -29,7 +29,7 @@ import {
   type SwitcherState,
 } from '../../lib/cockpitModel';
 import { untitledTitle } from '../../lib/deepModel';
-import { createDeepExploration } from '../../lib/hesterDeep';
+import { isDraftId, newDraft } from '../../lib/hesterDeep';
 
 export type { SectionId };
 
@@ -496,7 +496,8 @@ export async function openExplorationInDeep(
   const onIt = s.deepActive && s.deepSessionExploration === exploration_id;
   if (api && !onIt) {
     try {
-      await api.deepStart({ workspace, exploration_id, title, surface: 'lee' });
+      // An in-memory Page (Deep next R8) has no exploration yet: start the session without one.
+      await api.deepStart({ workspace, exploration_id: isDraftId(exploration_id) ? null : exploration_id, title, surface: 'lee' });
     } catch {
       /* the Page still opens; M logs the failure */
     }
@@ -522,8 +523,8 @@ let blankPending = false;
 
 /**
  * Deep with nothing open in this window: the Deep session's exploration if
- * one is running here, else a new untitled exploration, opened on its Page.
- * If Hester can't create one, fall back to the opener.
+ * one is running here, else a blank in-memory Page (Deep next R8): nothing
+ * is created in Hester until its first save with content.
  */
 export async function openBlankDeep(api?: CopilotAPI | null, workspace: string = workspaceKey): Promise<void> {
   if (!state.enabled || blankPending || !workspace) return;
@@ -540,12 +541,9 @@ export async function openBlankDeep(api?: CopilotAPI | null, workspace: string =
   }
   blankPending = true;
   try {
-    const r = await createDeepExploration(workspace, { title: untitledTitle(new Date()), origin: { kind: 'opener' } });
-    if (!r.ok) {
-      cockpitModeStore.focusOpener();
-      return;
-    }
-    await openExplorationInDeep(api, workspace, r.data.id, r.data.title);
+    const title = untitledTitle(new Date());
+    const id = newDraft({ workspace, title, page: '', sendTitle: true, origin: { kind: 'opener' } });
+    await openExplorationInDeep(api, workspace, id, title);
   } finally {
     blankPending = false;
   }
