@@ -547,3 +547,103 @@
   gap: var(--space-3);
   margin-top: var(--space-2);
 }
+
+/* ---- tools: Cursor, Move, Draw ---- */
+
+/* A small floating bar at the bottom centre, above the Drawer strip. Quiet:
+   the current tool is a fill, never phosphor (there's no next step here). */
+.desk-tools {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  z-index: 3;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--ground-1);
+  border: 1px solid var(--ground-3);
+  border-radius: var(--radius-control);
+}
+
+.desk-tools .desk-tool {
+  color: var(--text-3);
+}
+
+.desk-tools .desk-tool.is-current {
+  background: var(--ground-3);
+  color: var(--text-1);
+}
+
+/* Move: cards and Area names grab; nothing opens or zooms from them. */
+.desk-viewport.is-tool-move .desk-card,
+.desk-viewport.is-tool-move .desk-area-head,
+.desk-viewport.is-tool-move .desk-area-name {
+  cursor: inherit;
+}
+
+.desk-viewport.is-tool-move .desk-card-zoom {
+  display: none;
+}
+
+.desk-area.is-lifted {
+  z-index: 1;
+}
+
+.desk-card.is-lifted {
+  z-index: 1;
+  border-color: var(--ground-5);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.5);
+}
+
+/* The Area a card would land in. */
+.desk-area.is-drop {
+  border-color: var(--ground-5);
+}
+
+/* Draw: the whole Desk is paper; nothing on it takes the pointer. */
+.desk-viewport.is-tool-draw .desk-world {
+  pointer-events: none;
+}
+
+/* ---- strokes: lines that mean nothing ---- */
+
+.desk-strokes {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.desk-stroke-line {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.desk-stroke-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.desk-viewport:not(.is-tool-cursor) .desk-stroke-hit {
+  pointer-events: none;
+}
+
+.desk-stroke.is-selected .desk-stroke-hit {
+  stroke: var(--ground-4);
+  opacity: 0.6;
+}
+
+.desk-stroke.is-selected .desk-stroke-line {
+  stroke: var(--text-1);
+}

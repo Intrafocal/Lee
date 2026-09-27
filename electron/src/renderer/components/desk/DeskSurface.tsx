@@ -19,43 +19,77 @@
  * - The Drawer is a button in the strip along the bottom of the overview: a
  *   menu of put-away Areas (click to take one out) and Ideas (Someday; click
  *   to start a Page, or drag one onto an Area).
- * - Esc: closes the innermost thing (a Drawer, the preview), then from an
- *   Area goes to the overview. From a zoomed card it's DeepHost's.
+ * - Tools, in a small bar at the bottom: Cursor (V; all of the above),
+ *   Move (M; drag a card within or between Areas, or an Area by its name
+ *   strip, cards and lines with it) and Draw (D; freehand lines, in the
+ *   Area where they start, else on the Desk). Lines mean nothing to Hester.
+ *   In Cursor a click selects a line; Delete, or its right-click menu,
+ *   deletes it, and ⌘Z undoes the last draw or delete. Moves and lines show
+ *   at once and settle when Hester has them (deskModel's DeskEdits).
+ * - Esc: closes the innermost thing (a Drawer, the preview, a selected
+ *   line), then Move or Draw goes back to Cursor, then from an Area goes to
+ *   the overview. From a zoomed card it's DeepHost's.
  * - No `next` button anywhere here: the Desk is a place, not a flow.
  * - A Hester without the Desk (404) gets one quiet line asking for a
  *   reinstall and nothing else (§10).
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DeskArea, DeskCard } from '../../../shared/desk';
+import type { DeskArea, DeskCard, DeskStroke, DeskStrokeCreate } from '../../../shared/desk';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
 import { fetchGoalsStatus, listSomeday, triageSomeday, type SomedayItem } from '../../lib/hesterCockpit';
-import { createArea, deleteArea, deleteDeskPage, ideaToPage, patchArea, putAwayArea, takeOutArea } from '../../lib/hesterDesk';
+import {
+  createArea,
+  createStroke,
+  deleteArea,
+  deleteDeskPage,
+  deleteStroke,
+  ideaToPage,
+  patchArea,
+  patchCard,
+  putAwayArea,
+  takeOutArea,
+} from '../../lib/hesterDesk';
 import { newDraft } from '../../lib/hesterDeep';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
 import {
   AREA_HEAD,
+  DESK_TOOLS,
   IDENTITY,
+  NO_EDITS,
+  STROKE_STEP_PX,
   areaAt,
   areasOnDesk,
   cameraTransform,
   cardCountLine,
   cardsIn,
+  deskEscapeStep,
+  dragDelta,
   drawerCounts,
-  escapeStep,
+  dropArea,
+  dropCard,
+  dropEdit,
   fitRect,
   focusRect,
   isEmptySpot,
+  movedEnough,
   panBy,
   placeNewCard,
   putAwayAreas,
   screenToDesk,
+  strokeFromDrag,
+  strokePath,
+  toolCursor,
+  toolForKey,
+  withEdits,
   zoomAt,
   type Camera,
+  type DeskEdits,
+  type DeskTool,
   type EscLayer,
   type Point,
 } from '../../lib/deskModel';
@@ -73,10 +107,35 @@ interface DeskSurfaceProps {
 const HOVER_MS = 300;
 const GOALS_SHOWN = 5;
 const IDEA_MIME = 'application/x-lee-idea';
+const UNDO_MAX = 50;
+/** Screen px either side of a line that still picks it. */
+const STROKE_HIT_PX = 6;
+const TOOL_HINT: Record<DeskTool, string> = {
+  cursor: 'Click an empty spot in an Area to start a Page',
+  move: 'Drag a card, or an Area by its name',
+  draw: 'Draw anywhere. Lines are yours; Hester doesn’t read them',
+};
+
+/** A press on the Desk, by what it started. */
+type Gesture =
+  | { kind: 'pan'; id: number; x: number; y: number; cam: Camera; moved: boolean }
+  | { kind: 'card'; id: number; x: number; y: number; moved: boolean; card: DeskCard; from: DeskArea }
+  | { kind: 'area'; id: number; x: number; y: number; moved: boolean; area: DeskArea }
+  | { kind: 'draw'; id: number; points: Point[]; last: Point };
+
+/** ⌘Z: the last line drawn goes; the last one deleted comes back. */
+type StrokeUndo = { kind: 'drew'; id: string } | { kind: 'deleted'; stroke: DeskStroke };
+
+const isTyping = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 
 export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceProps): JSX.Element {
   const ctx = useDeskContext();
-  const desk = ctx?.desk ?? null;
+  // Your moves and lines show at once, over what Hester last said (until it says so too).
+  const [edits, setEdits] = useState<DeskEdits>(NO_EDITS);
+  const desk = useMemo(() => (ctx?.desk ? withEdits(ctx.desk, edits) : null), [ctx?.desk, edits]);
+  const deskRef = useRef(desk);
+  deskRef.current = desk;
   const status = ctx?.status ?? 'loading';
   const nav = useCockpitModeState().deep;
   const zoom = nav.zoom;
@@ -118,35 +177,179 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     else setOwn(panBy(cam, -e.deltaX, -e.deltaY));
   };
 
-  // A drag on bare Desk pans; a click (no drag) on an empty spot starts a Page.
-  const drag = useRef<{ x: number; y: number; cam: Camera; moved: boolean; id: number } | null>(null);
+  // ---- tools ----
+  const [tool, setTool] = useState<DeskTool>('cursor');
+  // A card or Area being dragged (Desk px), and the Area a card would land in.
+  const [lift, setLift] = useState<{ kind: 'card' | 'area'; id: string; dx: number; dy: number; over: string | null } | null>(null);
+  // The line being drawn, in Desk px.
+  const [ink, setInk] = useState<Point[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [strokeMenu, setStrokeMenu] = useState<{ stroke: DeskStroke; x: number; y: number } | null>(null);
+  const undoStack = useRef<StrokeUndo[]>([]);
+  const remember = (u: StrokeUndo) => {
+    undoStack.current = [...undoStack.current, u].slice(-UNDO_MAX);
+  };
+
+  // A press on bare Desk pans; a click (no drag) on an empty spot starts a Page. Move drags
+  // cards and Areas instead; Draw draws. Nothing moves the pinned Goals card.
+  const drag = useRef<Gesture | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     const t = e.target as Element;
-    if ((menuFor && !t.closest('.desk-area-menu')) || drawer || cardMenu) {
+    if (t.closest('.desk-card-menu')) return; // a press on a card's or a line's menu is its own
+    if ((menuFor && !t.closest('.desk-area-menu')) || drawer || cardMenu || strokeMenu) {
       setMenuFor(null);
       setDrawer(false);
       setCardMenu(null);
+      setStrokeMenu(null);
       return;
     }
-    if (t.closest('.desk-card, .desk-goals, button, input, textarea, .desk-area-menu')) return;
-    drag.current = { x: e.clientX, y: e.clientY, cam, moved: false, id: e.pointerId };
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (t.closest('.desk-tools, .desk-goals')) return;
+    const capture = () => (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const base = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+    if (tool === 'draw') {
+      const p = screenToDesk(cam, localPoint(e.clientX, e.clientY));
+      drag.current = { kind: 'draw', id: e.pointerId, points: [p], last: { x: e.clientX, y: e.clientY } };
+      setOwn(cam);
+      setInk([p]);
+      return capture();
+    }
+    if (tool === 'move' && desk) {
+      const cardId = (t.closest('.desk-card') as HTMLElement | null)?.dataset.cardId;
+      const card = cardId ? desk.cards.find((c) => c.id === cardId && !c.pinned) : null;
+      const from = card ? onDesk.find((a) => a.id === card.area_id) : null;
+      if (card && from) {
+        drag.current = { kind: 'card', ...base, card, from };
+        return capture();
+      }
+      const areaId = !t.closest('.desk-area-menu, input') ? (t.closest('.desk-area-head') as HTMLElement | null)?.dataset.areaId : undefined;
+      const area = areaId ? onDesk.find((a) => a.id === areaId) : null;
+      if (area) {
+        drag.current = { kind: 'area', ...base, area };
+        return capture();
+      }
+    }
+    if (tool === 'cursor') {
+      const strokeId = (t.closest('[data-stroke-id]') as HTMLElement | null)?.dataset.strokeId;
+      if (strokeId) {
+        setSelected(strokeId);
+        rootRef.current?.focus({ preventScroll: true });
+        return;
+      }
+    }
+    if (t.closest('.desk-card, button, input, textarea, .desk-area-menu')) return;
+    setSelected(null);
+    drag.current = { kind: 'pan', ...base, cam };
+    capture();
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
-    const dx = e.clientX - d.x;
-    const dy = e.clientY - d.y;
-    if (!d.moved && Math.hypot(dx, dy) < 4) return;
-    d.moved = true;
-    setOwn(panBy(d.cam, dx, dy));
+    const now = { x: e.clientX, y: e.clientY };
+    if (d.kind === 'draw') {
+      if (Math.hypot(now.x - d.last.x, now.y - d.last.y) < STROKE_STEP_PX) return;
+      d.last = now;
+      d.points.push(screenToDesk(cam, localPoint(now.x, now.y)));
+      setInk(d.points.slice());
+      return;
+    }
+    if (!d.moved && !movedEnough(d, now)) return;
+    if (!d.moved) {
+      d.moved = true;
+      if (d.kind !== 'pan') {
+        hoverOut();
+        setOwn(cam);
+      }
+    }
+    if (d.kind === 'pan') return setOwn(panBy(d.cam, now.x - d.x, now.y - d.y));
+    const delta = dragDelta(d, now, cam.scale);
+    const over = d.kind === 'card' ? areaAt(onDesk, screenToDesk(cam, localPoint(now.x, now.y)))?.id ?? d.from.id : null;
+    setLift({ kind: d.kind, id: d.kind === 'card' ? d.card.id : d.area.id, dx: delta.x, dy: delta.y, over });
   };
   const onPointerUp = (e: React.PointerEvent) => {
     const d = drag.current;
     drag.current = null;
-    if (!d || d.id !== e.pointerId || d.moved) return;
-    onBareClick(localPoint(e.clientX, e.clientY));
+    if (!d || d.id !== e.pointerId) return;
+    const now = { x: e.clientX, y: e.clientY };
+    if (d.kind === 'draw') {
+      setInk(null);
+      const body = strokeFromDrag(d.points, cam.scale, onDesk);
+      if (body) void saveStroke(body, true);
+      return;
+    }
+    setLift(null);
+    if (d.kind === 'pan') {
+      if (!d.moved && tool === 'cursor') onBareClick(localPoint(now.x, now.y));
+      return;
+    }
+    if (!d.moved) return;
+    const delta = dragDelta(d, now, cam.scale);
+    if (d.kind === 'card') void moveCard(d.card, dropCard(d.card, d.from, delta, onDesk, screenToDesk(cam, localPoint(now.x, now.y))));
+    else void moveArea(d.area, dropArea(d.area, delta));
+  };
+  const cancelGesture = () => {
+    drag.current = null;
+    setLift(null);
+    setInk(null);
+  };
+
+  // ---- moving and drawing: shown at once, settled when Hester has it ----
+  const oldHester = (code?: number) => (code === 404 || code === 405 ? 'Hester is older than this Lee. Reinstall it to keep this.' : null);
+  const moveCard = async (c: DeskCard, to: { area_id: string; x: number; y: number }) => {
+    if (to.area_id === c.area_id && to.x === c.x && to.y === c.y) return;
+    setEdits((e) => ({ ...e, cards: { ...e.cards, [c.id]: to } }));
+    const r = await patchCard(workspace, c.id, to.area_id === c.area_id ? { x: to.x, y: to.y } : to);
+    if (!r.ok) say(r.error);
+    else await ctx?.refresh();
+    setEdits((e) => dropEdit(e, { card: c.id }));
+  };
+  const moveArea = async (a: DeskArea, to: { x: number; y: number }) => {
+    if (to.x === a.x && to.y === a.y) return;
+    setEdits((e) => ({ ...e, areas: { ...e.areas, [a.id]: to } }));
+    const r = await patchArea(workspace, a.id, to);
+    if (!r.ok) say(r.error);
+    else await ctx?.refresh();
+    setEdits((e) => dropEdit(e, { area: a.id }));
+  };
+  const tempIds = useRef(0);
+  const saveStroke = async (body: DeskStrokeCreate, undoable: boolean) => {
+    const temp: DeskStroke = { id: `tmp-${++tempIds.current}`, area_id: body.area_id, points: body.points, width: body.width ?? 2, created_at: '' };
+    setEdits((e) => ({ ...e, added: [...e.added, temp] }));
+    const r = await createStroke(workspace, body);
+    if (!r.ok) say(oldHester(r.status) ?? r.error);
+    else {
+      if (undoable) remember({ kind: 'drew', id: r.data.id });
+      await ctx?.refresh();
+    }
+    setEdits((e) => dropEdit(e, { added: temp.id }));
+  };
+  const removeStroke = async (s: DeskStroke, undoable: boolean) => {
+    setSelected((x) => (x === s.id ? null : x));
+    setStrokeMenu(null);
+    if (s.id.startsWith('tmp-')) return;
+    setEdits((e) => ({ ...e, removed: [...e.removed, s.id] }));
+    const r = await deleteStroke(workspace, s.id);
+    if (!r.ok && r.status !== 404) say(oldHester(r.status) ?? r.error);
+    else {
+      if (undoable) remember({ kind: 'deleted', stroke: s });
+      await ctx?.refresh();
+    }
+    setEdits((e) => dropEdit(e, { removed: s.id }));
+  };
+  const undo = async () => {
+    const u = undoStack.current.pop();
+    if (!u) return;
+    if (u.kind === 'drew') {
+      const s = deskRef.current?.strokes?.find((x) => x.id === u.id);
+      if (s) await removeStroke(s, false);
+    } else await saveStroke({ area_id: u.stroke.area_id, points: u.stroke.points, width: u.stroke.width }, false);
+  };
+  const pickTool = (t: DeskTool) => {
+    cancelGesture();
+    setTool(t);
+    setPreview(null);
+    setStrokeMenu(null);
+    if (t !== 'cursor') setSelected(null);
   };
 
   // ---- starting things ----
@@ -181,6 +384,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverIn = (c: DeskCard, el: HTMLElement) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (tool !== 'cursor' || drag.current) return;
     hoverTimer.current = setTimeout(() => {
       const r = el.getBoundingClientRect();
       const v = viewRef.current?.getBoundingClientRect();
@@ -302,36 +506,74 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     void ideaPage(id, { area, rel: { x: at.x - area.x, y: at.y - area.y } });
   };
 
-  // ---- Esc: the innermost thing, then from an Area to the overview ----
-  useEffect(() => {
-    if (!visible) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
-      if (document.querySelector('.deep-sheet-scrim')) return;
+  // ---- Esc: the innermost thing, then back to Cursor, then from an Area to the overview ----
+  // ---- V, M, D pick a tool; Delete deletes the selected line; ⌘Z undoes a line ----
+  const keys = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  keys.current = (e: KeyboardEvent) => {
+    if (e.defaultPrevented || e.isComposing) return;
+    if (document.querySelector('.deep-sheet-scrim')) return;
+    const t = e.target instanceof HTMLElement ? e.target : null;
+    const typing = isTyping(t);
+    if (e.key === 'Escape') {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (drag.current) {
+        e.preventDefault();
+        return cancelGesture();
+      }
       const open: EscLayer[] = [];
-      const t = e.target instanceof HTMLElement ? e.target : null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) open.push('input');
+      if (typing) open.push('input');
+      if (strokeMenu) open.push('popover');
+      if (selected) open.push('selection');
       if (preview) open.push('preview');
       if (drawer || menuFor || confirm || cardMenu) open.push('drawer');
-      const step = escapeStep(open, zoom === 'card' ? 'overview' : zoom);
+      const step = deskEscapeStep(open, zoom === 'card' ? 'overview' : zoom, tool);
       if (step.kind === 'none') return;
       e.preventDefault();
-      if (step.kind === 'zoom') zoomOut('overview', 'key');
+      if (step.kind === 'tool') pickTool('cursor');
+      else if (step.kind === 'zoom') zoomOut('overview', 'key');
       else if (step.layer === 'input') {
         setNewArea(null);
         setRenaming(null);
         t?.blur();
-      } else if (step.layer === 'preview') setPreview(null);
+      } else if (step.layer === 'popover') setStrokeMenu(null);
+      else if (step.layer === 'selection') setSelected(null);
+      else if (step.layer === 'preview') setPreview(null);
       else {
         setDrawer(false);
         setMenuFor(null);
         setConfirm(null);
         setCardMenu(null);
       }
-    };
+      return;
+    }
+    // The rest only when the Desk has focus and nothing is being typed into.
+    const active = document.activeElement;
+    if (typing || confirm || (active && active !== document.body && !rootRef.current?.contains(active))) return;
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+      if (!undoStack.current.length) return;
+      e.preventDefault();
+      void undo();
+      return;
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selected && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const s = desk?.strokes?.find((x) => x.id === selected);
+      if (!s) return;
+      e.preventDefault();
+      void removeStroke(s, true);
+      return;
+    }
+    const next = toolForKey(e, typing);
+    if (next && !e.shiftKey) {
+      e.preventDefault();
+      pickTool(next);
+    }
+  };
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => keys.current(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [visible, preview, drawer, menuFor, confirm, cardMenu, zoom]);
+  }, [visible]);
 
   // Keys land somewhere when the Desk shows (not on a hidden Page).
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -343,6 +585,16 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const counts = desk ? drawerCounts(desk) : { ideas: 0, putAway: 0 };
   const areaInView = zoom !== 'overview' ? onDesk.find((a) => a.id === nav.area_id) ?? null : null;
   const goalsCard = desk?.goals_card_id ? desk.cards.find((c) => c.id === desk.goals_card_id) ?? null : null;
+  const strokes = desk?.strokes ?? [];
+  const deskStrokes = strokes.filter((s) => !s.area_id);
+  const strokeMenuAt = (s: DeskStroke, e: React.MouseEvent) => {
+    hoverOut();
+    setMenuFor(null);
+    setCardMenu(null);
+    setSelected(s.id);
+    const p = localPoint(e.clientX, e.clientY);
+    setStrokeMenu({ stroke: s, x: p.x, y: p.y });
+  };
 
   // GOALS.md's goals, for the pinned Goals card (the Goals Page may not exist yet).
   const [goals, setGoals] = useState<Array<{ id: string; title: string }>>([]);
@@ -414,23 +666,27 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       {desk && status !== 'old' && (
         <div
           ref={viewRef}
-          className="desk-viewport"
+          className={`desk-viewport is-tool-${tool}`}
+          style={{ cursor: toolCursor(tool, !!lift) }}
           onWheel={onWheel}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerCancel={() => (drag.current = null)}
+          onPointerCancel={cancelGesture}
         >
           <div
             className={`desk-world${own ? '' : ' is-fitting'}`}
             style={{ transform: cameraTransform(cam), ['--desk-scale' as string]: String(cam.scale) }}
           >
             {onDesk.map((area) => {
+              const lifted = lift?.kind === 'area' && lift.id === area.id;
+              const lifting = lift?.kind === 'card' && desk.cards.some((c) => c.id === lift.id && c.area_id === area.id);
+              const dropHere = lift?.kind === 'card' && lift.over === area.id && !lifting;
               return (
                 <section
                   key={area.id}
-                  className={`desk-area${area.id === nav.area_id && zoom !== 'overview' ? ' is-current' : ''}`}
-                  style={{ left: area.x, top: area.y, width: area.w, height: area.h }}
+                  className={`desk-area${area.id === nav.area_id && zoom !== 'overview' ? ' is-current' : ''}${lifted || lifting ? ' is-lifted' : ''}${dropHere ? ' is-drop' : ''}`}
+                  style={{ left: area.x, top: area.y, width: area.w, height: area.h, transform: lifted ? `translate(${lift.dx}px, ${lift.dy}px)` : undefined }}
                   aria-label={area.name}
                   onContextMenu={(e) => {
                     if ((e.target as Element).closest('.desk-card, input, textarea')) return;
@@ -442,7 +698,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                   }}
                   onDrop={(e) => onAreaDrop(e, area)}
                 >
-                  <div className="desk-area-head" style={{ height: AREA_HEAD }}>
+                  <div className="desk-area-head" data-area-id={area.id} style={{ height: AREA_HEAD }}>
                     {renaming?.id === area.id ? (
                       <input
                         className="deep-title-input desk-area-rename"
@@ -500,13 +756,27 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                     </span>
                   </div>
 
+                  <StrokeLayer
+                    strokes={strokes.filter((s) => s.area_id === area.id)}
+                    scale={cam.scale}
+                    selected={selected}
+                    onMenu={strokeMenuAt}
+                  />
+
                   {cardsIn(desk, area.id).map((c) => (
                     <DeskCardView
                       key={c.id}
                       card={c}
-                      style={{ left: c.x, top: c.y, width: c.w, height: c.h }}
+                      style={{
+                        left: c.x,
+                        top: c.y,
+                        width: c.w,
+                        height: c.h,
+                        transform: lift?.kind === 'card' && lift.id === c.id ? `translate(${lift.dx}px, ${lift.dy}px)` : undefined,
+                      }}
+                      lifted={lift?.kind === 'card' && lift.id === c.id}
                       waiting={ctx?.waiting.has(c.id) ?? false}
-                      onZoom={(via) => zoomCard(c, area, via)}
+                      onZoom={(via) => (via === 'key' || tool === 'cursor') && zoomCard(c, area, via)}
                       onHover={(el) => hoverIn(c, el)}
                       onLeave={hoverOut}
                       onMenu={(e) => {
@@ -520,7 +790,35 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                 </section>
               );
             })}
+
+            <StrokeLayer strokes={deskStrokes} scale={cam.scale} selected={selected} onMenu={strokeMenuAt} />
+            {ink && ink.length > 1 && (
+              <svg className="desk-strokes" aria-hidden="true">
+                <path className="desk-stroke-line" d={strokePath(ink)} strokeWidth={2 / cam.scale} />
+              </svg>
+            )}
           </div>
+
+          <div className="desk-tools" role="toolbar" aria-label="Desk tools">
+            {DESK_TOOLS.map((t) => (
+              <IconAction
+                key={t.tool}
+                icon={t.icon}
+                label={t.label}
+                kbd={t.key}
+                className={`desk-tool${tool === t.tool ? ' is-current' : ''}`}
+                onClick={() => pickTool(t.tool)}
+              />
+            ))}
+          </div>
+
+          {strokeMenu && (
+            <div className="deep-popover desk-card-menu" role="menu" style={{ left: strokeMenu.x, top: strokeMenu.y }}>
+              <button className="deep-pop-row desk-danger" role="menuitem" onClick={() => void removeStroke(strokeMenu.stroke, true)} title="⌘Z brings it back">
+                Delete line
+              </button>
+            </div>
+          )}
 
           <GoalsPin
             workspace={workspace}
@@ -626,7 +924,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             )}
           </span>
           <span className="deep-spacer" />
-          <span className="deep-muted desk-hint">Click an empty spot in an Area to start a Page</span>
+          <span className="deep-muted desk-hint">{TOOL_HINT[tool]}</span>
         </footer>
       )}
 
@@ -660,6 +958,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
 function DeskCardView({
   card,
   style,
+  lifted,
   waiting,
   onZoom,
   onHover,
@@ -668,6 +967,8 @@ function DeskCardView({
 }: {
   card: DeskCard;
   style: React.CSSProperties;
+  /** Being dragged in Move. */
+  lifted: boolean;
   waiting: boolean;
   onZoom: (via: 'click' | 'key') => void;
   onHover: (el: HTMLElement) => void;
@@ -677,7 +978,8 @@ function DeskCardView({
   const line = cardCountLine(card.summary);
   return (
     <div
-      className="desk-card"
+      className={`desk-card${lifted ? ' is-lifted' : ''}`}
+      data-card-id={card.id}
       style={style}
       tabIndex={0}
       role="button"
@@ -704,6 +1006,48 @@ function DeskCardView({
         <IconAction icon="maximize" label="Zoom in" kbd="↵" onClick={() => onZoom('click')} />
       </span>
     </div>
+  );
+}
+
+/**
+ * Lines you drew, in one quiet colour at the same width on screen at any
+ * zoom (`scale` divides it back out). Points are relative to the layer's
+ * parent: an Area, or the Desk. A wider invisible path picks a line in
+ * Cursor; Move and Draw turn that off (desk.css).
+ */
+function StrokeLayer({
+  strokes,
+  scale,
+  selected,
+  onMenu,
+}: {
+  strokes: readonly DeskStroke[];
+  scale: number;
+  selected: string | null;
+  onMenu: (s: DeskStroke, e: React.MouseEvent) => void;
+}): JSX.Element | null {
+  if (!strokes.length) return null;
+  return (
+    <svg className="desk-strokes" aria-hidden="true">
+      {strokes.map((s) => {
+        const d = strokePath(s.points.map(([x, y]) => ({ x, y })));
+        return (
+          <g
+            key={s.id}
+            className={`desk-stroke${selected === s.id ? ' is-selected' : ''}`}
+            data-stroke-id={s.id}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onMenu(s, e);
+            }}
+          >
+            <path className="desk-stroke-hit" d={d} strokeWidth={(s.width + 2 * STROKE_HIT_PX) / scale} />
+            <path className="desk-stroke-line" d={d} strokeWidth={s.width / scale} />
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
