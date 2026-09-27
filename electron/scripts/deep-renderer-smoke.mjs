@@ -416,11 +416,7 @@ test('no var(--lit) in renderer CSS outside the terminal', () => {
   const root = join(__dirname, '../src/renderer');
   // Stylesheets other packages own; their owners take --lit out (cockpit-design
   // §9). Remove an entry once its file is clean; this test then holds it clean.
-  const PENDING = {
-    'styles/components.css': 'unowned (§9): the file tree’s selected icon',
-    'components/copilot/copilot.css': 'unowned (§9)',
-    'components/cockpit/cockpit-shell.css': 'R1',
-  };
+  const PENDING = {};
   const css = [];
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {

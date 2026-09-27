@@ -45,8 +45,7 @@
 }
 
 .deep-overlay kbd,
-.deep-sheet kbd,
-.deep-opener kbd {
+.deep-sheet kbd {
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 0 4px;
@@ -778,110 +777,6 @@
 
 .deep-sheet-actions .deep-muted {
   font-size: 12px;
-}
-
-/* ---- the opener (§8.2) ---- */
-
-.deep-opener {
-  margin-bottom: var(--space-3);
-  padding: var(--space-3);
-  background: var(--ground-2);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-card);
-}
-
-.deep-opener-field {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.deep-opener-label {
-  color: var(--text-2);
-  white-space: nowrap;
-}
-
-.deep-opener-field .deep-opener-label {
-  color: var(--text-1);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.deep-opener-input {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  font-size: 13px;
-  color: var(--text-1);
-  background: var(--ground-1);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-control);
-  padding: var(--space-1) var(--space-2);
-  outline: none;
-}
-
-.deep-opener-input:focus {
-  border-color: var(--ground-5);
-}
-
-.deep-opener-error {
-  margin-top: var(--space-1);
-  color: var(--text-3);
-}
-
-.deep-opener-group {
-  margin-top: var(--space-3);
-}
-
-.deep-opener-group > .deep-opener-label {
-  margin-bottom: var(--space-1);
-}
-
-.deep-opener-pickup {
-  display: block;
-  width: 100%;
-  text-align: left;
-  font: inherit;
-  color: var(--text-1);
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
-  padding: var(--space-1) var(--space-2);
-  cursor: pointer;
-}
-
-.deep-opener-pickup:hover:not(:disabled) {
-  border-color: var(--ground-4);
-  background: var(--ground-3);
-}
-
-.deep-opener-pickup-title {
-  font-weight: 600;
-}
-
-.deep-opener-pickup-title::before {
-  content: '▸ ';
-  color: var(--phosphor);
-}
-
-.deep-opener-arrived {
-  padding-left: calc(var(--space-2) + 1em);
-}
-
-.deep-opener-surfaces {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.deep-opener-list {
-  margin-top: var(--space-1);
-  padding: var(--space-1);
-  max-height: 220px;
-  overflow: auto;
-  background: var(--ground-1);
-  border: 1px solid var(--ground-3);
-  border-radius: var(--radius-control);
 }
 
 /* The sheet takes focus back after Hand off… closes; no ring for that. */

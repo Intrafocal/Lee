@@ -27,6 +27,7 @@ import './copilot/copilot.css';
 import { CockpitModeChip } from './cockpit/CockpitModeChip';
 import { cockpitModeStore, endDeepSession, goDeep, useCockpitModeState } from './cockpit/cockpitMode';
 import { cockpitStatusCounts, cockpitStatusParts } from '../lib/cockpitModel';
+import { deepStatusLine } from './deep/deepView';
 import { fetchSteward, setStewardNotToday, type StewardState } from '../lib/hesterCockpit';
 
 
@@ -384,7 +385,15 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             ) : isDeep ? (
               <>
                 <span className="status-icon"><Icon name="eye" size={14} /></span>
-                <span className="status-text">Deep · {copilot.focus?.quiet_count ?? 0} waiting</span>
+                {(() => {
+                  const line = deepStatusLine(copilot.focus?.quiet_count ?? 0);
+                  return (
+                    <span className="status-text">
+                      {line.left}
+                      {line.right && <> · {line.right}</>}
+                    </span>
+                  );
+                })()}
               </>
             ) : isFocused ? (
               <>

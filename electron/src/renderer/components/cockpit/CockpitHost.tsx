@@ -49,7 +49,7 @@ import { Launcher, type LauncherPrefill } from './Launcher';
 import { Icon } from '../Icon';
 import { RunMenu } from './RunMenu';
 import { KeyHelp } from './KeyHelp';
-import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './AgentTile';
+import { ReplyPopover, CheckinPopover, RenamePopover, type RenameTarget } from './Popovers';
 import { fetchGoalsStatus, patchTask, type GoalsStatusResponse } from '../../lib/hesterCockpit';
 import { HomeSection } from './sections/HomeSection';
 import { WorkSection } from './sections/WorkSection';
@@ -59,6 +59,7 @@ import { OperationsSection } from './sections/OperationsSection';
 import type { Exploration } from '../../lib/hesterCockpit';
 import { HistorySection } from './sections/HistorySection';
 import { isControlTarget, isTypingTarget } from './dom';
+import { publishPaletteAbout } from '../paletteAbout';
 import './cockpit-shell.css';
 import './work.css';
 import './library.css';
@@ -637,6 +638,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     : selectedRow?.about ?? null;
   // The palette's "about" (§6.2) reads the Cockpit's selected item here.
   currentAbout = shown ? aboutRef : null;
+  // ...and through its registry, keyed by the selection (a null ref would hide its tile fallback).
+  publishPaletteAbout(shown && aboutRef ? state.selected : null, aboutRef);
 
   // ---- v4: goal status (badge + Goals section), steward requests ----
   const [goalsData, setGoalsData] = useState<GoalsStatusResponse | null>(null);

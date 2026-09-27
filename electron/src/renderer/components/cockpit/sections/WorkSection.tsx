@@ -221,6 +221,11 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       openDetail(tile ? `work:agent:${tile.ptyId}` : `work:task:${taskId}`);
       return;
     }
+    // Home's Reply (feed row id `att:<item id>`): that item's detail, reply field focused.
+    if (sel?.startsWith('att:')) {
+      openDetail(`work:item:${sel.slice(4)}`, true);
+      return;
+    }
     if (!detail) return;
     if (sel == null) {
       if (was === detail.id) closeDetail();

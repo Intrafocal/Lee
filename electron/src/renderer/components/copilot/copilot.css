@@ -979,7 +979,7 @@
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--lit);
+  color: var(--text-1);
 }
 
 .copilot-device-token-copy {

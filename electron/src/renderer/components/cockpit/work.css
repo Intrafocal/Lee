@@ -5,9 +5,8 @@
  * file only lays them out. Loaded after cockpit-shell.css (CockpitHost
  * imports both).
  *
- * The agent tile styles below stay until the Cockpit stops mounting
- * AgentTiles (R1 removes the dock, §2.1); the Reply popover still uses
- * .cockpit-agent-words.
+ * Also the .cockpit-chip tones the Launcher, Proposals and Goals still use,
+ * and the Reply popover's .cockpit-agent-words (the tile dock is gone, §2.1).
  */
 
 /* ---------------------------------------------------------------------- */
@@ -408,105 +407,8 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Agent tiles                                                             */
+/* Chips (Launcher, Proposals, Goals) and the Reply popover's words        */
 /* ---------------------------------------------------------------------- */
-
-.cockpit-agents {
-  border-top: 1px solid var(--border);
-  padding: var(--space-2) var(--space-3);
-  max-height: 45%;
-  overflow-y: auto;
-  flex-shrink: 0;
-}
-
-.cockpit-agents-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-  padding: 0 0 var(--space-2);
-}
-
-.cockpit-agents-hint {
-  margin-left: auto;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-muted);
-}
-
-.cockpit-tiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.cockpit-tile {
-  width: 250px;
-  min-height: 110px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--bg-secondary);
-  cursor: pointer;
-}
-
-.cockpit-tile:hover {
-  border-color: var(--bg-quaternary);
-}
-
-.cockpit-tile.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.cockpit-tile.tone-needs {
-  border-left: 3px solid var(--ember);
-}
-
-.cockpit-tile-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.cockpit-tile-title {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cockpit-tile-dismiss {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-control);
-  background: none;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.cockpit-tile-dismiss:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
 
 .cockpit-chip {
   flex-shrink: 0;
@@ -532,114 +434,17 @@
   color: var(--accent-light);
 }
 
-.cockpit-tile-tool {
-  font-size: 11px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cockpit-tile-summary,
 .cockpit-agent-words {
   color: var(--text-secondary);
   line-height: 1.4;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.cockpit-agent-words {
   -webkit-line-clamp: 4;
-  margin-top: 2px;
-}
-
-/* Selected tile / row: the agent's words in full, as markdown, scrollable. */
-.cockpit-tile-summary.is-expanded,
-.cockpit-agent-words.is-expanded {
-  display: block;
-  -webkit-line-clamp: unset;
-  max-height: 18em;
-  overflow-y: auto;
-  cursor: auto;
-  user-select: text;
-}
-
-.cockpit-tile-summary.is-expanded .agent-md,
-.cockpit-agent-words.is-expanded .agent-md {
+  -webkit-box-orient: vertical;
   margin-top: 2px;
 }
 
 .cockpit-agent-label {
   color: var(--text-muted);
   font-style: italic;
-}
-
-.cockpit-tile-tail {
-  margin: 0;
-  padding: var(--space-1);
-  font-size: 10px;
-  line-height: 1.35;
-  color: var(--text-secondary);
-  background: var(--bg-primary);
-  border-radius: var(--radius-tdeck);
-  white-space: pre;
-  overflow: hidden;
-  max-height: 72px;
-}
-
-.cockpit-tile-meta {
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.cockpit-btn.is-go {
-  margin-left: auto;
-}
-
-/* Icon-only tile actions: the label slides out on hover / keyboard focus. */
-.cockpit-btn.is-reveal {
-  gap: 0;
-  padding: 4px 6px;
-  transition: gap 120ms ease;
-}
-
-.cockpit-btn.is-reveal .cockpit-btn-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 0;
-  overflow: hidden;
-  opacity: 0;
-  transition: max-width 160ms ease, opacity 120ms ease;
-}
-
-.cockpit-btn.is-reveal:is(:hover, :focus-visible, .is-open):not(:disabled) {
-  gap: 4px;
-}
-
-.cockpit-btn.is-reveal:is(:hover, :focus-visible, .is-open):not(:disabled) .cockpit-btn-label {
-  max-width: 240px;
-  opacity: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cockpit-btn.is-reveal,
-  .cockpit-btn.is-reveal .cockpit-btn-label {
-    transition: none;
-  }
-}
-
-/* Narrow windows */
-
-@media (max-width: 1000px) {
-  .cockpit-tile {
-    width: 100%;
-    max-width: 320px;
-  }
-
-  .cockpit-agents-hint {
-    display: none;
-  }
 }
