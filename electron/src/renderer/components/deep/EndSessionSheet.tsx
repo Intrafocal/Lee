@@ -8,7 +8,9 @@
  *    unchecked Asks are marked read.
  * 3. How deep was that? Deep / mixed / shallow, none selected.
  * 4. Anything for agents while you're away? "Hand off…" (the v1 dialog).
- * 5. Close Lee (the default, Enter) or Stay open.
+ * 5. Close Lee (the default, Enter) or Stay open. While Asks are still
+ *    running, a line says so and Stay open becomes the default: closing Lee
+ *    stops the daemon, and Enter must never quietly stop work.
  *
  * Either button writes the SessionRecord, ends the Deep session and returns
  * this window to the Cockpit; Close Lee then quits. Esc ends the session
@@ -40,6 +42,8 @@ interface EndSessionSheetProps {
   questions: RitualQuestion[];
   focus: FocusState | null;
   copilotApi: CopilotAPI | null;
+  /** Asks still queued or running; closing Lee stops them (they come back as Retry). */
+  running?: number;
   /** Called before anything is written, so the Page can flush its last save. */
   beforeEnd?: () => Promise<void>;
   onClose: () => void;
@@ -58,9 +62,11 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
   questions,
   focus,
   copilotApi,
+  running = 0,
   beforeEnd,
   onClose,
 }) => {
+  const closeByDefault = running === 0;
   const [stoppedAt, setStoppedAt] = useState(prefill);
   const [kept, setKept] = useState<Set<string>>(() => new Set(questions.map((q) => q.id)));
   const [rating, setRating] = useState<DepthRating | null>(null);
@@ -134,7 +140,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
       if (!onSheet || own) return;
       e.preventDefault();
       e.stopPropagation();
-      void finish('ritual', true);
+      void finish('ritual', closeByDefault);
     }
   };
   useEffect(() => {
@@ -222,14 +228,20 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           Hand off…
         </button>
 
+        {running > 0 && (
+          <div className="deep-muted">
+            {running} {running === 1 ? 'Ask' : 'Asks'} still running. Closing Lee stops {running === 1 ? 'it' : 'them'}; {running === 1 ? "it'll" : "they'll"} come back as Retry.
+          </div>
+        )}
+
         <div className="deep-sheet-actions">
           <span className="deep-muted">Esc ends without the sheet</span>
           <span className="deep-spacer" />
-          <button className="deep-btn" type="button" disabled={busy} onClick={() => void finish('ritual', false)}>
-            Stay open
+          <button className={`deep-btn${closeByDefault ? '' : ' is-primary'}`} type="button" disabled={busy} onClick={() => void finish('ritual', false)}>
+            Stay open{!closeByDefault && <kbd>↵</kbd>}
           </button>
-          <button className="deep-btn is-primary" type="button" disabled={busy} onClick={() => void finish('ritual', true)}>
-            Close Lee <kbd>↵</kbd>
+          <button className={`deep-btn${closeByDefault ? ' is-primary' : ''}`} type="button" disabled={busy} onClick={() => void finish('ritual', true)}>
+            Close Lee{closeByDefault && <kbd>↵</kbd>}
           </button>
         </div>
       </div>

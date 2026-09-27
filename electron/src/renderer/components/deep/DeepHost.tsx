@@ -925,6 +925,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           questions={sheet.questions}
           focus={copilot.focus ?? copilot.snapshot?.focus ?? null}
           copilotApi={copilot.api}
+          running={answers.filter(isPending).length + localAsks.length}
           beforeEnd={async () => {
             if (saveTimer.current || inFlight.current) await save();
             const c = editor.current?.cursor();

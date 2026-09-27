@@ -124,7 +124,7 @@ Two-sided, per `GOALS.md`.
 | `⌘0` toggles Cockpit ↔ Workbench (keys pass, `docs/shortcuts.md`) | `⌘0` is a `⌘Tab`-style **mode switcher**; `⇧⌘0` Cockpit ↔ Deep, `⌥⌘0` Cockpit ↔ Manual; Reset Zoom loses `⇧⌘0` (§3.1) |
 | A `human`-lead task has no surface of its own (§2.2, §2.3) | It opens in Deep's **Workbench** (§4.4) |
 | Hester in the Cockpit is conversational (§8) | In Deep mode Hester is **not** conversational: selection actions and quiet arrivals only; `⌘/` stays for a quick question (§5) |
-| v5 Copilot mode is next (§11, §15) | **Parked** (2026-09-26). Its deterministic jobs already run elsewhere, and its local-model jobs are what §5.3 and §8 replace. Revisit with the daemon-lifetime question (§13) |
+| v5 Copilot mode is next (§11, §15) | **Parked** (2026-09-26). Its deterministic jobs already run elsewhere, and its local-model jobs are what §5.3 and §8 replace. The daemon stops when Lee closes (§8), so it stays parked |
 | v6 devices render the full Cockpit (§15) | After D1, so devices are built on Deep's attention model (§3.2) |
 | Pinned nav items, later (§6.0) | Dropped; the opener covers them (§6) |
 
@@ -171,7 +171,7 @@ Keys, following the ⌘-chord convention from the keys pass (`docs/shortcuts.md`
 
 - Each mode remembers where it was: the Cockpit section, the exploration, view, file and cursor in Deep, the tabs in Manual.
 - Entering Deep with no exploration open goes to the opener's "What's on your mind?" field (§6), except Workbench, which can open without one (§4.4).
-- Leaving Deep for a moment doesn't end the Deep session. The session ends through the ending ritual (§7), or after being away from the machine (13 §5.1 presence) for longer than `deep.idle_end_minutes` (default 45), which counts as an unrated ending.
+- Leaving Deep for a moment doesn't end the Deep session. The session ends through the ending ritual (§7), or after being away from the machine (13 §5.1 presence) for longer than `deep.idle_end_minutes` (default 45), which counts as an unrated ending. An extended session (§8.1) isn't idle-ended until its extension runs out.
 - **Hops are never scored.** Time in the Cockpit or Manual during a Deep session is recorded (mode changes are events) but isn't subtracted, nudged, linted or shown back as a problem. `turn_churn` measures prompting agents the moment they finish, which can happen from any mode; looking is not churn.
 - **Outside Deep, you see everything.** Parked items, approvals and waiting agents are all there, as usual. Deep holds interruptions; it never hides state from you when you go looking.
 - **Coming back** to Deep after a hop is instant and exact: same view, same scroll, same cursor, same selection.
@@ -414,7 +414,7 @@ A session ends when you choose **End session** (Deep header or the status bar mo
 2. **Open questions:** the `?` lines from this session, each with a checkbox to keep open.
 3. **How deep was that?** Deep / mixed / shallow. One tap, optional. This is `session_depth` (G0).
 4. **Anything for agents while you're away?** Optional. It's 13's handoff (§5.1) pre-filled with this session's `todo:` lines and unfinished spin-offs.
-5. **Close Lee** (the default button) or **Stay open**.
+5. **Close Lee** (the default button) or **Stay open**. If Asks are still running, the sheet says so in one line ("2 Asks still running. Closing Lee stops them; they'll come back as Retry") and **Stay open** becomes the default, so Enter never quietly stops work.
 
 Nothing is required, and **Esc** ends the session without the sheet (recorded as an unrated ending). There are no timers, no break reminders and no "you've been deep for two hours" cues. Lee's encouragement to stop is that stopping is easy and leaves things in a good state.
 
@@ -425,7 +425,7 @@ Hester's preparation for the next session is **assembly, not generation**. Every
 This works because the thinking already happened during the session, when you asked (§5.3). Answers and spin-offs that were still running when you ended finish on their own and are waiting when you return.
 
 - **No model runs between sessions for deep work.** Copilot mode (13 §11) is parked, and ProactiveWatcher's model tasks stay off unless a workspace enables them (13 §14). The opener never depends on either.
-- **Lee can be closed.** If Lee is closed, in-flight Asks (daemon) and spin-offs (agent processes) continue if the daemon keeps running; otherwise they're recorded as interrupted and offered as **Retry** in the opener. Nothing is lost silently.
+- **Lee can be closed, and closing it stops everything.** *Decided 2026-09-27:* the daemon stays a child of Lee main. In-flight Asks and spin-offs (D2; their agent processes are Lee's PTYs) stop with it, are recorded as interrupted, and are offered as **Retry** in the opener. A spin-off retried this way resumes from its worktree rather than starting over. Nothing is lost silently.
 - **Devices feed the loop.** An idea captured on Dirigible during a walk (13 §5.1) lands in "Captured away", which is exactly the unconscious-to-conscious handoff the origin notes describe.
 
 ### 8.1 Devices: carry, not Deep
@@ -443,6 +443,7 @@ This works because the thinking already happened during the session, when you as
 - **Open next.** A device can pick what the next session opens first: an exploration or a captured thought. The opener puts it at the top of "Pick up where you left off". This replaces the device Focus toggle (Dirigible's `f` key, `screen_waiting.cpp` `focus_toggle`), since Deep can't start remotely.
 - **No bypass while you're deep.** While a Deep session is running at the machine, devices get no pushes either; agents park (§3.3) and the device header says "In deep work". Pulling the phone out and replying is a hop: agency, never scored (§3.1). `turn_churn` counts prompts from every surface, so poking agents from the phone shows up where it should.
 - **After the ending ritual** the away policy applies as 13 §5.1 says: at most one summary, and wake-me items only. The ritual's handoff step (§7) is where you set it.
+- **Idle-end push** (*decided 2026-09-27*, with 13 v6). When a Deep session is about to end from idleness with Lee still open (a few minutes before `deep.idle_end_minutes`), the devices get **one** push: **Extend** (another 45 minutes, for the walk that's still thinking), **End and rate** (deep / mixed / shallow, plus an optional stopped-at note on Dirigible), or **Capture** a thought into the exploration. Ignoring it ends the session unrated, as today. At most one per session, never in quiet hours; Dirigible uses plain letters (`e` extend, `d`/`m`/`s` rate, `c` capture). It's the only push Deep ever sends, and it arrives when you're already away.
 - **`device_creative_share`** (G4) gets its best source: captures made away from the machine that feed the next Deep session.
 
 **Compatibility in D1.** Devices aren't changed in D1, and today's firmware and app keep working: `focus_active` stays true during a Deep session, so they hold notifications correctly; the snapshot gains `mode` and `deep: { exploration_id, title } | null` for v6; the focus-set endpoint devices call keeps working, and "start" means Go deep with no exploration (the Mac shows the opener).
@@ -580,11 +581,11 @@ Resolved in conversation (2026-09-26):
 - ~~Workbench vs Manual~~: Workbench's multiplexer half is Manual mode (no wall, all TUIs); its hands-on half is Deep's Workbench view with tabs and terminals (§3, §4.4). ~~Review replies~~: batched (§4.4). ~~Take a hunk~~: later. ~~Scope~~: per workspace; Studio later (§12). ~~Stopping~~: the ending ritual only (§7). ~~Reading~~: the browser (§4.3). ~~Voice~~: later.
 - ~~Ask routing~~ (2026-09-26): `deep-ask` uses Hester's existing hybrid routing (local or cloud per `prepare.py`), steward off. A heavier Ask that runs as a small agent with tools can come with Spin off in D2.
 - ~~Key bindings~~ (2026-09-26): as proposed: `⌘0` switcher, `⇧⌘0` Cockpit ↔ Deep (Reset Zoom keeps its menu item, loses the accelerator), `⌥⌘0` Cockpit ↔ Manual, `⌥⌘1`–`4` views, `⌘.` action row; `⌘P`, `⌥⌘S` and `⌘D` with their D2 views. The D1 contract checks each against CodeMirror's keymap and macOS text chords before registering.
+- ~~Daemon lifetime~~ (2026-09-27): the daemon stays a child of Lee main; closing Lee stops it, and interrupted work comes back as Retry (§7, §8).
+- ~~Leaving Deep without ending~~ (2026-09-27): 45 minutes is fine; a device push just before the idle end offers Extend, End and rate, or Capture (§8.1).
 - ~~Dive in~~ (2026-09-26): Explore's **Dive in / Continue** opens the exploration in Deep (the Page). The per-node chats stay in the Library, which is reachable from Manual; the existing Log is kept.
 
 Open:
 - **Device questions (§8.1):** is **Open next** the right replacement for Dirigible's `f` (the alternative is to drop the key)? Should the Aeronaut reading list be in v6 or later? Does voice capture (`hester/docs/VoicePlan.md`) join v6 for Aeronaut, since it belongs to the walk, or stay later?
 - **Board library:** build a small canvas or adopt tldraw/Excalidraw? Depends on licence, bundle size and the renderer CSP.
 - **Render views:** how far should view discovery go (Next routes, Flutter golden tests), and what's the fallback when a web route needs auth or state?
-- **Daemon lifetime:** should the daemon (and spin-off agents) keep running when Lee is closed, so Asks and spin-offs finish while you're away? Today it's a child of Lee main.
-- **Leaving Deep without ending:** is `deep.idle_end_minutes` (45) the right boundary between "stepped away to think" and "done for now"? A walk is part of the work.
