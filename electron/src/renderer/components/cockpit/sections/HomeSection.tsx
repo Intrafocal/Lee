@@ -14,7 +14,11 @@
  * 5. Or start from: each surface as a sentence; lists open inline and
  *    picking opens Deep. Q2 items are written out one by one.
  * 6. Meanwhile: one sentence (meanwhileSentence()), up to three needs-you
- *    rows (Allow or Reply, and a quiet second action), then quiet links:
+ *    rows (Allow or Reply, and a quiet second action), the Lee Feed entries
+ *    that need you and live nowhere else (homeFeedNeeds(): a check-in
+ *    proposal, an escalate proposal; the entry's first action, shown
+ *    verbatim first when it types or runs something, C3, and Dismiss ⌘⌫),
+ *    then quiet links:
  *    See what shipped (inline), Ask Hester what to do next (What next?,
  *    answered inline), This week's retro when due, and work lint as ⚠ N
  *    (to Ops, where the findings are).
@@ -26,7 +30,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { AboutRef, LintSnapshot, Opener, StewardAnswer } from '../../../../shared/cockpit';
+import type { AboutRef, FeedAction, LintSnapshot, Opener, StewardAnswer } from '../../../../shared/cockpit';
 import { fetchDigest, type DigestResponse } from '../../../lib/hesterCopilot';
 import {
   askSteward,
@@ -42,13 +46,16 @@ import {
   arrivedLine,
   formatAge,
   greeting,
+  homeFeedNeeds,
   homeNeeds,
   homeQuestion,
   meanwhileSentence,
   plainLine,
   q2Sentence,
+  rendererAction,
   startSentence,
   type AttentionFeedRow,
+  type LeeFeedRow,
   type StartSurface,
 } from '../../../lib/cockpitModel';
 import { openInDeep, openUrl } from '../../deep/deepBridge';
@@ -243,6 +250,10 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
     } else if (pending.req.kind === 'what-next') {
       handledNonce = pending.nonce;
       runNext();
+    } else if (pending.req.kind === 'answer') {
+      handledNonce = pending.nonce;
+      askSeq.current++;
+      setAsk({ phase: 'done', answer: pending.req.answer, label: pending.req.question });
     }
   }, [pending, runAsk, runNext]);
 
@@ -296,6 +307,19 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
   // ---- needs you (the attention queue, as Work orders it) ----
   const needs = homeNeeds(ctx.feedRows, 3);
   const waiting = ctx.feedRows.filter((r) => r.source === 'attention' && r.severity !== 'ambient' && r.item.kind !== 'summary').length;
+  // Lee's own needs-you entries (check-in, escalate) have no other place (§4.1).
+  const feedNeeds = homeFeedNeeds(ctx.feedRows, (ctx.ops?.proposals ?? []).map((p) => p.id));
+  const openEntry = (row: LeeFeedRow) => {
+    const ref = row.entry.ref;
+    if (ref.pty_id != null) {
+      ctx.setSection('work');
+      ctx.selectRow(`work:agent:${ref.pty_id}`);
+    } else if (ref.task_id) {
+      ctx.setSection('work');
+      ctx.selectRow(`work:task:${ref.task_id}`);
+    } else if (ref.op || ref.proposal_id) ctx.setSection('ops');
+  };
+  const dismissEntry = (row: LeeFeedRow) => void ctx.api?.feed.act(row.entry.id, 'dismiss').catch(() => {});
 
   const act = (row: AttentionFeedRow, action: 'approve' | 'deny') => {
     const api = ctx.copilotApi;
@@ -332,6 +356,14 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
       open: () => replyInWork(r),
       approval: r.item.kind === 'approval' ? r.item : null,
       replyItem: r.item,
+    })),
+    ...feedNeeds.map((r) => ({
+      id: `home:${r.id}`,
+      title: r.title,
+      ptyId: r.entry.ref.pty_id ?? null,
+      open: () => openEntry(r),
+      dismiss: () => dismissEntry(r),
+      about: { kind: 'feed' as const, id: r.entry.id, label: r.title, record: r.entry },
     })),
   ];
   useEffect(() => {
@@ -500,7 +532,7 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
         {digestError && !digest ? (
           <p className="home-sentence is-muted">{digestError}</p>
         ) : (
-          <p className="home-sentence">{digest ? meanwhileSentence(digest, { waiting }) : 'Loading…'}</p>
+          <p className="home-sentence">{digest ? meanwhileSentence(digest, { waiting: waiting + feedNeeds.length }) : 'Loading…'}</p>
         )}
 
         {needs.length > 0 && (
@@ -553,6 +585,14 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
                 {waiting - needs.length} more in Work
               </button>
             )}
+          </div>
+        )}
+
+        {feedNeeds.length > 0 && (
+          <div className="home-needs">
+            {feedNeeds.map((r) => (
+              <HomeFeedNeed key={r.id} ctx={ctx} row={r} selected={isSel(`home:${r.id}`)} onDismiss={() => dismissEntry(r)} />
+            ))}
           </div>
         )}
 
@@ -617,6 +657,113 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
         )}
       </div>
     </section>
+  );
+};
+
+/**
+ * One Lee Feed entry as a Meanwhile row: its first action as the plain
+ * button, Dismiss as the quiet second. An action that types or runs text
+ * (confirm_text) or takes an input shows it first, then asks again (C3).
+ */
+const HomeFeedNeed: React.FC<{ ctx: CockpitCtx; row: LeeFeedRow; selected: boolean; onDismiss: () => void }> = ({ ctx, row, selected, onDismiss }) => {
+  const entry = row.entry;
+  const id = `home:${row.id}`;
+  const [pending, setPending] = useState<FeedAction | null>(null);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const primary = entry.actions[0] ?? null;
+
+  const act = (action: FeedAction, payload?: Record<string, string>) => {
+    if (!ctx.api || busy) return;
+    if (entry.kind === 'proposal') ctx.copilotApi?.logCeremony('confirm', 'proposal');
+    setBusy(true);
+    setError(null);
+    ctx.api.feed
+      .act(entry.id, action.id, payload)
+      .then((r) => {
+        if (!r.success) {
+          setError(r.error || 'failed');
+          return;
+        }
+        setPending(null);
+        const ra = rendererAction(r);
+        if (ra?.action === 'what-next') ctx.requestSteward({ kind: 'what-next' });
+        else if (ra?.action === 'link-goal') {
+          const taskId = ra.taskId ?? entry.ref.task_id ?? null;
+          if (taskId) ctx.requestSteward({ kind: 'link-goal', taskId });
+        }
+      })
+      .catch(() => setError('failed'))
+      .finally(() => setBusy(false));
+  };
+  const start = (a: FeedAction) => {
+    if (a.confirm_text || a.input) {
+      setPending(a);
+      setValue(a.input?.kind === 'select' ? a.input.options?.[0] ?? '' : '');
+    } else act(a);
+  };
+  const sub = plainLine(entry.text, 120);
+
+  return (
+    <div data-cockpit-row={id} className={`home-need is-feed${selected ? ' is-selected' : ''}`} onClick={() => ctx.selectRow(id)}>
+      <Dot kind="needs" />
+      <div className="home-need-main">
+        <div className="home-need-name">{entry.title}</div>
+        {sub && (
+          <div className="home-need-ask" title={sub}>
+            {entry.text_is_agent ? `Agent says: ${sub}` : sub}
+          </div>
+        )}
+      </div>
+      {!pending && (
+        <div className="home-need-actions" onClick={(e) => e.stopPropagation()}>
+          {primary && (
+            <Btn kind="plain" disabled={busy || !ctx.api} title={primary.confirm_text ?? undefined} onClick={() => start(primary)}>
+              {primary.label}
+            </Btn>
+          )}
+          <Btn kind="quiet" disabled={busy || !ctx.api} title="Dismiss (⌘⌫)" onClick={onDismiss}>
+            Dismiss
+          </Btn>
+        </div>
+      )}
+      {pending && (
+        <div className="home-need-confirm" onClick={(e) => e.stopPropagation()}>
+          {pending.confirm_text && (
+            <>
+              <div className="home-muted">{pending.label} will do exactly this:</div>
+              <pre className="home-need-confirm-text">{pending.confirm_text}</pre>
+            </>
+          )}
+          {pending.input?.kind === 'text' && (
+            <input autoFocus className="home-need-input" value={value} placeholder={pending.input.placeholder} onChange={(e) => setValue(e.target.value)} />
+          )}
+          {pending.input?.kind === 'select' && (
+            <select className="home-need-input" value={value} onChange={(e) => setValue(e.target.value)}>
+              {(pending.input.options ?? []).map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="home-need-actions">
+            <Btn
+              kind="plain"
+              disabled={busy || (!!pending.input && !value)}
+              onClick={() => act(pending, pending.input ? { [pending.input.param]: value } : undefined)}
+            >
+              Confirm {pending.label}
+            </Btn>
+            <Btn kind="quiet" onClick={() => setPending(null)}>
+              Cancel
+            </Btn>
+          </div>
+        </div>
+      )}
+      {error && <div className="home-error home-need-confirm">{error}</div>}
+    </div>
   );
 };
 

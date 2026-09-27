@@ -2,13 +2,15 @@
  * Work detail's inline pickers (cockpit-design §4.2): Assign… for an agent
  * with no task (moved here from the retired Tabs section: attach it to an
  * open task, or make a task from it) and Link to a goal… for a task (moved
- * from Tasks; also what a lint fix's link-goal request opens, §2.2).
+ * from Tasks; also what a lint fix's link-goal request opens, §2.2) and
+ * Priority… for a task (the Important / Urgent override menu, moved from
+ * Tasks' quadrant chip: each on, off or auto, where auto clears it).
  */
 
 import React, { useEffect, useState } from 'react';
 import type { CockpitTask } from '../../../../shared/cockpit';
-import { taskTitle } from '../../../lib/cockpitModel';
-import { confirmTask, createTask, fetchGoals, fetchWorkstreams, linkTask, type GoalRef, type WorkstreamRef } from '../../../lib/hesterCockpit';
+import { overrideChoice, overridePatch, taskTitle, type OverrideChoice } from '../../../lib/cockpitModel';
+import { confirmTask, createTask, fetchGoals, fetchWorkstreams, linkTask, patchTask, type GoalRef, type WorkstreamRef } from '../../../lib/hesterCockpit';
 import { Btn, Chip } from '../ui';
 import type { CockpitCtx } from '../CockpitHost';
 
@@ -152,6 +154,57 @@ export const LinkPicker: React.FC<{ ctx: CockpitCtx; task: CockpitTask; onDone: 
         <Btn kind="plain" onClick={save}>
           Save links
         </Btn>
+        <Btn kind="quiet" onClick={onDone}>
+          Cancel
+        </Btn>
+      </div>
+    </div>
+  );
+};
+
+const OVERRIDE_CHOICES: OverrideChoice[] = ['on', 'off', 'auto'];
+
+export const PriorityPicker: React.FC<{ ctx: CockpitCtx; task: CockpitTask; onDone: () => void }> = ({ ctx, task, onDone }) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pick = (axis: 'important' | 'urgent', choice: OverrideChoice) => {
+    if (busy || overrideChoice(task.overrides, axis) === choice) return;
+    setBusy(true);
+    void patchTask(ctx.workspace, task.id, overridePatch(axis, choice)).then((r) => {
+      setBusy(false);
+      if (r.ok) {
+        ctx.hester.refresh();
+        onDone();
+      } else setError(r.error);
+    });
+  };
+  const derived = [
+    task.serves.length ? `serves ${task.serves.join(', ')}` : 'serves no goal',
+    task.urgency ? `urgent: ${task.urgency.signal}${task.urgency.ref ? ` (${task.urgency.ref})` : ''}` : 'no urgency signal',
+  ].join(' · ');
+  return (
+    <div className="work-picker">
+      <div className="work-picker-note">{derived}</div>
+      {(['important', 'urgent'] as const).map((axis) => {
+        const cur = overrideChoice(task.overrides, axis);
+        return (
+          <div key={axis} className="work-chips" role="group" aria-label={axis === 'important' ? 'Important' : 'Urgent'}>
+            <span className="work-picker-axis">{axis === 'important' ? 'Important' : 'Urgent'}</span>
+            {OVERRIDE_CHOICES.map((c) => (
+              <Chip
+                key={c}
+                className={cur === c ? 'is-on' : undefined}
+                label={`${cur === c ? '✓ ' : ''}${c}`}
+                title={c === 'auto' ? 'Derived from goals and urgency signals' : undefined}
+                disabled={busy}
+                onClick={() => pick(axis, c)}
+              />
+            ))}
+          </div>
+        );
+      })}
+      {error && <div className="work-error">{error}</div>}
+      <div className="work-picker-actions">
         <Btn kind="quiet" onClick={onDone}>
           Cancel
         </Btn>

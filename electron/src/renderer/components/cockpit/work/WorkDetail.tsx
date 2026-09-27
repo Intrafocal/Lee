@@ -5,7 +5,10 @@
  * options), the reply box (all four quick replies, a textarea sent exactly
  * as written, C3), "Along the way" from the agent's activity (§7.1) and the
  * quiet links: Check in, Rename, Open terminal in Manual, Accept / Discard,
- * Link to a goal…, Assign… and Close agent.
+ * Link to a goal…, and for an open task Promote… (to a workstream),
+ * Escalate → Explore (an exploration seeded from it, shown in the Library),
+ * Hester's view (/suggest, answered inline with its proposals) and
+ * Priority… (the Important / Urgent overrides); then Assign… and Close agent.
  *
  * Esc and ↑/↓ are Work's (WorkSection): back to the list, or the previous or
  * next item without going back.
@@ -13,9 +16,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { AgentSummary, AttentionItem } from '../../../../shared/copilot';
-import { CHECKIN_PROMPT, type CockpitTask } from '../../../../shared/cockpit';
+import { CHECKIN_PROMPT, type CockpitTask, type StewardAnswer } from '../../../../shared/cockpit';
 import { taskTitle, type TileModel } from '../../../lib/cockpitModel';
-import { closeTask, confirmTask } from '../../../lib/hesterCockpit';
+import { closeTask, confirmTask, escalateTask, promoteTask, suggestTask } from '../../../lib/hesterCockpit';
 import {
   alongTheWay,
   approvalLine,
@@ -28,9 +31,10 @@ import {
 } from '../../../lib/workModel';
 import { Btn, Chip, Dot, Eyebrow, QuietLinks, type DotKind, type QuietLink } from '../ui';
 import { AgentMarkdown } from '../AgentMarkdown';
+import { StewardAnswerView } from '../StewardAnswerView';
 import type { CockpitCtx } from '../CockpitHost';
 import { choosable, choose, decide, sendText } from './actions';
-import { AssignPicker, LinkPicker } from './Pickers';
+import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
 
 /** What the detail view shows, resolved from the list id by WorkSection. */
 export interface DetailSubject {
@@ -59,7 +63,8 @@ interface WorkDetailProps {
   onBack: () => void;
 }
 
-type Panel = 'assign' | 'link' | null;
+type Panel = 'assign' | 'link' | 'priority' | null;
+type ViewState = { phase: 'idle' } | { phase: 'loading' } | { phase: 'done'; answer: StewardAnswer } | { phase: 'error'; error: string };
 
 export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply, openLink, onBack }) => {
   const { item, tile, task, agent, ptyId } = subject;
@@ -67,6 +72,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<Panel>(openLink && task ? 'link' : null);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [view, setView] = useState<ViewState>({ phase: 'idle' });
+  const viewSeq = useRef(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const replyRef = useRef<HTMLTextAreaElement | null>(null);
   const alive = useRef(true);
@@ -86,6 +93,12 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   useEffect(() => {
     if (openLink && task) setPanel('link');
   }, [openLink, task]);
+
+  // Hester's view belongs to the task it was asked about.
+  useEffect(() => {
+    viewSeq.current++;
+    setView({ phase: 'idle' });
+  }, [task?.id]);
 
   useEffect(() => {
     if (!confirmClose) return;
@@ -178,6 +191,42 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   }
   if (task && task.status !== 'done' && task.status !== 'discarded') {
     links.push({ label: 'Link to a goal…', onClick: () => setPanel((p) => (p === 'link' ? null : 'link')) });
+    if (!task.workstream) {
+      links.push({
+        label: 'Promote…',
+        onClick: () => taskAct(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream'),
+      });
+    }
+    links.push({
+      label: 'Escalate → Explore',
+      onClick: () =>
+        act(async () => {
+          const r = await escalateTask(ctx.workspace, task.id);
+          if (!r.ok) {
+            ctx.notify(r.error, 'error');
+            return false;
+          }
+          ctx.hester.refresh();
+          ctx.notify(`Exploration started: ${r.data.exploration.title}`);
+          // The task stays open; its exploration is in the Library.
+          ctx.setSection('library');
+          ctx.selectRow(`explore:${r.data.exploration.id}`);
+          return true;
+        }),
+    });
+    links.push({
+      label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view",
+      onClick: () => {
+        if (view.phase === 'loading') return;
+        const seq = ++viewSeq.current;
+        setView({ phase: 'loading' });
+        void suggestTask(ctx.workspace, task.id).then((r) => {
+          if (!alive.current || seq !== viewSeq.current) return;
+          setView(r.ok ? { phase: 'done', answer: r.data } : { phase: 'error', error: r.error });
+        });
+      },
+    });
+    links.push({ label: 'Priority…', onClick: () => setPanel((p) => (p === 'priority' ? null : 'priority')) });
   }
   if (tile && !tile.task && ptyId != null) links.push({ label: 'Assign…', onClick: () => setPanel((p) => (p === 'assign' ? null : 'assign')) });
   if (tile) {
@@ -317,6 +366,12 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         />
       )}
       {panel === 'link' && task && <LinkPicker ctx={ctx} task={task} onDone={() => setPanel(null)} />}
+      {panel === 'priority' && task && <PriorityPicker ctx={ctx} task={task} onDone={() => setPanel(null)} />}
+      {view.phase === 'loading' && <div className="work-hint">Hester is weighing which goals this serves and where to start…</div>}
+      {view.phase === 'error' && <div className="work-error">{view.error}</div>}
+      {view.phase === 'done' && (
+        <StewardAnswerView key={view.answer.request_id} ctx={ctx} answer={view.answer} onClose={() => setView({ phase: 'idle' })} />
+      )}
     </div>
   );
 };

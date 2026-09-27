@@ -272,6 +272,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         replyItem: canTextReply(w.item) ? w.item : null,
         dismiss: w.item.actions.includes('dismiss') ? () => fireSwipe(w, 'dismiss') : undefined,
         rename: tile ? () => ctx.openRename({ ptyId: tile.ptyId, taskId: tile.task?.id ?? null, current: tile.title, provider: tile.provider }) : undefined,
+        checkin: tile?.canCheckin && !tile.checkin ? () => ctx.openCheckin(tile.ptyId, w.name) : undefined,
         about: tile ? aboutTile(tile) : { kind: 'feed', id: w.item.id, label: w.item.title, record: w.item },
       };
     }
@@ -291,6 +292,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       approval: tile?.approval ?? null,
       replyItem: tile?.replyItem ?? null,
       rename: () => ctx.openRename({ ptyId: r.ptyId, taskId: task?.id ?? null, current: r.title, provider: tile?.provider ?? task?.agent?.provider ?? null }),
+      checkin: tile?.canCheckin && !tile.checkin ? () => ctx.openCheckin(tile.ptyId, r.title) : undefined,
       about: tile ? aboutTile(tile) : task ? { kind: 'task', id: task.id, label: r.title } : null,
     };
   };

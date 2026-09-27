@@ -369,6 +369,20 @@ test('paletteRoute: an about asks /cockpit/ask, none streams /context/stream', (
   assert.deepEqual(paletteRoute(undefined), { kind: 'stream', path: '/context/stream' });
 });
 
+test('stewardExtras: an about answer keeps its proposals and steer for Home; plain text has none', () => {
+  const { stewardExtras } = palette;
+  assert.equal(stewardExtras(null), null);
+  assert.equal(stewardExtras({ text: 'Just do it', proposals: [], steer: null }), null);
+  assert.deepEqual(stewardExtras({ text: 't', proposals: [{ id: 'p', label: 'Create a task: fix login' }], steer: null }), {
+    proposals: ['Create a task: fix login'],
+    steer: null,
+  });
+  assert.deepEqual(stewardExtras({ text: 't', proposals: [], steer: { task_id: 't1', pty_id: 3, text: '  Run the tests first ' } }), {
+    proposals: [],
+    steer: 'Run the tests first',
+  });
+});
+
 test('paletteAboutFor: the Cockpit selection, published ref first, tile fallback, nothing guessed', () => {
   const { paletteAboutFor, publishPaletteAbout, publishedPaletteAbout, aboutLine, selectionKey } = palette;
   const tabDisplay = new Map([[7, { provider: 'claude', name: 'Login fix' }], [8, { provider: 'codex', name: null }]]);

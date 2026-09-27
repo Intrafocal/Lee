@@ -22,6 +22,21 @@ export type PaletteRoute =
   | { kind: 'steward'; path: '/cockpit/ask'; about: AboutRef }
   | { kind: 'stream'; path: '/context/stream' };
 
+/**
+ * What a steward answer carries beyond its text (§6.2): its proposals and
+ * any steer. The palette lists them and hands the answer to Home, where
+ * StewardAnswerView can act on them; an answer with neither is just text.
+ */
+export function stewardExtras(answer: { proposals?: readonly { label: string }[] | null; steer?: { text: string } | null } | null | undefined): {
+  proposals: string[];
+  steer: string | null;
+} | null {
+  if (!answer) return null;
+  const proposals = (answer.proposals ?? []).map((p) => p.label);
+  const steer = answer.steer?.text?.trim() || null;
+  return proposals.length || steer ? { proposals, steer } : null;
+}
+
 /** An about asks the steward; no about streams the general question. */
 export function paletteRoute(about: AboutRef | null | undefined): PaletteRoute {
   return about ? { kind: 'steward', path: '/cockpit/ask', about } : { kind: 'stream', path: '/context/stream' };

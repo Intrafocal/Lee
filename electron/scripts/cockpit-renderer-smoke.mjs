@@ -1106,6 +1106,40 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
   });
 }
 
+// Lee Feed entries (§4.1): check-in and escalate proposals live in Home's
+// Meanwhile; lint, operation failures and run proposals are Ops'.
+const leeRow = (id, over = {}) => {
+  const entry = {
+    id,
+    version: 1,
+    workspace: WS,
+    kind: 'proposal',
+    severity: 'needs-you',
+    producer: 'checkin',
+    title: `Check in on ${id}?`,
+    text: 'Busy for a while with no report.',
+    text_is_agent: false,
+    created_at: ago(5),
+    updated_at: ago(5),
+    state: 'open',
+    item_ref: null,
+    ref: { pty_id: 7 },
+    actions: [{ id: 'checkin', label: 'Check in', style: 'primary', confirm_text: 'How is it going?' }],
+    pinned: false,
+    expires_at: null,
+    ...over,
+  };
+  return { source: 'lee', id: `lee:${id}`, kind: entry.kind, severity: entry.severity, at: entry.updated_at, title: entry.title, entry };
+};
+const leeRows = [
+  leeRow('ck'),
+  leeRow('esc', { producer: 'ops', title: 'Escalate test to a task?', ref: { proposal_id: 'opesc_1', op: 'test' } }),
+  leeRow('run', { producer: 'ops', ref: { proposal_id: 'p1', op: 'test' } }),
+  leeRow('fail', { producer: 'ops', kind: 'failure', ref: { op: 'test', run_id: 'r1' } }),
+  leeRow('lint', { producer: 'lint', kind: 'lint', ref: { diag_id: 'd1' } }),
+  leeRow('save', { producer: 'ops', severity: 'ambient', ref: { proposal_id: 'opsave_1', op: 'x' } }),
+];
+
 // ---------------------------------------------------------------------------
 // Cockpit design R1 (cockpit-design §2, §3, §6.3, §10 R1): greeting(),
 // meanwhileSentence(), Home's needs rows and sentences, the Launcher's three
@@ -1120,6 +1154,8 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     homeQuestion,
     meanwhileSentence,
     homeNeeds,
+    homeFeedNeeds,
+    workNeedsCount,
     q2Sentence,
     startSentence,
     arrivedLine,
@@ -1194,6 +1230,18 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     assert.deepEqual(homeNeeds([]), []);
   });
 
+  test('homeFeedNeeds: Lee entries that need you and live nowhere else (not lint, op failures, Ops run proposals)', () => {
+    assert.deepEqual(homeFeedNeeds(leeRows, ['p1']).map((r) => r.entry.id), ['ck', 'esc']);
+    assert.deepEqual(homeFeedNeeds(leeRows).map((r) => r.entry.id), ['ck', 'esc', 'run'], 'a proposal Ops no longer holds comes here');
+    assert.deepEqual(homeFeedNeeds([]), []);
+  });
+
+  test('workNeedsCount: only what Work shows (attention that needs you, no summaries, no Lee entries)', () => {
+    const att = (id, severity, kind = 'waiting') => ({ source: 'attention', id: `att:${id}`, kind: 'decision', severity, at: ago(1), title: id, item: item({ id, severity, kind }) });
+    assert.equal(workNeedsCount([att('a', 'needs-you'), att('b', 'blocking', 'approval'), att('c', 'ambient', 'review'), att('s', 'needs-you', 'summary'), ...leeRows]), 2);
+    assert.equal(workNeedsCount(leeRows), 0, 'a check-in proposal alone lights no Work dot');
+  });
+
   test('Or start from: sentences, not labels (phone vs devices, singulars, empties)', () => {
     assert.equal(startSentence({ kind: 'blank' }), 'A blank page');
     assert.equal(startSentence({ kind: 'open_questions', count: 2, items: [{}, {}] }), '2 open questions');
@@ -1241,6 +1289,8 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     const busy = railDots({ work: 2, goals: [{ flagged: false, last_evaluated_at: stale }], opsFailing: 0, opsProposals: 1, now });
     assert.deepEqual(busy, { home: false, work: true, goals: true, library: false, ops: true, history: false });
     assert.equal(railDots({ work: 0, goals: [{ flagged: true, last_evaluated_at: fresh }], opsFailing: 1, opsProposals: 0, now }).goals, true);
+    const homeOnly = railDots({ home: 1, work: 0, goals: [], opsFailing: 0, opsProposals: 0, now });
+    assert.deepEqual(homeOnly, { home: true, work: false, goals: false, library: false, ops: false, history: false }, 'Lee entries light Home, not Work');
     for (const v of Object.values(busy)) assert.equal(typeof v, 'boolean');
   });
 
@@ -1399,6 +1449,7 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
   const guard = v.createNextGuard({ warn: (m) => warnings.push(m) });
   const views = {
     home: h(v.HomeSection, { ctx, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
+    'home (Lee entries)': h(v.HomeSection, { ctx: { ...ctx, feedRows: [...ctx.feedRows, ...leeRows] }, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
     'home (nothing to pick up)': h(v.HomeSection, { ctx: { ...ctx, feedRows: [] }, returnNonce: 0, seed: { opener: { ...opener, pick_up: null }, digest, name: null } }),
     goals: h(v.GoalsSection, { ctx }),
     ops: h(v.OperationsSection, { ctx }),
@@ -1417,6 +1468,7 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     assert.equal(nextCount(html.home), 1, 'Home: Continue');
     assert.match(html.home, /ui-btn is-next[^>]*>Continue<span class="ui-kbd">⇧⌘0</);
     assert.equal(nextCount(html['home (nothing to pick up)']), 0);
+    assert.equal(nextCount(html['home (Lee entries)']), 1, 'Lee entries add no next step');
     assert.equal(nextCount(html.goals), 1, 'Goals: Evaluate on the first goal due');
     assert.equal(nextCount(html.ops), 0, 'Ops: none');
     assert.equal(nextCount(html.history), 0);
@@ -1440,6 +1492,19 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
     assert.ok(!/Ask Hester<\/div>|about:|Copilot mode/.test(s), 'the Ask card, about chips and the Copilot mode placeholder are gone');
     assert.ok(!/cockpit-badge/.test(s), 'no count badges');
     assert.match(html['home (nothing to pick up)'], />What&#x27;s on your mind\?</);
+  });
+
+  test('Home: Lee entries with no other place show in Meanwhile (first action plain, Dismiss quiet)', () => {
+    const s = html['home (Lee entries)'];
+    assert.ok(s.includes('Check in on ck?'), 'the check-in proposal');
+    assert.ok(s.includes('Escalate test to a task?'), 'the escalate proposal');
+    assert.ok(!s.includes('Check in on fail?') && !s.includes('Check in on lint?') && !s.includes('Check in on run?'), 'Ops keeps failures, lint and run proposals');
+    assert.ok(!s.includes('Check in on save?'), 'ambient entries are not needs-you rows');
+    assert.match(s, /ui-btn is-plain[^>]*>Check in</);
+    assert.match(s, /ui-btn is-quiet[^>]*>Dismiss</);
+    assert.match(s, /title="How is it going\?"[^>]*>Check in</, 'the text it types is on the button');
+    assert.ok(!s.includes('home-need-confirm-text'), 'and shown verbatim after the first click, before it is sent (C3)');
+    assert.ok(s.includes('Six are waiting on you.'), 'the sentence counts them');
   });
 
   test('rail: icons with labels and tooltips; the only badge is a dot', () => {

@@ -2212,6 +2212,34 @@ textarea,
   font-weight: 600;
 }
 
+/* A steward answer's proposals and steer (cockpit-design §6.2): listed, acted on in Home */
+.command-palette-proposals {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.command-palette-proposals-head {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.command-palette-proposals ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.command-palette-steer {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
 /* Footer with actions */
 .command-palette-footer {
   display: flex;

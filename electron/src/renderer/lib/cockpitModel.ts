@@ -1422,6 +1422,33 @@ export function homeNeeds(rows: readonly FeedRow[], limit = 3): AttentionFeedRow
     .map((x) => x.row);
 }
 
+/** Attention rows that need you: what Work's "Waiting on you" shows (summaries are Home's digest). */
+export function workNeedsCount(rows: readonly FeedRow[]): number {
+  return rows.filter((r) => r.source === 'attention' && r.severity !== 'ambient' && r.item.kind !== 'summary').length;
+}
+
+/** A Lee Feed row (an entry a Lee producer posted: check-in, ops, lint, tabs). */
+export type LeeFeedRow = Extract<FeedRow, { source: 'lee' }>;
+
+/**
+ * Lee Feed entries that need you and have no other place (§4.1): a check-in
+ * proposal, an operation agent's "Escalate to a task?", and the like. They
+ * show in Home's Meanwhile. Lint findings are Ops' lint group, an
+ * operation's failure is Ops (and Work's In flight), and a run proposal is
+ * Ops' Proposals (`opsProposalIds`), so those stay out. Feed order.
+ */
+export function homeFeedNeeds(rows: readonly FeedRow[], opsProposalIds: Iterable<string> = []): LeeFeedRow[] {
+  const inOps = new Set(opsProposalIds);
+  return rows.filter(
+    (r): r is LeeFeedRow =>
+      r.source === 'lee' &&
+      r.severity !== 'ambient' &&
+      r.entry.producer !== 'lint' &&
+      !(r.entry.kind === 'failure' && r.entry.ref.op) &&
+      !(r.entry.ref.proposal_id && inOps.has(r.entry.ref.proposal_id)),
+  );
+}
+
 /** The Q2 candidate fields a sentence needs (lib/hesterCockpit Q2Candidate). */
 export interface Q2Like {
   kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
@@ -1514,7 +1541,9 @@ export function evaluationDue(lastEvaluatedAt: string | null | undefined, now: n
 }
 
 export interface RailInput {
-  /** Needs-you Work items (feedNeedsCount) plus tasks that need you. */
+  /** Lee Feed entries only Home shows (homeFeedNeeds). */
+  home?: number;
+  /** What Work shows as needing you: attention items (workNeedsCount) plus tasks that need you. */
   work: number;
   goals: readonly { flagged: boolean; last_evaluated_at: string | null }[] | null | undefined;
   opsFailing: number;
@@ -1524,13 +1553,14 @@ export interface RailInput {
 
 /**
  * The rail's ember dots (§2.1): a section gets one when it holds something
- * that needs you. No counts anywhere. Home, Library and History never do:
- * Home's needs-you rows are Work's items, and ideas are never urgent.
+ * that needs you. No counts anywhere. Home's own are the Lee Feed entries
+ * nothing else shows (its attention rows are Work's items, and count there);
+ * Library and History never do: ideas are never urgent.
  */
 export function railDots(input: RailInput): Record<SectionId, boolean> {
   const goals = input.goals ?? [];
   return {
-    home: false,
+    home: (input.home ?? 0) > 0,
     work: input.work > 0,
     goals: goals.some((g) => g.flagged || evaluationDue(g.last_evaluated_at, input.now)),
     library: false,

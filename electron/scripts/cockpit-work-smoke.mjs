@@ -526,6 +526,16 @@ test('render: a text item’s detail shows all four quick replies, the reply box
   assert.match(html, /Assign…/, 'an agent with no task offers Assign…');
 });
 
+test('render: an open task’s detail keeps Tasks’ actions as quiet links (Promote…, Escalate → Explore, Hester’s view, Priority…)', () => {
+  const task = { id: 't1', title: 'Fix login', name: null, status: 'running', confirmed: true, serves: [], workstream: null, created_at: ago(30), overrides: null, urgency: null };
+  const html = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task, tile: tile(3, { task }) }));
+  for (const label of ['Promote…', 'Escalate → Explore', 'Hester&#x27;s view', 'Priority…', 'Link to a goal…']) assert.ok(html.includes(label), label);
+  const inStream = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, workstream: 'ws1' }, tile: tile(3) }));
+  assert.ok(!inStream.includes('Promote…'), 'no Promote… once it is in a workstream');
+  const closed = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, status: 'done' }, tile: null, ptyId: null }));
+  for (const label of ['Promote…', 'Escalate → Explore', 'Priority…']) assert.ok(!closed.includes(label), `closed: no ${label}`);
+});
+
 test('render: Library has no next step', () => {
   const html = render.library(fixtureCtx());
   assert.equal(nextCount(html), 0);

@@ -383,6 +383,13 @@
   color: var(--text-3);
 }
 
+.work-picker-axis {
+  min-width: 72px;
+  align-self: center;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 .work-picker-actions {
   display: flex;
   align-items: center;

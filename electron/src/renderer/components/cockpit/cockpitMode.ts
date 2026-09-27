@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { AgentState, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
-import type { AboutRef, DeepView, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
+import type { AboutRef, DeepView, GoIntoFrom, LeeMode, ModeReason, StewardAnswer, TabRunState } from '../../../shared/cockpit';
 import {
   agentPtysFromSnapshot,
   deepSessionOf,
@@ -264,6 +264,8 @@ const launcherListeners = new Set<() => void>();
  */
 export type StewardRequest =
   | { kind: 'ask'; about: AboutRef; question?: string }
+  /** An answer the palette already has (§6.2): Home shows it, proposals and all, without asking again. */
+  | { kind: 'answer'; answer: StewardAnswer; question: string }
   | { kind: 'what-next' }
   | { kind: 'link-goal'; taskId: string };
 

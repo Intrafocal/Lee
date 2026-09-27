@@ -11,7 +11,10 @@
  * About (cockpit-design §6.2): opened while the Cockpit has a selected item,
  * the palette shows "about: <kind> <title> ×" above the field and asks
  * through POST /cockpit/ask (the steward); × makes the question general
- * again, and a general question streams through /context/stream. The input
+ * again, and a general question streams through /context/stream. A steward
+ * answer with proposals or a steer lists them under its text; "Review in
+ * Home" (⌘⏎) hands the whole answer to Home's StewardAnswerView, where they
+ * can be accepted (no second model call). The input
  * has no ring (the §1.4 rule): its rule brightens and the caret shows.
  */
 
@@ -19,9 +22,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 import { addReference } from '../lib/hesterDeep';
 import { askSteward } from '../lib/hesterCockpit';
-import type { AboutRef } from '../../shared/cockpit';
+import type { AboutRef, StewardAnswer } from '../../shared/cockpit';
 import { cockpitModeStore } from './cockpit/cockpitMode';
-import { aboutLine, paletteAboutFor, paletteRoute, publishedPaletteAbout } from './paletteAbout';
+import { aboutLine, paletteAboutFor, paletteRoute, publishedPaletteAbout, stewardExtras } from './paletteAbout';
 
 const HESTER_DAEMON_PORT = 9000;
 
@@ -101,6 +104,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [isDaemonHealthy, setIsDaemonHealthy] = useState<boolean | null>(null);
   const [kept, setKept] = useState<'idle' | 'saving' | 'kept' | 'error'>('idle');
   const [about, setAbout] = useState<AboutRef | null>(null);
+  const [steward, setSteward] = useState<{ answer: StewardAnswer; question: string } | null>(null);
   const askSeq = useRef(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -156,6 +160,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         setIsProcessing(false);
         setKept('idle');
         setAbout(null);
+        setSteward(null);
         sessionIdRef.current = `palette-${Date.now()}`;
       }, 200);
     }
@@ -185,6 +190,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     setPhases([]);
     setViewingIndex(-1);
     setResponse(null);
+    setSteward(null);
     setError(null);
     setIsProcessing(true);
 
@@ -194,8 +200,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       const seq = ++askSeq.current;
       const r = await askSteward(workspace, queryText.trim(), route.about);
       if (seq !== askSeq.current) return;
-      if (r.ok) setResponse({ session_id: '', status: 'done', text: r.data.text });
-      else setError(r.error || 'Hester could not answer');
+      if (r.ok) {
+        setResponse({ session_id: '', status: 'done', text: r.data.text });
+        setSteward({ answer: r.data, question: queryText.trim() });
+      } else setError(r.error || 'Hester could not answer');
       setIsProcessing(false);
       return;
     }
@@ -336,6 +344,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     }
   }, [response, onOpenAsTab, onClose]);
 
+  // Review in Home (§6.2): the whole steward answer, so its proposals and steer can be acted on.
+  const extras = stewardExtras(steward?.answer);
+  const handleReviewInHome = useCallback(() => {
+    if (!steward) return;
+    if (cockpitModeStore.requestSteward({ kind: 'answer', answer: steward.answer, question: steward.question })) onClose();
+    else setError('The Cockpit is not available here');
+  }, [steward, onClose]);
+
   // Keep (Deep D1 §5.5): the last response as a quote reference in the open exploration.
   const handleKeep = useCallback(async () => {
     const text = response?.text?.trim();
@@ -378,6 +394,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         e.preventDefault();
         e.stopPropagation();
         handleOpenAsTab();
+        return;
+      }
+
+      // Cmd+Enter hands a steward answer with proposals to Home
+      if (e.key === 'Enter' && e.metaKey && extras && !error) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleReviewInHome();
       }
     };
 
@@ -385,7 +409,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       window.addEventListener('keydown', handleKeyDown, true);
       return () => window.removeEventListener('keydown', handleKeyDown, true);
     }
-  }, [isOpen, onClose, response, error, handleOpenAsTab, exploration, handleKeep]);
+  }, [isOpen, onClose, response, error, handleOpenAsTab, exploration, handleKeep, extras, handleReviewInHome]);
 
   if (!isOpen) return null;
 
@@ -526,6 +550,26 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 )}
               </div>
             )}
+            {extras && (
+              <div className="command-palette-proposals">
+                {extras.proposals.length > 0 && (
+                  <>
+                    <div className="command-palette-proposals-head">Hester proposes</div>
+                    <ul>
+                      {extras.proposals.map((label, i) => (
+                        <li key={`${i}:${label}`}>{label}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {extras.steer && (
+                  <>
+                    <div className="command-palette-proposals-head">Hester would send the agent</div>
+                    <pre className="command-palette-steer">{extras.steer}</pre>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -545,6 +589,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               >
                 {kept === 'kept' ? 'Kept' : kept === 'error' ? 'Keep failed · retry' : 'Keep'}
                 <kbd>⌘K</kbd>
+              </button>
+            )}
+            {extras && !error && (
+              <button className="command-palette-btn secondary" onClick={handleReviewInHome} title="Show this answer in Home, where its proposals can be accepted">
+                Review in Home
+                <kbd>⌘⏎</kbd>
               </button>
             )}
             {response?.session_id && !error && (

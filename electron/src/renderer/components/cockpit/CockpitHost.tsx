@@ -23,6 +23,7 @@ import type { AttentionItem, AttentionSnapshot, CopilotAPI } from '../../../shar
 import type { AboutRef, CockpitAPI, GoIntoFrom, OperationsSnapshot, TabRuntimeInfo } from '../../../shared/cockpit';
 import {
   feedNeedsCount,
+  homeFeedNeeds,
   keyAction,
   mergeFeed,
   railDots,
@@ -31,6 +32,7 @@ import {
   checkinToasts,
   taskNeedsYou,
   tileModel,
+  workNeedsCount,
   type FeedRow,
   type ModelTab,
   type SectionId,
@@ -84,6 +86,8 @@ export interface RowHandle {
   ptyId?: number | null;
   /** Rename this row's task or agent (e). */
   rename?: () => void;
+  /** Check in on this row's agent (⇧⌘.). */
+  checkin?: () => void;
   /** What Ask Hester is "about" when this row was the last one selected (v4 §8.2). */
   about?: AboutRef | null;
 }
@@ -504,7 +508,8 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
           if (ptyId != null) break;
           await new Promise((r) => setTimeout(r, 50));
         }
-        if (ptyId != null && !req.activate) cockpitModeStore.select({ kind: 'tile', id: String(ptyId) });
+        // A background create selects nothing: agents live in Work's list, and a
+        // selection the user didn't make would take Enter, ⌘⏎ and ⌘E (§2.1).
         api.createTabResult({ request_id: req.request_id, tab_id: tabId, pty_id: ptyId, ...(ptyId == null ? { error: 'no_pty' } : {}) });
       });
     } catch {
@@ -628,14 +633,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     if (!active || active === document.body) rootRef.current?.focus({ preventScroll: true });
   }, [popover, shown]);
 
-  const selectedTile = state.selected?.kind === 'tile' ? tiles.find((t) => String(t.ptyId) === state.selected?.id) ?? null : null;
   const selectedRow = state.selected?.kind === 'row' ? rowsRef.current.find((r) => r.id === state.selected?.id) ?? null : null;
-  // An item ref, not a title (v4 §8.2): a tile with a task is about that task.
-  const aboutRef: AboutRef | null = selectedTile
-    ? selectedTile.task
-      ? { kind: 'task', id: selectedTile.task.id, label: selectedTile.title }
-      : { kind: 'tile', id: String(selectedTile.ptyId), label: selectedTile.title, record: { pty_id: selectedTile.ptyId, title: selectedTile.title, provider: selectedTile.provider } }
-    : selectedRow?.about ?? null;
+  // An item ref, not a title (v4 §8.2): each section's rows carry their own.
+  const aboutRef: AboutRef | null = selectedRow?.about ?? null;
   // The palette's "about" (§6.2) reads the Cockpit's selected item here.
   currentAbout = shown ? aboutRef : null;
   // ...and through its registry, keyed by the selection (a null ref would hide its tile fallback).
@@ -723,7 +723,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     if (!act) return;
     e.preventDefault();
     const sel = state.selected;
-    const tile = selectedTile;
     const row = selectedRow;
     switch (act.kind) {
       case 'row': {
@@ -736,26 +735,24 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
         break;
       }
       case 'enter':
-        if (tile) goInto(tile.ptyId, 'tile');
-        else if (row?.open) row.open();
+        row?.open?.();
         break;
       case 'approve':
-        approve(tile?.approval ?? row?.approval, 'approve');
+        approve(row?.approval, 'approve');
         break;
       case 'deny':
-        approve(tile?.approval ?? row?.approval, 'deny');
+        approve(row?.approval, 'deny');
         break;
       case 'reply': {
-        const item = tile?.replyItem ?? row?.replyItem ?? null;
-        if (item) openReply(item, tile?.title ?? item.source.tab_label ?? item.title);
+        const item = row?.replyItem ?? null;
+        if (item) openReply(item, item.source.tab_label ?? item.title);
         break;
       }
       case 'checkin':
-        if (tile?.canCheckin) openCheckin(tile.ptyId, tile.title);
+        row?.checkin?.();
         break;
       case 'rename':
-        if (tile) openRename({ ptyId: tile.ptyId, taskId: tile.task?.id ?? null, current: tile.title, provider: tile.provider });
-        else row?.rename?.();
+        row?.rename?.();
         break;
       case 'run':
         setPopover({ kind: 'run' });
@@ -827,8 +824,10 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   if (!state.enabled || !available || state.mode !== 'cockpit') return null;
 
   // One ember dot per section that holds something needing you; no counts (§2.1).
+  // Each section's dot counts what that section shows (Lee entries are Home's).
   const dots: NavDots = railDots({
-    work: needsCount + (hester.snapshot?.tasks.open ?? []).filter(taskNeedsYou).length,
+    home: homeFeedNeeds(feedRows, (ops?.proposals ?? []).map((p) => p.id)).length,
+    work: workNeedsCount(feedRows) + (hester.snapshot?.tasks.open ?? []).filter(taskNeedsYou).length,
     goals: goalsData?.goals,
     opsFailing: (ops?.operations ?? []).filter((o) => o.status === 'failed' || o.status === 'crashed' || o.status === 'unhealthy').length,
     opsProposals: ops?.proposals.length ?? 0,
