@@ -52,8 +52,10 @@ FIELDS = (
     "updated_at", "closed_at", "version", "worktree",
     # v4: quadrant derivation (contract section 4) and scope growth
     "importance_rank", "overrides", "urgency_cleared_at", "files_at_first_report",
+    # docs/15-Usage.md §5: the task's agent usage (AgentUsage), from agent.usage
+    "usage",
 )
-FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions")
+FOLLOWER_ONLY = ("busy_ms", "turns", "files", "sessions", "usage")
 # Persisted in the frontmatter but not part of the API shape.
 EXTRA_KEYS = ("applied_through", "name_custom_seen")
 MAX_PARSE_CACHE = 5000
@@ -188,6 +190,7 @@ def default_task(task_id: str, workspace: str, now: Optional[datetime] = None) -
         "overrides": None,
         "urgency_cleared_at": None,
         "files_at_first_report": None,
+        "usage": None,
         "applied_through": None,
     }
 

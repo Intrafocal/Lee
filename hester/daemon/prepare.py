@@ -25,7 +25,7 @@ import httpx
 if TYPE_CHECKING:
     from .registries import PromptRegistry
 
-from .copilot.model_log import record_model_call
+from .copilot.model_log import ollama_usage, record_model_call
 from .thinking_depth import ThinkingDepth, DepthClassification, classify_complexity
 from .tools.base import HESTER_TOOLS, ToolDefinition, get_available_tools
 
@@ -706,6 +706,7 @@ class OllamaFunctionGemma:
         """
         started = time.monotonic()
         ok = False
+        usage: Dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 payload = {
@@ -727,6 +728,7 @@ class OllamaFunctionGemma:
                 if response.status_code == 200:
                     ok = True
                     data = response.json()
+                    usage = ollama_usage(data)
                     msg = data.get("message", {})
                     tool_calls = msg.get("tool_calls", [])
                     if tool_calls:
@@ -752,6 +754,7 @@ class OllamaFunctionGemma:
             record_model_call(
                 provider="ollama", model=self.model, op="generate", location="local",
                 ok=ok, duration_ms=(time.monotonic() - started) * 1000.0,
+                cost_basis="local", **usage,
             )
 
         return None
@@ -2188,6 +2191,7 @@ class OllamaGemmaClient:
 
         started = time.monotonic()
         ok = False
+        usage: Dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 payload: Dict[str, Any] = {
@@ -2213,7 +2217,9 @@ class OllamaGemmaClient:
 
                 if response.status_code == 200:
                     ok = True
-                    return response.json().get("response", "")
+                    data = response.json()
+                    usage = ollama_usage(data)
+                    return data.get("response", "")
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
             # Treat a timeout as unavailability: the next call skips it instantly
@@ -2229,6 +2235,7 @@ class OllamaGemmaClient:
             record_model_call(
                 provider="ollama", model=ollama_name, op="generate", location="local",
                 ok=ok, duration_ms=(time.monotonic() - started) * 1000.0,
+                cost_basis="local", **usage,
             )
 
         return None

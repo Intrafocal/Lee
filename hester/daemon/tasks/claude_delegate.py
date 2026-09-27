@@ -4,6 +4,7 @@ Claude Delegate - Claude Code Agent SDK integration for task execution.
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
@@ -137,25 +138,29 @@ class ClaudeDelegate:
             # Use custom transport if cli_path is configured
             transport = self._create_transport(prompt, options) if self.cli_path else None
 
-            async for message in query(prompt=prompt, options=options, transport=transport):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            output_parts.append(block.text)
-                            if self.on_output:
-                                self.on_output(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            tool_calls.append({
-                                "name": block.name,
-                                "input": block.input,
-                            })
-                elif isinstance(message, ResultMessage):
-                    result_info = {
-                        "result": message.result,
-                        "cost_usd": message.total_cost_usd,
-                        "usage": message.usage,
-                        "is_error": message.is_error,
-                    }
+            started = time.monotonic()
+            try:
+                async for message in query(prompt=prompt, options=options, transport=transport):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                output_parts.append(block.text)
+                                if self.on_output:
+                                    self.on_output(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                tool_calls.append({
+                                    "name": block.name,
+                                    "input": block.input,
+                                })
+                    elif isinstance(message, ResultMessage):
+                        result_info = {
+                            "result": message.result,
+                            "cost_usd": message.total_cost_usd,
+                            "usage": message.usage,
+                            "is_error": message.is_error,
+                        }
+            finally:
+                self._record_usage(result_info, started)
 
             output = "".join(output_parts)
             batch.output = output
@@ -212,23 +217,27 @@ class ClaudeDelegate:
             # Use custom transport if cli_path is configured
             transport = self._create_transport(prompt, options) if self.cli_path else None
 
-            async for message in query(prompt=prompt, options=options, transport=transport):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            output_parts.append(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            tool_calls.append({
-                                "name": block.name,
-                                "input": block.input,
-                            })
-                elif isinstance(message, ResultMessage):
-                    result_info = {
-                        "result": message.result,
-                        "cost_usd": message.total_cost_usd,
-                        "usage": message.usage,
-                        "is_error": message.is_error,
-                    }
+            started = time.monotonic()
+            try:
+                async for message in query(prompt=prompt, options=options, transport=transport):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                output_parts.append(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                tool_calls.append({
+                                    "name": block.name,
+                                    "input": block.input,
+                                })
+                    elif isinstance(message, ResultMessage):
+                        result_info = {
+                            "result": message.result,
+                            "cost_usd": message.total_cost_usd,
+                            "usage": message.usage,
+                            "is_error": message.is_error,
+                        }
+            finally:
+                self._record_usage(result_info, started)
 
             output = "".join(output_parts)
             batch.output = output
@@ -252,6 +261,30 @@ class ClaudeDelegate:
             raise RuntimeError(
                 "claude-code-sdk is not installed. Install it with: pip install claude-code-sdk"
             ) from e
+
+    def _record_usage(self, result_info: Optional[Dict[str, Any]], started: float) -> None:
+        """One ``model.call`` for the delegate run (docs/15-Usage.md §3.4). Never raises."""
+        try:
+            from ..copilot.model_log import record_model_call
+
+            info = result_info or {}
+            usage = info.get("usage") if isinstance(info.get("usage"), dict) else {}
+            tokens = {
+                "input": usage.get("input_tokens"),
+                "output": usage.get("output_tokens"),
+                "cache_read": usage.get("cache_read_input_tokens"),
+                "cache_write": usage.get("cache_creation_input_tokens"),
+            }
+            # The CLI bills an API key when one is in its environment, else the subscription.
+            basis = "billed" if os.environ.get("ANTHROPIC_API_KEY") else "subscription"
+            record_model_call(
+                provider="anthropic", model=self.model or "claude", op="delegate", location="cloud",
+                ok=bool(result_info) and not info.get("is_error"),
+                duration_ms=(time.monotonic() - started) * 1000.0,
+                tokens=tokens, cost_usd=info.get("cost_usd"), cost_basis=basis,
+            )
+        except Exception as e:
+            logger.debug(f"delegate usage not recorded: {e}")
 
     async def _check_api_key(self) -> None:
         """Verify API key is available."""
