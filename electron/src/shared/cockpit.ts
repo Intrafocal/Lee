@@ -10,6 +10,7 @@
  */
 
 import type { AgentState, LeeStatusBlock } from './copilot';
+import type { DeskCardBrief, DeskCardKind } from './desk';
 
 // ---------------------------------------------------------------------------
 // Event log additions (written through logCockpitEvent() in cockpit-bus.ts)
@@ -44,7 +45,10 @@ export type CockpitEventType =
   | 'deep.view'
   | 'deep.action'
   | 'deep.affordance'
-  | 'deep.switcher';
+  | 'deep.switcher'
+  | 'desk.zoom'
+  | 'deep.idle_push'
+  | 'deep.extend';
 
 // ---------------------------------------------------------------------------
 // Tabs (package A)
@@ -243,8 +247,9 @@ export type TaskStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'review' | 
 /**
  * Where a task came from. 'explore' refs a spike node ('<exp>/<node>'); 'exploration'
  * (Deep next R3) refs a hand-off record ('<exp>#<answer id>'), which Hester's follower keeps in step.
+ * 'page' (Desk D2) refs a hand-off record ('<page id>#<answer id>'); 'exploration' is the pre-Desk form.
  */
-export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval' | 'exploration';
+export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval' | 'exploration' | 'page';
 
 // ---------------------------------------------------------------------------
 // Copilot v4: goals and steward (contract 2026-09-26 v4 §9)
@@ -264,7 +269,7 @@ export type ProposalAction = 'create_task' | 'launch' | 'link_goal' | 'set_lead'
 export interface Proposal { id: string; label: string; action: ProposalAction; params: Record<string, unknown> }
 export interface StewardSteer { task_id: string; pty_id: number | null; text: string }
 export interface StewardAnswer { text: string; proposals: Proposal[]; steer?: StewardSteer | null; surface: StewardSurface; request_id: string; packet?: unknown; stale_measure?: string | null }
-export type AboutKind = 'task' | 'exploration' | 'goal' | 'lint' | 'feed' | 'tile' | 'operation';
+export type AboutKind = 'task' | 'exploration' | 'goal' | 'lint' | 'feed' | 'tile' | 'operation' | 'page';
 export interface AboutRef { kind: AboutKind; id: string; label: string; record?: unknown }
 
 /** A launch's git worktree (claude `--worktree <slug>`), contract v3 §4. */
@@ -768,9 +773,10 @@ export type DeepView = 'page';                       // 'board' | 'browse' | 'wo
 export type DeepAction = 'capture' | 'keep' | 'ask' | 'explore' | 'insert' | 'follow_up' | 'dismiss';
 export type AffordancePattern = 'question' | 'url' | 'later';
 export type DeepRendererEvent =
-  | { type: 'deep.input'; data: { exploration_id: string; view: DeepView; keys: number; clicks: number; wheels: number; span_ms: number } }
-  | { type: 'deep.view'; data: { exploration_id: string; view: DeepView } }
-  | { type: 'deep.action'; data: { action: DeepAction; exploration_id: string; chars?: number } }
+  | { type: 'deep.input'; data: { exploration_id?: string; card_id?: string; card_kind?: DeskCardKind; view: DeepView; keys: number; clicks: number; wheels: number; span_ms: number } }
+  | { type: 'deep.view'; data: { exploration_id?: string; card_id?: string; card_kind?: DeskCardKind; view: DeepView } }
+  | { type: 'deep.action'; data: { action: DeepAction; exploration_id?: string; card_id?: string; card_kind?: DeskCardKind; chars?: number } }
+  | { type: 'desk.zoom'; data: { card_id: string | null; card_kind: DeskCardKind | null; via: 'land' | 'key' | 'click' | 'link' } }
   | { type: 'deep.affordance'; data: { pattern: AffordancePattern; outcome: 'accepted' | 'ignored' } }
   | { type: 'deep.switcher'; data: { from: LeeMode; to: LeeMode; via: 'tap' | 'overlay' | 'chip' } };
 
@@ -818,21 +824,24 @@ export interface DeepSessionRecord {
 }
 export type OpenerSurface =
   | { kind: 'blank' }
-  | { kind: 'open_questions'; count: number; items: Array<{ exploration_id: string; exploration_title: string; question_id: string; text: string }> }
+  | { kind: 'open_questions'; count: number; items: Array<{ exploration_id: string; exploration_title: string; question_id: string; text: string; card_id?: string; card_title?: string }> }
   | { kind: 'captured_away'; count: number; items: Array<{ someday_id: string; text: string; surface: string; created_at: string }> }
-  | { kind: 'reading_list'; count: number; items: Array<{ exploration_id: string; reference_id: string; title: string; url: string }> }
+  | { kind: 'reading_list'; count: number; items: Array<{ exploration_id: string; reference_id: string; title: string; url: string; card_id?: string }> }
   | { kind: 'q2'; items: unknown[] }
-  | { kind: 'quiet'; items: Array<{ exploration_id: string; title: string; last_touched_at: string }> };
+  | { kind: 'quiet'; items: Array<{ exploration_id: string; title: string; last_touched_at: string; card_id?: string }> };
 export interface Opener {
   generated_at: string; workspace: string;
   pick_up: null | {
     exploration: { id: string; title: string; last_touched_at: string };
     stopped_at: string | null;
     arrived: { answers: number; open_questions: number };
+    /** Desk D2 §6.4: the card (exploration above is its legacy alias). */
+    card?: DeskCardBrief;
+    stopped_line?: number | null;
   };
   surfaces: OpenerSurface[];
 }
-export interface DeepAnswerEvent { workspace: string; exploration_id: string; answer_id: string; status: AnswerStatus }
+export interface DeepAnswerEvent { workspace: string; exploration_id: string; answer_id: string; status: AnswerStatus; card_id?: string }
 
 /** Main asks a window's renderer to create a tab and report its ids. */
 export interface CreateTabRequest {
@@ -1018,6 +1027,13 @@ export function encodeWorkspaceHeader(workspace: string): string {
 // ---------------------------------------------------------------------------
 // Cockpit design (docs/plans/2026-09-27-cockpit-design-contracts.md §9)
 // ---------------------------------------------------------------------------
+
+/** The four Cockpit sections (Desk D2, docs/16-Desk.md §6). C switches to these; SectionId and LEGACY_SECTION stay until the merge step. */
+export type CockpitSectionId = 'home' | 'work' | 'goals' | 'ops';
+export const COCKPIT_SECTION: Record<string, CockpitSectionId> = {
+  copilot: 'home', feed: 'work', tasks: 'work', explore: 'home', someday: 'home', files: 'home', tabs: 'home',
+  library: 'home', history: 'home', home: 'home', work: 'work', goals: 'goals', ops: 'ops',
+};
 
 /** The six Cockpit sections (§2.2). Remembered ids from older builds map through LEGACY_SECTION. */
 export type SectionId = 'home' | 'work' | 'goals' | 'library' | 'ops' | 'history';
