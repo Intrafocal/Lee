@@ -38,11 +38,58 @@ fi
 exit 0
 `;
 
+/**
+ * docs/15-Usage.md §3.1: Claude Code's status line. POSTs the render's JSON to
+ * Lee in the background (never blocks the render, exits fast when Lee is
+ * down), then prints the user's own status line when they have one (its
+ * command is copied from ~/.claude/settings.json at install), else a small
+ * default: \`model · 5h 42% · 7d 18%\`.
+ */
+export const STATUSLINE_SCRIPT = `#!/bin/sh
+# Lee relay for Claude Code's status line. Written by Lee at startup; edits are overwritten.
+IN=$(cat)
+DIR="$HOME/.lee/hooks"
+HDR="$DIR/auth-header"
+BASE="\${LEE_API_URL:-http://127.0.0.1:9001}"
+PORT="\${BASE#http://127.0.0.1:}"
+case "$PORT" in ''|*[!0-9]*) BASE="http://127.0.0.1:9001" ;; esac
+if [ -r "$HDR" ]; then
+  printf '%s' "$IN" | curl -fsS --max-time 1 -X POST "$BASE/agent/status" \\
+    -H @"$HDR" \\
+    -H "Content-Type: application/json" \\
+    -H "X-Lee-Pty-Id: \${LEE_PTY_ID:-}" \\
+    -H "X-Lee-Window-Id: \${LEE_WINDOW_ID:-}" \\
+    --data-binary @- >/dev/null 2>&1 &
+fi
+USER_LINE="$DIR/claude-statusline-user.sh"
+if [ -s "$USER_LINE" ]; then
+  printf '%s' "$IN" | /bin/sh "$USER_LINE"
+  exit $?
+fi
+FLAT=$(printf '%s' "$IN" | tr -d '\\n')
+MODEL=$(printf '%s' "$FLAT" | sed -n 's/.*"display_name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+pct() {
+  V=$(printf '%s' "$FLAT" | sed -n "s/.*\\"$1\\"[[:space:]]*:[[:space:]]*{[^}]*\\"used_percentage\\"[[:space:]]*:[[:space:]]*\\([0-9.]*\\).*/\\1/p")
+  [ -n "$V" ] && printf '%.0f' "$V" 2>/dev/null
+}
+H5=$(pct five_hour)
+D7=$(pct seven_day)
+LINE="\${MODEL:-Claude}"
+[ -n "$H5" ] && LINE="$LINE · 5h $H5%"
+[ -n "$D7" ] && LINE="$LINE · 7d $D7%"
+printf '%s\\n' "$LINE"
+exit 0
+`;
+
 const MATCHER_EVENTS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']);
 
 export interface HookPaths {
   dir: string;
   script: string;
+  statusline: string;
+  /** The user's own statusLine command, copied from ~/.claude/settings.json (absent when they have none). */
+  userStatusline: string;
+  userClaudeSettings: string;
   authHeader: string;
   settings: string;
   tokenFile: string;
@@ -53,6 +100,9 @@ export function hookPaths(home: string = os.homedir()): HookPaths {
   return {
     dir,
     script: path.join(dir, 'claude-hook.sh'),
+    statusline: path.join(dir, 'claude-statusline.sh'),
+    userStatusline: path.join(dir, 'claude-statusline-user.sh'),
+    userClaudeSettings: path.join(home, '.claude', 'settings.json'),
     authHeader: path.join(dir, 'auth-header'),
     settings: path.join(dir, 'claude-settings.json'),
     tokenFile: path.join(home, '.lee', 'api-token'),
@@ -66,7 +116,26 @@ export function shQuote(p: string): string {
   return `'${p.replace(/'/g, `'\\''`)}'`;
 }
 
-export function buildClaudeSettings(scriptPath: string, permissionRequest: boolean): Record<string, unknown> {
+/** The user's own status line from ~/.claude/settings.json: its command and padding, or null. */
+export function readUserStatusLine(file: string): { command: string; padding?: number } | null {
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const sl = doc && typeof doc === 'object' ? doc.statusLine : null;
+    if (!sl || typeof sl !== 'object' || typeof sl.command !== 'string' || !sl.command.trim()) return null;
+    if (sl.type !== undefined && sl.type !== 'command') return null;
+    // Lee's own relay, if a user copied it in, would call itself.
+    if (sl.command.includes('claude-statusline.sh')) return null;
+    return { command: sl.command, ...(typeof sl.padding === 'number' ? { padding: sl.padding } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+export function buildClaudeSettings(
+  scriptPath: string,
+  permissionRequest: boolean,
+  statusline?: { script: string; padding?: number },
+): Record<string, unknown> {
   const hooks: Record<string, unknown> = {};
   for (const event of HOOK_EVENTS) {
     if (event === 'PermissionRequest' && !permissionRequest) continue;
@@ -75,7 +144,15 @@ export function buildClaudeSettings(scriptPath: string, permissionRequest: boole
     };
     hooks[event] = [MATCHER_EVENTS.has(event) ? { matcher: '*', ...entry } : entry];
   }
-  return { hooks };
+  if (!statusline) return { hooks };
+  return {
+    hooks,
+    statusLine: {
+      type: 'command',
+      command: `/bin/sh ${shQuote(statusline.script)}`,
+      ...(statusline.padding !== undefined ? { padding: statusline.padding } : {}),
+    },
+  };
 }
 
 function writeIfChanged(file: string, content: string, mode: number): void {
@@ -114,6 +191,8 @@ export interface InstallOptions {
   home?: string;
   enabled?: boolean;
   permissionRequest?: boolean;
+  /** docs/15-Usage.md §3.1 status line relay (default on with hooks). */
+  statusLine?: boolean;
 }
 
 /**
@@ -131,8 +210,19 @@ export function installClaudeHooks(opts: InstallOptions = {}): HookPaths {
   fs.chmodSync(paths.dir, 0o700);
   writeIfChanged(paths.script, HOOK_SCRIPT, 0o755);
   writeAuthHeader(paths);
+  const statusLine = enabled && (opts.statusLine ?? true);
+  const user = statusLine ? readUserStatusLine(paths.userClaudeSettings) : null;
+  if (statusLine) {
+    writeIfChanged(paths.statusline, STATUSLINE_SCRIPT, 0o755);
+    if (user) writeIfChanged(paths.userStatusline, `# Your statusLine command from ~/.claude/settings.json, copied by Lee at startup.\n${user.command}\n`, 0o700);
+    else fs.rmSync(paths.userStatusline, { force: true });
+  } else {
+    fs.rmSync(paths.statusline, { force: true });
+    fs.rmSync(paths.userStatusline, { force: true });
+  }
   if (enabled) {
-    const settings = JSON.stringify(buildClaudeSettings(paths.script, permissionRequest), null, 2) + '\n';
+    const sl = statusLine ? { script: paths.statusline, ...(user?.padding !== undefined ? { padding: user.padding } : {}) } : undefined;
+    const settings = JSON.stringify(buildClaudeSettings(paths.script, permissionRequest, sl), null, 2) + '\n';
     writeIfChanged(paths.settings, settings, 0o644);
   } else {
     fs.rmSync(paths.settings, { force: true });

@@ -15,6 +15,7 @@ import { Socket } from 'net';
 import { ipcMain } from 'electron';
 import { copilotAuthMiddleware, authenticateWsToken, noteDeviceWsInput, noteDeviceView, issueDeviceToken } from './copilot/auth';
 import { registerCoreRoutes } from './copilot/core-routes';
+import { registerCarryRoutes } from './copilot/carry';
 import { copilotBus } from './copilot/bus';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
@@ -980,6 +981,8 @@ export class APIServer {
 
   private setupRoutes(): void {
     registerCoreRoutes(this.app, { getHesterPort: () => this.pairingHesterPort, getPairingName: () => this.pairingName, isPairingEnabled: () => this.pairingEnabled, log: (level, message, details) => this.ptyManager.log(level, message, details) });
+    // Carry for devices (docs/14-Deep-Work.md §8.1): Lee main forwards to Hester.
+    registerCarryRoutes(this.app, { log: (level, message, details) => this.ptyManager.log(level, message, details) });
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
       res.json({

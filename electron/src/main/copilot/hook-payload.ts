@@ -48,6 +48,12 @@ export interface NormalizedHook {
   reason: string | null;
   /** Sent by Lee's Pi extension ('pi'); Claude Code's payloads have none. */
   provider: string | null;
+  /**
+   * docs/15-Usage.md §3.3: the turn's usage, on a Stop from Lee's Pi extension
+   * (`{ by_model: [{ provider, model, tokens, cost_usd }] }`). Raw here; the
+   * usage tracker validates it. Claude Code's payloads have none.
+   */
+  usage: unknown;
 }
 
 function str(v: unknown): string | null {
@@ -84,6 +90,7 @@ export function normalizeHook(headerEvent: string | null | undefined, body: unkn
     last_assistant_message: str(b.last_assistant_message),
     reason: str(b.reason),
     provider: str(b.provider),
+    usage: isRecord(b.usage) ? b.usage : null,
   };
 }
 

@@ -1,6 +1,6 @@
 /**
- * HTTP routes for the attention queue, focus, handoff and the Claude Code
- * hook relay on Lee main :9001.
+ * HTTP routes for the attention queue, focus, handoff, the Claude Code
+ * hook relay and the status line relay (docs/15-Usage.md §3.1) on Lee main :9001.
  *
  * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §4.4, §5.6, §6.4;
  * Deep sessions: docs/plans/2026-09-26-deep-d1-contracts.md §2.1.
@@ -200,16 +200,34 @@ export function registerQueueRoutes(app: Application, deps: { ptyManager: PTYMan
     }
   });
 
+  // docs/15-Usage.md §3.1: the status line relay (claude-statusline.sh), same callers as hooks.
+  app.post('/agent/status', (req: Request, res: Response) => {
+    if (!hookAllowed(req, res)) {
+      res.status(403).json({ success: false, error: 'Forbidden: status lines are accepted from this machine only' });
+      return;
+    }
+    try {
+      send(res, q().handleStatus(hookHeaders(req), req.body));
+    } catch (err) {
+      deps.ptyManager.log('WARN', 'Copilot: status line handling failed', { error: String(err) });
+      res.status(204).end();
+    }
+  });
+
   // express.json() runs before auth and rejects oversized (>100 KB) or
   // malformed hook bodies. Keep the hook's header-only information and
   // answer 204, so Claude is never affected.
   app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
-    if (req.method !== 'POST' || req.path !== '/agent/hook' || res.headersSent) {
+    if (req.method !== 'POST' || (req.path !== '/agent/hook' && req.path !== '/agent/status') || res.headersSent) {
       next(err);
       return;
     }
     if (!isLoopback(req) || !sharedTokenMatches(req)) {
       res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing token' });
+      return;
+    }
+    if (req.path === '/agent/status') {
+      res.status(204).end();
       return;
     }
     if (!badHookLogged) {
