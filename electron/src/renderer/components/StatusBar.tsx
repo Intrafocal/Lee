@@ -10,7 +10,7 @@
  * - The Hester menu (right-click) carries the steward: "Steward: on / quiet
  *   today / off", with Quiet today as the toggle (cockpit-design §2.1)
  *
- * In the Cockpit the bar is quieter (cockpit-design §2.1): "Lee · Cockpit ⌘0"
+ * In the Cockpit the bar is quieter (cockpit-design §2.1): "Cockpit ⌘0", the workspace
  * on the left; "2 agents working · 1 waiting" (neutral, never ember),
  * New ⌘N, Ask ⌘/ and the clock on the right.
  */
@@ -306,35 +306,33 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
-        {inCockpit && <span className="status-item status-lee">Lee ·</span>}
         <CockpitModeChip />
-        {!inCockpit && (
-          <div className="status-workspace-container" ref={workspaceMenuRef}>
-            <button
-              className="status-item status-workspace"
-              onClick={onWorkspaceClick}
-              onContextMenu={handleWorkspaceContextMenu}
-            >
-              <span className="status-icon"><Icon name="folder" size={14} /></span>
-              <span className="status-text">{formatWorkspace(workspace)}</span>
-            </button>
+        {/* The workspace switcher shows in every mode (Cockpit, Deep, Manual). */}
+        <div className="status-workspace-container" ref={workspaceMenuRef}>
+          <button
+            className="status-item status-workspace"
+            onClick={onWorkspaceClick}
+            onContextMenu={handleWorkspaceContextMenu}
+          >
+            <span className="status-icon"><Icon name="folder" size={14} /></span>
+            <span className="status-text">{formatWorkspace(workspace)}</span>
+          </button>
 
-            {/* Workspace context menu */}
-            {workspaceMenuOpen && (
-              <div className="workspace-context-menu">
-                <button onClick={onWorkspaceClick}>
-                  Change Workspace
-                </button>
-                <button onClick={handleEditConfig}>
-                  Edit Config
-                </button>
-                <button onClick={handleReloadConfig}>
-                  Reload Config
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+          {/* Workspace context menu */}
+          {workspaceMenuOpen && (
+            <div className="workspace-context-menu">
+              <button onClick={onWorkspaceClick}>
+                Change Workspace
+              </button>
+              <button onClick={handleEditConfig}>
+                Edit Config
+              </button>
+              <button onClick={handleReloadConfig}>
+                Reload Config
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="status-bar-center">

@@ -952,10 +952,7 @@
 }
 
 /* The status bar in the Cockpit (cockpit-design §2.1): quiet words, no ember. */
-.status-lee {
-  color: var(--text-3);
-  margin-right: -6px;
-}
+
 
 .status-cockpit-line {
   display: inline-flex;
