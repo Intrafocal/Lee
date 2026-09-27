@@ -3,6 +3,11 @@
  * header, Page column and margin, selection row, affordances, the ending
  * ritual sheet and the opener card. Themed from the Phosphor tokens
  * (styles/tokens.css); no new tokens.
+ *
+ * cockpit-design §6.1: Deep is a different room. --ground-0, your words in
+ * --font-write at 20/1.65, a quiet header with no fill, margin notes with no
+ * border or card, and no phosphor anywhere but the caret, the selection and
+ * the new-answer dot. Focus is the global rule (§1.4).
  */
 
 /* ---- overlay ---- */
@@ -14,12 +19,16 @@
   z-index: 901;
   display: flex;
   flex-direction: column;
-  background: var(--ground-1);
+  background: var(--ground-0);
   color: var(--text-1);
   font-family: var(--font-ui);
   font-size: 12px;
   overflow: hidden;
   outline: none;
+}
+
+.deep-overlay ::selection {
+  background: var(--selection);
 }
 
 /* Hidden, not display:none: scroll, cursor, selection and undo survive a hop. */
@@ -91,38 +100,47 @@
   cursor: default;
 }
 
-.deep-btn.is-primary {
-  background: var(--phosphor);
-  border-color: var(--phosphor);
-  color: var(--on-phosphor);
-}
-
-.deep-btn.is-primary kbd {
-  background: transparent;
-  border-color: rgba(var(--on-phosphor-rgb), 0.4);
-  color: var(--on-phosphor);
-}
-
 .deep-chip.is-on,
 .deep-toggle.is-on {
   color: var(--text-1);
-  border-color: var(--phosphor);
-  background: rgba(var(--phosphor-rgb), 0.14);
+  border-color: var(--ground-5);
+  background: var(--ground-4);
 }
 
-.deep-chip.is-unread {
-  color: var(--lit);
-  border-color: rgba(var(--lit-rgb), 0.45);
+/* A quiet button: text only (the header's counts, a note's actions). */
+.deep-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.deep-quiet:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.deep-quiet:disabled {
+  color: var(--text-3);
+  cursor: default;
 }
 
 .deep-link {
   font: inherit;
-  color: var(--phosphor-hi);
+  color: var(--text-1);
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
   text-decoration: underline;
+  text-decoration-color: var(--text-3);
   text-underline-offset: 2px;
 }
 
@@ -154,15 +172,16 @@
   font: inherit;
   font-size: 13px;
   color: var(--text-1);
-  background: var(--ground-2);
-  border: 1px solid var(--phosphor-deep);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
   border-radius: var(--radius-control);
   padding: var(--space-1) var(--space-2);
   outline: none;
+  caret-color: var(--caret);
 }
 
 .deep-ask-input:focus {
-  border-color: var(--phosphor);
+  border-color: var(--ground-5);
 }
 
 /* ---- header ---- */
@@ -171,18 +190,17 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--ground-3);
-  background: var(--ground-1);
-  min-height: 36px;
+  padding: 0 var(--space-4);
+  background: none;
+  height: 44px;
   flex-shrink: 0;
 }
 
 .deep-title {
   font: inherit;
   font-size: 13px;
-  font-weight: 600;
-  color: var(--text-1);
+  font-weight: 400;
+  color: var(--text-2);
   background: none;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
@@ -195,16 +213,16 @@
 }
 
 .deep-title:hover {
-  border-color: var(--ground-4);
+  color: var(--text-1);
 }
 
 .deep-title-input {
   font: inherit;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--text-1);
-  background: var(--ground-2);
-  border: 1px solid var(--phosphor);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-5);
   border-radius: var(--radius-control);
   padding: 2px var(--space-1);
   outline: none;
@@ -220,28 +238,13 @@
 }
 
 .deep-dirty.is-retrying {
-  background: var(--ember);
+  background: var(--text-2);
 }
 
-.deep-views {
-  display: flex;
-  gap: var(--space-1);
-  margin-left: var(--space-2);
-}
-
-.deep-view {
-  font: inherit;
+.deep-view-name {
+  font-size: 13px;
   color: var(--text-3);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 2px var(--space-1);
-  cursor: default;
-}
-
-.deep-view.is-active {
-  color: var(--text-1);
-  border-bottom-color: var(--phosphor);
+  margin-left: var(--space-1);
 }
 
 .deep-flash {
@@ -253,12 +256,17 @@
 }
 
 .deep-flash.is-warn {
-  color: var(--ember);
+  color: var(--text-1);
 }
 
+/* The wake line: something you asked to be woken for needs you (an ember dot). */
 .deep-wake {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   font: inherit;
-  color: var(--ember);
+  font-size: 13px;
+  color: var(--text-2);
   background: none;
   border: none;
   padding: 0;
@@ -269,22 +277,38 @@
   white-space: nowrap;
 }
 
-.deep-wake::before {
-  content: '● ';
+.deep-wake-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--needs-you);
+  flex-shrink: 0;
 }
 
-.deep-hint {
-  font: inherit;
-  color: var(--text-3);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  opacity: 0.8;
+.deep-wake:hover {
+  color: var(--text-1);
 }
 
-.deep-hint:hover {
+.deep-new-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-next);
+  flex-shrink: 0;
+}
+
+/* End session: a plain outline button. */
+.deep-btn.deep-end {
+  font-size: 13px;
   color: var(--text-2);
+  background: none;
+  border-color: var(--ground-5);
+  padding: 3px var(--space-3);
+  margin-left: var(--space-2);
+}
+
+.deep-btn.deep-end:hover {
+  color: var(--text-1);
 }
 
 .deep-pop-anchor {
@@ -332,9 +356,9 @@
 
 .deep-conflict {
   padding: var(--space-1) var(--space-4);
-  color: var(--ember);
-  background: rgba(var(--ember-rgb), 0.08);
-  border-bottom: 1px solid rgba(var(--ember-rgb), 0.3);
+  color: var(--text-1);
+  background: var(--ground-2);
+  border-bottom: 1px solid var(--ground-4);
   flex-shrink: 0;
 }
 
@@ -361,7 +385,7 @@
 }
 
 .deep-page-cm .cm-editor .cm-line.deep-h {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-1);
 }
 
@@ -384,11 +408,14 @@
 .deep-page-preview {
   padding: var(--space-5) 0 40vh;
   outline: none;
-  font-size: 15px;
-  line-height: 1.7;
+  font-family: var(--font-write);
+  font-size: 20px;
+  line-height: 1.65;
 }
 
 .deep-preview-hint {
+  font-family: var(--font-ui);
+  font-size: 12px;
   color: var(--text-3);
   margin-bottom: var(--space-3);
 }
@@ -414,56 +441,84 @@
   z-index: 3;
 }
 
+/* A note: no border, no card. Dot and label, then the question. */
+.deep-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 2px 0;
+  text-align: left;
+  font: inherit;
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.deep-note-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.deep-note-q {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.deep-note:hover .deep-note-q,
+.deep-marker-slot.is-open .deep-note-q {
+  color: var(--text-1);
+}
+
+/* The 6px dot: phosphor while unread (the new-answer dot), --text-3 once read. */
 .deep-marker {
   display: inline-block;
   position: relative;
-  width: 10px;
-  height: 10px;
-  margin-top: 8px;
+  width: 6px;
+  height: 6px;
   padding: 0;
   border-radius: 50%;
-  border: 2px solid var(--phosphor);
-  background: transparent;
-  cursor: pointer;
-  vertical-align: middle;
+  box-sizing: border-box;
+  background: var(--text-3);
   flex-shrink: 0;
 }
 
 .deep-marker.is-unread {
-  background: var(--phosphor);
-}
-
-.deep-marker.is-read {
-  border-color: var(--text-3);
+  background: var(--accent-next);
 }
 
 .deep-marker.is-error {
-  border-color: var(--ember);
+  background: none;
+  border: 1px solid var(--text-3);
 }
 
 .deep-marker.is-pending {
-  border-color: transparent;
-}
-
-.deep-pop-row .deep-marker {
-  margin-top: 0;
-  cursor: inherit;
+  background: none;
 }
 
 .deep-marker-spin {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   box-sizing: border-box;
-  border: 2px solid rgba(var(--phosphor-rgb), 0.25);
-  border-top-color: var(--phosphor);
+  border: 1px solid rgba(var(--text-3-rgb), 0.35);
+  border-top-color: var(--text-2);
   border-radius: 50%;
   animation: deep-spin 0.9s linear infinite;
 }
 
 .deep-marker .deep-marker-spin {
   position: absolute;
-  inset: -2px;
+  inset: -1px;
 }
 
 @keyframes deep-spin {
@@ -472,23 +527,15 @@
   }
 }
 
+/* The expanded note: the answer in the system sans at 14px, quiet actions. */
 .deep-card {
   margin-top: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  background: var(--ground-2);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-card);
-  box-shadow: 0 6px 18px rgba(var(--ground-0-rgb), 0.5);
-  font-size: 12px;
+  padding: 0 0 var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 14px;
   line-height: 1.5;
   max-height: 60vh;
   overflow: auto;
-}
-
-.deep-card-q {
-  color: var(--text-2);
-  font-style: italic;
-  margin-bottom: var(--space-1);
 }
 
 .deep-card-a {
@@ -496,14 +543,16 @@
 }
 
 .deep-card-err {
-  color: var(--ember);
+  color: var(--text-2);
+  font-size: 13px;
 }
 
 .deep-card-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-1) var(--space-2);
   margin-top: var(--space-2);
+  margin-left: calc(-1 * var(--space-1));
 }
 
 .deep-card-model {
@@ -516,47 +565,43 @@
 .deep-row-slot {
   position: absolute;
   z-index: 4;
-  width: 280px;
+  width: 380px; /* ROW_WIDTH in PageEditor */
 }
 
+/* The action row: four plain buttons, each with its key letter. No phosphor. */
 .deep-row {
   display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--ground-2);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-control);
-  box-shadow: 0 4px 12px rgba(var(--ground-0-rgb), 0.5);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--ground-0);
+  border-radius: 8px;
 }
 
 .deep-row-btn {
   display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font: inherit;
-  color: var(--text-2);
-  background: none;
-  border: none;
-  border-radius: var(--radius-tdeck);
-  padding: 2px var(--space-2);
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--ground-4);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px var(--space-3);
   cursor: pointer;
 }
 
 .deep-row-btn:hover,
 .deep-row-btn:focus {
-  color: var(--text-1);
-  background: var(--ground-4);
+  background: var(--ground-5);
   outline: none;
 }
 
 .deep-row-key {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--text-3);
-}
-
-.deep-row-btn:focus .deep-row-key {
-  color: var(--phosphor-hi);
 }
 
 /* ---- typing affordances (§7): dim, inline, never a popup ---- */
@@ -582,8 +627,8 @@
 }
 
 .deep-aff-btn:hover {
-  color: var(--phosphor-hi);
-  border-color: var(--phosphor-deep);
+  color: var(--text-1);
+  border-color: var(--ground-5);
 }
 
 @keyframes deep-aff-in {
@@ -595,7 +640,7 @@
   }
 }
 
-/* ---- ending ritual (§9) ---- */
+/* ---- ending ritual (§9; restyled with the primitives, cockpit-design §6.1) ---- */
 
 .deep-sheet-scrim {
   position: fixed;
@@ -606,59 +651,69 @@
   justify-content: center;
   background: var(--overlay);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-1);
 }
 
 .deep-sheet {
-  width: min(480px, calc(100vw - 2 * var(--space-4)));
+  width: min(520px, calc(100vw - 2 * var(--space-4)));
   max-height: calc(100vh - 2 * var(--space-5));
   overflow: auto;
-  padding: var(--space-4);
-  background: var(--ground-2);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-modal);
+  padding: var(--space-5);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-3);
+  border-radius: 10px;
   box-shadow: 0 16px 48px rgba(var(--ground-0-rgb), 0.7);
 }
 
 .deep-sheet-head {
   display: flex;
-  align-items: center;
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: var(--space-2);
+  align-items: baseline;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-1);
+  margin-bottom: var(--space-3);
 }
 
 .deep-sheet-label {
   display: block;
-  margin: var(--space-3) 0 var(--space-1);
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 13px;
   color: var(--text-2);
 }
 
+/* Where did you stop? Your words: Newsreader, borderless, an underline. */
 .deep-sheet-field {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  resize: vertical;
-  font: inherit;
-  font-size: 13px;
+  resize: none;
+  font-family: var(--font-write);
+  font-size: 19px;
+  line-height: 1.45;
   color: var(--text-1);
-  background: var(--ground-1);
-  border: 1px solid var(--ground-4);
-  border-radius: var(--radius-control);
-  padding: var(--space-2);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--ground-4);
+  border-radius: 0;
+  padding: var(--space-1) 0;
   outline: none;
+  caret-color: var(--caret);
+}
+
+.deep-sheet-field::placeholder {
+  color: var(--text-3);
 }
 
 .deep-sheet-field:focus {
-  border-color: var(--phosphor);
+  border-bottom-color: var(--ground-5);
 }
 
 .deep-sheet-questions {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  max-height: 160px;
+  gap: var(--space-2);
+  max-height: 180px;
   overflow: auto;
 }
 
@@ -669,25 +724,60 @@
   cursor: pointer;
 }
 
+.deep-sheet-q-text {
+  font-family: var(--font-write);
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
 .deep-sheet-q input {
-  accent-color: var(--phosphor);
+  accent-color: var(--text-2);
 }
 
 .deep-sheet-note {
-  margin-top: var(--space-1);
-  font-size: 11px;
+  margin-top: var(--space-2);
+  font-size: 12px;
 }
 
 .deep-sheet-ratings {
   display: flex;
-  gap: var(--space-1);
+  gap: var(--space-2);
+}
+
+/* A rating: the Chip's pill, pressed = one ground step up. */
+.deep-rating {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid var(--ground-4);
+  border-radius: 16px;
+  background: var(--ground-3);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.deep-rating:hover {
+  color: var(--text-1);
+}
+
+.deep-rating.is-on {
+  background: var(--ground-5);
+  border-color: var(--ground-5);
+  color: var(--text-1);
 }
 
 .deep-sheet-actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.deep-sheet-actions .deep-muted {
+  font-size: 12px;
 }
 
 /* ---- the opener (§8.2) ---- */
@@ -731,7 +821,7 @@
 }
 
 .deep-opener-input:focus {
-  border-color: var(--phosphor);
+  border-color: var(--ground-5);
 }
 
 .deep-opener-error {
