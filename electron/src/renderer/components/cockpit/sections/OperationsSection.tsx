@@ -10,6 +10,9 @@
  * Work lint lives here as its own group (it was in Copilot): each finding
  * with its fixes (the exact change shown first; a second click applies),
  * Dismiss and Ask Hester. The status bar's ⚠ flyout keeps the scoped ignores.
+ *
+ * Desk D2 §8: Usage (UsagePanel, moved from History, docs/15-Usage.md §6.3)
+ * sits at the end, pulled when Ops opens, never on a timer.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -18,6 +21,7 @@ import { formatAge, formatDuration, lintFamilyLabel, rendererAction } from '../.
 import { RunOpDialog, fillCommand } from '../RunMenu';
 import { Btn, Card, Dot, Eyebrow, Row, SectionHead, type DotKind } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
+import { UsagePanel } from './UsagePanel';
 
 const BAD = new Set(['failed', 'crashed', 'unhealthy']);
 
@@ -308,7 +312,8 @@ const LintGroup: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   );
 };
 
-export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
+/** usageSeed: fixture usage for the Usage panel (smokes). */
+export const OperationsSection: React.FC<{ ctx: CockpitCtx; usageSeed?: unknown }> = ({ ctx, usageSeed }) => {
   const snap = ctx.ops;
   const ops = snap?.operations ?? [];
   const [running, setRunning] = useState<OperationInfo | null>(null);
@@ -505,6 +510,9 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       )}
 
       <LintGroup ctx={ctx} />
+
+      <SectionHead title="Usage" summary="What today's work cost" className="cockpit-ops-usage" />
+      <UsagePanel ctx={ctx} seed={usageSeed} />
       {running && <RunOpDialog ctx={ctx} op={running} onClose={() => setRunning(null)} />}
     </section>
   );

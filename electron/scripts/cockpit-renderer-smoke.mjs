@@ -19,6 +19,12 @@
  * §6.1, §6.3; package UR): History's Usage tab from a fixture (spend and
  * subscription tokens never summed, Hester cloud / local and who asked, top
  * work items, no next step) and the Launcher's 85% note.
+ * Desk D2 §8 (package C): the four sections and every legacy id through
+ * COCKPIT_SECTION, digitTarget in each mode, Home's sentence, its needs
+ * capped at two with "n more in Work", the door's label with a card,
+ * without one and offline, deep_idle filtered from the Feed, the status bar
+ * and Work's waiting, cardIdForOrigin for both origin forms, Usage in Ops,
+ * and at most one next per section through the nextGuard.
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -40,17 +46,24 @@ assert.ok(!/^\s*import\s/m.test(code), 'cockpitModel.ts must have type-only impo
 const sharedResult = await esbuild.build({ entryPoints: [join(__dirname, '../src/shared/cockpit.ts')], bundle: true, format: 'esm', platform: 'node', write: false });
 const sharedCode = sharedResult.outputFiles[0].text;
 assert.ok(!/^\s*import\s/m.test(sharedCode), 'shared/cockpit.ts must have type-only imports (pure)');
+const deskResult = await esbuild.build({ entryPoints: [join(__dirname, '../src/shared/desk.ts')], bundle: true, format: 'esm', platform: 'node', write: false });
+const deskCode = deskResult.outputFiles[0].text;
+assert.ok(!/^\s*import\s/m.test(deskCode), 'shared/desk.ts must have type-only imports (pure)');
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'lee-cockpit-smoke-'));
 const tmpFile = join(tmpDir, 'cockpitModel.mjs');
 writeFileSync(tmpFile, code);
 const sharedFile = join(tmpDir, 'cockpitShared.mjs');
 writeFileSync(sharedFile, sharedCode);
+const deskFile = join(tmpDir, 'desk.mjs');
+writeFileSync(deskFile, deskCode);
 let mod;
 let shared;
+let desk;
 try {
   mod = await import(pathToFileURL(tmpFile).href);
   shared = await import(pathToFileURL(sharedFile).href);
+  desk = await import(pathToFileURL(deskFile).href);
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
@@ -585,17 +598,36 @@ test('D1 §1.2 nothing moves while the Cockpit is disabled', () => {
 
 test('deepSessionOf: an active source:deep focus in this workspace', () => {
   const focus = (o) => snapshot({ focus: { active: true, session_id: 'f1', source: 'deep', started_at: ago(3), item: null, quiet_count: 2, policy: 'none', deep: null, ...o } });
-  assert.deepEqual(deepSessionOf(focus({ deep: { exploration_id: 'exp-1', title: 'Clocks', workspace: WS } }), WS), { exploration_id: 'exp-1', title: 'Clocks' });
+  assert.deepEqual(deepSessionOf(focus({ deep: { exploration_id: 'exp-1', title: 'Clocks', workspace: WS } }), WS), { exploration_id: 'exp-1', title: 'Clocks', card_id: null });
   assert.deepEqual(
     deepSessionOf(focus({ item: { kind: 'exploration', workspace: WS, exploration_id: null, title: '' } }), WS),
-    { exploration_id: null, title: '' },
+    { exploration_id: null, title: '', card_id: null },
     'from the focus item; nothing open yet',
   );
   assert.equal(deepSessionOf(focus({ deep: { exploration_id: 'exp-1', title: 'x', workspace: '/other' } }), WS), null, 'another workspace');
   assert.equal(deepSessionOf(focus({ source: 'inferred' }), WS), null);
   assert.equal(deepSessionOf(focus({ active: false }), WS), null);
   assert.equal(deepSessionOf(snapshot({}), WS), null);
-  assert.deepEqual(deepSessionOf(focus({}), WS), { exploration_id: null, title: '' }, 'no workspace on record: machine-wide');
+  assert.deepEqual(deepSessionOf(focus({}), WS), { exploration_id: null, title: '', card_id: null }, 'no workspace on record: machine-wide');
+});
+
+test('deepSessionOf (Desk D2 §9.1): a card session, from focus.deep or the card focus item', () => {
+  const focus = (o) => snapshot({ focus: { active: true, session_id: 'f1', source: 'deep', started_at: ago(3), item: null, quiet_count: 0, policy: 'none', deep: null, ...o } });
+  assert.deepEqual(
+    deepSessionOf(focus({ deep: { exploration_id: 'pg-1a2b3c4d', card_id: 'pg-1a2b3c4d', card_kind: 'page', title: 'Clocks', workspace: WS } }), WS),
+    { exploration_id: 'pg-1a2b3c4d', title: 'Clocks', card_id: 'pg-1a2b3c4d' },
+  );
+  assert.deepEqual(
+    deepSessionOf(focus({ item: { kind: 'card', workspace: WS, card_id: 'pg-1a2b3c4d', card_kind: 'page', title: 'Clocks' } }), WS),
+    { exploration_id: 'pg-1a2b3c4d', title: 'Clocks', card_id: 'pg-1a2b3c4d' },
+    'from the card item (exploration_id kept as its alias)',
+  );
+  assert.deepEqual(
+    deepSessionOf(focus({ item: { kind: 'card', workspace: WS, card_id: null, card_kind: null, title: '' } }), WS),
+    { exploration_id: null, title: '', card_id: null },
+    'at the overview with no card yet',
+  );
+  assert.equal(deepSessionOf(focus({ item: { kind: 'card', workspace: '/other', card_id: 'pg-1a2b3c4d', card_kind: 'page', title: 'x' } }), WS), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -667,8 +699,9 @@ test('switcher: the chip opens the same cards; ⌘ release does not commit; clic
 // keyAction
 // ---------------------------------------------------------------------------
 
-test('nav: six sections, Home first, every section labelled, landing on Home (cockpit-design §2.2)', () => {
-  assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'library', 'ops', 'history']);
+test('nav: four sections, Home first, every section labelled, landing on Home (Desk D2 §8)', () => {
+  assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'ops']);
+  assert.deepEqual({ ...SECTION_LABELS }, { home: 'Home', work: 'Work', goals: 'Goals', ops: 'Ops' });
   for (const id of SECTIONS) assert.ok(SECTION_LABELS[id], id);
   assert.equal(DEFAULT_SECTION, 'home');
 });
@@ -1005,7 +1038,7 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
 // ---------------------------------------------------------------------------
 
 {
-  const { describeActivity, LEGACY_SECTION, QUICK_REPLIES } = shared;
+  const { describeActivity, LEGACY_SECTION, COCKPIT_SECTION, QUICK_REPLIES } = shared;
   const act = (tool, preview = '', files = [], extra = {}) => ({ tool, preview, files, ...extra });
 
   test('describeActivity: edits, one file and several (now and past)', () => {
@@ -1097,13 +1130,24 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
       copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library',
       home: 'home', work: 'work', goals: 'goals', library: 'library', ops: 'ops', history: 'history',
     };
-    assert.deepEqual({ ...LEGACY_SECTION }, expected);
-    for (const id of SECTIONS) assert.equal(LEGACY_SECTION[id], id, id);
-    for (const target of Object.values(LEGACY_SECTION)) assert.ok(SECTIONS.includes(target), target);
+    assert.deepEqual({ ...LEGACY_SECTION }, expected, 'kept until the merge step');
   });
 
-  test('readSection: maps through LEGACY_SECTION; unknown, empty and prototype keys land on Home', () => {
-    for (const [from, to] of Object.entries(LEGACY_SECTION)) assert.equal(readSection(from), to, from);
+  test('COCKPIT_SECTION (Desk D2 §8): every id Lee has used to one of the four; Library, History and its tabs to Home', () => {
+    const expected = {
+      copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'home', someday: 'home', files: 'home',
+      library: 'home', history: 'home', home: 'home', work: 'work', goals: 'goals', ops: 'ops',
+    };
+    assert.deepEqual({ ...COCKPIT_SECTION }, expected);
+    for (const id of SECTIONS) assert.equal(COCKPIT_SECTION[id], id, id);
+    for (const target of Object.values(COCKPIT_SECTION)) assert.ok(SECTIONS.includes(target), target);
+    for (const old of Object.keys(LEGACY_SECTION)) assert.ok(SECTIONS.includes(COCKPIT_SECTION[old]), `legacy ${old}`);
+  });
+
+  test('readSection: maps through COCKPIT_SECTION; unknown, empty and prototype keys land on Home', () => {
+    for (const [from, to] of Object.entries(COCKPIT_SECTION)) assert.equal(readSection(from), to, from);
+    assert.equal(readSection('library'), 'home');
+    assert.equal(readSection('history'), 'home');
     assert.equal(readSection('nope'), 'home');
     assert.equal(readSection(''), 'home');
     assert.equal(readSection(null), 'home');
@@ -1204,6 +1248,10 @@ const leeRows = [
     cockpitStatusCounts,
     cockpitStatusParts,
     COCKPIT_KEYS,
+    HOME_NEEDS_MAX,
+    homeMoreLine,
+    deskDoor,
+    cockpitShows,
   } = mod;
 
   test('greeting: weekday and part of day at every boundary (local time)', () => {
@@ -1228,27 +1276,22 @@ const leeRows = [
     assert.equal(homeQuestion(''), "What's on your mind?");
   });
 
-  test('meanwhileSentence: nothing, only wins, waiting only, both', () => {
+  test('meanwhileSentence: nothing, only wins, waiting only, both ("Everything\'s handled." when nothing waits)', () => {
     const d = (wins, sessions) => ({ wins: Array.from({ length: wins }, (_, i) => ({ title: `w${i}` })), agent_claims: sessions.map((s) => ({ session_id: s })) });
-    assert.equal(meanwhileSentence(null, { waiting: 0 }), 'Quiet while you were away. All clear.');
-    assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), 'Quiet while you were away. All clear.');
-    assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), 'Three things shipped while you were away. All clear.');
-    assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), 'One thing shipped while you were away. All clear.');
+    assert.equal(meanwhileSentence(null, { waiting: 0 }), "Everything's handled.");
+    assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), "Everything's handled.");
+    assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), "Three things shipped while you were away. Everything's handled.");
+    assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), "One thing shipped while you were away. Everything's handled.");
     assert.equal(meanwhileSentence(d(0, []), { waiting: 1 }), 'One thing needs you.');
     assert.equal(meanwhileSentence(null, { waiting: 2 }), 'Two things need you.');
     assert.equal(meanwhileSentence(d(2, []), { waiting: 1 }), 'Two things shipped while you were away. One thing needs you.');
     // The contract's example: finished turns count once per agent session.
     assert.equal(meanwhileSentence(d(0, ['a', 'b', 'a']), { waiting: 1 }), 'Two agents finished while you were away. One needs you.');
-    assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), 'One agent finished while you were away. All clear.');
-    assert.equal(meanwhileSentence(null, { waiting: 0, working: 2 }), 'Quiet while you were away. Working on it.');
-    assert.equal(quietLine(0), 'All clear.');
+    assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), "One agent finished while you were away. Everything's handled.");
+    assert.equal(meanwhileSentence(null, { waiting: 0, working: 2 }), "Everything's handled. Two agents working.");
+    assert.equal(meanwhileSentence(null, { waiting: 0, working: 1 }), "Everything's handled. One agent working.");
+    assert.equal(quietLine(0), 'All clear.', "Work's line is unchanged");
     assert.equal(quietLine(1), 'Working on it.');
-    assert.deepEqual(digitTarget('cockpit', true, 1), { kind: 'section', section: 'work' });
-    assert.equal(digitTarget('cockpit', true, 6), null, '⌘7 has no section');
-    assert.deepEqual(digitTarget('deep', true, 0), { kind: 'view', view: 'page' });
-    assert.equal(digitTarget('deep', true, 1), null, 'D1 has one view');
-    assert.deepEqual(digitTarget('manual', true, 2), { kind: 'tab', index: 2 });
-    assert.deepEqual(digitTarget('cockpit', false, 0), { kind: 'tab', index: 0 }, 'Cockpit off: tabs');
     assert.equal(workLine({ waiting: 1 }), 'One thing needs you.');
     assert.equal(workLine({ waiting: 2, working: 3 }), 'Two things need you.');
     assert.equal(workLine({ waiting: 0, working: 0 }), 'All clear.');
@@ -1263,6 +1306,67 @@ const leeRows = [
     );
     assert.ok(!/claim/i.test(meanwhileSentence(d(1, ['a']), { waiting: 1 })), 'no "claims"');
     assert.equal(numberWord(13), '13');
+  });
+
+  test('digitTarget (Desk D2 §8): ⌘1–⌘4 are the four sections in the Cockpit, tabs in Manual, nothing at the Desk', () => {
+    assert.deepEqual(digitTarget('cockpit', true, 0), { kind: 'section', section: 'home' });
+    assert.deepEqual(digitTarget('cockpit', true, 1), { kind: 'section', section: 'work' });
+    assert.deepEqual(digitTarget('cockpit', true, 2), { kind: 'section', section: 'goals' });
+    assert.deepEqual(digitTarget('cockpit', true, 3), { kind: 'section', section: 'ops' });
+    for (let i = 4; i < 9; i++) assert.equal(digitTarget('cockpit', true, i), null, `⌘${i + 1} has no section`);
+    for (let i = 0; i < 9; i++) assert.equal(digitTarget('deep', true, i), null, `⌘${i + 1} at the Desk: nothing`);
+    assert.deepEqual(digitTarget('manual', true, 2), { kind: 'tab', index: 2 });
+    assert.deepEqual(digitTarget('manual', true, 8), { kind: 'tab', index: 8 });
+    assert.deepEqual(digitTarget('cockpit', false, 0), { kind: 'tab', index: 0 }, 'Cockpit off: tabs');
+    assert.deepEqual(digitTarget('deep', false, 1), { kind: 'tab', index: 1 }, 'Cockpit off: tabs');
+  });
+
+  test('Home (Desk D2 §8): at most two needs-you, then "n more in Work"', () => {
+    assert.equal(HOME_NEEDS_MAX, 2);
+    assert.equal(homeMoreLine(5, 2), '3 more in Work');
+    assert.equal(homeMoreLine(3, 2), '1 more in Work');
+    assert.equal(homeMoreLine(2, 2), null);
+    assert.equal(homeMoreLine(0, 0), null);
+  });
+
+  test('Home (Desk D2 §8): the door with a card, without one, and against an old or absent Hester', () => {
+    const card = { id: 'pg-1a2b3c4d', kind: 'page', title: 'Vector clocks', area_id: 'area-1a2b3c4d', area_name: 'Sync', purpose: null, last_touched_at: ago(90) };
+    assert.deepEqual(deskDoor({ card, stopped_at: 'whether the merge needs a tiebreak' }), {
+      label: 'Back to your Desk',
+      title: 'Vector clocks',
+      stopped: 'whether the merge needs a tiebreak',
+    });
+    assert.deepEqual(deskDoor({ card, stopped_at: null }), { label: 'Back to your Desk', title: 'Vector clocks', stopped: null });
+    assert.deepEqual(deskDoor({ card, stopped_at: '   ' }), { label: 'Back to your Desk', title: 'Vector clocks', stopped: null });
+    assert.equal(deskDoor({ card: { ...card, title: ' ' }, stopped_at: null }).title, 'Untitled');
+    assert.deepEqual(deskDoor({ card: null, stopped_at: null }), { label: 'Go to your Desk', title: null, stopped: null }, 'no card yet');
+    assert.deepEqual(deskDoor(null), { label: 'Go to your Desk', title: null, stopped: null }, 'offline, or an older Hester (404)');
+    assert.deepEqual(deskDoor(undefined), { label: 'Go to your Desk', title: null, stopped: null });
+  });
+
+  test('deep_idle (Desk D2 §9.2) is devices-only: out of the Feed, the status bar counts and Home/Work', () => {
+    const idle = item({ id: 'idle', kind: 'deep_idle', severity: 'needs-you', actions: ['extend', 'end_rate', 'capture', 'dismiss'] });
+    const wait = item({ id: 'w', kind: 'waiting', severity: 'needs-you' });
+    assert.equal(cockpitShows(idle), false);
+    assert.equal(cockpitShows(wait), true);
+    assert.deepEqual(mergeFeed({ workspace: WS, items: [idle, wait] }).map((r) => r.item.id), ['w']);
+    assert.deepEqual(cockpitStatusCounts({ workspace: WS, agents: [], items: [idle, wait] }), { working: 0, waiting: 1 });
+    assert.equal(workNeedsCount(mergeFeed({ workspace: WS, items: [idle] })), 0);
+  });
+
+  test('cardIdForOrigin (Desk D2 §2.1): the page form, the old exploration form, and nothing else', () => {
+    const { cardIdForOrigin, pageIdForExploration } = desk;
+    assert.equal(cardIdForOrigin({ kind: 'page', ref: 'pg-1a2b3c4d#ans-01' }), 'pg-1a2b3c4d');
+    assert.equal(cardIdForOrigin({ kind: 'page', ref: 'pg-1a2b3c4d' }), 'pg-1a2b3c4d');
+    assert.equal(cardIdForOrigin({ kind: 'exploration', ref: 'exp-1a2b3c4d#ans-01' }), 'pg-1a2b3c4d', 'the hex carries over');
+    assert.equal(cardIdForOrigin({ kind: 'page', ref: 'exp-1a2b3c4d#ans-01' }), null);
+    assert.equal(cardIdForOrigin({ kind: 'exploration', ref: 'pg-1a2b3c4d' }), null);
+    assert.equal(cardIdForOrigin({ kind: 'explore', ref: 'exp-1a2b3c4d/n1' }), null, 'spike nodes are not hand-offs');
+    assert.equal(cardIdForOrigin({ kind: 'launcher' }), null);
+    assert.equal(cardIdForOrigin(null), null);
+    assert.equal(cardIdForOrigin(undefined), null);
+    assert.equal(pageIdForExploration('exp-00ff00ff'), 'pg-00ff00ff');
+    assert.equal(pageIdForExploration('exp-XYZ'), null);
   });
 
   test('homeNeeds: attention rows that need you, blocking first then oldest, at most three', () => {
@@ -1310,23 +1414,24 @@ const leeRows = [
     assert.equal(q2Sentence({ kind: 'evaluation-due', goal_id: 'G2', title: 'Deep', detail: 'Never evaluated.' }), 'G2 has never been evaluated');
     assert.equal(q2Sentence({ kind: 'evaluation-due', goal_id: 'G2', title: 'Deep', detail: 'Last evaluated 20 days ago.' }), 'G2 was last evaluated 20 days ago');
     assert.equal(q2Sentence({ kind: 'exploration-quiet', goal_id: null, title: 'Vector clocks', detail: 'Untouched for 9 days.' }), 'Vector clocks: untouched for 9 days');
+    assert.equal(q2Sentence({ kind: 'page-quiet', goal_id: null, title: 'Vector clocks', detail: 'Untouched for 9 days.' }), 'Vector clocks: untouched for 9 days');
     assert.equal(arrivedLine({ answers: 2, open_questions: 1 }), '2 answers came back · 1 open question');
     assert.equal(arrivedLine({ answers: 1, open_questions: 0 }), '1 answer came back');
     assert.equal(arrivedLine({ answers: 0, open_questions: 0 }), '');
   });
 
-  test('Launcher: New ⌘N offers Task, Explore and Run… at the top (Task first; Run keeps ⌘{)', () => {
+  test('Launcher: New ⌘N offers Task, New Page and Run… at the top (Task first; Run keeps ⌘{)', () => {
     assert.deepEqual(
       LAUNCHER_CHOICES.map((c) => c.id),
-      ['task', 'explore', 'run'],
+      ['task', 'page', 'run'],
     );
     assert.deepEqual(
       LAUNCHER_CHOICES.map((c) => c.label),
-      ['Task', 'Explore', 'Run…'],
+      ['Task', 'New Page', 'Run…'],
     );
     assert.equal(LAUNCHER_CHOICES.find((c) => c.id === 'run').kbd, '⌘{');
     assert.equal(LAUNCHER_CHOICES.find((c) => c.id === 'task').kbd, '⏎', 'Enter still launches a task');
-    assert.ok(COCKPIT_KEYS.some(([k, v]) => k === '⌘N' && /task.*exploration.*run/i.test(v)));
+    assert.ok(COCKPIT_KEYS.some(([k, v]) => k === '⌘N' && /task.*Page.*run/i.test(v)));
     assert.ok(COCKPIT_KEYS.some(([k, v]) => k === '⌘T' && /Manual/.test(v)), '⌘T goes to Manual');
     assert.ok(!COCKPIT_KEYS.some(([k]) => k === '← / →'), 'no tile keys: the dock is gone');
   });
@@ -1339,12 +1444,12 @@ const leeRows = [
     assert.equal(evaluationDue(fresh, now), false);
     assert.equal(evaluationDue(stale, now), true);
     const quiet = railDots({ work: 0, goals: [{ flagged: false, last_evaluated_at: fresh }], opsFailing: 0, opsProposals: 0, now });
-    assert.deepEqual(quiet, { home: false, work: false, goals: false, library: false, ops: false, history: false });
+    assert.deepEqual(quiet, { home: false, work: false, goals: false, ops: false });
     const busy = railDots({ work: 2, goals: [{ flagged: false, last_evaluated_at: stale }], opsFailing: 0, opsProposals: 1, now });
-    assert.deepEqual(busy, { home: false, work: true, goals: true, library: false, ops: true, history: false });
+    assert.deepEqual(busy, { home: false, work: true, goals: true, ops: true });
     assert.equal(railDots({ work: 0, goals: [{ flagged: true, last_evaluated_at: fresh }], opsFailing: 1, opsProposals: 0, now }).goals, true);
     const homeOnly = railDots({ home: 1, work: 0, goals: [], opsFailing: 0, opsProposals: 0, now });
-    assert.deepEqual(homeOnly, { home: true, work: false, goals: false, library: false, ops: false, history: false }, 'Lee entries light Home, not Work');
+    assert.deepEqual(homeOnly, { home: true, work: false, goals: false, ops: false }, 'Lee entries light Home, not Work');
     for (const v of Object.values(busy)) assert.equal(typeof v, 'boolean');
   });
 
@@ -1369,10 +1474,12 @@ const leeRows = [
   });
 
   test('sections: every legacy id migrates (localStorage and setSection callers)', () => {
-    const legacy = { copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library' };
+    const legacy = {
+      copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'home', someday: 'home', files: 'home', library: 'home', history: 'home',
+    };
     for (const [from, to] of Object.entries(legacy)) assert.equal(readSection(from), to, from);
     for (const id of SECTIONS) assert.equal(readSection(id), id, id);
-    assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'library', 'ops', 'history']);
+    assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'ops']);
     assert.equal(DEFAULT_SECTION, 'home');
   });
 }
@@ -1386,12 +1493,11 @@ const leeRows = [
     import { HomeSection } from './sections/HomeSection';
     import { GoalsSection } from './sections/GoalsSection';
     import { OperationsSection } from './sections/OperationsSection';
-    import { HistorySection } from './sections/HistorySection';
     import { Launcher } from './Launcher';
     import { CockpitNav } from './CockpitNav';
     export { createNextGuard } from './ui/nextGuard';
     export const render = (el) => renderToStaticMarkup(el);
-    export { React, HomeSection, GoalsSection, OperationsSection, HistorySection, Launcher, CockpitNav };
+    export { React, HomeSection, GoalsSection, OperationsSection, Launcher, CockpitNav };
   `;
   const built = await esbuild.build({
     stdin: { contents: entry, resolveDir: join(__dirname, '../src/renderer/components/cockpit'), loader: 'tsx' },
@@ -1452,8 +1558,6 @@ const leeRows = [
     goInto: noop,
     openOwnTab: noop,
     openFile: noop,
-    openExploration: async () => {},
-    openLibrary: noop,
     openWorkstream: noop,
     focusPty: noop,
     notify: noop,
@@ -1539,19 +1643,36 @@ const leeRows = [
   const nextCount = (html) => (html.match(/class="ui-btn is-next/g) ?? []).length;
   const warnings = [];
   const guard = v.createNextGuard({ warn: (m) => warnings.push(m) });
+  const deskCard = { id: 'pg-1a2b3c4d', kind: 'page', title: 'Vector clocks', area_id: 'area-1a2b3c4d', area_name: 'Sync', purpose: null, last_touched_at: ago(90) };
+  const deskLast = {
+    card: deskCard,
+    source: 'last',
+    stopped_at: 'whether the merge needs a tiebreak',
+    stopped_line: 12,
+    arrived: { answers: 2, handoffs: 0, open_questions: 1, captured: 0 },
+    last_session: null,
+  };
+  const shipped = { wins: [{ kind: 'commit', title: 'Fix merge', ref: 'abc1234', at: ago(30), verified: true, related: true }, { kind: 'decision', title: 'Keep vector clocks', at: ago(300), verified: false, related: true }], tasks: [], readings: [] };
+  // Home reads waiting items from the queue snapshot, the same list Work shows.
+  const homeCtx = { ...ctx, snapshot: { ...ctx.snapshot, items: ctx.feedRows.map((r) => r.item) } };
+  const quietCtx = { ...ctx, feedRows: [], snapshot: { items: [], agents: [] } };
   const views = {
-    home: h(v.HomeSection, { ctx, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
-    'home (Lee entries)': h(v.HomeSection, { ctx: { ...ctx, feedRows: [...ctx.feedRows, ...leeRows] }, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
-    'home (nothing to pick up)': h(v.HomeSection, { ctx: { ...ctx, feedRows: [] }, returnNonce: 0, seed: { opener: { ...opener, pick_up: null }, digest, name: null } }),
+    home: h(v.HomeSection, { ctx: homeCtx, returnNonce: 0, seed: { digest, deskLast, shipped } }),
+    'home (Lee entries)': h(v.HomeSection, { ctx: { ...homeCtx, feedRows: [...ctx.feedRows, ...leeRows] }, returnNonce: 0, seed: { digest, deskLast, shipped } }),
+    'home (all clear, no card)': h(v.HomeSection, { ctx: quietCtx, returnNonce: 0, seed: { digest: null, deskLast: { ...deskLast, card: null, stopped_at: null, stopped_line: null }, shipped: { wins: [], tasks: [], readings: [] } } }),
+    'home (older Hester)': h(v.HomeSection, { ctx: quietCtx, returnNonce: 0, seed: { digest, deskLast: null, shipped } }),
+    'home (idle push only)': h(v.HomeSection, {
+      ctx: { ...quietCtx, snapshot: { items: [item({ id: 'idle', kind: 'deep_idle', severity: 'needs-you', title: 'Still thinking?', actions: ['extend', 'end_rate', 'capture', 'dismiss'] })], agents: [] } },
+      returnNonce: 0,
+      seed: { digest: null, deskLast, shipped },
+    }),
     goals: h(v.GoalsSection, { ctx }),
     ops: h(v.OperationsSection, { ctx }),
-    history: h(v.HistorySection, { ctx }),
-    launcher: h(v.Launcher, { ctx, onClose: noop, onExplore: noop, onRun: noop }),
-    'history (usage)': h(v.HistorySection, { ctx, initialTab: 'usage', usageSeed }),
-    'launcher (limits)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(91) } }, onClose: noop, onExplore: noop, onRun: noop }),
-    'launcher (limits low)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(84) } }, onClose: noop, onExplore: noop, onRun: noop }),
-    // Deep next R12: no GOALS.md (or no ### G… goals): the entry points.
-    'home (no goals)': h(v.HomeSection, { ctx: { ...ctx, goals: { ...ctx.goals, data: { ...ctx.goals.data, goals: [] } } }, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
+    'ops (usage)': h(v.OperationsSection, { ctx, usageSeed }),
+    launcher: h(v.Launcher, { ctx, onClose: noop, onNewPage: noop, onRun: noop }),
+    'launcher (limits)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(91) } }, onClose: noop, onNewPage: noop, onRun: noop }),
+    'launcher (limits low)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(84) } }, onClose: noop, onNewPage: noop, onRun: noop }),
+    // Deep next R12: no GOALS.md (or no ### G… goals): the entry point (now the Desk's Goals card).
     'goals (no goals)': h(v.GoalsSection, { ctx: { ...ctx, goals: { ...ctx.goals, data: { ...ctx.goals.data, goals: [], constraints: [], tensions: [] } } } }),
     'goals (loading)': h(v.GoalsSection, { ctx: { ...ctx, goals: { data: null, error: null, loading: true, refresh: noop } } }),
     'goals (unmeasured)': h(v.GoalsSection, {
@@ -1575,38 +1696,57 @@ const leeRows = [
     for (let i = 0; i < nextCount(html[name]); i++) guard.register(root, name);
   }
 
-  test('views: no Cockpit view mounts more than one next button (nextGuard)', () => {
+  test('views: no Cockpit section mounts more than one next button (nextGuard)', () => {
     assert.deepEqual(warnings, []);
-    assert.equal(nextCount(html.home), 1, 'Home: Continue');
-    assert.match(html.home, /ui-btn is-next[^>]*>Continue<span class="ui-kbd">⇧⌘0</);
-    assert.equal(nextCount(html['home (nothing to pick up)']), 0);
+    assert.equal(nextCount(html.home), 1, 'Home: the door');
+    assert.match(html.home, /ui-btn is-next[^>]*>Back to your Desk<span class="ui-kbd">⇧⌘0</);
+    assert.equal(nextCount(html['home (all clear, no card)']), 1, 'still the door');
     assert.equal(nextCount(html['home (Lee entries)']), 1, 'Lee entries add no next step');
     assert.equal(nextCount(html.goals), 1, 'Goals: Evaluate on the first goal due');
     assert.equal(nextCount(html.ops), 0, 'Ops: none');
-    assert.equal(nextCount(html.history), 0);
+    assert.equal(nextCount(html['ops (usage)']), 0, 'Usage adds none');
     assert.equal(nextCount(html.launcher), 1, 'Launcher: Launch');
   });
 
-  test('Home: the desk from fixtures (greeting, Newsreader question, Pick up, sentences, Meanwhile)', () => {
+  test('Home (Desk D2 §8): greeting, one sentence, two needs and "n more", shipped this week, the door', () => {
     const s = html.home;
     assert.match(s, /class="home-greeting">[A-Z][a-z]+day (morning|afternoon|evening|night)</);
-    assert.match(s, /class="home-question"[^>]*>What&#x27;s on your mind, Ben\?</);
-    assert.match(s, /placeholder="Just start writing…"/);
-    assert.match(s, /Pick up where you left off/);
-    assert.match(s, /“whether the merge needs a tiebreak”/);
-    assert.match(s, /2 answers came back · 1 open question/);
-    for (const t of ['A blank page', '1 open question', '1 thought from your phone', 'G1 has nothing open serving it']) assert.ok(s.includes(t), t);
     assert.ok(s.includes('One agent finished while you were away, and one thing shipped. Four need you.'), 'one sentence');
-    assert.equal((s.match(/class="home-need[ "]/g) ?? []).length, 3, 'up to three needs-you rows');
-    assert.ok(s.includes('1 more in Work'));
+    assert.equal((s.match(/class="work-swipe"/g) ?? []).length, 2, "at most two of Work's waiting cards");
+    assert.ok(s.includes('2 more in Work'));
+    assert.ok(s.includes('Agent a1') && s.includes('Agent w1'), 'the queue order: the blocking approval first');
     assert.match(s, /ui-btn is-plain[^>]*>Allow</, 'Allow is plain on Home, not the phosphor step');
-    for (const t of ['See what shipped', 'Ask Hester what to do next', 'This week&#x27;s retro']) assert.ok(s.includes(t), t);
-    assert.ok(!/Ask Hester<\/div>|about:|Copilot mode/.test(s), 'the Ask card, about chips and the Copilot mode placeholder are gone');
+    assert.match(s, />Shipped this week</);
+    assert.ok(s.includes('Fix merge') && s.includes('Keep vector clocks'), 'the week’s wins');
+    assert.ok(s.includes('This week&#x27;s retro'), 'the retro when due');
+    assert.ok(s.includes('Ask Hester what to do next'));
+    assert.match(s, /class="home-door-title">Vector clocks</, 'your card, in the writing face');
+    assert.match(s, /“whether the merge needs a tiebreak”/, 'where you stopped');
+    assert.ok(s.indexOf('home-door') > s.indexOf('Shipped this week'), 'the door comes last');
+    for (const gone of ['What&#x27;s on your mind', 'Or start from', 'Pick up where you left off', 'A blank page', 'Just start writing']) assert.ok(!s.includes(gone), `the opener left Home: ${gone}`);
     assert.ok(!/cockpit-badge/.test(s), 'no count badges');
-    assert.match(html['home (nothing to pick up)'], />What&#x27;s on your mind\?</);
   });
 
-  test('Home: Lee entries with no other place show in Meanwhile (first action plain, Dismiss quiet)', () => {
+  test('Home: all clear says so; the door without a card, and against an older Hester, reads "Go to your Desk"', () => {
+    const clear = html['home (all clear, no card)'];
+    assert.ok(clear.includes('Everything&#x27;s handled.'));
+    assert.ok(!/work-swipe|more in Work/.test(clear), 'nothing needs you');
+    assert.ok(clear.includes('Nothing verified this week yet.'));
+    assert.match(clear, /ui-btn is-next[^>]*>Go to your Desk</);
+    assert.ok(!/home-door-title/.test(clear), 'no card, no title');
+    const old = html['home (older Hester)'];
+    assert.match(old, /ui-btn is-next[^>]*>Go to your Desk</);
+    assert.ok(!old.includes('Back to your Desk'));
+  });
+
+  test('Home: the idle-end push never shows in the Cockpit (devices only)', () => {
+    const s = html['home (idle push only)'];
+    assert.ok(!s.includes('Still thinking?'));
+    assert.ok(!/work-swipe/.test(s));
+    assert.ok(s.includes('Everything&#x27;s handled.'), 'it is not counted as waiting');
+  });
+
+  test('Home: Lee entries with no other place show under the needs (first action plain, Dismiss quiet)', () => {
     const s = html['home (Lee entries)'];
     assert.ok(s.includes('Check in on ck?'), 'the check-in proposal');
     assert.ok(s.includes('Escalate test to a task?'), 'the escalate proposal');
@@ -1619,13 +1759,15 @@ const leeRows = [
     assert.ok(s.includes('Six need you.'), 'the sentence counts them');
   });
 
-  test('rail: icons with labels and tooltips; the only badge is a dot', () => {
-    const dots = { home: false, work: true, goals: false, library: false, ops: true, history: false };
+  test('rail: four icons with labels and ⌘1–⌘4 tooltips; the only badge is a dot', () => {
+    const dots = { home: false, work: true, goals: false, ops: true };
     const s = v.render(h(v.CockpitNav, { section: 'home', dots, onSelect: noop }));
-    assert.equal((s.match(/class="cockpit-rail-item/g) ?? []).length, 6);
+    assert.equal((s.match(/class="cockpit-rail-item/g) ?? []).length, 4);
     assert.equal((s.match(/class="cockpit-rail-dot"/g) ?? []).length, 2);
     assert.match(s, /aria-label="Work, needs you"/);
-    assert.match(s, /data-tip="Library ⌘4" aria-keyshortcuts="Meta\+4"/);
+    assert.match(s, /data-tip="Ops ⌘4" aria-keyshortcuts="Meta\+4"/);
+    assert.match(s, /data-tip="Goals ⌘3"/);
+    assert.ok(!/Library|History/.test(s), 'Library and History are gone');
     assert.match(s, /class="cockpit-rail-item is-active"[^>]*aria-label="Home"/);
     assert.ok(!/\d<\/span>/.test(s.replace(/<svg[\s\S]*?<\/svg>/g, '')), 'no counts');
   });
@@ -1638,22 +1780,15 @@ const leeRows = [
     assert.match(html.ops, /Work lint/);
   });
 
-  test('Deep next R12: goals entry points show only without goals', () => {
-    const lead = 'This project doesn’t have goals yet';
-    const home = html['home (no goals)'];
-    assert.ok(home.includes(lead), 'Home leads Or start from with it');
-    assert.ok(home.indexOf(lead) < home.indexOf('A blank page'), 'first in the list, above the other links');
-    assert.ok(!html.home.includes(lead), 'not with goals');
-    assert.ok(!html['home (nothing to pick up)'].includes(lead));
+  test('Deep next R12 on the Desk: the Goals entry point shows only without goals', () => {
     const goals = html['goals (no goals)'];
     assert.match(goals, /class="home-question goals-start-question"[^>]*>What is this project for\?</, 'the question in the writing face');
-    assert.match(goals, /id="goals-start-field" class="home-input"/, 'with Home’s field');
+    assert.match(goals, /id="goals-start-field" class="home-input"/, 'with its field');
     assert.ok(!goals.includes('No goals in GOALS.md'), 'the old empty state is gone');
     assert.equal(nextCount(goals), 0);
     assert.ok(!html.goals.includes('What is this project for?'), 'not with goals');
     assert.ok(!html['goals (loading)'].includes('What is this project for?'), 'not while loading');
-    assert.ok(html.goals.includes('Think it through on a Page'), 'projects with goals can still open the Goals Page');
-    assert.equal(nextCount(html['home (no goals)']), 1, 'still just Continue');
+    assert.ok(html.goals.includes('Think it through on a Page'), 'projects with goals can still open the Goals card');
   });
 
   test('Deep next R12: a goal with no metrics reads "not measured yet", never as a problem', () => {
@@ -1663,16 +1798,11 @@ const leeRows = [
     assert.ok(!s.includes('a metric is failing'), 'never flagged');
   });
 
-  test('History: Activity and Usage tabs; Activity first', () => {
-    assert.match(html.history, /role="tablist" aria-label="History"/);
-    assert.match(html.history, /aria-selected="true" class="library-tabs-item is-on">Activity</);
-    assert.match(html['history (usage)'], /aria-selected="true" class="library-tabs-item is-on">Usage</);
-  });
-
-  test('History › Usage: dials for the windows, today against the 7-day average, spend apart from subscription tokens; no next step', () => {
-    const s = html['history (usage)'];
-    assert.equal(nextCount(s), 0);
-    assert.ok(!/is-needs/.test(s), 'no ember');
+  test('Ops › Usage (moved from History): dials for the windows, today against the 7-day average, spend apart from subscription tokens; no next step', () => {
+    const s = html['ops (usage)'];
+    assert.match(s, /class="ui-section-title">Usage</, 'its own heading at the end of Ops');
+    assert.ok(s.indexOf('Work lint') < s.indexOf('Claude subscription'), 'after the lint group');
+    assert.ok(!/role="tablist"/.test(s), 'no History tabs');
     assert.ok(!/>Week<|>Month</.test(s), 'today only');
     for (const t of ['Claude subscription', 'Today', 'vs 5-day avg', 'vs 7-day avg', 'Hester calls', 'Top work items']) assert.ok(s.includes(t), t);
     assert.ok(s.includes('$1.67 spent · 3.1M tok on the subscription · 240k tok local.'), 'the total line: $1.25 + $0.42, never the subscription list price');
@@ -1689,6 +1819,11 @@ const leeRows = [
     assert.ok(s.includes('Fix the parser') && s.includes('2.4M tok<'), 'a subscription item is tokens only');
     assert.ok(s.includes('90k tok · $1.25'), 'a billed item shows dollars');
     assert.ok(s.indexOf('Pi refactor') < s.indexOf('Fix the parser'), 'dollars first');
+  });
+
+  test('Launcher: New Page instead of Explore', () => {
+    assert.match(html.launcher, />New Page</);
+    assert.ok(!/>Explore</.test(html.launcher));
   });
 
   test('Launcher: the 5-hour window at 85% or more is one neutral line, no extra step', () => {

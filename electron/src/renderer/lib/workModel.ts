@@ -12,7 +12,7 @@
 import type { AgentSummary, AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 import type { CockpitTask, OperationInfo, TabRuntimeInfo } from '../../shared/cockpit';
 import { QUICK_REPLIES, describeActivity, type AgentActivity, type AgentUpdate } from '../../shared/cockpit';
-import { formatDuration, plainLine, taskTitle, type TileModel } from './cockpitModel';
+import { cockpitShows, formatDuration, plainLine, taskTitle, type TileModel } from './cockpitModel';
 import { agentTokensLabel } from './usageModel';
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,8 @@ export function waitingItems(input: WaitingInput): WaitingItem[] {
   for (const a of input.agents ?? []) usage.set(a.pty_id, a.usage);
   const out: Array<WaitingItem & { rank: number; t: number }> = [];
   for (const item of input.items ?? []) {
-    if (item.state !== 'open' || item.severity === 'ambient') continue;
+    // The idle-end push (deep_idle) is devices-only (Desk D2 §9.2).
+    if (item.state !== 'open' || item.severity === 'ambient' || !cockpitShows(item)) continue;
     if (item.source.workspace && !sameWorkspace(item.source.workspace, input.workspace)) continue;
     if (input.hidden?.has(item.id)) continue;
     const pty = item.source.pty_id;

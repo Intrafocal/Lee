@@ -65,15 +65,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'prev_tab', defaultChord: 'ctrl+shift+tab', scope: 'renderer', group: 'Tabs', description: 'Previous center tab' },
   { action: 'toggle_watch', defaultChord: 'meta+w', scope: 'renderer', group: 'Tabs', description: 'Toggle idle-watching on the focused agent tab' },
   { action: 'cycle_idle', defaultChord: 'meta+i', scope: 'renderer', group: 'Tabs', description: 'Cycle through watched agent tabs that have gone idle' },
-  { action: 'tab_1', defaultChord: 'meta+1', scope: 'renderer', group: 'Tabs', description: '⌘1: tab 1 in Manual, rail section 1 in the Cockpit, view 1 in Deep' },
-  { action: 'tab_2', defaultChord: 'meta+2', scope: 'renderer', group: 'Tabs', description: '⌘2: tab 2 in Manual, rail section 2 in the Cockpit, view 2 in Deep' },
-  { action: 'tab_3', defaultChord: 'meta+3', scope: 'renderer', group: 'Tabs', description: '⌘3: tab 3 in Manual, rail section 3 in the Cockpit, view 3 in Deep' },
-  { action: 'tab_4', defaultChord: 'meta+4', scope: 'renderer', group: 'Tabs', description: '⌘4: tab 4 in Manual, rail section 4 in the Cockpit, view 4 in Deep' },
-  { action: 'tab_5', defaultChord: 'meta+5', scope: 'renderer', group: 'Tabs', description: '⌘5: tab 5 in Manual, rail section 5 in the Cockpit, view 5 in Deep' },
-  { action: 'tab_6', defaultChord: 'meta+6', scope: 'renderer', group: 'Tabs', description: '⌘6: tab 6 in Manual, rail section 6 in the Cockpit, view 6 in Deep' },
-  { action: 'tab_7', defaultChord: 'meta+7', scope: 'renderer', group: 'Tabs', description: '⌘7: tab 7 in Manual, rail section 7 in the Cockpit, view 7 in Deep' },
-  { action: 'tab_8', defaultChord: 'meta+8', scope: 'renderer', group: 'Tabs', description: '⌘8: tab 8 in Manual, rail section 8 in the Cockpit, view 8 in Deep' },
-  { action: 'tab_9', defaultChord: 'meta+9', scope: 'renderer', group: 'Tabs', description: '⌘9: tab 9 in Manual, rail section 9 in the Cockpit, view 9 in Deep' },
+  { action: 'tab_1', defaultChord: 'meta+1', scope: 'renderer', group: 'Tabs', description: '⌘1: tab 1 in Manual, rail section 1 in the Cockpit, nothing in Deep' },
+  { action: 'tab_2', defaultChord: 'meta+2', scope: 'renderer', group: 'Tabs', description: '⌘2: tab 2 in Manual, rail section 2 in the Cockpit, nothing in Deep' },
+  { action: 'tab_3', defaultChord: 'meta+3', scope: 'renderer', group: 'Tabs', description: '⌘3: tab 3 in Manual, rail section 3 in the Cockpit, nothing in Deep' },
+  { action: 'tab_4', defaultChord: 'meta+4', scope: 'renderer', group: 'Tabs', description: '⌘4: tab 4 in Manual, rail section 4 in the Cockpit, nothing in Deep' },
+  { action: 'tab_5', defaultChord: 'meta+5', scope: 'renderer', group: 'Tabs', description: '⌘5: tab 5 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_6', defaultChord: 'meta+6', scope: 'renderer', group: 'Tabs', description: '⌘6: tab 6 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_7', defaultChord: 'meta+7', scope: 'renderer', group: 'Tabs', description: '⌘7: tab 7 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_8', defaultChord: 'meta+8', scope: 'renderer', group: 'Tabs', description: '⌘8: tab 8 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_9', defaultChord: 'meta+9', scope: 'renderer', group: 'Tabs', description: '⌘9: tab 9 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
 
   // --- Tools (tab launchers) ---
   { action: 'terminal', defaultChord: 'meta+shift+t', scope: 'renderer', group: 'Tools', description: 'New terminal tab' },
@@ -90,7 +90,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'k8s', defaultChord: 'meta+shift+k', scope: 'renderer', group: 'Tools', description: 'Kubernetes TUI (k9s)' },
   { action: 'sql', defaultChord: 'meta+shift+p', scope: 'renderer', group: 'Tools', description: 'SQL client (pgcli)' },
   { action: 'hester_qa', defaultChord: 'meta+shift+q', scope: 'renderer', group: 'Tools', description: 'Hester QA scene runner' },
-  { action: 'library', defaultChord: 'meta+shift+y', scope: 'renderer', group: 'Tools', description: 'Library pane' },
   { action: 'system', defaultChord: 'meta+shift+m', scope: 'renderer', group: 'Tools', description: 'System monitor (btop)' },
   { action: 'workstream', defaultChord: 'meta+shift+w', scope: 'renderer', group: 'Tools', description: 'Workstream picker' },
 
@@ -100,6 +99,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'mode_switcher', defaultChord: 'meta+0', scope: 'renderer', group: 'View', description: 'Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual' },
   { action: 'mode_deep', defaultChord: 'meta+shift+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Deep' },
   { action: 'mode_manual', defaultChord: 'meta+alt+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Manual' },
+  // Desk D2 §7.2: implemented by the Desk (components/desk), listed for docs only.
+  { action: 'desk_overview', defaultChord: 'esc', scope: 'renderer', documentationOnly: true, group: 'View', description: 'Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first)' },
   { action: 'force_reload', defaultChord: 'meta+shift+r', scope: 'menu', group: 'View', description: 'Reload the Lee UI, discarding caches (prompts if terminals are open)' },
   {
     action: 'scroll_bottom',

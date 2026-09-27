@@ -21,6 +21,7 @@ import {
   type TaskStatus,
   type TaskWorktree,
 } from '../../shared/cockpit';
+import type { DeskLast } from '../../shared/desk';
 import type { HesterTaskEvent } from './cockpitModel';
 import type { DigestWin } from './hesterCopilot';
 
@@ -238,6 +239,15 @@ export function fetchHistory(workspace: string, days = 7): Promise<HesterResult<
 }
 
 /**
+ * GET /desk/last (Desk D2 §6.4): your last card and where you stopped, for
+ * Home's "Back to your Desk". An older Hester has no route (404): the door
+ * then reads "Go to your Desk" (§10).
+ */
+export function fetchDeskLast(workspace: string): Promise<HesterResult<DeskLast>> {
+  return call<DeskLast>(workspace, 'GET', '/desk/last');
+}
+
+/**
  * docs/15-Usage.md §5, §6.3: usage over a range (pull-only; History's Usage
  * tab). The body is read tolerantly by usageModel.usageView(); expected:
  * `{ range, limits, totals: {claude, pi, hester_cloud, hester_local: bucket},
@@ -332,7 +342,8 @@ export interface GoalsStatusResponse {
 
 /** Digest Q2 candidates (v4 §6), deterministic. */
 export interface Q2Candidate {
-  kind: 'goal-unserved' | 'exploration-quiet' | 'evaluation-due';
+  /** 'page-quiet' (Desk D2 §6.4) refs a Page card; 'exploration-quiet' is the pre-Desk form. */
+  kind: 'goal-unserved' | 'exploration-quiet' | 'page-quiet' | 'evaluation-due';
   goal_id?: string | null;
   ref: string;
   title: string;

@@ -16,7 +16,6 @@ import { FileTreePane } from './components/FileTreePane';
 import { EditorPanel } from './components/EditorPanel';
 import { BrowserPane } from './components/BrowserPane';
 import { StatusBar, StatusMessage, DaemonStatus } from './components/StatusBar';
-import { LibraryPane } from './components/LibraryPane';
 import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
 import { SpyglassPane } from './components/SpyglassPane';
@@ -78,9 +77,6 @@ export interface TabData extends Tab {
   browserCheckpointReady?: boolean; // True when session+email captured for Frame checkpoint
   // Workstream-specific data (for type='workstream')
   workstreamId?: string;
-  /** Library tabs: the exploration to show (Cockpit "Open tree"); the nonce re-selects the same one. */
-  librarySessionId?: string;
-  librarySessionNonce?: number;
   /** Hester chat tabs resumed on a known session (an Explore deep dive), so a second open refocuses it. */
   hesterSessionId?: string;
   // Machine-specific data (for type='spyglass' or 'bridge')
@@ -1448,20 +1444,6 @@ const App: React.FC = () => {
       );
     }
 
-    if (tab.type === 'library') {
-      return (
-        <LibraryPane
-          key={tab.id}
-          active={active}
-          workspace={workspace}
-          onOpenFile={handleFileOpen}
-          openSessionId={tabData.librarySessionId ?? null}
-          openSessionNonce={tabData.librarySessionNonce ?? 0}
-          onOpenWorkstream={handleWorkstreamSelect}
-        />
-      );
-    }
-
     if (tab.type === 'workstream') {
       return (
         <WorkstreamPane
@@ -1598,48 +1580,6 @@ const App: React.FC = () => {
       ptyId: null,
       dockPosition: 'center',
       workstreamId: wsId,
-    };
-    setTabs(prev => [...prev, newTab]);
-    setActiveTabId(tabId);
-    setFocusedPanel('center');
-  }, []);
-
-  // Open (or refocus) the Library tab on an exploration (Cockpit "Open tree").
-  const handleOpenLibrary = useCallback((expId: string) => {
-    const existing = tabsRef.current.find(t => t.type === 'library');
-    if (existing) {
-      setTabs(prev => prev.map(t => (t.id === existing.id
-        ? { ...t, librarySessionId: expId, librarySessionNonce: (t.librarySessionNonce ?? 0) + 1 }
-        : t)));
-      switch (existing.dockPosition) {
-        case 'left':
-          setActiveLeftTabId(existing.id);
-          setFocusedPanel('left');
-          break;
-        case 'right':
-          setActiveRightTabId(existing.id);
-          setFocusedPanel('right');
-          break;
-        case 'bottom':
-          setActiveBottomTabId(existing.id);
-          setFocusedPanel('bottom');
-          break;
-        default:
-          setActiveTabId(existing.id);
-          setFocusedPanel('center');
-      }
-      return;
-    }
-    const tabId = nextTabIdRef.current++;
-    const newTab: TabData = {
-      id: tabId,
-      type: 'library',
-      label: 'Library',
-      closable: true,
-      ptyId: null,
-      dockPosition: 'center',
-      librarySessionId: expId,
-      librarySessionNonce: 1,
     };
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(tabId);
@@ -1964,6 +1904,8 @@ const App: React.FC = () => {
             try {
               // Skip tabs that require runtime state not persisted in sessions
               if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
+              // The Library pane is gone (Desk D2 §8): explorations are Pages on the Desk.
+              if (sessionTab.type === 'library') continue;
 
               // File-backed tabs (editor and every viewer) are restored by
               // reopening the path, which re-runs the normal routing: viewers get
@@ -2076,7 +2018,6 @@ const App: React.FC = () => {
           ...(t.provider ? { provider: t.provider } : {}),
           ...(t.filePath ? { filePath: t.filePath } : {}),
           ...(t.workstreamId ? { workstreamId: t.workstreamId } : {}),
-          ...(t.librarySessionId ? { librarySessionId: t.librarySessionId } : {}),
           ...(t.machineConfig ? { machineName: t.machineConfig.name, machineHost: t.machineConfig.host } : {}),
         })),
         activeTabId,
@@ -2516,21 +2457,19 @@ const App: React.FC = () => {
     handlers['k8s'] = () => createTab('k8s');
     handlers['sql'] = () => createTab('sql');
     handlers['hester_qa'] = () => createTab('hester-qa');
-    handlers['library'] = () => getOrCreateTab('library');
     handlers['system'] = () => getOrCreateTab('system');
     handlers['workstream'] = () => setShowWorkstreamPicker(true);
     handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
     // Tab switching (Cmd+1-9) over every center tab.
-    // ⌘1–⌘9 pick within the current mode: the rail in the Cockpit, Deep's
-    // views in Deep, tabs in Manual (digitTarget).
+    // ⌘1–⌘9 pick within the current mode: the rail's four sections in the
+    // Cockpit, tabs in Manual, nothing at the Desk (digitTarget; Desk D2 §8).
     for (let i = 0; i < 9; i++) {
       handlers[`tab_${i + 1}`] = () => {
         const m = cockpitModeStore.get();
         const t = digitTarget(m.mode, m.enabled, i);
         if (!t) return;
         if (t.kind === 'section') cockpitModeStore.setSection(t.section);
-        else if (t.kind === 'view') cockpitModeStore.showDeepView(t.view);
         else {
           activateTab(centerTabs[t.index]);
           setFocusedPanel('center');
@@ -2832,11 +2771,6 @@ const App: React.FC = () => {
                     <span className="shortcut-name">Browser</span>
                     <kbd>{getDisplayKeybinding('browser', 'meta+shift+b')}</kbd>
                   </div>
-                  <div className="shortcut-chip" onClick={() => getOrCreateTab('library')}>
-                    <span className="shortcut-icon"><Icon name="book" size={14} /></span>
-                    <span className="shortcut-name">Library</span>
-                    <kbd>{getDisplayKeybinding('library', 'meta+shift+y')}</kbd>
-                  </div>
                   <div className="shortcut-chip" onClick={() => handleBridge()}>
                     <span className="shortcut-icon"><Icon name="link" size={14} /></span>
                     <span className="shortcut-name">Bridge</span>
@@ -2883,7 +2817,6 @@ const App: React.FC = () => {
           else handlePanelTabSelect(tabId, t.dockPosition);
         }}
         onOpenFile={(path: string) => handleFileOpenRef.current(path)}
-        onOpenLibrary={handleOpenLibrary}
         onOpenWorkstream={handleWorkstreamSelect}
         onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
         onNotify={(message: string, level: 'info' | 'error') => notify(level === 'error' ? 'warn' : 'info', message, { id: 'cockpit-checkin' })}

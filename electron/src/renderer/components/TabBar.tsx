@@ -58,7 +58,6 @@ export const CORE_TAB_OPTIONS: NewTabOption[] = [
 /** Feature tabs — React components, always shown */
 export const FEATURE_TAB_OPTIONS: NewTabOption[] = [
   { type: 'devops', label: 'DevOps', icon: <Icon name="devops" size={16} />, shortcut: '⇧⌘O' },
-  { type: 'library', label: 'Library', icon: <Icon name="book" size={16} />, shortcut: '⇧⌘Y' },
   { type: 'workstream', label: 'Workstream', icon: <Icon name="list" size={16} />, shortcut: '⇧⌘W' },
 ];
 

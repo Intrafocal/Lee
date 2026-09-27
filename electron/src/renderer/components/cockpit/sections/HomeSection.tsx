@@ -1,177 +1,101 @@
 /**
- * HomeSection - Home, the desk (cockpit-design §3; package R1). Replaces the
- * Copilot section and absorbs D1's OpenerCard (Deep D1 §8.2, 14 §6). One
- * centred column of --col-home:
+ * HomeSection - Home (cockpit-design §3; Desk D2 §8, docs/16-Desk.md §6).
+ * The Cockpit's job is reassurance: you check it, then go back to your Desk.
+ * One centred column of --col-home, top to bottom:
  *
- * 1. The greeting, "<weekday> <part of day>" (greeting()).
- * 2. The question, "What's on your mind, <name>?", in Newsreader; the name is
- *    window.lee.app.userName() (§7.2), else no name.
- * 3. The field: Enter opens an active exploration with that exact title
- *    (any case), else opens a Page in Deep with your text as its first line.
- *    One keystroke to writing. The exploration itself is created on the
- *    Page's first save with content (Deep next R8), so an empty Page left
- *    behind creates nothing; A blank page works the same way.
- * 4. Pick up where you left off (when the opener has one): one Card, with
- *    your stopped_at sentence and Continue ⇧⌘0, the view's one phosphor.
- * 5. Or start from: each surface as a sentence; lists open inline and
- *    picking opens Deep. Q2 items are written out one by one. With no goals
- *    yet (no GOALS.md, or no `### G…`), it leads with "This project doesn't
- *    have goals yet", which opens the Goals Page (Deep next R12).
- * 6. Meanwhile: one sentence (meanwhileSentence()), up to three needs-you
- *    rows (Allow or Reply, and a quiet second action), the Lee Feed entries
- *    that need you and live nowhere else (homeFeedNeeds(): a check-in
- *    proposal, an escalate proposal; the entry's first action, shown
- *    verbatim first when it types or runs something, C3, and Dismiss ⌘⌫),
- *    then quiet links:
- *    See what shipped (inline), Ask Hester what to do next (What next?,
- *    answered inline), This week's retro when due, and work lint as ⚠ N
- *    (to Ops, where the findings are).
+ * 1. The greeting, "<weekday> <part of day>" (greeting()), and one
+ *    reassuring sentence (meanwhileSentence(): "Everything's handled." when
+ *    nothing waits).
+ * 2. The one or two things that need you, answerable here with Work's
+ *    waiting card (Allow / Deny, quick replies; never the phosphor step
+ *    here), then "n more in Work". Lee Feed entries that need you and live
+ *    nowhere else follow (homeFeedNeeds(): a check-in proposal, an escalate
+ *    proposal; the entry's first action, shown verbatim first when it types
+ *    or runs something, C3, and Dismiss ⌘⌫).
+ * 3. Shipped this week: History's wins strip (GET /cockpit/history?days=7),
+ *    then quiet links: This week's retro when due, Ask Hester what to do
+ *    next (answered inline), and work lint as ⚠ N (to Ops).
+ * 4. Back to your Desk, the view's one next step: a big door with your last
+ *    card's title (Newsreader) and its stopped-at line (Newsreader italic),
+ *    from GET /desk/last. With no card, or an older Hester without the
+ *    route, it reads "Go to your Desk". Either way it's
+ *    openDesk({ kind: 'last' }).
  *
- * The opener is deterministic (GET /copilot/opener, no model call). It and
- * the digest refresh on load, on return and every 10 minutes while shown.
- * Steward requests from outside (a lint item's Ask Hester, a lint fix's
- * what-next) still land here and answer inline. Asking anything else is ⌘/.
+ * The opener ("What's on your mind?", Or start from) left Home for the Desk,
+ * where typing on an empty Area starts a Page. The digest, the wins and the
+ * door refresh on load, on return and every 10 minutes while shown. Steward
+ * requests from outside (a lint item's Ask Hester, a lint fix's what-next)
+ * still land here and answer inline. Asking anything else is ⌘/.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { AboutRef, FeedAction, LintSnapshot, Opener, StewardAnswer } from '../../../../shared/cockpit';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AboutRef, FeedAction, LintSnapshot, StewardAnswer } from '../../../../shared/cockpit';
+import type { DeskLast } from '../../../../shared/desk';
 import { fetchDigest, type DigestResponse } from '../../../lib/hesterCopilot';
+import { askSteward, fetchDeskLast, fetchHistory, whatNext, type HistoryResponse } from '../../../lib/hesterCockpit';
 import {
-  askSteward,
-  listExplorations,
-  triageSomeday,
-  whatNext,
-  type Exploration,
-  type Q2Candidate,
-} from '../../../lib/hesterCockpit';
-import { cutAtWord, fetchOpener, goalsEntryShown, newDraft, patchReference, resolveGoalsPage } from '../../../lib/hesterDeep';
-import { matchExploration, untitledTitle } from '../../../lib/deepModel';
-import {
-  arrivedLine,
+  HOME_NEEDS_MAX,
+  deskDoor,
   formatAge,
   greeting,
   homeFeedNeeds,
-  homeNeeds,
-  homeQuestion,
+  homeMoreLine,
   meanwhileSentence,
   plainLine,
-  q2Sentence,
   rendererAction,
-  startSentence,
-  type AttentionFeedRow,
   type LeeFeedRow,
-  type StartSurface,
 } from '../../../lib/cockpitModel';
-import { deepStart, openInDeep, openUrl } from '../../deep/deepBridge';
-import { cockpitModeStore } from '../cockpitMode';
+import { waitingItems, type SwipeAction, type WaitingItem } from '../../../lib/workModel';
+import { openDesk } from '../cockpitMode';
 import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
-import { openItem } from '../Proposals';
 import { RetroCard } from '../../copilot/RetroCard';
+import { WaitingCard } from '../work/WaitingCard';
+import { dismiss as dismissItem, snooze as snoozeItem } from '../work/actions';
 import { Btn, Card, Dot, Eyebrow, QuietLinks, Row, WritingQuote, type QuietLink } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 interface HomeSectionProps {
   ctx: CockpitCtx;
   returnNonce: number;
-  /** First-render data before the fetches land (the renderer smoke renders Home from fixtures; the app passes none). */
-  seed?: { opener?: Opener | null; digest?: DigestResponse | null; name?: string | null };
+  /**
+   * First-render data before the fetches land (the renderer smoke renders
+   * Home from fixtures; the app passes none). `deskLast: null` is an older
+   * Hester (or Hester offline).
+   */
+  seed?: { digest?: DigestResponse | null; deskLast?: DeskLast | null; shipped?: HistoryResponse | null };
 }
 
 const REFRESH_MS = 10 * 60000;
-const PICKUP_ROW = 'home:pickup';
+const DOOR_ROW = 'home:door';
+/** Wins shown in the strip; the rest are in Hester's history. */
+const SHIPPED_MAX = 6;
 /** Default question when a lint item's Ask Hester asks without one. */
 const DEFAULT_QUESTION = 'What should I do about this?';
 
 /** Steward requests already handled (per window), so a remount never replays one. */
 let handledNonce = 0;
 
-// Go deep with nothing open may ask before Home has mounted; the request
-// waits here until it does.
-let focusPending = false;
-let focusMounted: (() => void) | null = null;
-cockpitModeStore.onFocusOpener(() => {
-  if (focusMounted) focusMounted();
-  else focusPending = true;
-});
-
-/** The user's first name, asked once per window (§7.2); null until known or when there is none. */
-let userNameCache: Promise<string | null> | null = null;
-function userName(): Promise<string | null> {
-  if (!userNameCache) {
-    userNameCache = (async () => {
-      try {
-        return (await window.lee?.app?.userName?.()) ?? null;
-      } catch {
-        return null;
-      }
-    })();
-  }
-  return userNameCache;
-}
-
-/**
- * Open a Page in Deep: an exploration (starting the Deep session on it), or
- * an in-memory Page (`draft`, Deep next R8), whose session starts with no
- * exploration and is retargeted when the Page's first save creates it.
- */
-export async function openPageTarget(workspace: string, target: { id: string; title: string; draft: boolean }): Promise<void> {
-  if (!target.draft) {
-    await openInDeep(workspace, target.id, target.title);
-    return;
-  }
-  await deepStart({ workspace, exploration_id: null, title: target.title, surface: 'lee' });
-  cockpitModeStore.openDeep(target.id, target.title);
-}
-
-/** R12's entry points: open the Goals Page (the existing one, else a new in-memory one) with your text first. */
-export async function openGoalsPage(workspace: string, firstLine: string): Promise<void> {
-  await openPageTarget(workspace, await resolveGoalsPage(workspace, firstLine));
-}
-
-type Expanded = 'open_questions' | 'captured_away' | 'reading_list' | 'quiet' | null;
 type AskState = { phase: 'idle' } | { phase: 'loading'; label: string } | { phase: 'done'; answer: StewardAnswer; label: string } | { phase: 'error'; error: string };
 
 export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed }) => {
   const workspace = ctx.workspace;
-  const [name, setName] = useState<string | null>(seed?.name ?? null);
-  const [opener, setOpener] = useState<Opener | null>(seed?.opener ?? null);
-  const [openerError, setOpenerError] = useState<string | null>(null);
   const [digest, setDigest] = useState<DigestResponse | null>(seed?.digest ?? null);
-  const [digestError, setDigestError] = useState<string | null>(null);
-  const [text, setText] = useState('');
+  const [shipped, setShipped] = useState<HistoryResponse | null>(seed?.shipped ?? null);
+  const [shippedError, setShippedError] = useState<string | null>(null);
+  const [deskLast, setDeskLast] = useState<DeskLast | null>(seed?.deskLast ?? null);
   const [busy, setBusy] = useState(false);
-  const [expanded, setExpanded] = useState<Expanded>(null);
-  const [shipped, setShipped] = useState(false);
   const [retroOpen, setRetroOpen] = useState(false);
   const [lint, setLint] = useState<LintSnapshot | null>(null);
   const [ask, setAsk] = useState<AskState>({ phase: 'idle' });
   const [next, setNext] = useState<AskState>({ phase: 'idle' });
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const explorations = useRef<Exploration[]>([]);
+  // Items swiped away here: hidden at once, the queue hears of them right away.
+  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    void userName().then((n) => {
-      if (alive.current) setName(n);
-    });
-  }, []);
-
-  useEffect(() => {
-    const focus = () => requestAnimationFrame(() => inputRef.current?.focus());
-    focusMounted = focus;
-    if (focusPending) {
-      focusPending = false;
-      focus();
-    }
-    return () => {
-      if (focusMounted === focus) focusMounted = null;
     };
   }, []);
 
@@ -186,28 +110,26 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
     nextSeq.current++;
     setAsk({ phase: 'idle' });
     setNext({ phase: 'idle' });
+    setDeskLast(null);
   }
 
-  // ---- the opener and the digest: on load, on return, every 10 minutes ----
+  // ---- the digest, the week's wins and the door: on load, on return, every 10 minutes ----
   const load = useCallback(() => {
     if (!workspace) return () => undefined;
     let cancelled = false;
-    fetchOpener(workspace).then((r) => {
-      if (cancelled) return;
-      if (r.ok) {
-        setOpener(r.data);
-        setOpenerError(null);
-      } else setOpenerError(r.error);
-    });
-    listExplorations(workspace).then((r) => {
-      if (!cancelled && r.ok && Array.isArray(r.data)) explorations.current = r.data;
-    });
     fetchDigest({ workspace }).then((r) => {
+      if (!cancelled && r.ok) setDigest(r.data);
+    });
+    fetchHistory(workspace, 7).then((r) => {
       if (cancelled) return;
       if (r.ok) {
-        setDigest(r.data);
-        setDigestError(null);
-      } else setDigestError(r.error);
+        setShipped(r.data);
+        setShippedError(null);
+      } else setShippedError(r.error);
+    });
+    // A 404 (an older Hester) or no Hester: the door reads "Go to your Desk" (§10).
+    fetchDeskLast(workspace).then((r) => {
+      if (!cancelled) setDeskLast(r.ok ? r.data : null);
     });
     return () => {
       cancelled = true;
@@ -280,70 +202,26 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
     }
   }, [pending, runAsk, runNext]);
 
-  // ---- the opener's actions (unchanged from D1 §8.2) ----
-  const titleOf = (id: string, fallback?: string) => explorations.current.find((e) => e.id === id)?.title ?? fallback ?? id;
-
-  const open = async (id: string, title: string) => {
+  // ---- the door ----
+  const door = deskDoor(deskLast);
+  const goToDesk = async () => {
+    if (busy) return;
     setBusy(true);
     try {
-      await openInDeep(workspace, id, title);
+      await openDesk(ctx.copilotApi, workspace, { kind: 'last' });
     } finally {
       if (alive.current) setBusy(false);
     }
   };
 
-  /** An in-memory Page (R8): nothing is created until its first save with content. */
-  const create = async (input: { seed?: string; title: string; page: string }) => {
-    const id = newDraft({
-      workspace,
-      title: input.title,
-      page: input.page,
-      ...(input.seed ? { seed: input.seed } : {}),
-      sendTitle: !input.seed,
-      origin: { kind: 'opener' },
-    });
-    setText('');
-    setBusy(true);
-    try {
-      await openPageTarget(workspace, { id, title: input.title, draft: true });
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  };
-
-  const openGoals = async () => {
-    setBusy(true);
-    try {
-      await openGoalsPage(workspace, '');
-    } finally {
-      if (alive.current) setBusy(false);
-    }
-  };
-
-  const submit = async () => {
-    const t = text.trim();
-    if (!t || busy) return;
-    if (!explorations.current.length) {
-      const r = await listExplorations(workspace);
-      if (r.ok && Array.isArray(r.data)) explorations.current = r.data;
-    }
-    const hit = matchExploration(t, explorations.current);
-    if (hit) {
-      setText('');
-      await open(hit.id, hit.title);
-      return;
-    }
-    await create({ seed: t, title: cutAtWord(t, 60), page: `${t}\n\n` });
-  };
-
-  const onQ2 = (c: Q2Candidate) => {
-    if (c.kind === 'exploration-quiet') void openItem(ctx, 'exploration', c.ref);
-    else void openItem(ctx, 'goal', c.goal_id || c.ref);
-  };
-
-  // ---- needs you (the attention queue, as Work orders it) ----
-  const needs = homeNeeds(ctx.feedRows, 3);
-  const waiting = ctx.feedRows.filter((r) => r.source === 'attention' && r.severity !== 'ambient' && r.item.kind !== 'summary').length;
+  // ---- needs you: Work's waiting cards, at most two here ----
+  const snapshot = ctx.snapshot;
+  const waiting = useMemo(
+    () => waitingItems({ items: snapshot?.items, workspace, tiles: ctx.tiles, hidden: gone, agents: snapshot?.agents }),
+    [snapshot, workspace, ctx.tiles, gone],
+  );
+  const shownWaiting = waiting.slice(0, HOME_NEEDS_MAX);
+  const more = homeMoreLine(waiting.length, shownWaiting.length);
   // Lee's own needs-you entries (check-in, escalate) have no other place (§4.1).
   const feedNeeds = homeFeedNeeds(ctx.feedRows, (ctx.ops?.proposals ?? []).map((p) => p.id));
   const openEntry = (row: LeeFeedRow) => {
@@ -357,42 +235,32 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
     } else if (ref.op || ref.proposal_id) ctx.setSection('ops');
   };
   const dismissEntry = (row: LeeFeedRow) => void ctx.api?.feed.act(row.entry.id, 'dismiss').catch(() => {});
-
-  const act = (row: AttentionFeedRow, action: 'approve' | 'deny') => {
-    const api = ctx.copilotApi;
-    if (!api) return;
-    api
-      .reply(row.item.id, { action, version: row.item.version })
-      .then((r) => {
-        if (!r.success) ctx.notify(r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'failed', 'error');
-      })
-      .catch(() => ctx.notify('failed', 'error'));
-  };
-  const snooze = (row: AttentionFeedRow) => {
-    const api = ctx.copilotApi;
-    if (!api) return;
-    api
-      .snooze(row.item.id, { until: 'change' })
-      .then((r) => {
-        if (!r.success) ctx.notify(r.error || 'Could not snooze', 'error');
-      })
-      .catch(() => ctx.notify('Could not snooze', 'error'));
-  };
-  /** Reply opens Work's detail view on this item (§3.6). */
-  const replyInWork = (row: AttentionFeedRow) => {
+  /** A card's detail (and its reply box) is Work's. */
+  const openInWork = (w: WaitingItem) => {
     ctx.setSection('work');
-    ctx.selectRow(row.id);
+    ctx.selectRow(w.id);
+  };
+  const swipe = (w: WaitingItem, action: SwipeAction) => {
+    setGone((g) => new Set(g).add(w.item.id));
+    const done = action === 'dismiss' ? dismissItem(ctx, w.item) : snoozeItem(ctx, w.item);
+    void done.then((ok) => {
+      if (ok || !alive.current) return;
+      setGone((g) => {
+        const n = new Set(g);
+        n.delete(w.item.id);
+        return n;
+      });
+    });
   };
 
-  const pickUp = opener?.pick_up ?? null;
   const rows: RowHandle[] = [
-    ...(pickUp ? [{ id: PICKUP_ROW, title: pickUp.exploration.title, open: () => void open(pickUp.exploration.id, pickUp.exploration.title) }] : []),
-    ...needs.map((r) => ({
-      id: `home:${r.id}`,
-      title: r.item.source.tab_label || r.title,
-      open: () => replyInWork(r),
-      approval: r.item.kind === 'approval' ? r.item : null,
-      replyItem: r.item,
+    ...shownWaiting.map((w) => ({
+      id: w.id,
+      title: w.name,
+      open: () => openInWork(w),
+      approval: w.kind === 'approval' ? w.item : null,
+      replyItem: w.item,
+      ptyId: w.ptyId,
     })),
     ...feedNeeds.map((r) => ({
       id: `home:${r.id}`,
@@ -402,6 +270,7 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
       dismiss: () => dismissEntry(r),
       about: { kind: 'feed' as const, id: r.entry.id, label: r.title, record: r.entry },
     })),
+    { id: DOOR_ROW, title: door.title ?? door.label, open: () => void goToDesk() },
   ];
   useEffect(() => {
     ctx.registerRows(rows);
@@ -409,260 +278,82 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
   const sel = ctx.mode.selected;
   const isSel = (id: string) => sel?.kind === 'row' && sel.id === id;
 
-  // ---- Or start from ----
-  const surfaces = (opener?.surfaces ?? []).filter((s) => s.kind !== 'blank');
-  const q2 = (surfaces.find((s) => s.kind === 'q2')?.items ?? []) as Q2Candidate[];
-  const starts = surfaces
-    .filter((s) => s.kind !== 'q2')
-    .map((s) => ({ kind: s.kind as Exclude<Expanded, null>, sentence: startSentence(s as StartSurface) }))
-    .filter((s): s is { kind: Exclude<Expanded, null>; sentence: string } => !!s.sentence);
-  const order: Array<Exclude<Expanded, null>> = ['open_questions', 'captured_away', 'reading_list', 'quiet'];
-  starts.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
-  const before = starts.filter((s) => s.kind !== 'quiet');
-  const quiet = starts.filter((s) => s.kind === 'quiet');
-
-  const expandedList = (() => {
-    const s = opener?.surfaces.find((x) => x.kind === expanded);
-    if (!s || s.kind === 'blank' || s.kind === 'q2') return null;
-    switch (s.kind) {
-      case 'open_questions':
-        return s.items.map((q) => (
-          <Row
-            key={q.question_id}
-            title={<span className="home-writing">{q.text}</span>}
-            meta={q.exploration_title}
-            onOpen={busy ? undefined : () => void open(q.exploration_id, q.exploration_title)}
-          />
-        ));
-      case 'reading_list':
-        return s.items.map((r) => (
-          <Row
-            key={r.reference_id}
-            title={r.title || r.url}
-            meta={titleOf(r.exploration_id)}
-            onOpen={
-              busy
-                ? undefined
-                : () => {
-                    openUrl(r.url);
-                    void patchReference(workspace, r.exploration_id, r.reference_id, { opened: true });
-                    void open(r.exploration_id, titleOf(r.exploration_id));
-                  }
-            }
-          />
-        ));
-      case 'captured_away':
-        return s.items.map((c) => (
-          <Row
-            key={c.someday_id}
-            title={<span className="home-writing">{c.text}</span>}
-            meta={c.surface === 'aeronaut' ? 'phone' : c.surface}
-            onOpen={
-              busy
-                ? undefined
-                : async () => {
-                    setBusy(true);
-                    const r = await triageSomeday(workspace, c.someday_id, { action: 'explore' });
-                    if (!alive.current) return;
-                    setBusy(false);
-                    if (r.ok && 'exploration' in r.data) void open(r.data.exploration.id, r.data.exploration.title);
-                    else setOpenerError(r.ok ? 'Hester made no exploration' : r.error);
-                  }
-            }
-          />
-        ));
-      case 'quiet':
-        return s.items.map((e) => (
-          <Row key={e.exploration_id} title={e.title} meta={formatAge(e.last_touched_at, ctx.now)} onOpen={busy ? undefined : () => void open(e.exploration_id, e.title)} />
-        ));
-    }
-    return null;
-  })();
-
-  const startLink = (key: string, label: string, onClick: () => void, on = false) => (
-    <button key={key} type="button" className={`home-start-link${on ? ' is-on' : ''}`} aria-expanded={on || undefined} disabled={busy} onClick={onClick}>
-      {label}
-    </button>
-  );
-
-  // ---- Meanwhile's quiet links ----
+  // ---- shipped this week, and the quiet links under it ----
+  const wins = shipped?.wins ?? [];
   const diags = (lint?.diagnostics ?? []).filter((d) => d.severity !== 'off' && (!d.workspace || d.workspace === workspace));
   const links: QuietLink[] = [
-    { label: shipped ? 'Hide what shipped' : 'See what shipped', onClick: () => setShipped((x) => !x) },
+    ...(digest?.retro.due ? [{ label: "This week's retro", onClick: () => setRetroOpen((x) => !x) }] : []),
     {
       label: next.phase === 'loading' ? 'Asking Hester…' : 'Ask Hester what to do next',
       onClick: () => {
         if (next.phase !== 'loading') runNext();
       },
     },
-    ...(digest?.retro.due ? [{ label: "This week's retro", onClick: () => setRetroOpen((x) => !x) }] : []),
     ...(diags.length ? [{ label: `⚠ ${diags.length}`, onClick: () => ctx.setSection('ops') }] : []),
   ];
 
-  const awaySummary = (ctx.snapshot?.items ?? []).find((i) => i.kind === 'summary' && i.state === 'open') ?? null;
+  const working = ctx.tiles.filter((t) => t.working).length;
 
   return (
     <section className="home">
       <div className="home-greeting">{greeting(new Date(ctx.now))}</div>
-      <label htmlFor="home-field" className="home-question">
-        {homeQuestion(name)}
-      </label>
-      <div className="home-field">
-        <input
-          id="home-field"
-          ref={inputRef}
-          className="home-input"
-          value={text}
-          disabled={busy}
-          placeholder="Just start writing…"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              e.stopPropagation();
-              void submit();
-            }
-          }}
-        />
-        <span className="home-enter" aria-hidden="true">
-          ↵
-        </span>
-      </div>
-      {openerError && <div className="home-error">{openerError}</div>}
+      <p className="home-lead">{meanwhileSentence(digest, { waiting: waiting.length + feedNeeds.length, working })}</p>
 
-      {pickUp && (
-        <div className="home-block">
-          <Card
-            className="home-pickup"
-            onOpen={() => void open(pickUp.exploration.id, pickUp.exploration.title)}
-            selected={isSel(PICKUP_ROW)}
-            label={`Continue ${pickUp.exploration.title}`}
-          >
-            <div data-cockpit-row={PICKUP_ROW}>
-              <Eyebrow right={formatAge(pickUp.exploration.last_touched_at, ctx.now)}>Pick up where you left off</Eyebrow>
-              <div className="home-pickup-title">{pickUp.exploration.title}</div>
-              {pickUp.stopped_at && <WritingQuote text={pickUp.stopped_at} size={19} />}
-              {arrivedLine(pickUp.arrived) && <div className="home-pickup-arrived">{arrivedLine(pickUp.arrived)}</div>}
-              <div className="home-pickup-actions">
-                <Btn kind="next" kbd="⇧⌘0" disabled={busy} onClick={() => void open(pickUp.exploration.id, pickUp.exploration.title)}>
-                  Continue
-                </Btn>
-              </div>
+      {(shownWaiting.length > 0 || feedNeeds.length > 0) && (
+        <div className="home-block home-needs-block">
+          {shownWaiting.length > 0 && (
+            <div className="work-waiting">
+              {shownWaiting.map((w) => (
+                <div key={w.id} data-cockpit-row={w.id}>
+                  <WaitingCard
+                    ctx={ctx}
+                    w={w}
+                    raised={false}
+                    selected={isSel(w.id)}
+                    onOpen={() => openInWork(w)}
+                    onSwipe={(action) => swipe(w, action)}
+                  />
+                </div>
+              ))}
             </div>
-          </Card>
+          )}
+          {more && (
+            <button type="button" className="home-more" onClick={() => ctx.setSection('work')}>
+              {more}
+            </button>
+          )}
+          {feedNeeds.length > 0 && (
+            <div className="home-needs">
+              {feedNeeds.map((r) => (
+                <HomeFeedNeed key={r.id} ctx={ctx} row={r} selected={isSel(`home:${r.id}`)} onDismiss={() => dismissEntry(r)} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       <div className="home-block">
-        <Eyebrow>Or start from</Eyebrow>
-        <div className="home-starts">
-          {goalsEntryShown(ctx.goals.data) && startLink('goals', 'This project doesn’t have goals yet', () => void openGoals())}
-          {startLink('blank', 'A blank page', () => void create({ title: untitledTitle(new Date()), page: '' }))}
-          {before.map((s) => startLink(s.kind, s.sentence, () => setExpanded((cur) => (cur === s.kind ? null : s.kind)), expanded === s.kind))}
-          {q2.map((c) => startLink(`q2:${c.kind}:${c.ref}`, q2Sentence(c), () => onQ2(c)))}
-          {quiet.map((s) => startLink(s.kind, s.sentence, () => setExpanded((cur) => (cur === s.kind ? null : s.kind)), expanded === s.kind))}
-        </div>
-        {expandedList && <Card className="home-start-list">{expandedList}</Card>}
-      </div>
-
-      <div className="home-meanwhile">
-        <Eyebrow>Meanwhile</Eyebrow>
-        {digestError && !digest ? (
-          <p className="home-sentence is-muted">{digestError}</p>
-        ) : (
-          <p className="home-sentence">{digest ? meanwhileSentence(digest, { waiting: waiting + feedNeeds.length, working: ctx.tiles.filter((t) => t.working).length }) : 'Loading…'}</p>
-        )}
-
-        {needs.length > 0 && (
-          <div className="home-needs">
-            {needs.map((r) => {
-              const id = `home:${r.id}`;
-              const who = r.item.source.tab_label || 'An agent';
-              const approval = r.item.kind === 'approval';
-              const askLine = approval
-                ? r.item.tool
-                  ? r.item.tool.preview || r.item.tool.name
-                  : r.item.title
-                : plainLine(r.item.text, 120) || plainLine(r.item.title, 120);
-              return (
-                <div key={r.id} data-cockpit-row={id} className={`home-need${isSel(id) ? ' is-selected' : ''}`} onClick={() => ctx.selectRow(id)}>
-                  <Dot kind="needs" />
-                  <div className="home-need-main">
-                    <div className="home-need-name">{who}</div>
-                    <div className={`home-need-ask${approval ? ' is-command' : ''}`} title={askLine}>
-                      {approval && r.item.tool ? `${r.item.tool.name}: ` : ''}
-                      {askLine}
-                    </div>
-                  </div>
-                  <div className="home-need-actions">
-                    {approval ? (
-                      <>
-                        <Btn kind="plain" disabled={!ctx.copilotApi} onClick={() => act(r, 'approve')}>
-                          Allow
-                        </Btn>
-                        <Btn kind="quiet" disabled={!ctx.copilotApi} onClick={() => act(r, 'deny')}>
-                          Deny
-                        </Btn>
-                      </>
-                    ) : (
-                      <>
-                        <Btn kind="plain" onClick={() => replyInWork(r)}>
-                          Reply
-                        </Btn>
-                        <Btn kind="quiet" disabled={!ctx.copilotApi} onClick={() => snooze(r)} title="Until it changes">
-                          Snooze
-                        </Btn>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {waiting > needs.length && (
-              <button type="button" className="home-more" onClick={() => ctx.setSection('work')}>
-                {waiting - needs.length} more in Work
-              </button>
-            )}
-          </div>
-        )}
-
-        {feedNeeds.length > 0 && (
-          <div className="home-needs">
-            {feedNeeds.map((r) => (
-              <HomeFeedNeed key={r.id} ctx={ctx} row={r} selected={isSel(`home:${r.id}`)} onDismiss={() => dismissEntry(r)} />
+        <Eyebrow>Shipped this week</Eyebrow>
+        {shippedError && !shipped && <div className="home-muted">{shippedError}</div>}
+        {!shipped && !shippedError && <div className="home-muted">Loading…</div>}
+        {shipped && wins.length === 0 && <div className="home-muted">Nothing verified this week yet.</div>}
+        {wins.length > 0 && (
+          <Card className="home-shipped-list">
+            {wins.slice(0, SHIPPED_MAX).map((w, i) => (
+              <Row key={`${w.kind}-${w.ref ?? i}`} dot={w.verified ? 'done' : 'idle'} title={<AgentMarkdown inline text={w.title} />} meta={formatAge(w.at, ctx.now)} />
             ))}
-          </div>
+          </Card>
         )}
-
         <QuietLinks items={links} />
 
-        {shipped && (
-          <div className="home-shipped">
-            {!digest && <div className="home-muted">Nothing yet.</div>}
-            {digest && digest.wins.length === 0 && digest.changed.agent_files.length === 0 && digest.changed.commits === 0 && (
-              <div className="home-muted">Nothing shipped since you left.</div>
-            )}
-            {digest && digest.wins.length > 0 && (
-              <Card>
-                {digest.wins.slice(0, 8).map((w, i) => (
-                  <Row key={`${w.kind}-${w.ref ?? i}`} dot={w.verified ? 'done' : 'idle'} title={<AgentMarkdown inline text={w.title} />} meta={w.ref ?? undefined} />
-                ))}
-              </Card>
-            )}
-            {digest && (digest.changed.commits > 0 || digest.changed.agent_files.length > 0) && (
-              <div className="home-changed">
-                <div className="home-muted">
-                  {digest.changed.commits} commit{digest.changed.commits === 1 ? '' : 's'} · {digest.changed.agent_files.length} file
-                  {digest.changed.agent_files.length === 1 ? '' : 's'} agents changed
-                </div>
-                {digest.changed.agent_files.slice(0, 12).map((f) => (
-                  <button key={f} type="button" className="home-file" onClick={() => ctx.openFile(f)}>
-                    {f}
-                  </button>
-                ))}
-              </div>
-            )}
-            {awaySummary && <AgentMarkdown className="home-away" text={awaySummary.text} />}
+        {retroOpen && digest?.retro.due && (
+          <div className="home-answer">
+            <RetroCard
+              onDone={() => {
+                setRetroOpen(false);
+                load();
+              }}
+            />
           </div>
         )}
 
@@ -682,24 +373,28 @@ export const HomeSection: React.FC<HomeSectionProps> = ({ ctx, returnNonce, seed
             <StewardAnswerView key={ask.answer.request_id} ctx={ctx} answer={ask.answer} onClose={() => setAsk({ phase: 'idle' })} />
           </div>
         )}
+      </div>
 
-        {retroOpen && digest?.retro.due && (
-          <div className="home-answer">
-            <RetroCard
-              onDone={() => {
-                setRetroOpen(false);
-                load();
-              }}
-            />
+      <div className="home-block">
+        <Card className="home-door" onOpen={() => void goToDesk()} selected={isSel(DOOR_ROW)} label={door.title ? `${door.label}: ${door.title}` : door.label}>
+          <div data-cockpit-row={DOOR_ROW}>
+            <Eyebrow right={deskLast?.card?.last_touched_at ? formatAge(deskLast.card.last_touched_at, ctx.now) : undefined}>Your Desk</Eyebrow>
+            {door.title && <div className="home-door-title">{door.title}</div>}
+            {door.stopped && <WritingQuote text={door.stopped} size={19} />}
+            <div className="home-door-actions">
+              <Btn kind="next" kbd="⇧⌘0" disabled={busy} onClick={() => void goToDesk()}>
+                {door.label}
+              </Btn>
+            </div>
           </div>
-        )}
+        </Card>
       </div>
     </section>
   );
 };
 
 /**
- * One Lee Feed entry as a Meanwhile row: its first action as the plain
+ * One Lee Feed entry as a needs-you row: its first action as the plain
  * button, Dismiss as the quiet second. An action that types or runs text
  * (confirm_text) or takes an input shows it first, then asks again (C3).
  */

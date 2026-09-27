@@ -1,7 +1,7 @@
 /**
  * CockpitNav - the icon rail (cockpit-design §2.1): a 56px column of 36px
- * icon buttons, one per section, each with an aria-label and a tooltip
- * carrying its name. The active one gets a --ground-3 fill. The only badge
+ * icon buttons, one per section (⌘1–⌘4), each with an aria-label and a
+ * tooltip carrying its name and key. The active one gets a --ground-3 fill. The only badge
  * is a 6px ember dot when the section holds something that needs you
  * (railDots); there are no counts.
  */
@@ -14,17 +14,16 @@ import { SECTIONS, SECTION_LABELS, type SectionId } from '../../lib/cockpitModel
 export type NavDots = Record<SectionId, boolean>;
 
 /**
- * Rail icons. §2.2 asks for house, tray, target, books, play and clock;
- * the icon set has no tray or target yet, so Work and Goals use the
- * closest existing glyphs until design/icons.json gains them.
+ * Rail icons, Home, Work, Goals, Ops (Desk D2 §8: Library and History are
+ * gone). §2.2 asks for house, tray, target and play; the icon set has no
+ * tray or target yet, so Work and Goals use the closest existing glyphs
+ * until design/icons.json gains them.
  */
 const SECTION_ICONS: Record<SectionId, IconName> = {
   home: 'home',
   work: 'list',
   goals: 'circle',
-  library: 'book',
   ops: 'play',
-  history: 'clock',
 };
 
 interface CockpitNavProps {

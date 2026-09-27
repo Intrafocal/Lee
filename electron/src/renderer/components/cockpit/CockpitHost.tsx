@@ -11,6 +11,10 @@
  * Also owns the create-tab bridge (cockpit:create-tab) and cockpit:go-into.
  * Cockpit and Deep never show an agent terminal; Manual shows every tab
  * (Deep D1 §1.4).
+ *
+ * Desk D2 §8: four sections, Home, Work, Goals and Ops (⌘1–⌘4). Library's
+ * explorations and ideas live at the Desk now, its files in Manual, and
+ * History folded into Home (what shipped) and Ops (Usage).
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -40,7 +44,7 @@ import {
 } from '../../lib/cockpitModel';
 import {
   cockpitModeStore,
-  openExplorationInDeep,
+  openDesk,
   useCockpitModeState,
   type CockpitModeHandle,
   type CockpitModeState,
@@ -56,15 +60,11 @@ import { fetchGoalsStatus, patchTask, type GoalsStatusResponse } from '../../lib
 import { HomeSection } from './sections/HomeSection';
 import { WorkSection } from './sections/WorkSection';
 import { GoalsSection } from './sections/GoalsSection';
-import { LibrarySection } from './sections/LibrarySection';
 import { OperationsSection } from './sections/OperationsSection';
-import type { Exploration } from '../../lib/hesterCockpit';
-import { HistorySection } from './sections/HistorySection';
 import { isControlTarget, isTypingTarget } from './dom';
 import { publishPaletteAbout } from '../paletteAbout';
 import './cockpit-shell.css';
 import './work.css';
-import './library.css';
 
 export type CockpitTab = Tab & { ptyId: number | null; dockPosition: DockPosition };
 
@@ -124,10 +124,6 @@ export interface CockpitCtx {
   openOwnTab: (tabId: number) => void;
   /** Open a file the way Manual does, then switch to Manual. */
   openFile: (path: string) => void;
-  /** Open an exploration in Deep: start the Deep session on it, then show its Page (D1 §8.3). */
-  openExploration: (exp: Exploration) => Promise<void>;
-  /** Open (or refocus) the Library tab on this exploration's tree, then switch to Manual. */
-  openLibrary: (expId: string) => void;
   /** Open a workstream's tab, then switch to Manual. */
   openWorkstream: (id: string, title: string) => void;
   focusPty: (ptyId: number) => void;
@@ -163,8 +159,6 @@ interface CockpitHostProps {
   onCloseTab?: (tabId: number) => void | Promise<void>;
   /** Manual's open-file path (App.handleFileOpen). */
   onOpenFile?: (path: string) => Promise<number | null | undefined> | void;
-  /** Open (or refocus) the Library tab on an exploration (App: librarySessionId on the tab's data). */
-  onOpenLibrary?: (expId: string) => void;
   /** Open a workstream tab (App.handleWorkstreamSelect). */
   onOpenWorkstream?: (id: string, title: string) => void;
   /** Unused since Home dropped its Ask card (asking is ⌘/, cockpit-design §3.7); App still passes it. */
@@ -199,7 +193,7 @@ let currentAbout: AboutRef | null = null;
 
 /**
  * What the ⌘/ palette is "about" (cockpit-design §6.2): the Cockpit's
- * selected item (a Work card or row, a Library exploration, a Goals row),
+ * selected item (a Work card or row, a Goals row),
  * else null. Read when the palette opens; it's not a subscription.
  */
 export function currentCockpitAbout(): AboutRef | null {
@@ -228,7 +222,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   onOpenTab,
   onCloseTab,
   onOpenFile,
-  onOpenLibrary,
   onOpenWorkstream,
   onNotify,
 }) => {
@@ -320,8 +313,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
   }, []);
   const openFileRef = useRef(onOpenFile);
   openFileRef.current = onOpenFile;
-  const openLibraryRef = useRef(onOpenLibrary);
-  openLibraryRef.current = onOpenLibrary;
   const openWorkstreamRef = useRef(onOpenWorkstream);
   openWorkstreamRef.current = onOpenWorkstream;
 
@@ -428,19 +419,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     [notify],
   );
 
-  const openLibrary = useCallback(
-    (expId: string) => {
-      const open = openLibraryRef.current;
-      if (!open) {
-        notify('The Library is not available here', 'error');
-        return;
-      }
-      open(expId);
-      cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
-    },
-    [notify],
-  );
-
   const openWorkstream = useCallback(
     (id: string, title: string) => {
       const open = openWorkstreamRef.current;
@@ -452,13 +430,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       cockpitModeStore.apply(cockpitModeStore.decide({ kind: 'open_tab' }));
     },
     [notify],
-  );
-
-  // Dive in / Continue: the exploration's Page in Deep (D1 §8.3). The chat-tab
-  // dive-in is gone from here; the Library's per-node chats are unchanged.
-  const openExplorationDeep = useCallback(
-    (exp: Exploration) => openExplorationInDeep(copilot.api, workspace, exp.id, exp.title),
-    [copilot.api, workspace],
   );
 
   const focusPty = useCallback(
@@ -582,12 +553,11 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
 
   // ---- popovers, rows, keyboard ----
   const [popover, setPopover] = useState<Popover>(null);
-  // New ⌘N → Explore: go to the Library and focus its new-exploration field.
-  const [exploreNonce, setExploreNonce] = useState(0);
-  const startExplore = useCallback(() => {
-    cockpitModeStore.setSection('library');
-    setExploreNonce((n) => n + 1);
-  }, []);
+  // New ⌘N → New Page: the Desk's overview, where you click an Area and type (Desk D2 §8).
+  const copilotApiForDesk = copilot.api;
+  const newPage = useCallback(() => {
+    void openDesk(copilotApiForDesk, workspace, { kind: 'overview' });
+  }, [copilotApiForDesk, workspace]);
   const rowsRef = useRef<RowHandle[]>([]);
   const registerRows = useCallback((rows: RowHandle[]) => {
     rowsRef.current = rows;
@@ -803,8 +773,6 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
     goInto,
     openOwnTab,
     openFile,
-    openExploration: openExplorationDeep,
-    openLibrary,
     openWorkstream,
     focusPty,
     notify,
@@ -864,9 +832,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
           {section === 'home' && <HomeSection ctx={ctx} returnNonce={returnNonce} />}
           {section === 'work' && <WorkSection ctx={ctx} />}
           {section === 'goals' && <GoalsSection ctx={ctx} />}
-          {section === 'library' && <LibrarySection ctx={ctx} focusCreateNonce={exploreNonce} />}
           {section === 'ops' && <OperationsSection ctx={ctx} />}
-          {section === 'history' && <HistorySection ctx={ctx} />}
         </div>
       </div>
       {toast && (
@@ -879,9 +845,9 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
           ctx={ctx}
           prefill={popover.prefill}
           onClose={() => setPopover(null)}
-          onExplore={() => {
+          onNewPage={() => {
             setPopover(null);
-            startExplore();
+            newPage();
           }}
           onRun={() => setPopover({ kind: 'run' })}
         />

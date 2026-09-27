@@ -21,11 +21,14 @@
  * opens the Goals Page in Deep with your text as its first line. A goal with
  * no metrics reads "not measured yet", neutrally. Projects with goals can
  * still open the Goals Page ("Think it through on a Page").
+ *
+ * Desk D2 §8: the Goals Page is the Desk's pinned Goals card, opened with
+ * openDesk({ kind: 'goals' }); the Pages serving a goal open their card.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import { goalNotMeasured, goalsEntryShown } from '../../../lib/hesterDeep';
-import { openGoalsPage } from './HomeSection';
+import { openDesk } from '../cockpitMode';
 import type { OperationInfo } from '../../../../shared/cockpit';
 import {
   balanceSegments,
@@ -276,7 +279,7 @@ const GoalRow: React.FC<{
               aria-expanded={expanded}
             >
               {expanded ? '▾' : '▸'} {s.tasks.length} task{s.tasks.length === 1 ? '' : 's'} · {s.workstreams.length} workstream
-              {s.workstreams.length === 1 ? '' : 's'} · {s.explorations.length} exploration{s.explorations.length === 1 ? '' : 's'}
+              {s.workstreams.length === 1 ? '' : 's'} · {s.explorations.length} Page{s.explorations.length === 1 ? '' : 's'}
             </button>
           ) : null}
           {goal.focus_ms_7d > 0 ? ` · ${formatHours(goal.focus_ms_7d)} of your focus this week` : ' · none of your focus this week'}
@@ -290,7 +293,7 @@ const GoalRow: React.FC<{
               <Row key={`w:${w.id}`} title={w.title} sub={`workstream · ${w.phase}`} onOpen={() => ctx.openWorkstream(w.id, w.title)} />
             ))}
             {s.explorations.map((x) => (
-              <Row key={`x:${x.id}`} title={x.title} sub="exploration" onOpen={() => void openItem(ctx, 'exploration', x.id)} />
+              <Row key={`x:${x.id}`} title={<span className="home-writing">{x.title}</span>} sub="Page" onOpen={() => void openItem(ctx, 'page', x.id)} />
             ))}
           </div>
         )}
@@ -442,7 +445,7 @@ const GoalsStart: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     if (busy) return;
     setBusy(true);
     try {
-      await openGoalsPage(ctx.workspace, text.trim());
+      await openDesk(ctx.copilotApi, ctx.workspace, { kind: 'goals', first_line: text.trim() });
       setText('');
     } finally {
       setBusy(false);
@@ -512,7 +515,7 @@ export const GoalsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         right={
           <>
             {goals.length > 0 && (
-              <Btn kind="quiet" onClick={() => void openGoalsPage(ctx.workspace, '')} title="Open the Goals Page in Deep">
+              <Btn kind="quiet" onClick={() => void openDesk(ctx.copilotApi, ctx.workspace, { kind: 'goals' })} title="Open the Goals card at your Desk">
                 Think it through on a Page
               </Btn>
             )}

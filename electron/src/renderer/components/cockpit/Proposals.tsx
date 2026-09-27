@@ -15,7 +15,9 @@
 import React, { useState } from 'react';
 import { Icon } from '../Icon';
 import type { OperationInfo, Proposal } from '../../../shared/cockpit';
+import { PAGE_ID_RE, pageIdForExploration } from '../../../shared/desk';
 import { mergeServes, proposalPlan, proposalTaskId, type ProposalPlan } from '../../lib/cockpitModel';
+import { openDesk } from './cockpitMode';
 import {
   createExploration,
   createTask,
@@ -26,14 +28,24 @@ import {
 import { RunOpDialog } from './RunMenu';
 import type { CockpitCtx } from './CockpitHost';
 
-/** Select or open what an `open` proposal (or a Goals row) points at. */
-export async function openItem(ctx: CockpitCtx, target: 'task' | 'exploration' | 'goal' | 'workstream', id: string): Promise<void> {
+/** A Page card id from a card id or a pre-Desk exploration id (Desk D2 §2.1: migration keeps the hex). */
+export function deskCardId(id: string): string | null {
+  return PAGE_ID_RE.test(id) ? id : pageIdForExploration(id);
+}
+
+/** Open a Page card at the Desk; the overview when the id is neither a card nor an exploration. */
+export function openCard(ctx: Pick<CockpitCtx, 'copilotApi' | 'workspace'>, id: string): Promise<void> {
+  const card_id = deskCardId(id);
+  return openDesk(ctx.copilotApi, ctx.workspace, card_id ? { kind: 'card', card_id } : { kind: 'overview' });
+}
+
+/** Select or open what an `open` proposal (or a Goals row) points at. Pages (and old explorations) open at the Desk. */
+export async function openItem(ctx: CockpitCtx, target: 'task' | 'exploration' | 'page' | 'goal' | 'workstream', id: string): Promise<void> {
   if (target === 'task') {
     ctx.setSection('work');
     ctx.selectRow(`task:${id}`);
-  } else if (target === 'exploration') {
-    ctx.setSection('library');
-    ctx.selectRow(`explore:${id}`);
+  } else if (target === 'exploration' || target === 'page') {
+    await openCard(ctx, id);
   } else if (target === 'goal') {
     ctx.setSection('goals');
     ctx.selectRow(`goal:${id}`);
@@ -105,11 +117,10 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
       return { ok: false, error: r.error || 'Run failed' };
     }
     case 'explore': {
+      // Hester's migration puts it on the Desk as a Page on the next read (Desk D2 §6.1).
       const r = await createExploration(ws, { seed: plan.seed, origin: { kind: 'hester' } });
       if (!r.ok) return { ok: false, error: r.error };
-      ctx.setSection('library');
-      ctx.selectRow(`explore:${r.data.id}`);
-      return { ok: true, message: `Exploration started: ${r.data.title}` };
+      return { ok: true, message: `On your Desk: ${r.data.title}` };
     }
   }
 }

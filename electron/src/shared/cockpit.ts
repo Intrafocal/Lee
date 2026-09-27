@@ -831,10 +831,10 @@ export interface Opener {
   generated_at: string; workspace: string;
   pick_up: null | {
     exploration: { id: string; title: string; last_touched_at: string };
-    stopped_at: string | null;
-    arrived: { answers: number; open_questions: number };
     card?: DeskCardBrief;
+    stopped_at: string | null;
     stopped_line?: number | null;
+    arrived: { answers: number; open_questions: number };
   };
   surfaces: OpenerSurface[];
 }

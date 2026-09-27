@@ -16,9 +16,9 @@
  * agent's initial prompt. Deterministic and offline; nothing is summarised.
  *
  * Cockpit design §2.1: New ⌘N. Three choices sit at the top, Task (this
- * form; Enter still launches), Explore (a new exploration in the Library)
- * and Run… (the operations menu, also ⌘{), replacing the old header's
- * + Task, + Explore and Run ▾.
+ * form; Enter still launches), New Page (the Desk's overview, where you
+ * click an Area and type: Desk D2 §8) and Run… (the operations menu, also
+ * ⌘{), replacing the old header's + Task, + Explore and Run ▾.
  *
  * docs/15-Usage.md §6.1: starting a Claude run with the 5-hour window at 85%
  * or more shows one quiet line ("5h window at 91%, resets 3:40pm"); no
@@ -64,13 +64,13 @@ interface LauncherProps {
   ctx: CockpitCtx;
   prefill?: LauncherPrefill;
   onClose: () => void;
-  /** Explore: close and start a new exploration (the Library's field). */
-  onExplore: () => void;
+  /** New Page: close and go to the Desk's overview (Desk D2 §8). */
+  onNewPage: () => void;
   /** Run…: swap to the operations menu. */
   onRun: () => void;
 }
 
-export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExplore, onRun }) => {
+export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onNewPage, onRun }) => {
   const [text, setText] = useState(prefill?.text ?? '');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<TaskKind | null>(prefill?.kind ?? null);
@@ -300,7 +300,7 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExp
               aria-pressed={c.id === 'task'}
               className={c.id === 'task' ? 'is-on' : undefined}
               onClick={() => {
-                if (c.id === 'explore') onExplore();
+                if (c.id === 'page') onNewPage();
                 else if (c.id === 'run') onRun();
                 else textRef.current?.focus();
               }}

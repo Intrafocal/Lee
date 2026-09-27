@@ -1,7 +1,7 @@
 /**
- * UsagePanel - History's Usage tab (docs/15-Usage.md §6.3): what today's
- * work cost, pulled from GET /cockpit/usage?range=today when the tab opens,
- * never on a timer.
+ * UsagePanel - Usage in Ops (docs/15-Usage.md §6.3; Desk D2 §8 moved it
+ * from History): what today's work cost, pulled from
+ * GET /cockpit/usage?range=today when Ops opens, never on a timer.
  *
  * The Claude subscription windows lead as two segmented dials that
  * empty like a fuel gauge (lit segments are what's left; a tick marks

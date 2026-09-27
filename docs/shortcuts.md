@@ -10,7 +10,8 @@ On Linux/Windows ⌘ is Ctrl.
 **Owner** says which surface fires the action, so nothing is bound twice:
 `menu` = the application menu carries the accelerator; `renderer` = the in-app
 hotkey map; `both` = a menu item exists for discoverability but the renderer
-owns the chord; `editor` = implemented by the editor panel / CodeMirror.
+owns the chord; `editor` = implemented by the editor panel / CodeMirror;
+`desk` = implemented by the Desk surface (Deep mode).
 
 Override any chord with a `keybindings:` block in `config.yaml`, keyed by the
 action name, e.g.:
@@ -50,15 +51,15 @@ keybindings:
 | `⌃⇧Tab` | `prev_tab` | renderer | Previous center tab |
 | `⌘W` | `toggle_watch` | renderer | Toggle idle-watching on the focused agent tab |
 | `⌘I` | `cycle_idle` | renderer | Cycle through watched agent tabs that have gone idle |
-| `⌘1` | `tab_1` | renderer | Tab 1 in Manual, rail section 1 in the Cockpit, view 1 in Deep |
-| `⌘2` | `tab_2` | renderer | Tab 2 in Manual, rail section 2 in the Cockpit, view 2 in Deep |
-| `⌘3` | `tab_3` | renderer | Tab 3 in Manual, rail section 3 in the Cockpit, view 3 in Deep |
-| `⌘4` | `tab_4` | renderer | Tab 4 in Manual, rail section 4 in the Cockpit, view 4 in Deep |
-| `⌘5` | `tab_5` | renderer | Tab 5 in Manual, rail section 5 in the Cockpit, view 5 in Deep |
-| `⌘6` | `tab_6` | renderer | Tab 6 in Manual, rail section 6 in the Cockpit, view 6 in Deep |
-| `⌘7` | `tab_7` | renderer | Tab 7 in Manual, rail section 7 in the Cockpit, view 7 in Deep |
-| `⌘8` | `tab_8` | renderer | Tab 8 in Manual, rail section 8 in the Cockpit, view 8 in Deep |
-| `⌘9` | `tab_9` | renderer | Tab 9 in Manual, rail section 9 in the Cockpit, view 9 in Deep |
+| `⌘1` | `tab_1` | renderer | Tab 1 in Manual, rail section 1 in the Cockpit, nothing in Deep |
+| `⌘2` | `tab_2` | renderer | Tab 2 in Manual, rail section 2 in the Cockpit, nothing in Deep |
+| `⌘3` | `tab_3` | renderer | Tab 3 in Manual, rail section 3 in the Cockpit, nothing in Deep |
+| `⌘4` | `tab_4` | renderer | Tab 4 in Manual, rail section 4 in the Cockpit, nothing in Deep |
+| `⌘5` | `tab_5` | renderer | Tab 5 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep |
+| `⌘6` | `tab_6` | renderer | Tab 6 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep |
+| `⌘7` | `tab_7` | renderer | Tab 7 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep |
+| `⌘8` | `tab_8` | renderer | Tab 8 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep |
+| `⌘9` | `tab_9` | renderer | Tab 9 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep |
 
 ## Tools
 
@@ -77,7 +78,6 @@ keybindings:
 | `⇧⌘K` | `k8s` | renderer | Kubernetes TUI (k9s) |
 | `⇧⌘P` | `sql` | renderer | SQL client (pgcli) |
 | `⇧⌘Q` | `hester_qa` | renderer | Hester QA scene runner |
-| `⇧⌘Y` | `library` | renderer | Library pane |
 | `⇧⌘M` | `system` | renderer | System monitor (btop) |
 | `⇧⌘W` | `workstream` | renderer | Workstream picker |
 
@@ -88,6 +88,7 @@ keybindings:
 | `⌘0` | `mode_switcher` | renderer | Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual |
 | `⇧⌘0` | `mode_deep` | renderer | Cockpit ↔ Deep |
 | `⌥⌘0` | `mode_manual` | renderer | Cockpit ↔ Manual |
+| `Esc` | `desk_overview` | desk | Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first) |
 | `⇧⌘R` | `force_reload` | menu | Reload the Lee UI, discarding caches (prompts if terminals are open) |
 | `⌘↓` | `scroll_bottom` | renderer | Scroll the focused terminal to the bottom (ignored while a code editor has focus, where it means go-to-end) |
 | — | View ▸ Reset Zoom | menu | Reset the zoom level. Menu only, no chord: `⌘0` is the mode switcher and `⇧⌘0` is Deep |
@@ -111,11 +112,11 @@ field. Implemented by `keyAction` in `electron/src/renderer/lib/cockpitModel.ts`
 registry, so these can't be overridden in `keybindings:`. Actions follow the
 ⌘-chord convention; only navigation is a bare key, so a stray keystroke can't
 approve, deny or send anything. Every global chord above keeps working,
-including `⌘1`–`⌘9`, which pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (`⌘1` Home, `⌘2` Work, `⌘3` Goals, `⌘4` Library, `⌘5` Ops, `⌘6` History) and views in Deep (`⌘1` Page).
+including `⌘1`–`⌘9`, which pick within the current mode: tabs in Manual and the rail's sections in the Cockpit (`⌘1` Home, `⌘2` Work, `⌘3` Goals, `⌘4` Ops). At the Desk (Deep) they do nothing; `Esc` from a zoomed card goes back to the overview.
 
 | Chord | What it does |
 |---|---|
-| `⌘N` | New task (the Launcher). The File ▸ New File accelerator, which App routes to the Launcher while the Cockpit is showing |
+| `⌘N` | New: a task, a Page (at your Desk) or a run (the Launcher). The File ▸ New File accelerator, which App routes to the Launcher while the Cockpit is showing |
 | `↓` / `↑` | Next / previous row |
 | `←` / `→` | Previous / next agent tile (within the drawer once it has focus) |
 | `Enter` | Peek at the selected agent, or open the row |
