@@ -329,8 +329,8 @@ export type AgentState = 'busy' | 'idle' | 'waiting' | 'unknown';
 
 /**
  * One running agent (a Claude tab Lee launched), for the device "In flight"
- * view. Never carries prompt text or tool inputs; last_summary is the
- * agent's own words.
+ * view. Never carries prompt text or raw tool inputs; last_summary is the
+ * agent's own words, and now/recent carry only short tool previews.
  */
 export interface AgentSummary {
   pty_id: number;

@@ -6,10 +6,19 @@
  * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §6.4.
  */
 
+import type { AgentActivity as ActivityEntry, AgentNow } from '../../shared/cockpit';
 import type { LeeStatusBlock } from '../../shared/copilot';
-import type { ParsedQuestion } from './hook-payload';
+import { clip, type ParsedQuestion } from './hook-payload';
 
 export const MAX_SESSION_FILES = 50;
+
+/** Cockpit design §7.1: activity entries kept per session, and how many a snapshot shows. */
+export const MAX_ACTIVITY = 20;
+export const RECENT_ACTIVITY = 8;
+/** A finished call still counts as "now" for this long after it ends. */
+export const ACTIVITY_NOW_MS = 60_000;
+/** Activity previews are toolPreview, capped shorter. */
+export const ACTIVITY_PREVIEW_MAX = 160;
 
 export interface PendingTool {
   name: string;
@@ -21,6 +30,8 @@ export interface PendingTool {
   files: string[];
   /** AskUserQuestion calls: the parsed question (the agent's words; never logged). */
   question?: ParsedQuestion | null;
+  /** When PreToolUse started it (ms); the activity ring's `now.since`. */
+  started_at?: number;
 }
 
 /** Tool calls that have started (PreToolUse) and not finished yet, per session. */
@@ -62,6 +73,8 @@ export interface AgentSession {
   files_written: string[];
   last_summary: string | null;
   last_lee_status: LeeStatusBlock | null;
+  /** Cockpit design §7.1: the last MAX_ACTIVITY tool calls (pre and post), oldest first. In memory only. */
+  activity_log: ActivityEntry[];
   ended: boolean;
 }
 
@@ -109,6 +122,7 @@ export class AgentSessions {
         files_written: [],
         last_summary: null,
         last_lee_status: null,
+        activity_log: [],
         ended: false,
       };
       this.sessions.set(sessionId, s);
@@ -242,6 +256,36 @@ export class AgentSessions {
       for (let i = s.open_tools.length - 1; i >= 0; i--) if (s.open_tools[i].signature === signature) return s.open_tools[i];
     }
     return null;
+  }
+
+  /** agent.tool pre or post: append to the session's activity ring. */
+  noteActivity(s: AgentSession, entry: ActivityEntry): void {
+    s.activity_log.push(entry);
+    if (s.activity_log.length > MAX_ACTIVITY) s.activity_log.splice(0, s.activity_log.length - MAX_ACTIVITY);
+  }
+
+  /**
+   * What the agent is doing now: the open tool if one is running, else the
+   * last entry if it is within ACTIVITY_NOW_MS, else null.
+   */
+  activityNow(s: AgentSession, now: number): AgentNow | null {
+    const open = s.pending_tool;
+    if (open && !s.ended) {
+      return {
+        tool: open.name,
+        preview: clip(open.preview, ACTIVITY_PREVIEW_MAX),
+        files: [...open.files],
+        since: new Date(open.started_at ?? s.last_event_at).toISOString(),
+      };
+    }
+    const last = s.activity_log[s.activity_log.length - 1];
+    if (!last || now - Date.parse(last.at) > ACTIVITY_NOW_MS) return null;
+    return { tool: last.tool, preview: last.preview, files: [...last.files], since: last.at };
+  }
+
+  /** The last RECENT_ACTIVITY entries, newest last. */
+  recentActivity(s: AgentSession): ActivityEntry[] {
+    return s.activity_log.slice(-RECENT_ACTIVITY).map((e) => ({ ...e, files: [...e.files] }));
   }
 
   addWritten(s: AgentSession, files: string[]): void {
