@@ -362,6 +362,8 @@ The two devices share one data model (the attention queue, Someday, the digest) 
 
 Per workspace. The Cockpit answers three questions: **Where are we heading?** (goals), **What's in flight?** (tasks, workstreams, explorations, operations, tabs), **What needs me?** (approvals, decisions, failures, drift).
 
+*Revised 2026-09-27:* the Cockpit's look and structure are redesigned in [`plans/2026-09-27-cockpit-design-contracts.md`](plans/2026-09-27-cockpit-design-contracts.md): an icon rail with six sections (Home, Work, Goals, Library, Ops, History), Home as a single column that leads into Deep, Work in the same layout as Aeronaut's Now, and no agent dock or tab drawer. Where it conflicts with the layout below, the contract wins.
+
 *Revised 2026-09-26.* The right rail is gone: Hester lives in a **Copilot** section, first in the nav, so the center keeps the full width.
 
 ```

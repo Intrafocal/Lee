@@ -430,6 +430,8 @@ This works because the thinking already happened during the session, when you as
 
 ### 8.1 Devices: carry, not Deep
 
+*Designed 2026-09-27:* the phone and T-Deck screens for Work, one agent and Library (Carry) are in the Cockpit design contract, §8 ([`plans/2026-09-27-cockpit-design-contracts.md`](plans/2026-09-27-cockpit-design-contracts.md)).
+
 *Decided 2026-09-26.* Neither device gets a Deep mode. A phone screen and a T-Deck aren't places for hard thinking at length, and Deep work happens at the machine. But the devices are what you have with you during the other half of the loop, the walk, the shower, dinner (§0), so they carry the exploration out of a session and bring thoughts back into the next one.
 
 | | **Aeronaut** (phone) | **Dirigible** (T-Deck) |
