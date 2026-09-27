@@ -1563,4 +1563,55 @@ const leeRows = [
   });
 }
 
+{
+  // Restoring saved Claude tabs: resume vs fallback vs fresh (lib/sessionResume.ts).
+  const r = await bundle('../src/renderer/lib/sessionResume.ts', 'session-resume');
+  const WT = '/work/lee/.claude/worktrees/fix-1';
+  const yes = () => true;
+  const no = async () => false;
+  const plans = {
+    resume: await r.restorePlan({ label: 'Fix login', resume: { session_id: 'sess-1', cwd: WT } }, 'claude', yes),
+    gone: await r.restorePlan({ label: 'Fix login', resume: { session_id: 'sess-1', cwd: WT } }, 'claude', no),
+    old: await r.restorePlan({ label: 'Claude' }, 'claude', yes),
+    pi: await r.restorePlan({ label: 'Pi', resume: { session_id: 'sess-1', cwd: WT } }, 'pi', yes),
+    flag: await r.restorePlan({ label: 'Claude', resume: { session_id: '--settings', cwd: WT } }, 'claude', yes),
+    throws: await r.restorePlan({ label: 'X', resume: { session_id: 'sess-1', cwd: WT } }, 'claude', () => {
+      throw new Error('ipc');
+    }),
+  };
+
+  test('restore: a Claude tab with a saved session resumes it in its directory', () => {
+    assert.deepEqual(plans.resume, { kind: 'resume', session_id: 'sess-1', cwd: WT });
+    assert.deepEqual(r.resumeArgs('sess-1'), ['--resume', 'sess-1']);
+    assert.ok(!r.resumeArgs('sess-1').includes('--session-id'));
+  });
+
+  test('restore: its worktree gone falls back to a new session, and says so', () => {
+    assert.equal(plans.gone.kind, 'fallback');
+    assert.equal(plans.gone.message, "Couldn't resume Fix login: its worktree is gone; started a new session.");
+    assert.equal(plans.throws.kind, 'fallback', 'an exists() failure is "gone"');
+  });
+
+  test('restore: older sessions, Pi / Hester and bad ids restore fresh, as before', () => {
+    assert.deepEqual(plans.old, { kind: 'fresh' });
+    assert.deepEqual(plans.pi, { kind: 'fresh' });
+    assert.deepEqual(plans.flag, { kind: 'fresh' });
+  });
+
+  test('restore: the saved resume follows the snapshot agents, sticky and Claude-only', () => {
+    const empty = new Map();
+    const m1 = r.mergeResumeRefs(empty, [{ pty_id: 3, session_id: 's3', cwd: WT }, { pty_id: 4, session_id: null }], '/work/lee');
+    assert.notEqual(m1, empty);
+    assert.deepEqual([...m1], [[3, { session_id: 's3', cwd: WT }]]);
+    assert.equal(r.mergeResumeRefs(m1, [{ pty_id: 3, session_id: 's3', cwd: WT }], '/work/lee'), m1, 'unchanged: same map (no re-save)');
+    assert.equal(r.mergeResumeRefs(m1, [], '/work/lee'), m1, 'an agent leaving the snapshot keeps its entry');
+    const m2 = r.mergeResumeRefs(m1, [{ pty_id: 3, session_id: 's3b', cwd: null, workspace: '/work/lee' }], '/work/lee');
+    assert.deepEqual(m2.get(3), { session_id: 's3b', cwd: '/work/lee' }, 'a new session (/clear) replaces it; no cwd: the workspace');
+    assert.deepEqual(r.resumeForTab({ type: 'agent', provider: 'claude', ptyId: 3 }, m1), { session_id: 's3', cwd: WT });
+    assert.equal(r.resumeForTab({ type: 'agent', provider: 'pi', ptyId: 3 }, m1), null);
+    assert.equal(r.resumeForTab({ type: 'terminal', ptyId: 3 }, m1), null);
+    assert.equal(r.resumeForTab({ type: 'agent', provider: 'claude', ptyId: 9 }, m1), null);
+  });
+}
+
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

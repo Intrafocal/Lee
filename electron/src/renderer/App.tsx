@@ -34,6 +34,7 @@ import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
 import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
+import { mergeResumeRefs, restorePlan, resumeArgs, resumeForTab, type ResumeRef } from './lib/sessionResume';
 import { CockpitHost } from './components/cockpit/CockpitHost';
 import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
 import { digitTarget } from './lib/cockpitModel';
@@ -221,6 +222,17 @@ const App: React.FC = () => {
   // is shown on its own tab; the status bar mentions only what isn't on a tab here.
   const copilot = useCopilot();
   const tabAttention = useMemo(() => attentionByPty(copilot.snapshot?.items), [copilot.snapshot]);
+  // Claude sessions a restore can resume: pty -> {session_id, cwd}, learned
+  // from the snapshot's agents (their hooks). Sticky while Lee runs, so a
+  // save made as agents end (Lee quitting) still carries them.
+  const resumeRefs = useRef<ReadonlyMap<number, ResumeRef>>(new Map());
+  const [resumeVersion, setResumeVersion] = useState(0);
+  useEffect(() => {
+    const next = mergeResumeRefs(resumeRefs.current, copilot.snapshot?.agents, workspace);
+    if (next === resumeRefs.current) return;
+    resumeRefs.current = next;
+    setResumeVersion((v) => v + 1);
+  }, [copilot.snapshot, workspace]);
   // Agent ptys A knows (TabRuntimeInfo): a terminal running a hand-started
   // Claude/Pi gets that agent's icon, and an agent's session name is its label.
   const tabDisplay = useCockpitTabDisplay();
@@ -275,18 +287,26 @@ const App: React.FC = () => {
     // match the key, so restoring via label breaks non-default providers.
     // Older sessions won't have this; restore falls back to the label.
     provider?: string;
+    // Claude agent tabs: the session to resume (`claude --resume`) and the
+    // directory it ran in (Claude files sessions per directory). Older
+    // sessions and other providers restore as a new session.
+    resume?: ResumeRef;
   }
 
   // Save session (open tabs and their positions) to localStorage
   const saveSession = useCallback((currentTabs: TabData[], ws: string) => {
     if (!ws) return;
-    const sessionTabs: SessionTab[] = currentTabs.map(t => ({
-      type: t.type,
-      label: t.label,
-      dockPosition: t.dockPosition,
-      ...(t.filePath ? { filePath: t.filePath } : {}),
-      ...(t.type === 'agent' && t.provider ? { provider: t.provider } : {}),
-    }));
+    const sessionTabs: SessionTab[] = currentTabs.map(t => {
+      const resume = resumeForTab(t, resumeRefs.current);
+      return {
+        type: t.type,
+        label: t.label,
+        dockPosition: t.dockPosition,
+        ...(t.filePath ? { filePath: t.filePath } : {}),
+        ...(t.type === 'agent' && t.provider ? { provider: t.provider } : {}),
+        ...(resume ? { resume } : {}),
+      };
+    });
     const storageKey = getSessionStorageKey(ws);
     console.log('[Lee] Saving session:', storageKey, sessionTabs);
     localStorage.setItem(storageKey, JSON.stringify(sessionTabs));
@@ -313,9 +333,10 @@ const App: React.FC = () => {
   // ui_control `tui custom` command) run a specific command/args instead of
   // the default login shell, while still going through normal tab creation.
   // For type === 'agent', spawnOptions.args are extra argv for the provider
-  // (a Cockpit launch: session id, name, prompt) and spawnOptions.label the
-  // tab's display label (default: the provider's name).
-  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[]; label?: string }) => {
+  // (a Cockpit launch: session id, name, prompt), spawnOptions.label the
+  // tab's display label (default: the provider's name) and spawnOptions.cwd
+  // the directory it runs in (a resumed session's; default: the workspace).
+  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[]; label?: string; cwd?: string }) => {
     // Bridge type opens the picker instead of creating a tab directly
     if (type === 'bridge' as any) {
       setBridgePreselectedMachine(null);
@@ -345,7 +366,7 @@ const App: React.FC = () => {
             console.log('[Lee] Converting legacy editor tab to editor-panel');
             return createTab('editor-panel', dockPosition, label || 'Editor');
           case 'terminal':
-            ptyId = await lee.pty.spawn(spawnOptions?.command, spawnOptions?.args, workspace, tabLabel);
+            ptyId = await lee.pty.spawn(spawnOptions?.command, spawnOptions?.args, spawnOptions?.cwd || workspace, tabLabel);
             break;
           case 'git':
             ptyId = await lee.pty.spawnTUI('git', workspace);
@@ -380,9 +401,10 @@ const App: React.FC = () => {
           case 'agent': {
             // label is used as the provider key when creating agent tabs
             const provider = label || 'hester';
+            const cwd = spawnOptions?.cwd || workspace;
             ptyId = spawnOptions?.args?.length
-              ? await lee.pty.spawnAgent(provider, workspace, spawnOptions.args)
-              : await lee.pty.spawnAgent(provider, workspace);
+              ? await lee.pty.spawnAgent(provider, cwd, spawnOptions.args)
+              : await lee.pty.spawnAgent(provider, cwd);
             break;
           }
         }
@@ -1971,6 +1993,19 @@ const App: React.FC = () => {
               // sessions saved before `provider` was persisted.
               if (sessionTab.type === 'agent') {
                 const provider = sessionTab.provider || sessionTab.label.toLowerCase();
+                // A Claude tab with a saved session resumes it in the directory
+                // it ran in; if that worktree is gone, a new session in the
+                // workspace root (and say so).
+                const plan = await restorePlan(sessionTab, provider, (dir) => lee.fs.exists(dir));
+                if (plan.kind === 'resume') {
+                  await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider, {
+                    args: resumeArgs(plan.session_id),
+                    cwd: plan.cwd,
+                    label: sessionTab.label,
+                  });
+                  continue;
+                }
+                if (plan.kind === 'fallback') notifyRef.current('warn', plan.message);
                 await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider);
                 continue;
               }
@@ -1998,6 +2033,17 @@ const App: React.FC = () => {
     if (isSwitchingRef.current) return;
     saveSession(tabs, workspace);
   }, [tabs, workspace, sessionRestored, saveSession]);
+
+  // An agent's session id arrives by its hooks after its tab opened: re-save
+  // (debounced) when the known Claude sessions change, so a restore can resume them.
+  useEffect(() => {
+    if (!resumeVersion || !workspace || !sessionRestored) return;
+    const t = window.setTimeout(() => {
+      if (isSwitchingRef.current || tabsRef.current.length === 0) return;
+      saveSession(tabsRef.current, workspace);
+    }, 1000);
+    return () => window.clearTimeout(t);
+  }, [resumeVersion, workspace, sessionRestored, saveSession]);
 
   // Report context to main process for Hester integration
   // This enables bidirectional context awareness between Lee and Hester

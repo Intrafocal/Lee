@@ -44,6 +44,12 @@ export interface AgentSession {
   pty_id: number | null;
   provider: string;
   cwd: string | null;
+  /**
+   * The directory the session started in (its SessionStart cwd, else the
+   * first seen): where Claude files it, so where `claude --resume` finds it.
+   * `cwd` follows the agent if it moves.
+   */
+  start_cwd?: string | null;
   started_at: number;
   last_event_at: number;
   /** Set while the agent is working; null while idle or paused. */
@@ -107,6 +113,7 @@ export class AgentSessions {
         pty_id: ptyId,
         provider: 'claude',
         cwd,
+        start_cwd: cwd,
         started_at: now,
         last_event_at: now,
         busy_since: null,
@@ -130,6 +137,7 @@ export class AgentSessions {
     }
     if (ptyId != null) s.pty_id = ptyId;
     if (cwd) s.cwd = cwd;
+    if (cwd && !s.start_cwd) s.start_cwd = cwd;
     s.last_event_at = now;
     s.ended = false;
     return s;

@@ -14,6 +14,7 @@ import {
   type CreateTabResult,
   type FeedActionResult,
   type LaunchRequest,
+  type ResumeRequest,
   type TabReadRequest,
   type TabSendRequest,
   type AgentNameSource,
@@ -346,6 +347,7 @@ export function initCockpitTabs({ ptyManager }: { ptyManager: PTYManager }): Tab
   );
   ipcMain.handle(COCKPIT_IPC.checkinCancel, (_e: IpcMainInvokeEvent, ptyId: number) => checkins.cancel(ptyArg(ptyId), LOCAL_USER));
   ipcMain.handle(COCKPIT_IPC.launch, (e: IpcMainInvokeEvent, req: LaunchRequest) => launcher.launch(req, LOCAL_USER, senderWindow(e)));
+  ipcMain.handle(COCKPIT_IPC.resume, (e: IpcMainInvokeEvent, req: ResumeRequest) => launcher.resume(req, LOCAL_USER, senderWindow(e)));
   ipcMain.handle(COCKPIT_IPC.launchDefaults, (_e: IpcMainInvokeEvent, workspace: unknown) => {
     const ws = typeof workspace === 'string' ? openWorkspacePath(workspace) : null;
     return { permission_default: permissionDefault(getCockpitConfig(ws).cockpit.launch.permission_default) };

@@ -212,6 +212,8 @@ export interface FlightGroups {
   rows: FlightRow[];
   /** Idle agents folded into "n earlier today". */
   earlier: FlightRow[];
+  /** Open tasks with no live agent, folded into "Not open (n)" below In flight. */
+  notOpen: FlightRow[];
 }
 
 /** An agent's sub-line: what it's doing now (§7.1), else the first line of its summary. */
@@ -235,6 +237,7 @@ export function inFlight(input: FlightInput): FlightGroups {
   for (const a of input.agents ?? []) agents.set(a.pty_id, a);
   const rows: FlightRow[] = [];
   const earlier: FlightRow[] = [];
+  const notOpen: FlightRow[] = [];
   const tilePtys = new Set<number>();
 
   for (const tile of input.tiles) {
@@ -267,20 +270,21 @@ export function inFlight(input: FlightInput): FlightGroups {
     }
   }
 
-  // Open tasks with no live agent here: review ones to review, the rest idle.
+  // Open tasks with no live agent here: In flight shows only open agents, so
+  // these fold into "Not open" (review ones still read "ready to review").
   for (const task of input.tasks ?? []) {
     if (task.status === 'done' || task.status === 'discarded') continue;
     const pty = task.agent?.pty_id;
     if (pty != null && tilePtys.has(pty)) continue;
     const review = task.status === 'review';
     const t = at(task.updated_at);
-    rows.push({
+    notOpen.push({
       id: `work:task:${task.id}`,
       kind: 'task',
       group: review ? 'review' : 'idle',
       dot: review ? 'done' : 'idle',
       title: taskTitle(task) || task.title,
-      sub: review ? 'done · ready to review' : task.status === 'queued' ? 'queued' : `${task.status} · no agent`,
+      sub: review ? 'ready to review' : task.status === 'queued' ? 'queued' : 'not open',
       meta: Number.isNaN(t) ? '' : formatDuration(now - t),
       ptyId: null,
       taskId: task.id,
@@ -317,12 +321,33 @@ export function inFlight(input: FlightInput): FlightGroups {
     if (a.group === 'busy' || a.group === 'running') return a.t - b.t;
     return b.t - a.t;
   };
-  return { rows: rows.sort(byGroup), earlier: earlier.sort(byGroup) };
+  return { rows: rows.sort(byGroup), earlier: earlier.sort(byGroup), notOpen: notOpen.sort(byGroup) };
 }
 
 /** "3 earlier today" (the fold's label). */
 export function earlierLabel(n: number): string {
   return `${n} earlier today`;
+}
+
+/** "Not open (2)" (the fold of open tasks with no live agent). */
+export function notOpenLabel(n: number): string {
+  return `Not open (${n})`;
+}
+
+/**
+ * The Claude session a not-open task can resume (`claude --resume`): its
+ * agent's session id, else its latest session, when its agent is Claude.
+ * Null for other providers and tasks that never had a session.
+ */
+export function resumableSession(
+  task: { status: string; agent?: { provider?: string | null; session_id?: string | null } | null; sessions?: readonly string[] | null } | null | undefined,
+): string | null {
+  if (!task || task.status === 'done' || task.status === 'discarded') return null;
+  const provider = task.agent?.provider ?? 'claude';
+  if (provider !== 'claude') return null;
+  const ids = [task.agent?.session_id, ...[...(task.sessions ?? [])].reverse()];
+  for (const id of ids) if (typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)) return id;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -531,13 +556,16 @@ export type DetailActionId =
   | 'promote'
   | 'escalate'
   | 'hester-view'
-  | 'assign';
+  | 'assign'
+  | 'resume';
 
 export interface DetailActionsInput {
   /** A tile (a live agent) is shown. */
   tile: { checkin: unknown; canCheckin: boolean; task: unknown } | null;
   ptyId: number | null;
   task: { confirmed: boolean; status: string; workstream: string | null } | null;
+  /** A not-open task's Claude session can be resumed (resumableSession). */
+  resumable?: boolean;
 }
 
 /**
@@ -545,12 +573,14 @@ export interface DetailActionsInput {
  * in the ⋯ menu. Check in (or Cancel check-in), Rename, Open terminal,
  * Confirm, Accept / Discard, Close agent; then Link to a goal…, Priority…,
  * Promote…, Escalate → Explore, Hester's view (an open task) and Assign…
- * (an agent with no task).
+ * (an agent with no task). A not-open task with a Claude session leads
+ * with Resume.
  */
 export function detailActions(input: DetailActionsInput): { icons: DetailActionId[]; more: DetailActionId[] } {
   const { tile, ptyId, task } = input;
   const icons: DetailActionId[] = [];
   const more: DetailActionId[] = [];
+  if (input.resumable && !tile && ptyId == null && task && task.status !== 'done' && task.status !== 'discarded') icons.push('resume');
   if (tile?.checkin) icons.push('cancel-checkin');
   else if (tile?.canCheckin) icons.push('checkin');
   if (ptyId != null || task) icons.push('rename');

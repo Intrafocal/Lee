@@ -205,7 +205,7 @@ test('in flight: the fold is at exactly 2h', () => {
   assert.deepEqual(g.earlier.map((r) => r.ptyId), [2]);
 });
 
-test('in flight: failed ops lead, running ops follow the busy agents; tasks without an agent show', () => {
+test('in flight: failed ops lead, running ops follow the busy agents; tasks without an agent fold into Not open', () => {
   const ops = [
     { def: { name: 'build' }, status: 'running', running: { started_at: ago(3), ended_at: null }, last_run: null },
     { def: { name: 'test' }, status: 'failed', running: null, last_run: { started_at: ago(5), ended_at: ago(2) } },
@@ -218,13 +218,45 @@ test('in flight: failed ops lead, running ops follow the busy agents; tasks with
     { id: 'd', title: 'done', status: 'done', agent: null, updated_at: ago(1) },
   ];
   const g = m.inFlight({ tiles: [tile(1, { working: true })], tasks, ops, now: NOW });
-  assert.deepEqual(g.rows.map((r) => r.id), ['work:op:test', 'work:agent:1', 'work:op:build', 'work:task:r', 'work:task:q']);
+  assert.deepEqual(g.rows.map((r) => r.id), ['work:op:test', 'work:agent:1', 'work:op:build'], 'In flight shows only open agents (and ops)');
   const failed = g.rows[0];
   assert.equal(failed.dot, 'needs');
   assert.equal(failed.sub, 'failed · 2m');
   assert.equal(g.rows[2].sub, 'running · 3m');
-  assert.equal(g.rows[3].title, 'Named review');
-  assert.equal(g.rows[4].sub, 'queued');
+  assert.deepEqual(g.notOpen.map((r) => r.id), ['work:task:r', 'work:task:q']);
+  assert.equal(g.notOpen[0].title, 'Named review');
+  assert.equal(g.notOpen[0].sub, 'ready to review', 'a review task keeps its sub-line');
+  assert.equal(g.notOpen[0].dot, 'done');
+  assert.equal(g.notOpen[1].sub, 'queued');
+});
+
+test('in flight: an open task whose agent is gone is not open, not an idle row', () => {
+  const tasks = [
+    { id: 'gone', title: 'Agent closed', status: 'running', agent: { pty_id: 42, session_id: 's1' }, updated_at: ago(30) },
+    { id: 'w', title: 'Was waiting', status: 'waiting', agent: null, updated_at: ago(10) },
+  ];
+  const g = m.inFlight({ tiles: [], tasks, now: NOW });
+  assert.deepEqual(g.rows, []);
+  assert.deepEqual(g.earlier, []);
+  assert.deepEqual(g.notOpen.map((r) => [r.id, r.sub, r.dot]), [
+    ['work:task:w', 'not open', 'idle'],
+    ['work:task:gone', 'not open', 'idle'],
+  ]);
+  assert.ok(!g.notOpen.some((r) => /no agent/.test(r.sub)));
+  assert.equal(m.notOpenLabel(2), 'Not open (2)');
+});
+
+test('resume: a not-open task resumes its Claude session only when it has one', () => {
+  assert.equal(m.resumableSession({ status: 'running', agent: { provider: 'claude', session_id: 'abc-1' }, sessions: ['old'] }), 'abc-1');
+  assert.equal(m.resumableSession({ status: 'review', agent: { provider: 'claude', session_id: null }, sessions: ['s1', 's2'] }), 's2', 'else the latest session');
+  assert.equal(m.resumableSession({ status: 'running', agent: { provider: 'pi', session_id: 'p1' }, sessions: [] }), null, 'Claude only');
+  assert.equal(m.resumableSession({ status: 'queued', agent: null, sessions: [] }), null, 'no session, no Resume');
+  assert.equal(m.resumableSession({ status: 'done', agent: { provider: 'claude', session_id: 'x' }, sessions: [] }), null, 'closed tasks do not resume');
+  assert.equal(m.resumableSession({ status: 'running', agent: { provider: 'claude', session_id: '--settings' }, sessions: [] }), null, 'never a flag on argv');
+  const t = { confirmed: true, status: 'running', workstream: null };
+  assert.equal(m.detailActions({ tile: null, ptyId: null, task: t, resumable: true }).icons[0], 'resume');
+  assert.ok(!m.detailActions({ tile: null, ptyId: null, task: t, resumable: false }).icons.includes('resume'));
+  assert.ok(!m.detailActions({ tile: { checkin: null, canCheckin: true, task: {} }, ptyId: 3, task: t, resumable: true }).icons.includes('resume'), 'an open agent has no Resume');
 });
 
 test('in flight: agent times from the snapshot, else the tab runtime', () => {
@@ -688,6 +720,27 @@ test('render: a task in review shows Accept and Discard as icons; its rarer acti
   const closed = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, status: 'done' }, tile: null, ptyId: null }));
   assert.ok(!closed.includes('More actions'), 'a closed task has no ⋯');
   assert.equal(nextCount(closed), 0);
+});
+
+test('render: Not open folds below In flight; Resume shows only with a Claude session id', () => {
+  const tasks = [
+    { id: 'n1', title: 'Old fix', name: null, status: 'running', confirmed: true, serves: [], workstream: null, created_at: ago(90), updated_at: ago(60), agent: { provider: 'claude', pty_id: 77, session_id: 'sess-1', tab_label: null }, sessions: ['sess-1'], overrides: null, urgency: null },
+    { id: 'n2', title: 'Needs review', name: null, status: 'review', confirmed: true, serves: [], workstream: null, created_at: ago(90), updated_at: ago(30), agent: null, sessions: [], overrides: null, urgency: null },
+  ];
+  const hester = { snapshot: { tasks: { open: tasks, recent_closed: [] } }, offline: null, refresh: noop };
+  const html = render.work(fixtureCtx({ hester, tiles: [tile(5, { working: true })] }));
+  assert.match(html, /In flight/);
+  assert.match(html, /Not open \(2\)/);
+  assert.ok(!html.includes('Old fix') && !html.includes('Needs review'), 'the fold starts collapsed');
+  assert.ok(html.indexOf('In flight') < html.indexOf('Not open (2)'), 'below In flight');
+  const api = { resume: async () => ({ success: true, pty_id: 9 }) };
+  const withSession = render.detail(fixtureCtx({ api }), subject({ id: 'work:task:n1', task: tasks[0], tile: null, ptyId: null }));
+  assert.match(withSession, /aria-label="Resume"/);
+  assert.equal(nextCount(withSession), 0, 'Resume is an icon, not a second next step');
+  const without = render.detail(fixtureCtx({ api }), subject({ id: 'work:task:n2', task: tasks[1], tile: null, ptyId: null }));
+  assert.ok(!/aria-label="Resume"/.test(without), 'no session id, no Resume');
+  const open = render.detail(fixtureCtx({ api }), subject({ id: 'work:agent:3', task: tasks[0], tile: tile(3, { task: tasks[0] }) }));
+  assert.ok(!/aria-label="Resume"/.test(open), 'an open agent has no Resume');
 });
 
 test('render: Library has no next step', () => {

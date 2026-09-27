@@ -267,6 +267,38 @@ test('agents: busy with busy_since, idle with last_summary after Stop; no prompt
   }
 });
 
+test('agents: full snapshots carry session_id and the cwd it started in (a restore resumes there); compact ones do not', () => {
+  const { pty, q, hook } = setup();
+  const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude: api' }, { id: 12, ptyId: 2, label: 'Claude: resumed' }]);
+  try {
+    hook('SessionStart', { cwd: '/work/api/.claude/worktrees/fix-1' });
+    hook('UserPromptSubmit', { prompt: 'x', cwd: '/work/api/.claude/worktrees/fix-1/src' });
+    let [a] = q.snapshot().agents;
+    assert.strictEqual(a.session_id, 's1');
+    assert.strictEqual(a.cwd, '/work/api/.claude/worktrees/fix-1', 'where Claude filed it, not where it moved');
+    const [c] = q.snapshot({ compact: true }).agents;
+    assert.ok(!('session_id' in c) && !('cwd' in c), 'compact (device) snapshots leave them out');
+    // A resumed session (same id) in a new PTY: SessionStart moves it there.
+    pty.add(2);
+    hook('SessionStart', { cwd: '/work/api/.claude/worktrees/fix-1', source: 'resume' }, '2');
+    [a] = q.snapshot().agents;
+    assert.strictEqual(a.pty_id, 2);
+    assert.strictEqual(a.session_id, 's1');
+  } finally {
+    done();
+  }
+});
+
+test('withClaudeHooks adds Lee hooks to a resumed Claude (argv --resume <id>, no --session-id)', () => {
+  const dir = path.join(tmpHome, '.lee', 'hooks');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'claude-settings.json'), '{}');
+  const args = withClaudeHooks('claude', ['--resume', 'sess-1']);
+  assert.strictEqual(args[0], '--settings');
+  assert.deepStrictEqual(args.slice(-2), ['--resume', 'sess-1']);
+  assert.ok(!args.includes('--session-id'));
+});
+
 test('agents: updates ring keeps the last 10 turns (summary clipped to 600, lee-status parsed), newest last', () => {
   const { q, hook } = setup();
   const done = withWindow([{ id: 11, ptyId: 1, label: 'Claude: api' }]);

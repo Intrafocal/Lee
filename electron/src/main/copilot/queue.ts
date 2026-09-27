@@ -581,6 +581,8 @@ export class CopilotQueue {
 
     switch (h.event) {
       case 'SessionStart': {
+        // Where Claude files this session (a resume must run there).
+        if (h.cwd) s.start_cwd = h.cwd;
         ev('agent.session_start', { provider: s.provider, ...(h.cwd ? { cwd: h.cwd } : {}), ...(h.source ? { source: h.source } : {}) });
         if (cfg.hooks.lee_status_hint) return { status: 200, body: LEE_STATUS_HINT };
         return { status: 204, body: null };
@@ -1368,6 +1370,7 @@ export class CopilotQueue {
         now: shortActivityTool(this.sessions.activityNow(s, now)),
         recent: this.sessions.recentActivity(s).map((e) => shortActivityTool(e)),
         updates: this.agentUpdates(s.session_id),
+        ...(opts.compact ? {} : { session_id: s.session_id, cwd: s.start_cwd ?? s.cwd }),
       };
     });
   }

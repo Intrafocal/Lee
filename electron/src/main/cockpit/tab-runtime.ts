@@ -953,6 +953,8 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       command?: string;
       args?: string[];
       provider?: string;
+      /** For an agent: the directory to run it in (else the workspace). */
+      cwd?: string;
       activate?: boolean;
     },
     extra: { session_id?: string | null; timeouts?: { result?: number; fallback?: number } } = {},
@@ -969,6 +971,7 @@ export class TabRuntimeImpl extends EventEmitter implements TabRuntimeContract {
       ...(opts.type === 'terminal' && opts.command ? { command: opts.command, args: opts.args ?? [] } : {}),
       ...(opts.type === 'agent' && opts.args?.length ? { args: opts.args } : {}),
       ...(opts.provider ? { provider: opts.provider } : {}),
+      ...(opts.type === 'agent' && opts.cwd ? { cwd: opts.cwd } : {}),
       activate: !!opts.activate,
     };
     const pending = this.waitForResult(request.request_id, extra.timeouts?.result ?? CREATE_TAB_TIMEOUT_MS);

@@ -355,6 +355,10 @@ export interface AgentSummary {
   recent?: AgentActivity[];
   /** Work's Updates feed: the last 10 finished turns (summary, lee-status), newest last. */
   updates?: AgentUpdate[];
+  /** The agent's session id (from its hooks), so a restored tab can resume it. Omitted in compact snapshots. */
+  session_id?: string | null;
+  /** The directory the session runs in (its worktree for a Cockpit task). Omitted in compact snapshots. */
+  cwd?: string | null;
 }
 
 export interface AttentionSnapshot {

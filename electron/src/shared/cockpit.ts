@@ -405,6 +405,31 @@ export interface LaunchResult {
   relayed?: boolean;
 }
 
+/**
+ * Resume a task's Claude session (`claude --resume <session_id>`) in a new
+ * agent tab. Claude files sessions under the directory they ran in, so it
+ * runs in the task's worktree when that still exists, else the workspace.
+ */
+export interface ResumeRequest {
+  workspace: string;
+  task_id: string;
+  session_id: string;
+  /** The task's worktree path, if it ran in one. */
+  cwd?: string | null;
+  label?: string | null;
+}
+
+export interface ResumeResult {
+  success: boolean;
+  error?: string;
+  pty_id?: number | null;
+  tab_id?: number | null;
+  /** Where it runs. */
+  cwd?: string;
+  /** The worktree was gone: it runs in the workspace root instead. */
+  fell_back?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Feed (entries produced in Lee main; attention items and Hester tasks are
 // merged in by the renderer, not stored here)
@@ -798,6 +823,8 @@ export interface CreateTabRequest {
   args?: string[];
   /** For type 'agent': provider key. `label` is the tab's display label. */
   provider?: string;
+  /** For type 'agent': the directory to run it in (a resumed session's); else the workspace. */
+  cwd?: string;
   /** Make it the active tab (Manual) instead of leaving it as a tile. */
   activate: boolean;
 }
@@ -833,6 +860,8 @@ export const COCKPIT_IPC = {
   checkin: 'cockpit:checkin',
   checkinCancel: 'cockpit:checkin:cancel',
   launch: 'cockpit:launch',
+  /** invoke(ResumeRequest): ResumeResult. */
+  resume: 'cockpit:resume',
   /** invoke(workspace): LaunchDefaults (the Launcher's initial toggles). */
   launchDefaults: 'cockpit:launch:defaults',
   feedGet: 'cockpit:feed:get',
@@ -901,6 +930,8 @@ export interface CockpitAPI {
   /** Cancel the PTY's pending check-in (nothing is typed after this). */
   checkinCancel: (ptyId: number) => Promise<{ success: boolean; error?: string }>;
   launch: (req: LaunchRequest) => Promise<LaunchResult>;
+  /** Resume a task's Claude session in a new agent tab; optional so older hosts/mocks still type. */
+  resume?: (req: ResumeRequest) => Promise<ResumeResult>;
   /** The workspace's launch defaults (cockpit.launch); optional so older hosts/mocks still type. */
   launchDefaults?: (workspace: string) => Promise<LaunchDefaults>;
   feed: {

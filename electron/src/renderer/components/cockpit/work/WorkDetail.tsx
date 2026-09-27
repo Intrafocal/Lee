@@ -6,9 +6,9 @@
  * as written, C3: it answers the item that takes text, else types into the
  * idle agent's terminal, and waits disabled while the agent works), the
  * Updates feed (its recent turn summaries and lee-status), "Along the way"
- * from its activity (§7.1, folded) and the actions: icons for Check in,
- * Rename, Open terminal in Manual, Confirm, Accept / Discard and Close
- * agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
+ * from its activity (§7.1, folded) and the actions: icons for Resume (a
+ * not-open task's Claude session), Check in, Rename, Open terminal in
+ * Manual, Confirm, Accept / Discard and Close agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
  * workstream), Escalate → Explore (an exploration seeded from it, shown in
  * the Library), Hester's view (/suggest, answered inline with its
  * proposals) and Assign….
@@ -33,6 +33,7 @@ import {
   providerLabel,
   quickReplies,
   replyMode,
+  resumableSession,
   sendIsNext,
   shortAge,
   tabSendError,
@@ -74,12 +75,14 @@ interface WorkDetailProps {
   /** Open the goal picker on open (a link-goal request). */
   openLink: boolean;
   onBack: () => void;
+  /** A resumed task's new agent (its pty): WorkSection opens its detail. */
+  onResumed?: (ptyId: number) => void;
 }
 
 type Panel = 'assign' | 'link' | 'priority' | null;
 type ViewState = { phase: 'idle' } | { phase: 'loading' } | { phase: 'done'; answer: StewardAnswer } | { phase: 'error'; error: string };
 
-export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply, openLink, onBack }) => {
+export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply, openLink, onBack, onResumed }) => {
   const { item, tile, task, agent, ptyId } = subject;
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -188,7 +191,35 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const updates = updatesFeed(agent?.updates, item ? null : words);
   const [alongOpen, setAlongOpen] = useState(false);
 
-  const { icons, more } = detailActions({ tile, ptyId, task });
+  const resumeId = !tile && ptyId == null ? resumableSession(task) : null;
+  const { icons, more } = detailActions({ tile, ptyId, task, resumable: !!resumeId && !!ctx.api?.resume });
+  // Resume through Lee main, so the tab gets Lee's hooks and the task link:
+  // `claude --resume` in the task's worktree while it exists, else the workspace root.
+  const resume = () => {
+    const run = ctx.api?.resume;
+    if (!task || !resumeId || !run) return;
+    act(async () => {
+      try {
+        const r = await run({
+          workspace: ctx.workspace,
+          task_id: task.id,
+          session_id: resumeId,
+          cwd: task.worktree?.path ?? null,
+          label: subject.name,
+        });
+        if (!r.success || r.pty_id == null) {
+          ctx.notify(r.error || 'failed', 'error');
+          return false;
+        }
+        if (r.fell_back) ctx.notify(`Resumed ${subject.name} in the workspace root: its worktree is gone, so Claude may start fresh`);
+        if (onResumed) onResumed(r.pty_id);
+        return true;
+      } catch {
+        ctx.notify('failed', 'error');
+        return false;
+      }
+    });
+  };
   const checkinCancel = () => {
     const api = ctx.api;
     if (!tile || !api) return;
@@ -248,6 +279,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   }
   const spec = (id: DetailActionId): ActionSpec | null => {
     switch (id) {
+      case 'resume':
+        return { icon: 'play', label: 'Resume', title: 'Resume its Claude session in a new tab', disabled: busy || !ctx.api?.resume, onClick: resume };
       case 'cancel-checkin':
         return {
           icon: 'stop',

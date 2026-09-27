@@ -5,7 +5,8 @@
  * The list: a line ("Two things need you.") over the waiting cards in the queue's order (the first raised,
  * its Allow the view's one next step), then "In flight" rows (busy agents
  * with what they're doing now, then ready to review, then idle; idle over
- * 2h folds into "n earlier today"; running and failed operations), else
+ * 2h folds into "n earlier today"; running and failed operations; open tasks
+ * with no live agent fold into "Not open (n)" below it), else
  * "All clear." (or "Working on it." while agents are busy) with Continue. Clicking a card or row replaces the
  * list with its detail view (WorkDetail) in place.
  *
@@ -29,6 +30,7 @@ import {
   doneToday,
   earlierLabel,
   inFlight,
+  notOpenLabel,
   swipedLabel,
   waitingItems,
   workSummary,
@@ -47,6 +49,7 @@ import { dismiss as dismissItem, snooze as snoozeItem } from '../work/actions';
 let handledLinkNonce = 0;
 
 const EARLIER_ID = 'work:earlier';
+const NOT_OPEN_ID = 'work:not-open';
 
 interface DetailState {
   id: string;
@@ -170,12 +173,13 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx.tiles, snapshot, times, open, ctx.ops, ctx.now, allWaiting, swiped]);
   const [showEarlier, setShowEarlier] = useState(false);
-  const flightRows = showEarlier ? [...flight.rows, ...flight.earlier] : flight.rows;
+  const [showNotOpen, setShowNotOpen] = useState(false);
+  const flightRows = [...flight.rows, ...(showEarlier ? flight.earlier : []), ...(showNotOpen ? flight.notOpen : [])];
 
   const summary = workSummary({
     waiting: waiting.length,
     working: flight.rows.filter((r) => r.group === 'busy').length,
-    done: doneToday(closed, ctx.now) + flight.rows.filter((r) => r.group === 'review').length,
+    done: doneToday(closed, ctx.now) + [...flight.rows, ...flight.notOpen].filter((r) => r.group === 'review').length,
   });
 
   // ---- selection and the detail view ----
@@ -189,13 +193,20 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const ptyOf = (id: string): number | null => {
     const w = allWaiting.find((x) => x.id === id);
     if (w) return w.ptyId;
-    const r = [...flight.rows, ...flight.earlier].find((x) => x.id === id);
+    const r = [...flight.rows, ...flight.earlier, ...flight.notOpen].find((x) => x.id === id);
     return r?.ptyId ?? null;
   };
 
   const openDetail = (id: string, reply = false, link = false) => {
     ctx.selectRow(id);
     setDetail({ id, pty: ptyOf(id), reply, link });
+  };
+
+  // A resumed task's new agent: its detail, in place of the task's.
+  const openAgent = (pty: number) => {
+    const id = `work:agent:${pty}`;
+    setDetail({ id, pty, reply: false, link: false });
+    ctx.selectRow(id);
   };
 
   const closeDetail = () => {
@@ -277,6 +288,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
       };
     }
     if (id === EARLIER_ID) return { id, title: earlierLabel(flight.earlier.length), open: () => setShowEarlier((s) => !s) };
+    if (id === NOT_OPEN_ID) return { id, title: notOpenLabel(flight.notOpen.length), open: () => setShowNotOpen((s) => !s) };
     const r = flightRows.find((x) => x.id === id);
     if (!r) return null;
     if (r.kind === 'op') {
@@ -301,6 +313,8 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     ...flight.rows.map((r) => r.id),
     ...(flight.earlier.length ? [EARLIER_ID] : []),
     ...(showEarlier ? flight.earlier.map((r) => r.id) : []),
+    ...(flight.notOpen.length ? [NOT_OPEN_ID] : []),
+    ...(showNotOpen ? flight.notOpen.map((r) => r.id) : []),
   ];
   const handles = (detail ? detailIds : listIds).map(handleFor).filter((h): h is RowHandle => !!h);
   useEffect(() => {
@@ -319,7 +333,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   if (detail && subject) {
     return (
       <div className="work" onKeyDown={onKeyDown}>
-        <WorkDetail key={subject.id} ctx={ctx} subject={subject} focusReply={detail.reply} openLink={detail.link} onBack={closeDetail} />
+        <WorkDetail key={subject.id} ctx={ctx} subject={subject} focusReply={detail.reply} openLink={detail.link} onBack={closeDetail} onResumed={openAgent} />
       </div>
     );
   }
@@ -421,6 +435,19 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
             {showEarlier && flight.earlier.map(renderFlight)}
           </Card>
         </>
+      )}
+      {flight.notOpen.length > 0 && (
+        <Card className="work-flight work-not-open">
+          <div data-cockpit-row={NOT_OPEN_ID} className="work-row-slot">
+            <Row
+              dot="idle"
+              title={showNotOpen ? 'Hide not open' : notOpenLabel(flight.notOpen.length)}
+              selected={sel === NOT_OPEN_ID}
+              onOpen={() => setShowNotOpen((s) => !s)}
+            />
+          </div>
+          {showNotOpen && flight.notOpen.map(renderFlight)}
+        </Card>
       )}
     </div>
   );

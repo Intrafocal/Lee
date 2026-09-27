@@ -72,7 +72,7 @@ export type CreateTabFn = (
   type: Tab['type'],
   dockPosition?: DockPosition,
   label?: string,
-  spawnOptions?: { command?: string; args?: string[]; label?: string },
+  spawnOptions?: { command?: string; args?: string[]; label?: string; cwd?: string },
 ) => Promise<number | null>;
 
 /** A section row the keyboard can act on (j/k, Enter, a/d/r/x). */
@@ -491,7 +491,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
               ? req.command
                 ? { command: req.command, args: req.args }
                 : undefined
-              : { args: req.args ?? [], label: req.label },
+              : { args: req.args ?? [], label: req.label, ...(req.cwd ? { cwd: req.cwd } : {}) },
           );
         } catch {
           tabId = null;

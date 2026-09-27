@@ -7,9 +7,20 @@
 
 import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import type { Principal } from '../../shared/copilot';
-import type { ClaudePermissionMode, LaunchRequest, LaunchResult, TaskKind, TaskLead, TaskOrigin, TaskWorktree } from '../../shared/cockpit';
+import type {
+  ClaudePermissionMode,
+  LaunchRequest,
+  LaunchResult,
+  ResumeRequest,
+  ResumeResult,
+  TaskKind,
+  TaskLead,
+  TaskOrigin,
+  TaskWorktree,
+} from '../../shared/cockpit';
 import { COCKPIT_IPC } from '../../shared/cockpit';
 import { windowRegistry } from '../window-registry';
 import { logCockpitEvent, type TaskCreateInput, type TaskLauncher } from './cockpit-bus';
@@ -185,6 +196,39 @@ function openWorkspace(requested: unknown): string | null {
   return null;
 }
 
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function inside(child: string, root: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(child));
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Where a resumed session runs (pure but for `exists`): the task's worktree
+ * when it is under the workspace (or its git top level) and still a
+ * directory, else the workspace root (`fell_back` when a worktree was named).
+ */
+export function resumeCwd(
+  workspace: string,
+  worktree: string | null | undefined,
+  opts: { toplevel?: string; exists?: (p: string) => boolean } = {},
+): { cwd: string; fell_back: boolean } {
+  const want = typeof worktree === 'string' && worktree.trim() ? worktree.trim() : null;
+  if (!want) return { cwd: workspace, fell_back: false };
+  const top = opts.toplevel ?? workspace;
+  const allowed = path.isAbsolute(want) && (inside(want, workspace) || inside(want, top));
+  if (allowed && (opts.exists ?? isDir)(want)) return { cwd: want, fell_back: false };
+  return { cwd: workspace, fell_back: true };
+}
+
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
 export function validOrigin(o: unknown): TaskOrigin | null {
   if (!o || typeof o !== 'object') return null;
   const v = o as Record<string, unknown>;
@@ -333,6 +377,34 @@ export class TaskLauncherImpl implements TaskLauncher {
       }
     }
     return { success: true, task_id: taskId, pty_id: opened.pty_id, tab_id: opened.tab_id, session_id: sessionId, relayed };
+  }
+
+  /**
+   * Resume a task's Claude session in a new agent tab (`claude --resume <id>`,
+   * hooks added at spawn like any Claude tab) and link the tab to the task.
+   * Claude finds a session only under the directory it ran in, so it runs in
+   * the task's worktree while that exists, else the workspace root. The
+   * resumed session's SessionStart reports the same session id, which the
+   * follower uses to move the task's agent to the new PTY.
+   */
+  async resume(req: ResumeRequest, by: Principal, windowId?: number | null): Promise<ResumeResult> {
+    if (by.kind === 'shared') return { success: false, error: 'forbidden' };
+    if (!req || typeof req !== 'object') return { success: false, error: 'invalid' };
+    const workspace = openWorkspace(req.workspace);
+    if (!workspace) return { success: false, error: "workspace must be an open window's workspace" };
+    if (typeof req.task_id !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(req.task_id)) return { success: false, error: 'invalid' };
+    if (typeof req.session_id !== 'string' || !SESSION_ID_RE.test(req.session_id)) return { success: false, error: 'invalid' };
+    const win = this.rt.pickWindow(workspace, windowId ?? null);
+    if (win == null) return { success: false, error: 'no_window' };
+    const where = resumeCwd(workspace, typeof req.cwd === 'string' ? req.cwd : null, { toplevel: gitToplevel(workspace) });
+    const label = (typeof req.label === 'string' && req.label.trim().slice(0, TITLE_MAX)) || 'Claude';
+    const opened = await this.rt.openTab(
+      { workspace, window_id: win, type: 'agent', provider: 'claude', label, command: 'claude', args: ['--resume', req.session_id], cwd: where.cwd, activate: false },
+      { session_id: req.session_id },
+    );
+    if (opened.pty_id == null) return { success: false, error: opened.error ?? 'failed' };
+    this.rt.setTask(opened.pty_id, req.task_id, req.session_id);
+    return { success: true, pty_id: opened.pty_id, tab_id: opened.tab_id, cwd: where.cwd, fell_back: where.fell_back };
   }
 
   async createTask(input: TaskCreateInput): Promise<{ task_id: string; relayed: boolean }> {

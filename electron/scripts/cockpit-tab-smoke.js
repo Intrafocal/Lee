@@ -1052,6 +1052,50 @@ async function main() {
     assert.strictEqual(relayed.find((r) => r.id === noWt.task_id).worktree, undefined);
   });
 
+  await check('resume: claude --resume <id> in the task worktree (else the workspace root), linked to the task, never with --session-id', async () => {
+    const { resumeCwd } = cockpit('launcher.js');
+    const wt = path.join(WS, '.claude', 'worktrees', 'fix-1234');
+    assert.deepStrictEqual(resumeCwd(WS, wt, { exists: () => true }), { cwd: wt, fell_back: false });
+    assert.deepStrictEqual(resumeCwd(WS, wt, { exists: () => false }), { cwd: WS, fell_back: true }, 'worktree gone');
+    assert.deepStrictEqual(resumeCwd(WS, null), { cwd: WS, fell_back: false }, 'no worktree: the root');
+    assert.deepStrictEqual(resumeCwd(WS, '/etc', { exists: () => true }), { cwd: WS, fell_back: true }, 'never outside the workspace');
+    assert.deepStrictEqual(resumeCwd(WS, 'rel/dir', { exists: () => true }), { cwd: WS, fell_back: true }, 'absolute paths only');
+
+    fs.mkdirSync(wt, { recursive: true });
+    const l3 = new TaskLauncherImpl(rt, { relay: async () => true });
+    sentToWindow.length = 0;
+    const origSend = bw.webContents.send;
+    bw.webContents.send = (channel, payload) => {
+      sentToWindow.push([channel, payload]);
+      if (channel === 'cockpit:create-tab') {
+        setTimeout(() => {
+          host.add(91, { claude: true, name: payload.label });
+          tabs.push({ id: 191, type: 'agent', provider: 'claude', label: payload.label, ptyId: 91, dockPosition: 'center', state: 'idle' });
+          rt.resolveCreateTab({ request_id: payload.request_id, tab_id: 191, pty_id: 91 });
+        }, 10);
+      }
+    };
+    const res = await l3.resume({ workspace: WS, task_id: 'task-0000cafe', session_id: 'sess-abc', cwd: wt, label: 'Fix login' }, LOCAL, 1);
+    const bad = await l3.resume({ workspace: WS, task_id: 'task-0000cafe', session_id: '--settings', cwd: wt }, LOCAL, 1);
+    const shared = await l3.resume({ workspace: WS, task_id: 'task-0000cafe', session_id: 'sess-abc' }, { kind: 'shared' }, 1);
+    bw.webContents.send = origSend;
+    fs.rmSync(path.join(WS, '.claude'), { recursive: true, force: true });
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    assert.strictEqual(res.pty_id, 91);
+    assert.strictEqual(res.cwd, wt);
+    assert.strictEqual(res.fell_back, false);
+    const req = sentToWindow.find(([c]) => c === 'cockpit:create-tab')[1];
+    assert.strictEqual(req.type, 'agent');
+    assert.strictEqual(req.provider, 'claude');
+    assert.deepStrictEqual(req.args, ['--resume', 'sess-abc']);
+    assert.ok(!req.args.includes('--session-id'));
+    assert.strictEqual(req.cwd, wt);
+    assert.strictEqual(req.label, 'Fix login');
+    assert.strictEqual(rt.taskOf(91), 'task-0000cafe', 'the new tab is linked to its task');
+    assert.strictEqual(bad.success, false, 'a flag is never a session id');
+    assert.strictEqual(shared.success, false, 'humans only');
+  });
+
   await check('relay: a non-ASCII workspace path is percent-encoded in X-Lee-Workspace (a raw header would throw and block the spool)', async () => {
     const got = [];
     const server = http.createServer((req, res2) => {
