@@ -1033,6 +1033,55 @@ export interface AgentUpdate {
 }
 
 /** What an agent is doing now (§7.1): the open tool, else the last entry within 60s. */
+// ---------------------------------------------------------------------------
+// Usage (docs/15-Usage.md). Contract for the usage and device builds.
+// ---------------------------------------------------------------------------
+
+/** §2: what a cost figure means. Subscription usage is shown as tokens only (§9). */
+export type CostBasis = 'billed' | 'subscription' | 'estimate' | 'local';
+
+/** §4.1 token counts. `thinking` is a subset of `output`. Unknown fields are omitted. */
+export interface UsageTokens {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  thinking?: number;
+}
+
+/**
+ * An agent session's running usage (§6.2), summed over its turns and its
+ * subagents' transcripts, deduplicated by message id.
+ * `shown_tokens` = input + output + cache_write (cache reads are excluded:
+ * they dwarf everything else and cost little); the breakdown is in `tokens`.
+ * `cost_usd` is present only for 'billed' and 'estimate' (never displayed for
+ * 'subscription').
+ */
+export interface AgentUsage {
+  tokens: UsageTokens;
+  shown_tokens: number;
+  cost_basis: CostBasis;
+  cost_usd?: number;
+  /** Per model, when the session used more than one. */
+  by_model?: Array<{ model: string; tokens: UsageTokens; cost_usd?: number }>;
+}
+
+/** §6.1: the latest Claude subscription windows seen from any Lee-launched session. */
+export interface UsageLimits {
+  five_hour?: { used_pct: number; resets_at: string | null };
+  seven_day?: { used_pct: number; resets_at: string | null };
+  /** When this snapshot was taken (the status line render). */
+  as_of: string;
+}
+
+/** "412k tok" / "1.2M tok": the compact token label used in Work and on devices. */
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1000) return `${Math.round(n)} tok`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k tok`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M tok`;
+}
+
 export interface AgentNow {
   tool: string;
   preview: string;

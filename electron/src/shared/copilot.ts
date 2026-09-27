@@ -6,7 +6,7 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
-import type { AgentActivity, AgentNow, AgentUpdate, DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
+import type { AgentActivity, AgentNow, AgentUpdate, AgentUsage, DeepAnswerEvent, DepthRating, LeeMode, Quadrant, UsageLimits } from './cockpit';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -359,6 +359,8 @@ export interface AgentSummary {
   session_id?: string | null;
   /** The directory the session runs in (its worktree for a Cockpit task). Omitted in compact snapshots. */
   cwd?: string | null;
+  /** docs/15-Usage.md §6.2: this agent session's usage so far (subagents included). Absent until its first turn ends. Kept in compact snapshots (devices show it). */
+  usage?: AgentUsage | null;
 }
 
 export interface AttentionSnapshot {
@@ -372,6 +374,8 @@ export interface AttentionSnapshot {
   mode?: LeeMode;
   /** Deep D1 §2.5: the Deep session, if one is active (focus.active stays true during it). */
   deep?: { exploration_id: string | null; title: string } | null;
+  /** docs/15-Usage.md §6.1: the latest Claude subscription limits seen by any Lee-launched session; null when none. */
+  limits?: UsageLimits | null;
   generated_at: string;
 }
 
