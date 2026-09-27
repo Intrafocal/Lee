@@ -3,16 +3,30 @@
  * auto-detected Suggestions (confirm/dismiss) and Hester/lint Proposals
  * (exact command and target shown; approved through their Feed entry)
  * (contracts §4.3).
+ *
+ * Cockpit design §6.3: built from the primitives, with no next step (Ops
+ * has no phosphor). Ember only as the Dot on what needs you: a failed
+ * operation, a proposal awaiting approval, a lint finding that needs you.
+ * Work lint lives here as its own group (it was in Copilot): each finding
+ * with its fixes (the exact change shown first; a second click applies),
+ * Dismiss and Ask Hester. The status bar's ⚠ flyout keeps the scoped ignores.
  */
 
 import React, { useEffect, useState } from 'react';
-import { Icon } from '../../Icon';
-import type { OperationDef, OperationInfo, OperationKind } from '../../../../shared/cockpit';
-import { formatAge, formatDuration } from '../../../lib/cockpitModel';
+import type { LintDiagnostic, LintSnapshot, OperationDef, OperationInfo, OperationKind } from '../../../../shared/cockpit';
+import { formatAge, formatDuration, lintFamilyLabel, rendererAction } from '../../../lib/cockpitModel';
 import { RunOpDialog, fillCommand } from '../RunMenu';
+import { Btn, Card, Dot, Eyebrow, Row, SectionHead, type DotKind } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
 
 const BAD = new Set(['failed', 'crashed', 'unhealthy']);
+
+function opDot(status: string): DotKind {
+  if (BAD.has(status)) return 'needs';
+  if (status === 'running') return 'working';
+  if (status === 'passed') return 'done';
+  return 'idle';
+}
 
 const EditForm: React.FC<{ ctx: CockpitCtx; op: OperationInfo; onDone: () => void }> = ({ ctx, op, onDone }) => {
   const [def, setDef] = useState<OperationDef>({ ...op.def });
@@ -46,12 +60,12 @@ const EditForm: React.FC<{ ctx: CockpitCtx; op: OperationInfo; onDone: () => voi
       </label>
       {error && <div className="cockpit-error">{error}</div>}
       <div className="cockpit-row-actions">
-        <button className="cockpit-btn is-primary" onClick={save}>
+        <Btn kind="plain" onClick={save}>
           Save
-        </button>
-        <button className="cockpit-btn" onClick={onDone}>
+        </Btn>
+        <Btn kind="quiet" onClick={onDone}>
           Cancel
-        </button>
+        </Btn>
       </div>
     </div>
   );
@@ -75,90 +89,222 @@ const OpRow: React.FC<{ ctx: CockpitCtx; op: OperationInfo; handle: RowHandle; s
   };
 
   return (
-    <div
-      data-cockpit-row={handle.id}
-      className={`cockpit-row${selected ? ' is-selected' : ''}${failed ? ' sev-needs-you' : ''}`}
-      onClick={() => ctx.selectRow(handle.id)}
-      onDoubleClick={() => handle.open?.()}
-    >
-      <div className="cockpit-row-head">
-        <span className={`cockpit-status st-${op.status}`}>{op.status === 'running' ? '▶ running' : op.status}</span>
-        <span className="cockpit-row-title">{op.def.name}</span>
-        <span className="cockpit-muted">
-          {op.source === 'service' ? 'service' : op.def.kind === 'long-running' ? 'long-running' : 'one-shot'}
-          {op.def.confirm ? ' · asks first' : ''}
+    <Card className="cockpit-op" selected={selected}>
+      <div data-cockpit-row={handle.id} onClick={() => ctx.selectRow(handle.id)} onDoubleClick={() => handle.open?.()}>
+        <div className="cockpit-op-head">
+          <Dot kind={opDot(op.status)} label={op.status} />
+          <span className="cockpit-op-name">{op.def.name}</span>
+          <span className="cockpit-op-meta">
+            {op.status === 'running' ? 'running · ' : failed ? `${op.status} · ` : ''}
+            {op.source === 'service' ? 'service' : op.def.kind === 'long-running' ? 'long-running' : 'one-shot'}
+            {op.def.confirm ? ' · asks first' : ''}
+          </span>
+        </div>
+        <div className="cockpit-op-sub">
+          <code>{op.def.command}</code>
+          {run && run.duration_ms != null && ` · ${formatDuration(run.duration_ms)}`}
+          {run && ` · ${formatAge(run.ended_at ?? run.started_at, ctx.now)}`}
+          {run?.exit_code != null && run.exit_code !== 0 && ` · exit ${run.exit_code}`}
+          {pty != null && ' · in a tab'}
+        </div>
+        {readings.length > 0 && <div className="cockpit-op-sub">{readings.map((r) => `${r.metric} ${r.value}${r.unit ? ` ${r.unit}` : ''}`).join(' · ')}</div>}
+        {editing ? (
+          <EditForm ctx={ctx} op={op} onDone={() => setEditing(false)} />
+        ) : (
+          <div className="cockpit-op-actions" onClick={(e) => e.stopPropagation()}>
+            {op.status !== 'running' && op.source !== 'service' && (
+              <Btn kind="plain" disabled={busy} onClick={onRun}>
+                Run
+              </Btn>
+            )}
+            {op.status === 'running' && (
+              <Btn kind="plain" disabled={busy} onClick={() => ctx.api && call(() => ctx.api!.ops.stop(ctx.workspace, op.def.name), `Stopping ${op.def.name}`)}>
+                Stop
+              </Btn>
+            )}
+            {pty != null && (
+              <Btn kind="quiet" onClick={() => ctx.focusPty(pty)}>
+                Open tab
+              </Btn>
+            )}
+            {failed && (
+              <>
+                <Btn
+                  kind="quiet"
+                  disabled={busy}
+                  onClick={() =>
+                    ctx.api &&
+                    call(
+                      () => ctx.api!.ops.startAgent({ workspace: ctx.workspace, purpose: 'fix', op: op.def.name, run_id: op.last_run?.run_id }),
+                      'Fix agent started',
+                    )
+                  }
+                >
+                  Fix with agent
+                </Btn>
+                <Btn
+                  kind="quiet"
+                  onClick={() =>
+                    ctx.openLauncher({
+                      text: `Fix ${op.def.name}: it failed${op.last_run?.exit_code != null ? ` (exit ${op.last_run.exit_code})` : ''}.${
+                        failure?.source === 'lee' && failure.entry.text ? `\n\n${failure.entry.text}` : ''
+                      }`,
+                      kind: 'bug',
+                      origin: { kind: 'operation', ref: op.def.name },
+                    })
+                  }
+                >
+                  Create task
+                </Btn>
+              </>
+            )}
+            {op.source !== 'service' && (
+              <Btn kind="quiet" onClick={() => setEditing(true)}>
+                Edit
+              </Btn>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
+
+/** The task a diagnostic is about, from its item ref ("task:<ws>:<id>" or "task:<id>"). */
+function taskIdOf(diag: LintDiagnostic): string | null {
+  const ref = diag.item_ref ?? '';
+  if (!ref.startsWith('task:')) return null;
+  const rest = ref.slice(5);
+  const i = rest.lastIndexOf(':');
+  return (i >= 0 ? rest.slice(i + 1) : rest) || null;
+}
+
+/** One lint finding: its words and evidence, fixes (shown, then applied on a second click), Dismiss, Ask Hester. */
+const LintFinding: React.FC<{ ctx: CockpitCtx; diag: LintDiagnostic }> = ({ ctx, diag }) => {
+  const api = ctx.api?.lint ?? null;
+  const [armed, setArmed] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const applyFix = async (fixId: string) => {
+    if (!api) return;
+    if (armed !== fixId) {
+      setArmed(fixId);
+      setError(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.fix(diag.id, fixId);
+      // v4 §7.3: some fixes are the renderer's to perform (link-goal, what-next).
+      const ra = res.success ? rendererAction(res) : null;
+      if (ra?.action === 'what-next') ctx.requestSteward({ kind: 'what-next' });
+      else if (ra?.action === 'link-goal') {
+        const taskId = ra.taskId ?? taskIdOf(diag);
+        if (taskId) ctx.requestSteward({ kind: 'link-goal', taskId });
+        else ctx.notify('Open the task in Work to link a goal');
+      } else if (res.success) ctx.notify(res.message ?? 'Fixed');
+      else setError(res.error === 'unavailable' ? 'Not available right now' : res.error ?? 'Failed');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      setArmed(null);
+    }
+  };
+
+  const dismiss = async () => {
+    if (!api) return;
+    setBusy(true);
+    try {
+      await api.dismiss(diag.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const armedFix = diag.fixes.find((f) => f.id === armed) ?? null;
+
+  return (
+    <div className="cockpit-lint">
+      <div className="cockpit-op-head">
+        <Dot kind={diag.severity === 'needs-you' ? 'needs' : 'idle'} label={diag.severity === 'needs-you' ? 'Needs you' : diag.severity} />
+        <span className="cockpit-op-name">{diag.message}</span>
+        <span className="cockpit-op-meta">
+          {lintFamilyLabel(diag.family)} · {diag.rule}
         </span>
       </div>
-      <div className="cockpit-row-meta">
-        <code>{op.def.command}</code>
-        {run && run.duration_ms != null && ` · ${formatDuration(run.duration_ms)}`}
-        {run && ` · ${formatAge(run.ended_at ?? run.started_at, ctx.now)}`}
-        {run?.exit_code != null && run.exit_code !== 0 && ` · exit ${run.exit_code}`}
-        {pty != null && ' · in a tab'}
+      {diag.evidence.length > 0 && (
+        <ul className="cockpit-lint-evidence">
+          {diag.evidence.slice(0, 4).map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {armedFix && (
+        <div className="cockpit-op-sub">
+          <code>{armedFix.confirm_text ?? armedFix.label}</code> · click again to apply
+        </div>
+      )}
+      {error && <div className="cockpit-error">{error}</div>}
+      <div className="cockpit-op-actions">
+        {diag.fixes.map((f) => (
+          <Btn key={f.id} kind={armed === f.id ? 'plain' : 'quiet'} disabled={busy || !api} onClick={() => void applyFix(f.id)}>
+            {armed === f.id ? 'Apply' : f.label}
+          </Btn>
+        ))}
+        <Btn kind="quiet" disabled={busy || !api} onClick={() => void dismiss()}>
+          Dismiss
+        </Btn>
+        <Btn
+          kind="quiet"
+          onClick={() => ctx.requestSteward({ kind: 'ask', about: { kind: 'lint', id: diag.id, label: diag.message, record: diag } })}
+          title="Ask Hester about this on Home"
+        >
+          Ask Hester
+        </Btn>
       </div>
-      {readings.length > 0 && (
-        <div className="cockpit-row-meta">
-          {readings.map((r) => `${r.metric} ${r.value}${r.unit ? ` ${r.unit}` : ''}`).join(' · ')}
-        </div>
-      )}
-      {editing ? (
-        <EditForm ctx={ctx} op={op} onDone={() => setEditing(false)} />
-      ) : (
-        <div className="cockpit-row-actions" onClick={(e) => e.stopPropagation()}>
-          {op.status !== 'running' && op.source !== 'service' && (
-            <button className="cockpit-btn is-primary" disabled={busy} onClick={onRun}>
-              <Icon name="play" size={11} /> Run
-            </button>
-          )}
-          {op.status === 'running' && (
-            <button className="cockpit-btn" disabled={busy} onClick={() => ctx.api && call(() => ctx.api!.ops.stop(ctx.workspace, op.def.name), `Stopping ${op.def.name}`)}>
-              <Icon name="stop" size={11} /> Stop
-            </button>
-          )}
-          {pty != null && (
-            <button className="cockpit-btn" onClick={() => ctx.focusPty(pty)}>
-              <Icon name="terminal" size={11} /> Open tab
-            </button>
-          )}
-          {failed && (
-            <>
-              <button
-                className="cockpit-btn"
-                disabled={busy}
-                onClick={() =>
-                  ctx.api &&
-                  call(
-                    () => ctx.api!.ops.startAgent({ workspace: ctx.workspace, purpose: 'fix', op: op.def.name, run_id: op.last_run?.run_id }),
-                    'Fix agent started',
-                  )
-                }
-              >
-                Fix with agent
-              </button>
-              <button
-                className="cockpit-btn"
-                onClick={() =>
-                  ctx.openLauncher({
-                    text: `Fix ${op.def.name}: it failed${op.last_run?.exit_code != null ? ` (exit ${op.last_run.exit_code})` : ''}.${
-                      failure?.source === 'lee' && failure.entry.text ? `\n\n${failure.entry.text}` : ''
-                    }`,
-                    kind: 'bug',
-                    origin: { kind: 'operation', ref: op.def.name },
-                  })
-                }
-              >
-                Create task
-              </button>
-            </>
-          )}
-          {op.source !== 'service' && (
-            <button className="cockpit-btn" onClick={() => setEditing(true)}>
-              <Icon name="edit" size={11} /> Edit
-            </button>
-          )}
-        </div>
-      )}
     </div>
+  );
+};
+
+const LintGroup: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
+  const [lint, setLint] = useState<LintSnapshot | null>(null);
+  const workspace = ctx.workspace;
+  useEffect(() => {
+    const api = ctx.api?.lint;
+    if (!api) return;
+    let on = true;
+    api
+      .list(workspace)
+      .then((s) => on && setLint(s))
+      .catch(() => on && setLint(null));
+    const off = api.onChange((s) => {
+      if (s.workspace === workspace) setLint(s);
+    });
+    return () => {
+      on = false;
+      off();
+    };
+  }, [ctx.api, workspace]);
+
+  const diags = (lint?.diagnostics ?? [])
+    .filter((d) => d.severity !== 'off' && (!d.workspace || d.workspace === workspace))
+    .sort((a, b) => (a.severity === 'needs-you' ? 0 : 1) - (b.severity === 'needs-you' ? 0 : 1));
+
+  return (
+    <>
+      <Eyebrow>Work lint</Eyebrow>
+      {!ctx.api?.lint && <div className="cockpit-muted">Lint isn't available in this window.</div>}
+      {ctx.api?.lint && diags.length === 0 && <div className="cockpit-muted">No problems.</div>}
+      {diags.length > 0 && (
+        <Card>
+          {diags.map((d) => (
+            <LintFinding key={d.id} ctx={ctx} diag={d} />
+          ))}
+        </Card>
+      )}
+    </>
   );
 };
 
@@ -224,41 +370,34 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const bad = ops.filter((o) => BAD.has(o.status)).length;
 
   return (
-    <section className="cockpit-sec">
-      <header className="cockpit-sec-head">
-        <h2>Operations</h2>
-        <span className="cockpit-muted">
-          {ops.length} defined{bad ? ` · ${bad} failing` : ''}
-          {suggestions.length ? ` · ${suggestions.length} suggested` : ''}
-          {proposals.length ? ` · ${proposals.length} proposed` : ''}
-        </span>
-      </header>
+    <section className="cockpit-sec cockpit-ops">
+      <SectionHead title="Ops" summary={`${ops.length} defined${bad ? ` · ${bad} failing` : ''}`} />
       {!snap && <div className="cockpit-empty">No operations data from Lee yet.</div>}
 
       {proposals.length > 0 && (
-        <div className="cockpit-group">
-          <div className="cockpit-group-title">Proposals</div>
+        <>
+          <Eyebrow tone="needs">Waiting on you</Eyebrow>
           {proposals.map((p) => {
             const row = ctx.feedRows.find((r) => r.source === 'lee' && r.entry.ref.proposal_id === p.id);
             const entry = row?.source === 'lee' ? row.entry : null;
             return (
-              <div key={p.id} className="cockpit-row sev-needs-you">
-                <div className="cockpit-row-head">
-                  <Icon name="bell" size={12} />
-                  <span className="cockpit-row-title">
+              <Card key={p.id} className="cockpit-op">
+                <div className="cockpit-op-head">
+                  <Dot kind="needs" />
+                  <span className="cockpit-op-name">
                     {p.by === 'hester' ? 'Hester' : 'Lint'} proposes {p.op ? p.op : 'a command'}
                   </span>
-                  <span className="cockpit-muted">{formatAge(p.created_at, ctx.now)}</span>
+                  <span className="cockpit-op-meta">{formatAge(p.created_at, ctx.now)}</span>
                 </div>
-                {p.reason && <div className="cockpit-row-text">{p.reason}</div>}
-                <div className="cockpit-muted">Runs exactly this{p.cwd ? ` in ${p.cwd}` : ''}:</div>
+                {p.reason && <div className="cockpit-op-text">{p.reason}</div>}
+                <div className="cockpit-op-sub">Runs exactly this{p.cwd ? ` in ${p.cwd}` : ''}:</div>
                 <pre className="cockpit-confirm-text">{p.command}</pre>
-                <div className="cockpit-row-actions">
+                <div className="cockpit-op-actions">
                   {entry ? (
                     entry.actions.slice(0, 3).map((a) => (
-                      <button
+                      <Btn
                         key={a.id}
-                        className={`cockpit-btn${a.style === 'primary' ? ' is-primary' : a.style === 'danger' ? ' is-danger' : ''}`}
+                        kind={a.style === 'primary' ? 'plain' : 'quiet'}
                         onClick={() => {
                           ctx.copilotApi?.logCeremony('confirm', 'proposal');
                           ctx.api?.feed
@@ -268,105 +407,104 @@ export const OperationsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
                         }}
                       >
                         {a.label}
-                      </button>
+                      </Btn>
                     ))
                   ) : (
-                    <span className="cockpit-muted">Approve it in the Feed.</span>
+                    <span className="cockpit-muted">Approve it in Work.</span>
                   )}
                 </div>
-              </div>
+              </Card>
             );
           })}
-        </div>
-      )}
-
-      {suggestions.length > 0 && !reviewing && (
-        <div className="cockpit-row is-ambient" onClick={() => setReviewing(true)}>
-          <div className="cockpit-row-head">
-            <Icon name="info" size={12} />
-            <span className="cockpit-row-title">
-              {suggestions.length} suggested operation{suggestions.length === 1 ? '' : 's'}
-            </span>
-            <span className="cockpit-muted">detected from project files, not saved yet</span>
-            <span className="cockpit-header-spacer" />
-            <button
-              className="cockpit-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setReviewing(true);
-              }}
-            >
-              Review
-            </button>
-          </div>
-        </div>
-      )}
-
-      {suggestions.length > 0 && reviewing && (
-        <div className="cockpit-group">
-          <div className="cockpit-group-title">
-            Suggestions (detected, not saved yet){' '}
-            <button className="cockpit-btn" onClick={() => setReviewing(false)}>
-              Hide
-            </button>
-          </div>
-          {suggestions.map((s) => (
-            <div key={s.def.name} className="cockpit-row">
-              <label className="cockpit-check">
-                <input
-                  type="checkbox"
-                  checked={picked.has(s.def.name)}
-                  onChange={(e) =>
-                    setPicked((prev) => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(s.def.name);
-                      else next.delete(s.def.name);
-                      return next;
-                    })
-                  }
-                />
-                <span className="cockpit-row-title">{s.def.name}</span>
-                <span className="cockpit-muted">
-                  {s.def.kind === 'long-running' ? 'long-running' : 'one-shot'}
-                  {s.def.confirm ? ' · asks first' : ''} · from {s.detected_from}
-                </span>
-              </label>
-              <div className="cockpit-row-meta">
-                <code>{fillCommand(s.def.command, {})}</code>
-                {s.def.cwd ? ` · in ${s.def.cwd}` : ''}
-              </div>
-              <div className="cockpit-row-actions">
-                <button className="cockpit-btn" onClick={() => void ctx.api?.ops.dismissSuggestion(ctx.workspace, s.def.name).catch(() => {})}>
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ))}
-          <div className="cockpit-row-actions">
-            <button className="cockpit-btn is-primary" disabled={busy || picked.size === 0} onClick={confirmSelected}>
-              Confirm selected ({picked.size})
-            </button>
-            <button className="cockpit-btn" onClick={() => setPicked(new Set(suggestions.map((s) => s.def.name)))}>
-              Select all
-            </button>
-          </div>
-        </div>
+        </>
       )}
 
       {ops.length > 0 && (
-        <div className="cockpit-rows">
-          {ops.map((op, i) => (
-            <OpRow
-              key={op.def.name}
-              ctx={ctx}
-              op={op}
-              handle={handles[i]}
-              selected={sel?.kind === 'row' && sel.id === handles[i].id}
-              onRun={() => startRun(op)}
-            />
-          ))}
-        </div>
+        <>
+          <Eyebrow>Operations</Eyebrow>
+          <div className="cockpit-op-list">
+            {ops.map((op, i) => (
+              <OpRow
+                key={op.def.name}
+                ctx={ctx}
+                op={op}
+                handle={handles[i]}
+                selected={sel?.kind === 'row' && sel.id === handles[i].id}
+                onRun={() => startRun(op)}
+              />
+            ))}
+          </div>
+        </>
       )}
+
+      {suggestions.length > 0 && !reviewing && (
+        <Card className="cockpit-op-suggested">
+          <Row
+            title={`${suggestions.length} suggested operation${suggestions.length === 1 ? '' : 's'}`}
+            sub="detected from project files, not saved yet"
+            meta="Review"
+            onOpen={() => setReviewing(true)}
+          />
+        </Card>
+      )}
+
+      {suggestions.length > 0 && reviewing && (
+        <>
+          <Eyebrow
+            right={
+              <Btn kind="quiet" onClick={() => setReviewing(false)}>
+                Hide
+              </Btn>
+            }
+          >
+            Suggested (detected, not saved yet)
+          </Eyebrow>
+          <Card>
+            {suggestions.map((s) => (
+              <div key={s.def.name} className="cockpit-lint">
+                <label className="cockpit-check">
+                  <input
+                    type="checkbox"
+                    checked={picked.has(s.def.name)}
+                    onChange={(e) =>
+                      setPicked((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(s.def.name);
+                        else next.delete(s.def.name);
+                        return next;
+                      })
+                    }
+                  />
+                  <span className="cockpit-op-name">{s.def.name}</span>
+                  <span className="cockpit-op-meta">
+                    {s.def.kind === 'long-running' ? 'long-running' : 'one-shot'}
+                    {s.def.confirm ? ' · asks first' : ''} · from {s.detected_from}
+                  </span>
+                </label>
+                <div className="cockpit-op-sub">
+                  <code>{fillCommand(s.def.command, {})}</code>
+                  {s.def.cwd ? ` · in ${s.def.cwd}` : ''}
+                </div>
+                <div className="cockpit-op-actions">
+                  <Btn kind="quiet" onClick={() => void ctx.api?.ops.dismissSuggestion(ctx.workspace, s.def.name).catch(() => {})}>
+                    Dismiss
+                  </Btn>
+                </div>
+              </div>
+            ))}
+          </Card>
+          <div className="cockpit-op-actions">
+            <Btn kind="plain" disabled={busy || picked.size === 0} onClick={confirmSelected}>
+              Confirm selected ({picked.size})
+            </Btn>
+            <Btn kind="quiet" onClick={() => setPicked(new Set(suggestions.map((s) => s.def.name)))}>
+              Select all
+            </Btn>
+          </div>
+        </>
+      )}
+
+      <LintGroup ctx={ctx} />
       {running && <RunOpDialog ctx={ctx} op={running} onClose={() => setRunning(null)} />}
     </section>
   );

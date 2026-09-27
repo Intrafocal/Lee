@@ -1237,6 +1237,115 @@ button.cockpit-tag.is-goal:hover {
   font-size: 11px;
 }
 
+/* Goals, Ops and History (cockpit-design §6.3): a centred column in the
+   primitives' type scale. */
+
+.cockpit-goals,
+.cockpit-ops,
+.cockpit-history {
+  max-width: var(--col-library);
+  margin: 0 auto;
+  padding-top: var(--space-5);
+  font-size: 14px;
+}
+
+/* Ops and History: a Card per operation, lint findings and closed tasks as blocks in a Card. */
+
+.cockpit-op-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.cockpit-op-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cockpit-op-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cockpit-op-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-op-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.cockpit-op-sub code {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.cockpit-op-text {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.cockpit-op-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.cockpit-lint,
+.cockpit-history-task {
+  padding: var(--space-2) 0;
+}
+
+.cockpit-lint + .cockpit-lint,
+.cockpit-history-task + .cockpit-history-task {
+  border-top: 1px solid var(--ground-3);
+}
+
+.cockpit-lint:first-child,
+.cockpit-history-task:first-child {
+  padding-top: 0;
+}
+
+.cockpit-lint:last-child,
+.cockpit-history-task:last-child {
+  padding-bottom: 0;
+}
+
+.cockpit-history-task.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  border-radius: var(--radius-control);
+}
+
+.cockpit-lint-evidence {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-history-goal {
+  padding: 0 var(--space-1);
+  font-size: 12px;
+}
+
 /* Goals (cockpit-design §6.3): a Card per goal, the primitives' type scale,
    ember only as the Dot on a goal that needs you. */
 
@@ -1487,8 +1596,8 @@ button.cockpit-quadrant:hover {
 }
 
 .cockpit-quadrant.q-play {
-  border-color: var(--lit);
-  color: var(--lit);
+  border-color: var(--ground-5);
+  color: var(--text-1);
 }
 
 .cockpit-quadrant.q-none {
