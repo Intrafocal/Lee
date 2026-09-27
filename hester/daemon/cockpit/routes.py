@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from ...shared.workspace import request_workspace
 from ..workspaces.registry import WorkspaceError, get_registry, validate_workspace
-from . import explore_ops, spikes
+from . import deep, deep_ask, explore_ops, spikes
 from .explorations import ExplorationError, ExplorationNotFound, open_session
 from .explorations import to_api as exploration_to_api
 from .explorations import to_api_with_conversations
@@ -375,6 +375,7 @@ def create_cockpit_router() -> APIRouter:
         try:
             ctx = context_for()
             n = _int(limit, 100, 0, 1000, "limit")
+            await deep_ask.get_runner().ensure_recovered(ctx)
             items = await asyncio.to_thread(ctx.explorations().list, status, n)
             return _ok(ctx, [exploration_to_api(e) for e in items])
         except BadRequest as e:
@@ -399,6 +400,7 @@ def create_cockpit_router() -> APIRouter:
     async def cockpit_exploration(exp_id: str):
         try:
             ctx = context_for()
+            await deep_ask.get_runner().ensure_recovered(ctx)
             store = ctx.explorations()
             exp = store.require(exp_id)
             body = store.body(exp_id)
@@ -445,11 +447,13 @@ def create_cockpit_router() -> APIRouter:
             return _err("not found", 404)
         return _ok(ctx, {"exploration": exploration_to_api(exp), **opened})
 
-    async def _exp_op(request: Request, fn, status: int = 200):
+    async def _exp_op(request: Request, fn, status: int = 200, recover: bool = False):
         """Run ``fn(ctx, store, body)`` (sync or async) on an exploration under the workspace lock."""
         try:
             body = await _body(request)
             ctx = context_for(body.pop("workspace", None))
+            if recover:
+                await deep_ask.get_runner().ensure_recovered(ctx)
             async with ctx.lock:
                 data = fn(ctx, ctx.explorations(), body)
                 if asyncio.iscoroutine(data):
@@ -516,10 +520,113 @@ def create_cockpit_router() -> APIRouter:
             return explore_ops.archive(ctx, exp_id, as_knowledge)
         return await _exp_op(request, op)
 
+    # ------------------------------------------------------------ Deep D1 (contract section 3.2)
+
+    @router.get("/cockpit/explorations/{exp_id}/page")
+    async def cockpit_exploration_page(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.read_page(store, exp_id))
+
+    @router.put("/cockpit/explorations/{exp_id}/page")
+    async def cockpit_exploration_page_put(exp_id: str, request: Request):
+        """The renderer saving the user's Page; 409 with the current text when ``base_version`` is stale."""
+        try:
+            body = await _body(request)
+            ctx = context_for(body.pop("workspace", None))
+            async with ctx.lock:
+                data = await asyncio.to_thread(deep.write_page, ctx.explorations(), exp_id, body)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except deep.PageConflict as e:
+            conflict = {"error": "version_conflict", "version": e.version, "text": e.text}
+            return JSONResponse(status_code=409, content={"success": False, **conflict, "data": conflict})
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, data)
+
+    @router.get("/cockpit/explorations/{exp_id}/references")
+    async def cockpit_exploration_references(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.list_references(store, exp_id))
+
+    @router.post("/cockpit/explorations/{exp_id}/references")
+    async def cockpit_exploration_reference_add(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.add_reference(store, exp_id, b), 201)
+
+    @router.patch("/cockpit/explorations/{exp_id}/references/{ref_id}")
+    async def cockpit_exploration_reference_patch(exp_id: str, ref_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.patch_reference(store, exp_id, ref_id, b))
+
+    @router.get("/cockpit/explorations/{exp_id}/answers")
+    async def cockpit_exploration_answers(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.list_answers(store, exp_id), recover=True)
+
+    @router.post("/cockpit/explorations/{exp_id}/asks")
+    async def cockpit_exploration_ask(exp_id: str, request: Request):
+        """deep-ask: record the question (queued) and run it in the background; 202."""
+        trigger = deep_ask.request_trigger()
+
+        def op(ctx, store, b):
+            answer = deep.new_answer(store, exp_id, b)
+            _log_deep_request(ctx, request)
+            deep_ask.get_runner().schedule(deep_ask.Job(ctx, exp_id, answer["id"], trigger))
+            return answer
+        return await _exp_op(request, op, 202, recover=True)
+
+    @router.patch("/cockpit/explorations/{exp_id}/answers/{answer_id}")
+    async def cockpit_exploration_answer_patch(exp_id: str, answer_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.patch_answer(store, exp_id, answer_id, b))
+
+    @router.post("/cockpit/explorations/{exp_id}/answers/{answer_id}/retry")
+    async def cockpit_exploration_answer_retry(exp_id: str, answer_id: str, request: Request):
+        """Retry (a user click) re-queues an errored or interrupted answer; 202."""
+        trigger = deep_ask.request_trigger()
+
+        def op(ctx, store, b):
+            answer = deep.requeue_answer(store, exp_id, answer_id)
+            _log_deep_request(ctx, request)
+            deep_ask.get_runner().schedule(deep_ask.Job(ctx, exp_id, answer_id, trigger))
+            return answer
+        return await _exp_op(request, op, 202, recover=True)
+
+    @router.get("/cockpit/explorations/{exp_id}/questions")
+    async def cockpit_exploration_questions(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.list_questions(store, exp_id))
+
+    @router.post("/cockpit/explorations/{exp_id}/questions")
+    async def cockpit_exploration_question_add(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.add_question(store, exp_id, b), 201)
+
+    @router.patch("/cockpit/explorations/{exp_id}/questions/{question_id}")
+    async def cockpit_exploration_question_patch(exp_id: str, question_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.patch_question(store, exp_id, question_id, b))
+
+    @router.post("/cockpit/explorations/{exp_id}/sessions")
+    async def cockpit_exploration_session_add(exp_id: str, request: Request):
+        return await _exp_op(request, lambda ctx, store, b: deep.add_session(store, exp_id, b), 201)
+
+    @router.post("/cockpit/explorations/{exp_id}/explore")
+    async def cockpit_exploration_explore(exp_id: str, request: Request):
+        return await _exp_op(
+            request, lambda ctx, store, b: exploration_to_api(deep.explore_child(store, exp_id, b)), 201,
+        )
+
     from .steward_routes import create_steward_router
 
     router.include_router(create_steward_router())
     return router
+
+
+def _log_deep_request(ctx, request: Request) -> None:
+    """``steward.request {surface: 'deep-ask', about_kind: 'exploration'}`` (G3 pull_usage)."""
+    from ..copilot import lee_events
+    from ..copilot.routes import caller_actor
+
+    try:
+        lee_events.ingest("steward.request", {"surface": "deep-ask", "about_kind": "exploration"},
+                          workspace=str(ctx.path), actor=caller_actor(request))
+    except Exception:
+        pass
 
 
 def _log_override(ctx, task: Dict[str, Any], request: Request) -> None:

@@ -1909,7 +1909,7 @@ async def docs_save(body: Dict[str, Any]):
 # Library Endpoints: a tree view onto Explore's files (v3 contracts §8)
 # ========================================================================
 #
-# ``session_id`` is the exploration id (``.hester/explore/<id>.md``) and node
+# ``session_id`` is the exploration id (``.hester/explore/<id>/exploration.md``) and node
 # ids are ``root`` or ``n-<8 hex>``. The workspace comes from the request
 # (``X-Lee-Workspace``), as for /cockpit/*. Nothing expires: DELETE archives.
 # Per-node chats run the same agents as before in the Hester session

@@ -65,6 +65,9 @@ def _norm_ws(workspace: Any) -> str:
 
 
 def _number(value: Any) -> Optional[float]:
+    if isinstance(value, dict):
+        # v6 G0 metrics are records: {value, ...}, time_to_deep {value_s, n}, session_depth {share_deep, ...}.
+        value = next((value[k] for k in ("value", "value_s", "share_deep") if k in value), None)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value

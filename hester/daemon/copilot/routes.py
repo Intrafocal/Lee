@@ -151,7 +151,8 @@ def create_copilot_router() -> APIRouter:
             source = body.get("source") if isinstance(body.get("source"), dict) else {}
             p = principal_of(request)
             if p.get("kind") == "device":
-                source = {"surface": p.get("device_kind") or "device", "device_id": p.get("device_id")}
+                # A device principal overrides surface and device_id; the rest is normalised as usual.
+                source = dict(source, surface=p.get("device_kind") or "device", device_id=p.get("device_id"))
             tags = body.get("tags") if isinstance(body.get("tags"), list) else None
             item = SomedayStore(ws).create(
                 text=body.get("text"),
@@ -291,6 +292,31 @@ def create_copilot_router() -> APIRouter:
                 "claims": len(data["agent_claims"]),
                 "surface": caller_surface(request),
             },
+            workspace=data["workspace"],
+            actor=caller_actor(request),
+        )
+        return _ok(data)
+
+    # ------------------------------------------------------------------ opener
+
+    @router.get("/copilot/opener")
+    async def copilot_opener(request: Request, workspace: Optional[str] = None):
+        """Deep D1: the top of the Copilot section (deterministic; may write missing session records)."""
+        from ..cockpit import deep_ask
+        from .opener import build_opener
+
+        try:
+            ws = resolve_workspace(workspace)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        ctx = get_registry().get(ws, source="request")
+        await deep_ask.get_runner().ensure_recovered(ctx)
+        async with ctx.lock:
+            data = await asyncio.to_thread(build_opener, ws)
+        lee_events.ingest(
+            "opener.shown",
+            {"workspace": data["workspace"], "pick_up": data["pick_up"] is not None,
+             "surfaces": [s["kind"] for s in data["surfaces"]]},
             workspace=data["workspace"],
             actor=caller_actor(request),
         )

@@ -26,7 +26,9 @@ from .event_reader import iso, parse_ts, read_events
 # nudge_acceptance, lost_threads.
 # v4: human_balance (your focus time by the quadrant of the task it went to).
 # v5: pull_usage (user-triggered steward requests per week).
-FORMULA_VERSION = 5
+# v6: G0 (Deep D1): turn_churn, deep_time, time_to_deep, session_depth;
+# focus_interruptions_deep; deep-ask counts as a pull surface.
+FORMULA_VERSION = 6
 
 UNAVAILABLE = ["background_leverage.reverted"]
 BALANCE_BANDS = ("Q1", "Q2", "Q3", "Q4", "play", "unclassified")
@@ -49,8 +51,15 @@ PICKUP_ACTIONS = {"explore", "promote", "drop"}
 LATENCY_KINDS = {"approval", "waiting", "decision", "blocker"}
 LATENCY_RESOLUTIONS = {"reply", "answered_in_tab"}
 # steward.request surfaces that are you asking Hester for judgment (G3 pull_usage).
-PULL_SURFACES = ("what-next", "evaluate", "rail-ask", "rail-steer", "lint-ask", "launch-suggest", "goal-edit")
+PULL_SURFACES = (
+    "what-next", "evaluate", "rail-ask", "rail-steer", "lint-ask", "launch-suggest", "goal-edit", "deep-ask",
+)
 WEEK = timedelta(days=7)
+# G0: a prompt this soon after the same session's turn ended is "one more turn".
+CHURN_WINDOW = timedelta(seconds=120)
+# G0 time_to_deep: a stretch starts after this long with no events, or on a return this long away.
+STRETCH_GAP = timedelta(minutes=30)
+DEPTH_RATINGS = ("deep", "mixed", "shallow")
 
 
 def _ms(delta: timedelta) -> float:
@@ -150,17 +159,22 @@ class BusyIndex:
 
 
 FOCUS_MODE_RACE = timedelta(seconds=2)
+# Deep D1: Cockpit and Deep are overlays over the tabs; Manual is the tab layout
+# (logged as ``workbench`` before D1).
+OVERLAY_MODES = ("cockpit", "deep")
+TAB_MODES = ("manual", "workbench")
 
 
 def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[str, Any]]:
     """tab.focus intervals per window: until the next tab.focus or window.focus false.
 
-    ``cockpit.mode`` to ``cockpit`` also ends the interval (the overlay covers
-    the tabs); the next one starts at the first tab.focus after ``workbench``.
-    Lee logs tab.focus and cockpit.mode in either order when one action both
-    activates a tab and leaves the Cockpit (⌘1-9, Hester opening a file), so a
-    tab.focus seen inside the Cockpit at most ``FOCUS_MODE_RACE`` before
-    ``workbench`` opens its interval there.
+    ``cockpit.mode`` to ``cockpit`` or ``deep`` also ends the interval (both
+    overlays cover the tabs); the next one starts at the first tab.focus after
+    ``manual`` (``workbench`` before Deep D1). Lee logs tab.focus and
+    cockpit.mode in either order when one action both activates a tab and
+    leaves an overlay (⌘1-9, Hester opening a file), so a tab.focus seen inside
+    an overlay at most ``FOCUS_MODE_RACE`` before ``manual`` opens its interval
+    there.
     """
     out: List[Dict[str, Any]] = []
     open_by_window: Dict[Any, Dict[str, Any]] = {}
@@ -184,11 +198,11 @@ def focus_intervals(events: List[Dict[str, Any]], end: datetime) -> List[Dict[st
         window = ev.get("window_id")
         if t == "cockpit.mode":
             to = _data(ev).get("to")
-            if to == "cockpit":
+            if to in OVERLAY_MODES:
                 close(window, ev["_ts"])
                 in_cockpit.add(window)
                 skipped.pop(window, None)
-            elif to == "workbench":
+            elif to in TAB_MODES:
                 in_cockpit.discard(window)
                 last = skipped.pop(window, None)
                 if last is not None and window not in open_by_window and ev["_ts"] - last["_ts"] <= FOCUS_MODE_RACE:
@@ -266,7 +280,7 @@ def go_into_peeks(events, start, end, focus_peeks: List[Dict[str, Any]]) -> List
             if nxt.get("window_id") != window:
                 continue
             nt = nxt.get("type")
-            if nt == "cockpit.go_into" or (nt == "cockpit.mode" and _data(nxt).get("to") == "cockpit") or (
+            if nt == "cockpit.go_into" or (nt == "cockpit.mode" and _data(nxt).get("to") in OVERLAY_MODES) or (
                 nt == "window.focus" and _data(nxt).get("focused") is False
             ) or (nt == "tab.focus" and _data(nxt).get("pty_id") != pty):
                 stop = nxt["_ts"]
@@ -593,7 +607,7 @@ def compute_metrics(
     tasks: Optional[List[Dict[str, Any]]] = None,
     goals: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
-    """All section 2.5 metrics (formula v5) over ``[start, end)``.
+    """All section 2.5 metrics (formula v6) over ``[start, end)``.
 
     ``events`` must be sorted by ts and may extend before ``start`` (7-day
     lookback) and after ``end`` (14-day capture pickup lookahead). ``tasks``
@@ -670,6 +684,7 @@ def compute_metrics(
 
     # focus_interruptions
     focus_ends = [e for e in window if e.get("type") == "focus.end"]
+    deep_ids = deep_session_ids(events)
     interruptions = [int(_data(e).get("interruptions") or 0) for e in focus_ends]
     surfaced_by_session: Dict[str, int] = defaultdict(int)
     for ev in window:
@@ -800,6 +815,10 @@ def compute_metrics(
         "focus_interruptions_max": max(interruptions) if interruptions else None,
         "focus_sessions": len(focus_ends),
         "focus_interruptions_crosscheck_mismatches": mismatches,
+        # Deep sessions have attention policy none: this should read 0.
+        "focus_interruptions_deep": sum(
+            int(_data(e).get("interruptions") or 0) for e in focus_ends if _is_deep_end(e, deep_ids)
+        ),
         "background_leverage_busy_ms_per_focus_hour": _round(busy_ms / focus_hours, 0) if focus_hours else None,
         "background_leverage_accepted_ms_per_focus_hour": _round(accepted_ms / focus_hours, 0) if focus_hours else None,
         "agent_busy_ms": busy_ms,
@@ -824,7 +843,170 @@ def compute_metrics(
     }
     metrics.update(human_balance(events, start, end, tasks, goals))
     metrics.update(pull_usage(window, start, end))
+    metrics["turn_churn"] = turn_churn(events, start, end, n_hours)
+    metrics["deep_time"] = deep_time(window, start, end)
+    metrics["time_to_deep"] = time_to_deep(events, start, end, deep_ids)
+    metrics["session_depth"] = session_depth(window, deep_ids)
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# G0 Deep work (formula v6)
+# ---------------------------------------------------------------------------
+
+
+def deep_session_ids(events: List[Dict[str, Any]]) -> Set[str]:
+    """Focus session ids whose ``focus.start`` (or ``focus.end``) says ``source: 'deep'``."""
+    out: Set[str] = set()
+    for ev in events:
+        if ev.get("type") in ("focus.start", "focus.end"):
+            d = _data(ev)
+            if d.get("source") == "deep" and d.get("session_id"):
+                out.add(str(d["session_id"]))
+    return out
+
+
+def _is_deep_end(ev: Dict[str, Any], deep_ids: Set[str]) -> bool:
+    d = _data(ev)
+    return d.get("source") == "deep" or str(d.get("session_id") or "") in deep_ids
+
+
+def turn_churn(events: List[Dict[str, Any]], start: datetime, end: datetime, n_hours: int) -> Dict[str, Any]:
+    """
+    ``agent.prompt`` within 120 s of the same session's previous ``agent.turn_end``
+    with no other prompt between them, per active hour. The session is the
+    event's ``session_id``, else the session last seen on its ``pty_id``
+    (BusyIndex's join), else the pty itself.
+    """
+    pty_session: Dict[int, str] = {}
+    last_end: Dict[Any, datetime] = {}
+    count = 0
+    for ev in events:
+        if ev["_ts"] >= end:
+            break
+        t = ev.get("type")
+        if t not in ("agent.prompt", "agent.turn_end"):
+            if t and t.startswith("agent."):
+                d = _data(ev)
+                if isinstance(d.get("pty_id"), int) and d.get("session_id"):
+                    pty_session[d["pty_id"]] = str(d["session_id"])
+            continue
+        d = _data(ev)
+        sid, pty = d.get("session_id"), d.get("pty_id")
+        if sid and isinstance(pty, int):
+            pty_session[pty] = str(sid)
+        if sid:
+            key: Any = ("s", str(sid))
+        elif isinstance(pty, int):
+            key = ("s", pty_session[pty]) if pty in pty_session else ("p", pty)
+        else:
+            continue
+        if t == "agent.turn_end":
+            last_end[key] = ev["_ts"]
+            continue
+        ended = last_end.pop(key, None)
+        if ended is not None and ev["_ts"] - ended <= CHURN_WINDOW and _in(ev, start, end):
+            count += 1
+    return {"value": _round(count / n_hours) if n_hours else None, "count": count, "active_hours": n_hours}
+
+
+def deep_time(window: List[Dict[str, Any]], start: datetime, end: datetime) -> Dict[str, Any]:
+    """Minutes of ``deep.input`` spans with any input, per 7 days (scaled to the window)."""
+    ms = 0.0
+    sessions: Set[str] = set()
+    for ev in window:
+        if ev.get("type") != "deep.input":
+            continue
+        d = _data(ev)
+        if int(d.get("keys") or 0) + int(d.get("clicks") or 0) + int(d.get("wheels") or 0) <= 0:
+            continue
+        ms += float(d.get("span_ms") or 0)
+        sid = _ctx(ev).get("focus_session_id")
+        if sid:
+            sessions.add(str(sid))
+    minutes = ms / 60000.0
+    weeks = (end - start) / WEEK
+    return {"value": _round(minutes / weeks, 1) if weeks > 0 else None, "minutes": _round(minutes, 1), "sessions": len(sessions)}
+
+
+def _stretch_starts(events: List[Dict[str, Any]]) -> List[datetime]:
+    """Where a stretch at the machine begins: the first event after a 30 min gap, or a return after 30 min away."""
+    out: List[datetime] = []
+    prev: Optional[datetime] = None
+    for ev in events:
+        ts = ev["_ts"]
+        if prev is None or ts - prev >= STRETCH_GAP:
+            out.append(ts)
+        prev = ts
+        if ev.get("type") == "presence.change":
+            d = _data(ev)
+            if (d.get("to") or {}).get("at_machine") is True and (d.get("from") or {}).get("at_machine") is False:
+                if float(d.get("away_ms") or 0) >= _ms(STRETCH_GAP):
+                    out.append(ts)
+    return sorted(out)
+
+
+def time_to_deep(events: List[Dict[str, Any]], start: datetime, end: datetime, deep_ids: Set[str]) -> Dict[str, Any]:
+    """
+    For Deep sessions in the window rated ``deep``: seconds from the start of
+    the stretch (Lee's start after a 30 min gap, or a return after 30 min away)
+    to the session's first ``deep.input`` with input. The median, or null.
+    """
+    starts: Dict[str, datetime] = {}
+    ends: Dict[str, datetime] = {}
+    rated: List[str] = []
+    for ev in events:
+        t = ev.get("type")
+        d = _data(ev)
+        sid = str(d.get("session_id") or "")
+        if not sid:
+            continue
+        if t == "focus.start" and sid in deep_ids:
+            starts.setdefault(sid, ev["_ts"])
+        elif t == "focus.end" and _is_deep_end(ev, deep_ids):
+            ends[sid] = ev["_ts"]
+            if _in(ev, start, end) and d.get("deep_rating") == "deep":
+                rated.append(sid)
+    stretch = _stretch_starts(events)
+    inputs = [
+        e for e in events
+        if e.get("type") == "deep.input"
+        and int(_data(e).get("keys") or 0) + int(_data(e).get("clicks") or 0) + int(_data(e).get("wheels") or 0) > 0
+    ]
+    values: List[float] = []
+    for sid in rated:
+        began = starts.get(sid)
+        if began is None:
+            continue
+        i = bisect.bisect_right(stretch, began)
+        if not i:
+            continue
+        origin = stretch[i - 1]
+        until = ends.get(sid, end)
+        first = next(
+            (e["_ts"] for e in inputs
+             if began <= e["_ts"] <= until and (_ctx(e).get("focus_session_id") in (None, sid))),
+            None,
+        )
+        if first is not None:
+            values.append((first - origin).total_seconds())
+    return {"value_s": _round(_median(values), 1), "n": len(values)}
+
+
+def session_depth(window: List[Dict[str, Any]], deep_ids: Set[str]) -> Dict[str, Any]:
+    """Ratings of Deep sessions that ended in the window, and the share rated deep."""
+    counts = {r: 0 for r in DEPTH_RATINGS}
+    unrated = 0
+    for ev in window:
+        if ev.get("type") != "focus.end" or not _is_deep_end(ev, deep_ids):
+            continue
+        rating = _data(ev).get("deep_rating")
+        if rating in counts:
+            counts[rating] += 1
+        else:
+            unrated += 1
+    rated = sum(counts.values())
+    return {**counts, "unrated": unrated, "share_deep": _round(counts["deep"] / rated) if rated else None}
 
 
 def pull_usage(window: List[Dict[str, Any]], start: datetime, end: datetime) -> Dict[str, Any]:

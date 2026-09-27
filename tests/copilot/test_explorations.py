@@ -17,7 +17,7 @@ def test_store_create_list_patch_and_file_format(tmp_path):
     assert ex.EXP_ID_RE.match(exp["id"]) and exp["status"] == "active" and exp["turns"] == 0
     assert exp["title"] == "Could we replace Redis sessions with files?", "title from the seed, made plain"
     assert exp["session_id"] == f"explore-{exp['id']}" and exp["origin"] == {"kind": "cockpit", "ref": None}
-    path = tmp_path / ".hester" / "explore" / f"{exp['id']}.md"
+    path = tmp_path / ".hester" / "explore" / exp["id"] / "exploration.md"
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     meta = yaml.safe_load(path.read_text().split("---\n")[1])
     assert meta["title"] == exp["title"] and meta["version"] == 1
@@ -101,7 +101,7 @@ def test_routes(cockpit_env):
     assert r.status_code == 201, r.text
     exp = r.json()["data"]
     assert exp["workspace"] == str(env.b) and exp["status"] == "active"
-    assert (env.b / ".hester" / "explore" / f"{exp['id']}.md").exists()
+    assert (env.b / ".hester" / "explore" / exp["id"] / "exploration.md").exists()
     assert c.get("/cockpit/explorations", headers=hdr(env.a)).json()["data"] == [], "per workspace"
     listed = c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"]
     assert [e["id"] for e in listed] == [exp["id"]]
