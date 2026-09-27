@@ -603,7 +603,13 @@ def create_cockpit_router() -> APIRouter:
 
     @router.post("/cockpit/explorations/{exp_id}/sessions")
     async def cockpit_exploration_session_add(exp_id: str, request: Request):
-        return await _exp_op(request, lambda ctx, store, b: deep.add_session(store, exp_id, b), 201)
+        def op(ctx, store, b):
+            from ..copilot import open_next
+
+            record = deep.add_session(store, exp_id, b)
+            open_next.on_session(ctx.path, exp_id, record)  # the next session happened (14 §8.1)
+            return record
+        return await _exp_op(request, op, 201)
 
     @router.post("/cockpit/explorations/{exp_id}/explore")
     async def cockpit_exploration_explore(exp_id: str, request: Request):

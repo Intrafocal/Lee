@@ -208,7 +208,7 @@ def build_usage(
 
         cost = price_cost(model, toks)
     if cost is not None:
-        usage["cost_usd"] = round(cost, 6)
+        usage["cost_usd"] = round(cost, 9)
     usage["cost_basis"] = basis
     if duration_ms is not None:
         usage["duration_ms"] = round(float(duration_ms), 1)

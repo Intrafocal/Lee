@@ -127,4 +127,4 @@ def cost_usd(model: Any, tokens: Optional[Dict[str, Any]], table: Optional[Dict[
         rate = price.get(key, price["input"])
         total += float(n) * rate / 1_000_000.0
         counted = True
-    return round(total, 6) if counted else None
+    return round(total, 9) if counted else None

@@ -1,7 +1,8 @@
 """
 Copilot HTTP routes on the Hester daemon (:9000).
 
-Someday (capture store), the session-start digest and the weekly retro.
+Someday (capture store), the session-start digest, the weekly retro, Open next
+(14 §8.1) and usage (15 §5).
 Every endpoint takes an explicit ``workspace`` (absolute path), falling back
 to the daemon's current workspace, so it works for any open Lee window.
 Callers are the shared token (Lee, the renderer) or a paired device token;
@@ -28,7 +29,9 @@ from ..cockpit.tasks import to_api as task_to_api
 from ..workspaces.registry import get_registry
 from . import digest as digest_mod
 from . import lee_events
+from . import open_next as open_next_mod
 from . import retro as retro_mod
+from . import usage as usage_mod
 from .event_reader import parse_ts
 from .someday import SomedayError, SomedayStore, age_ms
 
@@ -320,6 +323,67 @@ def create_copilot_router() -> APIRouter:
             workspace=data["workspace"],
             actor=caller_actor(request),
         )
+        return _ok(data)
+
+    # ------------------------------------------------------------------ open next
+
+    @router.get("/copilot/open-next")
+    async def copilot_open_next_get(request: Request, workspace: Optional[str] = None):
+        """14 §8.1: what the next Deep session opens first, or null (stale picks clear on read)."""
+        try:
+            ws = resolve_workspace(workspace)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        ctx = get_registry().get(ws, source="request")
+        async with ctx.lock:
+            data = await asyncio.to_thread(open_next_mod.get, ws)
+        return _ok(data)
+
+    @router.post("/copilot/open-next")
+    async def copilot_open_next_set(request: Request):
+        """``{workspace?, exploration_id?, someday_id?}``; the caller's surface is recorded (devices allowed)."""
+        try:
+            body = await _json_body(request)
+            ws = resolve_workspace(body.get("workspace"))
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        ctx = get_registry().get(ws, source="request")
+        async with ctx.lock:
+            try:
+                data = await asyncio.to_thread(
+                    open_next_mod.set_, ws,
+                    exploration_id=body.get("exploration_id"), someday_id=body.get("someday_id"),
+                    surface=caller_surface(request),
+                )
+            except open_next_mod.OpenNextError as e:
+                return _err(str(e), e.status)
+        return _ok(data)
+
+    @router.delete("/copilot/open-next")
+    async def copilot_open_next_clear(request: Request, workspace: Optional[str] = None):
+        try:
+            ws = resolve_workspace(workspace)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        ctx = get_registry().get(ws, source="request")
+        async with ctx.lock:
+            cleared = await asyncio.to_thread(open_next_mod.clear, ws)
+        return _ok({"cleared": cleared})
+
+    # ------------------------------------------------------------------ usage
+
+    @router.get("/cockpit/usage")
+    async def cockpit_usage(request: Request, range: str = "today", workspace: Optional[str] = None):
+        """docs/15-Usage.md §5: limits, totals by source and basis, by_day, Hester by trigger (pull-only)."""
+        if range not in usage_mod.RANGES:
+            return _err(f"range must be one of {', '.join(usage_mod.RANGES)}")
+        ws = None
+        if workspace:
+            try:
+                ws = str(resolve_workspace(workspace))
+            except BadRequest as e:
+                return _err(str(e), e.status)
+        data = await asyncio.to_thread(usage_mod.run, range, ws)
         return _ok(data)
 
     # ------------------------------------------------------------------ retro

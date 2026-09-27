@@ -61,7 +61,7 @@ def add_tokens(dst: Dict[str, int], src: Optional[Dict[str, Any]]) -> Dict[str, 
 
 
 def _round_usd(v: float) -> float:
-    return round(v, 6)
+    return round(v, 9)
 
 
 def usage_items(by_model: Any) -> List[Dict[str, Any]]:
@@ -211,21 +211,20 @@ def agent_source(data: Dict[str, Any]) -> str:
 
 def latest_limits(events: List[Dict[str, Any]], now: datetime) -> Optional[Dict[str, Any]]:
     """The newest ``limits.snapshot`` as ``UsageLimits`` plus ``age_s``; None without one."""
-    snaps = [e for e in events if e.get("type") == "limits.snapshot"]
-    if not snaps:
-        return None
-    ev = max(snaps, key=lambda e: e["_ts"])
-    d = ev.get("data") if isinstance(ev.get("data"), dict) else {}
-    out: Dict[str, Any] = {}
-    for key in ("five_hour", "seven_day"):
-        w = d.get(key)
-        if isinstance(w, dict) and isinstance(w.get("used_pct"), (int, float)) and not isinstance(w.get("used_pct"), bool):
-            out[key] = {"used_pct": w["used_pct"], "resets_at": w.get("resets_at") if isinstance(w.get("resets_at"), str) else None}
-    if not out:
-        return None
-    out["as_of"] = iso(ev["_ts"])
-    out["age_s"] = max(0, int((now - ev["_ts"]).total_seconds()))
-    return out
+    snaps = sorted((e for e in events if e.get("type") == "limits.snapshot"), key=lambda e: e["_ts"], reverse=True)
+    for ev in snaps:
+        d = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        out: Dict[str, Any] = {}
+        for key in ("five_hour", "seven_day"):
+            w = d.get(key)
+            pct = w.get("used_pct") if isinstance(w, dict) else None
+            if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+                out[key] = {"used_pct": pct, "resets_at": w.get("resets_at") if isinstance(w.get("resets_at"), str) else None}
+        if out:
+            out["as_of"] = iso(ev["_ts"])
+            out["age_s"] = max(0, int((now - ev["_ts"]).total_seconds()))
+            return out
+    return None
 
 
 def _filter_workspace(events: List[Dict[str, Any]], workspace: Optional[str]) -> List[Dict[str, Any]]:
