@@ -1052,6 +1052,52 @@ async function main() {
     assert.strictEqual(relayed.find((r) => r.id === noWt.task_id).worktree, undefined);
   });
 
+  await check('launch (Deep next R3): a hand-off carries origin exploration and its timebox to the record and task.launch', async () => {
+    const { validOrigin, validTimebox } = cockpit('launcher.js');
+    const ref = 'exp-1a2b3c4d#ans-5e6f7a8b';
+    assert.deepStrictEqual(validOrigin({ kind: 'exploration', ref }), { kind: 'exploration', ref });
+    assert.strictEqual(validTimebox(45), 45);
+    for (const bad of [0, -5, 1.5, 1441, '20', null, undefined, true]) assert.strictEqual(validTimebox(bad), null, String(bad));
+    const relayed = [];
+    const l3 = new TaskLauncherImpl(rt, { relay: async (r) => (relayed.push(r), true) });
+    const origSend = bw.webContents.send;
+    bw.webContents.send = (channel, payload) => {
+      if (channel === 'cockpit:create-tab') {
+        sentToWindow.push([channel, payload]);
+        setTimeout(() => {
+          host.add(89, { claude: true, name: payload.label });
+          tabs.push({ id: 189, type: 'agent', provider: 'claude', label: payload.label, ptyId: 89, dockPosition: 'center', state: 'idle' });
+          rt.resolveCreateTab({ request_id: payload.request_id, tab_id: 189, pty_id: 89 });
+        }, 10);
+      }
+    };
+    sentToWindow.length = 0;
+    const res = await l3.launch(
+      {
+        workspace: WS, lead: 'delegate', kind: 'question', worktree: false, title: 'Research: sync options',
+        prompt: 'Research: make no code changes.\n\nThe section.', tools: ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch'],
+        timebox_min: 20, origin: { kind: 'exploration', ref },
+      },
+      LOCAL,
+      1,
+    );
+    const noBox = await l3.launch({ workspace: WS, prompt: 'x', timebox_min: 0, origin: { kind: 'exploration', ref } }, LOCAL, 1);
+    bw.webContents.send = origSend;
+    assert.strictEqual(res.success, true, JSON.stringify(res));
+    const req = sentToWindow.find(([c]) => c === 'cockpit:create-tab')[1];
+    assert.ok(!req.args.includes('--worktree'), 'research runs in the workspace');
+    assert.ok(req.args.includes('--tools'), req.args.join(' '));
+    const rec = relayed.find((r) => r.id === res.task_id);
+    assert.deepStrictEqual(rec.origin, { kind: 'exploration', ref });
+    assert.strictEqual(rec.timebox_min, 20);
+    assert.strictEqual(rec.kind, 'question');
+    const ev = events.filter((e) => e.type === 'task.launch').find((e) => e.data.task_id === res.task_id);
+    assert.strictEqual(ev.data.origin_kind, 'exploration');
+    assert.strictEqual(ev.data.origin_ref, ref);
+    assert.strictEqual(ev.data.timebox_min, 20);
+    assert.strictEqual(relayed.find((r) => r.id === noBox.task_id).timebox_min, undefined, 'an invalid timebox is dropped');
+  });
+
   await check('resume: claude --resume <id> in the task worktree (else the workspace root), linked to the task, never with --session-id', async () => {
     const { resumeCwd } = cockpit('launcher.js');
     const wt = path.join(WS, '.claude', 'worktrees', 'fix-1234');

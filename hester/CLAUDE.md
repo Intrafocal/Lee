@@ -550,6 +550,9 @@ When running as a server (`hester daemon start`), exposes REST API:
 | POST/PATCH | `/cockpit/explorations/{id}/nodes[/{nid}]`, `/nodes/{nid}/prune`, `/decisions`, `/spikes[/{nid}]` | Tree edits: branches, decisions (reason optional), spikes (agent tasks in a worktree whose evidence comes back as a node) |
 | POST | `/cockpit/explorations/{id}/promote`, `/archive` | Promote to a task, workstream or goal draft (`.hester/goals/drafts/`); archive, optionally as knowledge (`.hester/knowledge/explore-<id>.md`, read by the `knowledge_notes` tool) |
 | POST | `/cockpit/tasks/{id}/escalate` | Open an exploration from a task (the task stays open) |
+| POST/PATCH | `/cockpit/explorations/{id}/handoffs`, `/answers/{aid}` | Deep hand-offs (`docs/plans/2026-09-27-deep-next-contract.md` §2): a `kind: 'handoff'` record in `answers.jsonl`; PATCH `{task_id}` links Lee's launched task (origin `{kind: 'exploration', ref: '<exp>#<aid>'}`) and `handoffs.sync` (follower, task routes) keeps its state and result in step. `GET /cockpit/handoff-template?kind=` returns the brief template |
+| DELETE | `/cockpit/explorations/{id}` | Only a still-Untitled exploration with an empty Page and no answers, references or questions; else 409 `not_empty` |
+| POST | `/cockpit/explorations/{id}/draft-from-readme` | Goals Page (`purpose: 'goals'`, one per workspace; `GET ?purpose=goals`): a first guess at the four prompts from README.md / CLAUDE.md, surface `goals-readme`; returns `{text}` and never writes the Page |
 | * | `/library/sessions[/{id}/...]` | The Library pane: a tree view onto the same exploration files (`session_id` = exploration id). DELETE archives; per-node chats (`library-<id>-<node>` sessions) write each exchange to the file; save goes to Someday |
 
 Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
