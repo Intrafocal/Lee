@@ -6,7 +6,7 @@
  * needs it. Do not edit it inside a work package; change the contract instead.
  */
 
-import type { DepthRating, Quadrant } from './cockpit';
+import type { DeepAnswerEvent, DepthRating, LeeMode, Quadrant } from './cockpit';
 
 // ---------------------------------------------------------------------------
 // Actors and principals
@@ -78,7 +78,11 @@ export type LeeEventType =
   | 'task.override'
   | 'steward.request'
   | 'steward.quiet'
-  | 'proposal.outcome';
+  | 'proposal.outcome'
+  // Deep D1 §10.1 (Hester -> Lee via POST /events/ingest): deep.answer {workspace, exploration_id, answer_id, status};
+  // opener.shown {workspace, pick_up, surfaces}
+  | 'deep.answer'
+  | 'opener.shown';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 
@@ -302,11 +306,11 @@ export interface FocusState {
 export type FocusEndReason = 'manual' | 'away' | 'switch' | 'handoff' | 'quit' | 'deep_end';
 export interface DeepStartRequest { workspace: string; exploration_id: string | null; title?: string; surface?: string }
 export interface DeepEndRequest { reason: 'ritual' | 'esc'; rating?: DepthRating | null; stopped_at_chars?: number }
-// Deep D1 §12, implemented by package M:
-// CopilotAPI gains: deepStart(req): Promise<FocusState>; deepEnd(req): Promise<FocusState>;
-// window.lee.deep = { onAnswer(cb: (e: DeepAnswerEvent) => void): () => void };
-// window.lee.app.quit(): void;
-// Attention snapshot gains: mode: LeeMode; deep: { exploration_id: string | null; title: string } | null;
+
+/** window.lee.deep (Deep D1 §6): main forwards Hester's ingested deep.answer events. */
+export interface DeepAPI {
+  onAnswer: (cb: (e: DeepAnswerEvent) => void) => CopilotUnsubscribe;
+}
 
 export type SummaryPolicy = { mode: 'none' } | { mode: 'on_return' } | { mode: 'at'; at: string };
 
@@ -354,6 +358,10 @@ export interface AttentionSnapshot {
   away: AwayState;
   /** Running agents. Optional: older Lee builds omit it; older clients ignore it. */
   agents?: AgentSummary[];
+  /** Deep D1 §2.5: the focused window's mode. Lee main always sets it; optional for older builds. */
+  mode?: LeeMode;
+  /** Deep D1 §2.5: the Deep session, if one is active (focus.active stays true during it). */
+  deep?: { exploration_id: string | null; title: string } | null;
   generated_at: string;
 }
 
@@ -466,6 +474,13 @@ export const COPILOT_IPC = {
   handoffEnd: 'copilot:handoff:end',
   /** main to renderer: ReturnInfo. */
   returnPush: 'copilot:return',
+  /** Deep D1 §2.1: invoke(DeepStartRequest) / invoke(DeepEndRequest), both resolve to FocusState. */
+  deepStart: 'copilot:deep:start',
+  deepEnd: 'copilot:deep:end',
+  /** main to renderer: DeepAnswerEvent (Deep D1 §6). */
+  deepAnswer: 'deep:answer',
+  /** send, renderer to main: { reason?: FocusEndReason } (Deep D1 §2.4). */
+  appQuit: 'app:quit',
 } as const;
 
 export interface InputBatch {
@@ -502,4 +517,7 @@ export interface CopilotAPI {
   handoffStart: (req: HandoffRequest) => Promise<HandoffResult>;
   handoffEnd: () => Promise<AwayState>;
   onReturn: (cb: (info: ReturnInfo) => void) => CopilotUnsubscribe;
+  // Deep D1 §2.1
+  deepStart: (req: DeepStartRequest) => Promise<FocusState>;
+  deepEnd: (req: DeepEndRequest) => Promise<FocusState>;
 }

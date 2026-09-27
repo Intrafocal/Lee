@@ -10,7 +10,10 @@
  */
 
 import type { Application, Request, Response } from 'express';
+import type { AnswerStatus, DeepAnswerEvent } from '../../shared/cockpit';
+import { COPILOT_IPC } from '../../shared/copilot';
 import type { Actor, CaptureRequest, LeeEventType, Principal } from '../../shared/copilot';
+import { windowRegistry } from '../window-registry';
 import { copilotBus, logEvent } from './bus';
 import { actorForPrincipal, getDeviceStore, issueDeviceToken, normalizeIp, requireLoopbackShared, revokeDevice } from './auth';
 import { getCaptureRelay, resolveCaptureWorkspace, setHesterPortProvider } from './capture';
@@ -34,7 +37,46 @@ const INGEST_TYPES = new Set<LeeEventType>([
   'steward.request',
   'steward.quiet',
   'proposal.outcome',
+  // Deep D1 §6, §8.1
+  'deep.answer',
+  'opener.shown',
 ]);
+
+const ANSWER_STATUSES = new Set<AnswerStatus>(['queued', 'running', 'done', 'error', 'interrupted']);
+const DEEP_ID_MAX = 128;
+const DEEP_WORKSPACE_MAX = 4096;
+
+/**
+ * The ids-only DeepAnswerEvent in an ingested deep.answer's data, or null when
+ * malformed. `data.workspace` wins; the event's own workspace is the fallback.
+ */
+export function deepAnswerEvent(data: unknown, eventWorkspace?: unknown): DeepAnswerEvent | null {
+  if (!isPlainObject(data)) return null;
+  const { exploration_id, answer_id, status } = data;
+  const workspace = data.workspace ?? eventWorkspace;
+  if (!isStr(workspace, DEEP_WORKSPACE_MAX) || !isStr(exploration_id, DEEP_ID_MAX) || !isStr(answer_id, DEEP_ID_MAX)) return null;
+  if (!ANSWER_STATUSES.has(status as AnswerStatus)) return null;
+  return { workspace, exploration_id, answer_id, status: status as AnswerStatus };
+}
+
+/**
+ * Send a deep.answer to every renderer window (IPC deep:answer). It raises no
+ * attention item: the answer arrives quietly in the Page's margin (Deep D1 §6).
+ * Returns how many windows it went to.
+ */
+export function forwardDeepAnswer(ev: DeepAnswerEvent): number {
+  let n = 0;
+  for (const ws of windowRegistry.getAll().values()) {
+    try {
+      if (ws.browserWindow.isDestroyed()) continue;
+      ws.browserWindow.webContents.send(COPILOT_IPC.deepAnswer, ev);
+      n++;
+    } catch {
+      // window closing
+    }
+  }
+  return n;
+}
 
 const REDEEM_LIMIT = 10;
 const REDEEM_WINDOW_MS = 60_000;
@@ -136,6 +178,10 @@ export function registerCoreRoutes(app: Application, deps: CoreRoutesDeps): void
         actor: parseActor(raw.actor) ?? { kind: 'hester' },
         data: raw.data,
       });
+      if (raw.type === 'deep.answer') {
+        const ev = deepAnswerEvent(raw.data, raw.workspace);
+        if (ev) forwardDeepAnswer(ev);
+      }
       accepted++;
     });
     res.json({ success: true, data: { accepted, rejected } });

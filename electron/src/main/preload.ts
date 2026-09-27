@@ -21,7 +21,8 @@ import type {
   FileChangedEvent,
   StatusMessagePayload,
 } from '../shared/lee-api';
-import { copilotApi } from './preload-copilot';
+import { COPILOT_IPC } from '../shared/copilot';
+import { copilotApi, deepApi } from './preload-copilot';
 import { cockpitApi } from './preload-cockpit';
 
 export type {
@@ -104,6 +105,7 @@ const api: LeeAPI = {
 
   app: {
     getWorkspace: () => ipcRenderer.invoke('app:get-workspace'),
+    quit: (reason) => ipcRenderer.send(COPILOT_IPC.appQuit, { reason }),
   },
 
   dialog: {
@@ -521,6 +523,7 @@ const api: LeeAPI = {
   },
   copilot: copilotApi,
   cockpit: cockpitApi,
+  deep: deepApi,
 };
 
 contextBridge.exposeInMainWorld('lee', api);

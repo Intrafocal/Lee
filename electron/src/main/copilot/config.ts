@@ -4,8 +4,8 @@
  * Workspace .lee/config.yaml files are NOT consulted: the queue, presence and
  * event log are machine-wide.
  *
- * Source of truth: docs/plans/2026-09-25-copilot-v0-v1-contracts.md (Appendix C).
- * Copied VERBATIM. Do not edit inside a work package.
+ * Source of truth: docs/plans/2026-09-25-copilot-v0-v1-contracts.md (Appendix C),
+ * plus the `deep:` block from docs/plans/2026-09-26-deep-d1-contracts.md §2.2.
  */
 
 import * as fs from 'fs';
@@ -46,6 +46,11 @@ export interface CopilotConfig {
   away: {
     return_min_away_minutes: number;
   };
+  /** Deep D1 §2.2. */
+  deep: {
+    /** A Deep session ends (reason 'away') after this long not at the machine. */
+    idle_end_minutes: number;
+  };
 }
 
 export const COPILOT_DEFAULTS: CopilotConfig = {
@@ -79,6 +84,9 @@ export const COPILOT_DEFAULTS: CopilotConfig = {
   },
   away: {
     return_min_away_minutes: 30,
+  },
+  deep: {
+    idle_end_minutes: 45,
   },
 };
 

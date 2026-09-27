@@ -1,20 +1,22 @@
 /**
  * Focus sessions: manual start/stop, deterministic inference from one-minute
- * input buckets, and the end rules. Pure: no Electron.
+ * input buckets, Deep sessions, and the end rules. Pure: no Electron.
  *
- * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.3.
+ * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §5.3;
+ * Deep sessions: docs/plans/2026-09-26-deep-d1-contracts.md §2.2.
  */
 
 import * as crypto from 'crypto';
 import * as path from 'path';
-import type { Actor, FocusItem, FocusState, LeeEventInput } from '../../shared/copilot';
-import type { CopilotConfig } from './config';
+import type { DepthRating } from '../../shared/cockpit';
+import type { Actor, FocusEndReason, FocusItem, FocusSource, FocusState, LeeEventInput } from '../../shared/copilot';
+import { COPILOT_DEFAULTS, type CopilotConfig } from './config';
 
 export const MAX_FOCUS_PATHS = 50;
 const MINUTE = 60_000;
 const BUCKET_KEEP_MINUTES = 60;
 
-export type FocusEndReason = 'manual' | 'away' | 'switch' | 'handoff' | 'quit';
+export type { FocusEndReason };
 export type FocusSurface = 'lee' | 'device' | 'auto';
 
 /** One `input.counts` line, as the focus tracker needs it. */
@@ -42,7 +44,7 @@ interface TabCounts {
 
 interface Session {
   session_id: string;
-  source: 'manual' | 'inferred';
+  source: FocusSource;
   started_at: number;
   item: FocusItem;
   interruptions: number;
@@ -65,6 +67,18 @@ export interface PresenceLike {
   away_since: string | null;
 }
 
+/** What only a Deep session's end carries (Deep D1 §2.2): the rating and the stopped-at length, never text. */
+export interface DeepEndInfo {
+  deep_rating?: DepthRating | null;
+  stopped_at_chars?: number;
+}
+
+export interface TickOptions {
+  deep?: CopilotConfig['deep'];
+  /** Some window is in Deep mode: no inference (Deep D1 §2.2). */
+  inferBlocked?: boolean;
+}
+
 function cloneItem(item: FocusItem): FocusItem {
   return JSON.parse(JSON.stringify(item));
 }
@@ -78,7 +92,16 @@ export function focusItemKey(item: FocusItem | null): string | null {
   if (item.kind === 'agent') return `agent:${item.pty_id}`;
   if (item.kind === 'files') return `files:${item.workspace ?? ''}`;
   if (item.kind === 'task') return `task:${item.workspace}:${item.task_id}`;
+  if (item.kind === 'exploration') return `exploration:${item.workspace}:${item.exploration_id ?? ''}`;
   return null;
+}
+
+/** An exploration id as Hester writes them; anything else is dropped. */
+const EXPLORATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+export function parseExplorationId(v: unknown): string | null | undefined {
+  if (v === null || v === undefined) return null;
+  return typeof v === 'string' && EXPLORATION_ID_RE.test(v) ? v : undefined;
 }
 
 /** Validate a FocusItem from an untrusted body. */
@@ -106,6 +129,16 @@ export function parseFocusItem(v: unknown): FocusItem | null {
       workspace: o.workspace,
       task_id: o.task_id.slice(0, 128),
       label: typeof o.label === 'string' && o.label ? o.label.slice(0, 200) : 'Task',
+    };
+  }
+  if (o.kind === 'exploration' && typeof o.workspace === 'string' && o.workspace) {
+    const id = parseExplorationId(o.exploration_id);
+    if (id === undefined) return null;
+    return {
+      kind: 'exploration',
+      workspace: o.workspace,
+      exploration_id: id,
+      title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 200) : 'Deep',
     };
   }
   return null;
@@ -136,8 +169,20 @@ export class FocusTracker {
     return this.session?.item ?? null;
   }
 
-  get source(): 'manual' | 'inferred' | null {
+  get source(): FocusSource | null {
     return this.session?.source ?? null;
+  }
+
+  /** Attention policy (Deep D1 §2.3): 'none' iff a Deep session is active. */
+  get policy(): 'normal' | 'none' {
+    return this.session?.source === 'deep' ? 'none' : 'normal';
+  }
+
+  /** The Deep session's exploration, or null outside Deep. */
+  get deep(): FocusState['deep'] {
+    const item = this.session?.source === 'deep' ? this.session.item : null;
+    if (!item || item.kind !== 'exploration') return null;
+    return { exploration_id: item.exploration_id, title: item.title, workspace: item.workspace };
   }
 
   state(quietCount: number): FocusState {
@@ -149,8 +194,8 @@ export class FocusTracker {
       started_at: s ? new Date(s.started_at).toISOString() : null,
       item: s ? cloneItem(s.item) : null,
       quiet_count: s ? quietCount : 0,
-      policy: 'normal',
-      deep: null,
+      policy: this.policy,
+      deep: this.deep,
     };
   }
 
@@ -158,6 +203,8 @@ export class FocusTracker {
   isRelated(ptyId: number | null, filesWritten: string[]): boolean {
     const item = this.session?.item;
     if (!item) return false;
+    // No agent is related to a Deep session (spin-offs come in D2).
+    if (item.kind === 'exploration') return false;
     if (item.kind === 'agent') return ptyId != null && ptyId === item.pty_id;
     if (item.kind === 'files') {
       return filesWritten.some((f) => item.paths.some((p) => samePath(f, p)));
@@ -239,12 +286,26 @@ export class FocusTracker {
 
   /**
    * Start (or re-target) a session. A manual start converts an inferred
-   * session to manual, keeping its session_id. Returns true on any change.
+   * session to manual, keeping its session_id. A Deep start ends a manual or
+   * inferred session (reason 'switch') and starts a Deep one; during Deep it
+   * only updates the item. Neither manual nor inferred starts touch a Deep
+   * session. Returns true on any change.
    */
-  start(item: FocusItem, source: 'manual' | 'inferred', surface: FocusSurface, actor: Actor, now: number): boolean {
-    const s = this.session;
+  start(item: FocusItem, source: FocusSource, surface: FocusSurface, actor: Actor, now: number): boolean {
+    let s = this.session;
+    if (s && source === 'deep') {
+      if (s.source === 'deep') {
+        const changedItem = JSON.stringify(s.item) !== JSON.stringify(item);
+        if (!changedItem) return false;
+        s.item = cloneItem(item);
+        this.deps.log({ type: 'focus.item', actor, data: { session_id: s.session_id, item: cloneItem(item) } });
+        return true;
+      }
+      this.stop('switch', now, actor);
+      s = null;
+    }
     if (s) {
-      if (source === 'inferred') return false;
+      if (source === 'inferred' || s.source === 'deep') return false;
       const changedItem = JSON.stringify(s.item) !== JSON.stringify(item);
       s.item = cloneItem(item);
       if (s.source === 'inferred') s.source = 'manual';
@@ -261,38 +322,50 @@ export class FocusTracker {
     this.deps.log({
       type: 'focus.start',
       actor,
-      data: { session_id: this.session.session_id, source, item: cloneItem(item), surface },
+      data: { session_id: this.session.session_id, source, item: cloneItem(item), surface, policy: this.policy },
     });
     return true;
   }
 
-  stop(reason: FocusEndReason, now: number, actor?: Actor): boolean {
+  /** End the session. `deep` is recorded only for Deep sessions (rating null when not given). */
+  stop(reason: FocusEndReason, now: number, actor?: Actor, deep?: DeepEndInfo): boolean {
     const s = this.session;
     if (!s) return false;
     this.session = null;
     this.lastEndMinute = Math.floor(now / MINUTE);
+    const stoppedAt = deep?.stopped_at_chars;
     this.deps.log({
       type: 'focus.end',
       actor,
       data: {
         session_id: s.session_id,
+        source: s.source,
         reason,
         duration_ms: Math.max(0, now - s.started_at),
         interruptions: s.interruptions,
+        ...(s.source === 'deep'
+          ? {
+              deep_rating: deep?.deep_rating ?? null,
+              ...(typeof stoppedAt === 'number' && Number.isInteger(stoppedAt) && stoppedAt >= 0 ? { stopped_at_chars: stoppedAt } : {}),
+            }
+          : {}),
       },
     });
     return true;
   }
 
   /** End rules and inference; call every ~15 s. Returns true on any change. */
-  tick(now: number, presence: PresenceLike | null, cfg: CopilotConfig['focus']): boolean {
+  tick(now: number, presence: PresenceLike | null, cfg: CopilotConfig['focus'], opts: TickOptions = {}): boolean {
     const cur = Math.floor(now / MINUTE);
     const s = this.session;
     if (s) {
       if (presence && !presence.at_machine && presence.away_since) {
         const awayMs = now - Date.parse(presence.away_since);
-        const limit = (s.source === 'manual' ? cfg.manual_end_away_minutes : cfg.inferred_end_away_minutes) * MINUTE;
-        if (Number.isFinite(awayMs) && awayMs >= limit) return this.stop('away', now);
+        const minutes =
+          s.source === 'deep'
+            ? (opts.deep ?? COPILOT_DEFAULTS.deep).idle_end_minutes
+            : s.source === 'manual' ? cfg.manual_end_away_minutes : cfg.inferred_end_away_minutes;
+        if (Number.isFinite(awayMs) && awayMs >= minutes * MINUTE) return this.stop('away', now);
       }
       if (s.source === 'inferred' && cfg.switch_minutes > 0) {
         const key = focusItemKey(s.item);
@@ -308,7 +381,7 @@ export class FocusTracker {
       return false;
     }
 
-    if (!cfg.infer_enabled) return false;
+    if (!cfg.infer_enabled || opts.inferBlocked) return false;
     const winners: TabCounts[] = [];
     let key: string | null | undefined;
     for (let m = cur - cfg.infer_window_minutes; m < cur; m++) {

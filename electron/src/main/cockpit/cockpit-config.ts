@@ -26,8 +26,12 @@ export interface LintRuleConfig {
 
 export interface CockpitConfig {
   cockpit: {
+    /**
+     * false = no Cockpit: the window is Manual only and Deep is unavailable.
+     * There is no default_mode (Deep D1 §1.1): Lee always opens in the Cockpit;
+     * an old config's default_mode is ignored like any unknown key.
+     */
     enabled: boolean;
-    default_mode: 'cockpit' | 'workbench';
     tab: {
       output_buffer_kb: number;
       quiet_ms: number;
@@ -111,7 +115,6 @@ export function withClaudePermissionDefault(cmd: string, args: string[], workspa
 export const COCKPIT_DEFAULTS: CockpitConfig = {
   cockpit: {
     enabled: true,
-    default_mode: 'cockpit',
     tab: { output_buffer_kb: 256, quiet_ms: 1500 },
     checkin: { timeout_s: 180, wait_idle_s: 120, propose_after_min: 20 },
     shell_integration: true,

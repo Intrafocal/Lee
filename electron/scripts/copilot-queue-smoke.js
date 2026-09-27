@@ -684,6 +684,323 @@ test('v4 focus on a task: parsed, logged, and related to items from its agent pt
   q.focusStop({ kind: 'user', surface: 'lee' });
 });
 
+// ---------------------------------------------------------------------------
+// Deep D1 (docs/plans/2026-09-26-deep-d1-contracts.md §2, §6, §11 M)
+// ---------------------------------------------------------------------------
+
+const { COPILOT_DEFAULTS } = require(path.join(dist, 'copilot', 'config.js'));
+const LEE = { kind: 'user', surface: 'lee' };
+const DEV_ACTOR = { kind: 'user', surface: 'device', device_id: 'dev1', device_kind: 'aeronaut' };
+const MIN = 60_000;
+
+/** Collect bus events while fn runs. */
+function logged(fn) {
+  const out = [];
+  const onEv = (e) => out.push(e);
+  copilotBus.on('event', onEv);
+  try {
+    fn();
+  } finally {
+    copilotBus.off('event', onEv);
+  }
+  return out;
+}
+
+/** An open approval (needs-you) on PTY `ptyId`; returns the item. */
+function openApproval(q, ptyId = 1, sid = 's1') {
+  q.handleHook({ event: 'UserPromptSubmit', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'UserPromptSubmit', prompt: 'x' });
+  q.handleHook({ event: 'PermissionRequest', ptyId: String(ptyId), windowId: null }, { session_id: sid, hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: `t${ptyId}` });
+  return q.snapshot({ all: false }).items.find((i) => i.kind === 'approval' && i.source.pty_id === ptyId);
+}
+
+/** A fake express app that records each route's last handler. */
+function fakeApp() {
+  const routes = {};
+  const reg = (m) => (p, ...hs) => {
+    routes[`${m} ${p}`] = hs[hs.length - 1];
+  };
+  return { routes, get: reg('GET'), post: reg('POST'), put: reg('PUT'), patch: reg('PATCH'), delete: reg('DELETE'), use() {} };
+}
+
+function call(handler, { body = {}, principal } = {}) {
+  const res = {
+    statusCode: 200,
+    body: undefined,
+    locals: { principal },
+    status(c) {
+      this.statusCode = c;
+      return this;
+    },
+    json(b) {
+      this.body = b;
+      return this;
+    },
+    type() {
+      return this;
+    },
+    send(b) {
+      this.body = b;
+      return this;
+    },
+    end() {
+      return this;
+    },
+  };
+  handler({ body, query: {}, params: {}, socket: { remoteAddress: '127.0.0.1' }, header: () => undefined }, res);
+  return res;
+}
+
+test('Deep: a Deep start replaces an inferred session (switch), then a second deepStart updates the item', () => {
+  const unreg = withWindow([]);
+  try {
+    const { q } = setup();
+    q.focus.start({ kind: 'files', workspace: '/work/api', paths: ['/work/api/a.py'] }, 'inferred', 'auto', { kind: 'system' }, Date.now());
+    const inferredId = q.focus.sessionId;
+    const ev = logged(() => {
+      const r = q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one', title: 'One' }, LEE, 'lee');
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.body.source, 'deep');
+      assert.strictEqual(r.body.policy, 'none');
+      assert.deepStrictEqual(r.body.deep, { exploration_id: 'exp-one', title: 'One', workspace: '/work/api' });
+    });
+    const end = ev.find((e) => e.type === 'focus.end');
+    assert.strictEqual(end.data.session_id, inferredId);
+    assert.strictEqual(end.data.reason, 'switch');
+    const start = ev.find((e) => e.type === 'focus.start');
+    assert.strictEqual(start.data.source, 'deep');
+    assert.strictEqual(start.data.policy, 'none');
+    const deepId = q.focus.sessionId;
+
+    const ev2 = logged(() => q.deepStart({ workspace: '/work/api', exploration_id: 'exp-two', title: 'Two' }, LEE, 'lee'));
+    assert.strictEqual(q.focus.sessionId, deepId, 'same session');
+    assert.deepStrictEqual(ev2.map((e) => e.type), ['focus.item']);
+    assert.strictEqual(q.focusState().deep.exploration_id, 'exp-two');
+    // A manual (lee) focus start leaves the Deep session alone.
+    q.focusStart({ kind: 'agent', pty_id: 1, window_id: null, label: 'x' }, LEE, 'lee');
+    assert.strictEqual(q.focusState().source, 'deep');
+    // deepEnd: the rating and length reach focus.end; never text.
+    const ev3 = logged(() => q.deepEnd({ reason: 'ritual', rating: 'deep', stopped_at_chars: 42, stopped_at: 'secret' }, LEE));
+    const end3 = ev3.find((e) => e.type === 'focus.end');
+    assert.deepStrictEqual(
+      { reason: end3.data.reason, source: end3.data.source, deep_rating: end3.data.deep_rating, stopped_at_chars: end3.data.stopped_at_chars },
+      { reason: 'deep_end', source: 'deep', deep_rating: 'deep', stopped_at_chars: 42 },
+    );
+    assert.ok(!JSON.stringify(ev3).includes('secret'));
+    assert.strictEqual(q.focusState().active, false);
+    assert.strictEqual(q.deepEnd({ reason: 'later' }, LEE).status, 400);
+    assert.strictEqual(q.deepEnd({ reason: 'esc', rating: 'great' }, LEE).status, 400);
+    assert.strictEqual(q.deepStart({ exploration_id: '../x' }, LEE, 'lee').status, 400);
+  } finally {
+    unreg();
+  }
+});
+
+test('Deep: idle end at 45 min away (reason away, unrated); not before', () => {
+  const { q } = setup();
+  const t0 = Date.now();
+  q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one' }, LEE, 'lee');
+  const away = (m) => ({ at_machine: false, engaged: false, away_since: new Date(t0 - m * MIN).toISOString() });
+  const cfg = COPILOT_DEFAULTS;
+  assert.strictEqual(cfg.deep.idle_end_minutes, 45);
+  // Past manual (15) and inferred (5) limits, a Deep session holds.
+  assert.strictEqual(q.focus.tick(t0, away(44), cfg.focus, { deep: cfg.deep }), false);
+  assert.strictEqual(q.focus.source, 'deep');
+  const ev = logged(() => assert.strictEqual(q.focus.tick(t0, away(45), cfg.focus, { deep: cfg.deep }), true));
+  const end = ev.find((e) => e.type === 'focus.end');
+  assert.strictEqual(end.data.reason, 'away');
+  assert.strictEqual(end.data.deep_rating, null);
+  assert.strictEqual(q.focus.source, null);
+});
+
+test('Deep: no inference while any window is in Deep mode (from cockpit.mode events)', () => {
+  const unreg1 = withWindow([], 1);
+  const unreg2 = withWindow([], 2);
+  try {
+    const { q } = setup();
+    const t0 = Math.floor(Date.now() / MIN) * MIN;
+    for (let m = 9; m >= 1; m--) {
+      q.focus.record({ window_id: 1, tab_id: 3, pty_id: null, file_path: '/work/api/a.py', workspace: '/work/api', label: 'a.py', keys: 20, clicks: 0 }, t0 - m * MIN);
+    }
+    const mode = (window_id, to) =>
+      q.onBusEvent({ type: 'cockpit.mode', window_id, data: { from: 'cockpit', to, reason: 'hop' }, ts: new Date().toISOString() });
+    assert.strictEqual(q.windowMode(2), 'cockpit', 'unreported windows are in the Cockpit');
+    mode(2, 'deep');
+    assert.strictEqual(q.anyWindowDeep(), true);
+    const tick = () => q.focus.tick(t0, null, COPILOT_DEFAULTS.focus, { deep: COPILOT_DEFAULTS.deep, inferBlocked: q.anyWindowDeep() });
+    assert.strictEqual(tick(), false);
+    assert.strictEqual(q.focus.active, false, 'no inferred session while window 2 is Deep');
+    mode(2, 'manual');
+    assert.strictEqual(q.anyWindowDeep(), false);
+    assert.strictEqual(tick(), true);
+    assert.strictEqual(q.focus.source, 'inferred');
+    // A closed window's stale Deep mode doesn't block.
+    mode(2, 'deep');
+    unreg2();
+    assert.strictEqual(q.anyWindowDeep(), false);
+  } finally {
+    unreg1();
+    unreg2();
+  }
+});
+
+test('Deep policy none: neither age nor relatedness escalates, a woken item does; notify only when woken', () => {
+  const { pty, q } = setup();
+  pty.add(2);
+  const t0 = Date.now();
+  q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one' }, LEE, 'lee');
+  const a = openApproval(q, 1, 'sa');
+  const b = openApproval(q, 2, 'sb');
+  assert.strictEqual(q.focus.isRelated(1, []), false, 'nothing is related to a Deep session');
+  const ev = logged(() => q.queue.recompute(t0 + 25 * MIN));
+  const get = (id) => q.snapshot({ all: false }).items.find((i) => i.id === id);
+  for (const id of [a.id, b.id]) {
+    const it = get(id);
+    assert.strictEqual(it.severity, 'needs-you', 'age does not escalate during Deep');
+    assert.strictEqual(it.parked, true, 'would-have-escalated items are parked');
+    assert.strictEqual(it.notify, false);
+  }
+  assert.ok(!ev.some((e) => e.type === 'attention.escalate'), 'no escalate during Deep');
+  assert.strictEqual(q.focusState().quiet_count, 2, 'quietCount: every open needs-you item, parked or not');
+
+  const ev2 = logged(() => q.queue.setWake(b.id, true, t0 + 26 * MIN, LEE));
+  const woke = get(b.id);
+  assert.strictEqual(woke.severity, 'blocking');
+  assert.strictEqual(woke.parked, false);
+  assert.strictEqual(woke.notify, true);
+  const esc = ev2.find((e) => e.type === 'attention.escalate');
+  assert.ok(esc, 'the woken item escalates');
+  assert.strictEqual(esc.data.reason, 'wake');
+  assert.strictEqual(get(a.id).severity, 'needs-you');
+  assert.strictEqual(q.focusState().quiet_count, 2);
+
+  // Deep ends: the parked item comes back and escalates by age as before.
+  q.deepEnd({ reason: 'esc' }, LEE);
+  q.queue.recompute(t0 + 27 * MIN);
+  assert.strictEqual(get(a.id).parked, false);
+  assert.strictEqual(get(a.id).severity, 'blocking');
+});
+
+test('Deep: NudgeBudget denies every claim (blocking too) with reason deep; cockpitBus tracks the Deep session', () => {
+  const { NudgeBudget, cockpitBus } = require(path.join(dist, 'cockpit', 'cockpit-bus.js'));
+  const nb = new NudgeBudget();
+  const req = { item_ref: 'pty:1', state_key: 'a', source: 'tabs', blocking: true };
+  assert.deepStrictEqual(nb.claim(req, true, true), { granted: false, reason: 'deep' });
+  assert.strictEqual(nb.claim(req, false, false).granted, true);
+  const { q } = setup();
+  q.deepStart({ workspace: '/work/api', exploration_id: null }, LEE, 'lee');
+  assert.strictEqual(cockpitBus.isDeepActive(), true);
+  assert.strictEqual(cockpitBus.claimNudge({ item_ref: 'pty:9', state_key: 'x', source: 'tabs', blocking: true }).reason, 'deep');
+  q.deepEnd({ reason: 'esc' }, LEE);
+  assert.strictEqual(cockpitBus.isDeepActive(), false);
+});
+
+test('Deep: a device POST /focus/start is Go deep with exploration_id null; /focus/stop ends it deep_end, unrated', () => {
+  const unreg = withWindow([]);
+  try {
+    const { registerQueueRoutes } = require(path.join(dist, 'copilot', 'queue-routes.js'));
+    const { getCopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
+    const pty = new FakePty();
+    pty.add(1);
+    const app = fakeApp();
+    registerQueueRoutes(app, { ptyManager: pty });
+    const q = getCopilotQueue(pty);
+    const dev = { kind: 'device', device_id: 'dev1', name: 'Aeronaut', device_kind: 'aeronaut', ip: '192.168.1.5' };
+    // Only paired devices are people over HTTP.
+    assert.strictEqual(call(app.routes['POST /focus/start'], { body: {}, principal: { kind: 'shared', loopback: true, ip: '127.0.0.1' } }).statusCode, 403);
+    const ev = logged(() => {
+      const r = call(app.routes['POST /focus/start'], { body: { item: { kind: 'agent', pty_id: 1, window_id: null, label: 'x' } }, principal: dev });
+      assert.strictEqual(r.statusCode, 200);
+      assert.strictEqual(r.body.data.source, 'deep');
+      assert.deepStrictEqual(r.body.data.item, { kind: 'exploration', workspace: '/work/api', exploration_id: null, title: 'Deep' });
+    });
+    const start = ev.find((e) => e.type === 'focus.start');
+    assert.strictEqual(start.data.surface, 'device');
+    assert.deepStrictEqual(start.actor, DEV_ACTOR);
+
+    const snap = call(app.routes['GET /attention'], { principal: dev }).body.data;
+    assert.strictEqual(snap.focus.active, true, 'devices still see focus active during Deep');
+    assert.strictEqual(snap.mode, 'cockpit');
+    assert.deepStrictEqual(snap.deep, { exploration_id: null, title: 'Deep' });
+    q.onBusEvent({ type: 'cockpit.mode', window_id: 1, data: { from: 'cockpit', to: 'deep', reason: 'deep_start' }, ts: new Date().toISOString() });
+    assert.strictEqual(q.snapshot({ compact: true }).mode, 'deep');
+
+    // Go deep from the renderer while the device session has nothing open picks the exploration.
+    q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one', title: 'One' }, LEE, 'lee', 1);
+    // A second device Go deep keeps the open exploration.
+    call(app.routes['POST /deep/start'], { body: { exploration_id: null }, principal: dev });
+    assert.strictEqual(q.focusState().deep.exploration_id, 'exp-one');
+
+    const ev2 = logged(() => assert.strictEqual(call(app.routes['POST /focus/stop'], { principal: dev }).statusCode, 200));
+    const end = ev2.find((e) => e.type === 'focus.end');
+    assert.strictEqual(end.data.reason, 'deep_end');
+    assert.strictEqual(end.data.deep_rating, null);
+    const after = q.snapshot({ compact: true });
+    assert.strictEqual(after.focus.active, false);
+    assert.strictEqual(after.deep, null);
+
+    assert.strictEqual(call(app.routes['POST /deep/end'], { body: { reason: 'esc' }, principal: dev }).statusCode, 200);
+  } finally {
+    unreg();
+  }
+});
+
+test('Deep: ingest accepts deep.answer and opener.shown; deep.answer is forwarded to every window (ids only)', () => {
+  const sentA = [];
+  const sentB = [];
+  const mk = (id, sink) => ({ id, isDestroyed: () => false, webContents: { send: (ch, p) => sink.push([ch, p]) } });
+  windowRegistry.register(mk(11, sentA), '/work/api', { getContext: () => ({ workspace: '/work/api', tabs: [], panels: {}, focusedPanel: 'center' }) });
+  windowRegistry.register(mk(12, sentB), '/work/web', { getContext: () => ({ workspace: '/work/web', tabs: [], panels: {}, focusedPanel: 'center' }) });
+  try {
+    const { registerCoreRoutes, deepAnswerEvent } = require(path.join(dist, 'copilot', 'core-routes.js'));
+    const app = fakeApp();
+    registerCoreRoutes(app, { getHesterPort: () => 9000, getPairingName: () => 'Lee', isPairingEnabled: () => false, log() {} });
+    const ingest = app.routes['POST /events/ingest'];
+    const answer = { workspace: '/work/api', exploration_id: 'exp-one', answer_id: 'ans-12345678', status: 'done' };
+    const ev = logged(() => {
+      const r = call(ingest, {
+        body: {
+          events: [
+            { type: 'deep.answer', workspace: '/work/api', data: answer },
+            { type: 'opener.shown', workspace: '/work/api', data: { workspace: '/work/api', pick_up: true, surfaces: ['blank', 'quiet'] } },
+            { type: 'deep.input', data: {} },
+          ],
+        },
+      });
+      assert.deepStrictEqual(r.body.data.accepted, 2);
+      assert.deepStrictEqual(r.body.data.rejected.map((x) => x.index), [2]);
+    });
+    assert.deepStrictEqual(ev.map((e) => e.type), ['deep.answer', 'opener.shown']);
+    assert.ok(ev.every((e) => 'focus_session_id' in e.ctx));
+    for (const sink of [sentA, sentB]) {
+      assert.deepStrictEqual(sink, [['deep:answer', answer]]);
+    }
+    // No attention item is raised.
+    const { q } = setup();
+    assert.strictEqual(q.snapshot({ all: true }).items.length, 0);
+    // Malformed: not forwarded.
+    call(ingest, { body: { events: [{ type: 'deep.answer', data: { ...answer, status: 'mystery' } }] } });
+    assert.strictEqual(sentA.length, 1);
+    assert.strictEqual(deepAnswerEvent({ exploration_id: 'e', answer_id: 'a', status: 'error' }, '/ws').workspace, '/ws');
+    assert.strictEqual(deepAnswerEvent({ exploration_id: 'e', answer_id: 'a', status: 'error' }), null);
+  } finally {
+    windowRegistry.unregister(11);
+    windowRegistry.unregister(12);
+  }
+});
+
+test('Deep: quitApp ends a Deep session with the given reason, then quits', () => {
+  const { q } = setup();
+  let quits = 0;
+  electronStub.app.quit = () => quits++;
+  q.deepStart({ workspace: '/work/api', exploration_id: 'exp-one' }, LEE, 'lee');
+  const ev = logged(() => q.quitApp('bogus'));
+  assert.strictEqual(ev.find((e) => e.type === 'focus.end').data.reason, 'quit');
+  assert.strictEqual(quits, 1);
+  q.quitApp('quit');
+  assert.strictEqual(quits, 2, 'no session: just quits');
+  delete electronStub.app.quit;
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

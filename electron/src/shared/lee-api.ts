@@ -13,7 +13,7 @@
  */
 
 import type { LeeContext, TUIDefinition, AgentDefinition, MachineConfig } from './context';
-import type { CopilotAPI } from './copilot';
+import type { CopilotAPI, DeepAPI, FocusEndReason } from './copilot';
 import type { CockpitAPI } from './cockpit';
 
 export interface OpenDialogResult {
@@ -133,6 +133,11 @@ export interface LeeAPI {
   };
   app: {
     getWorkspace: () => Promise<string>;
+    /**
+     * Deep D1 §2.4: quit Lee, first ending any Deep session with `reason`
+     * (default 'quit'). The ending ritual has normally sent deepEnd already.
+     */
+    quit: (reason?: FocusEndReason) => void;
   };
   dialog: {
     showOpenDialog: (options: { properties?: string[]; title?: string }) => Promise<OpenDialogResult>;
@@ -293,6 +298,8 @@ export interface LeeAPI {
   copilot: CopilotAPI;
   /** Copilot v2 Cockpit (docs/plans/2026-09-25-copilot-v2-contracts.md). */
   cockpit: CockpitAPI;
+  /** Deep D1 (docs/plans/2026-09-26-deep-d1-contracts.md §6). */
+  deep: DeepAPI;
 }
 
 /** Re-exported so components can annotate TUI lists without a deep import. */

@@ -635,7 +635,11 @@ function setupApplicationMenu(): void {
         },
         { role: 'toggleDevTools' as const },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const, accelerator: 'CmdOrCtrl+Shift+0' },
+        // Menu only (Deep D1 §1.3): an empty accelerator stops Electron adding
+        // the role's default Cmd+0, which is the mode switcher, and Cmd+Shift+0
+        // is Deep. registerAccelerator: false in case a default is shown anyway.
+        // Zoom In / Out keep their chords.
+        { role: 'resetZoom' as const, accelerator: '', registerAccelerator: false },
         { role: 'zoomIn' as const },
         { role: 'zoomOut' as const },
         { type: 'separator' as const },

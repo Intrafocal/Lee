@@ -810,6 +810,58 @@ async function main() {
     assert.strictEqual(validRendererEvent({ type: 'agent.prompt', data: {} }), null);
   });
 
+  await check('renderer events (Deep D1): new modes, reasons and deep.* types; legacy workbench rewritten', () => {
+    // Legacy 'workbench' is logged as 'manual'.
+    assert.deepStrictEqual(validRendererEvent({ type: 'cockpit.mode', data: { from: 'workbench', to: 'cockpit', reason: 'manual' } }).data,
+      { from: 'manual', to: 'cockpit', reason: 'manual' });
+    for (const reason of ['deep_start', 'deep_end', 'hop', 'switcher', 'focus_start', 'focus_end']) {
+      assert.ok(validRendererEvent({ type: 'cockpit.mode', data: { from: 'cockpit', to: 'deep', reason } }), reason);
+    }
+    assert.strictEqual(validRendererEvent({ type: 'cockpit.mode', data: { from: 'cockpit', to: 'deep', reason: 'nope' } }), null);
+    assert.strictEqual(validRendererEvent({ type: 'cockpit.mode', data: { from: 'cockpit', to: 'board', reason: 'hop' } }), null);
+
+    const input = { exploration_id: 'exp-abc', view: 'page', keys: 12, clicks: 1, wheels: 0, span_ms: 60000 };
+    assert.deepStrictEqual(validRendererEvent({ type: 'deep.input', data: { ...input, text: 'secret page words' } }),
+      { type: 'deep.input', data: input }, 'extra fields (content) are dropped');
+    assert.strictEqual(validRendererEvent({ type: 'deep.input', data: { ...input, keys: -1 } }), null);
+    assert.strictEqual(validRendererEvent({ type: 'deep.input', data: { ...input, view: 'board' } }), null);
+    assert.strictEqual(validRendererEvent({ type: 'deep.input', data: { ...input, exploration_id: '../x' } }), null);
+    assert.deepStrictEqual(validRendererEvent({ type: 'deep.view', data: { exploration_id: 'exp-abc', view: 'page' } }).data,
+      { exploration_id: 'exp-abc', view: 'page' });
+    for (const action of ['capture', 'keep', 'ask', 'explore', 'insert', 'follow_up', 'dismiss']) {
+      assert.ok(validRendererEvent({ type: 'deep.action', data: { action, exploration_id: 'exp-abc', chars: 40 } }), action);
+    }
+    assert.deepStrictEqual(validRendererEvent({ type: 'deep.action', data: { action: 'ask', exploration_id: 'exp-abc', question: 'why?' } }).data,
+      { action: 'ask', exploration_id: 'exp-abc' });
+    assert.strictEqual(validRendererEvent({ type: 'deep.action', data: { action: 'pin', exploration_id: 'exp-abc' } }), null);
+    assert.ok(validRendererEvent({ type: 'deep.affordance', data: { pattern: 'url', outcome: 'ignored' } }));
+    assert.strictEqual(validRendererEvent({ type: 'deep.affordance', data: { pattern: 'todo', outcome: 'accepted' } }), null);
+    assert.deepStrictEqual(validRendererEvent({ type: 'deep.switcher', data: { from: 'workbench', to: 'deep', via: 'tap' } }).data,
+      { from: 'manual', to: 'deep', via: 'tap' });
+    assert.strictEqual(validRendererEvent({ type: 'deep.switcher', data: { from: 'cockpit', to: 'deep', via: 'voice' } }), null);
+    assert.strictEqual(validRendererEvent({ type: 'deep.answer', data: {} }), null, 'deep.answer comes from Hester, not the renderer');
+  });
+
+  await check('shortcuts (Deep D1 §1.3): mode chords resolve; cockpit_toggle override maps to mode_switcher; Reset Zoom has no chord', () => {
+    const { SHORTCUTS, resolveChord, menuAccelerator } = require(path.join(dist, '..', 'shared', 'shortcuts.js'));
+    const expect = { mode_switcher: 'meta+0', mode_deep: 'meta+shift+0', mode_manual: 'meta+alt+0', deep_view_page: 'meta+alt+1', deep_actions: 'meta+.' };
+    for (const [action, chord] of Object.entries(expect)) {
+      assert.strictEqual(resolveChord(action, null), chord, action);
+      assert.strictEqual(SHORTCUTS.find((s) => s.action === action).scope, 'renderer', action);
+    }
+    assert.ok(!SHORTCUTS.some((s) => s.action === 'cockpit_toggle'), 'cockpit_toggle is gone');
+    assert.strictEqual(resolveChord('mode_switcher', { cockpit_toggle: 'meta+9' }), 'meta+9');
+    assert.strictEqual(resolveChord('mode_switcher', { cockpit_toggle: 'meta+9', mode_switcher: 'meta+8' }), 'meta+8', 'the new name wins');
+    // No two actions share a default chord.
+    const chords = SHORTCUTS.filter((s) => !s.documentationOnly).map((s) => s.defaultChord);
+    assert.strictEqual(new Set(chords).size, chords.length, 'duplicate default chord');
+    assert.strictEqual(menuAccelerator('resetZoom'), undefined);
+    const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
+    const resetZoom = mainSrc.split('\n').find((l) => l.includes("role: 'resetZoom'"));
+    assert.ok(resetZoom && /accelerator: ''/.test(resetZoom) && /registerAccelerator: false/.test(resetZoom), 'resetZoom menu item has no chord');
+    assert.ok(!mainSrc.includes("'CmdOrCtrl+Shift+0'"));
+  });
+
   // -------------------------------------------------------------------------
   const closedPort = await new Promise((resolve) => {
     const s = net.createServer();

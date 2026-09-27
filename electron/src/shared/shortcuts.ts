@@ -81,7 +81,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'files', defaultChord: 'meta+shift+e', scope: 'renderer', group: 'Tools', description: 'File tree' },
   { action: 'hester', defaultChord: 'meta+shift+h', scope: 'renderer', group: 'Tools', description: 'Hester agent tab' },
   { action: 'claude', defaultChord: 'meta+shift+c', scope: 'renderer', group: 'Tools', description: 'Claude Code agent tab' },
-  { action: 'cockpit_toggle', defaultChord: 'meta+0', scope: 'renderer', group: 'View', description: 'Switch between the Cockpit and the Workbench' },
   { action: 'pi', defaultChord: 'meta+shift+i', scope: 'renderer', group: 'Tools', description: 'Pi agent tab' },
   // Moved off meta+shift+o, which the File > Open Folder... menu accelerator owns.
   { action: 'devops', defaultChord: 'meta+shift+j', scope: 'renderer', group: 'Tools', description: 'DevOps dashboard' },
@@ -96,6 +95,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'workstream', defaultChord: 'meta+shift+w', scope: 'renderer', group: 'Tools', description: 'Workstream picker' },
 
   // --- View ---
+  // Modes (Deep D1 §1.3). mode_switcher replaced cockpit_toggle; resolveChord
+  // still honours a `keybindings:` entry for the old name.
+  { action: 'mode_switcher', defaultChord: 'meta+0', scope: 'renderer', group: 'View', description: 'Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual' },
+  { action: 'mode_deep', defaultChord: 'meta+shift+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Deep' },
+  { action: 'mode_manual', defaultChord: 'meta+alt+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Manual' },
+  { action: 'deep_view_page', defaultChord: 'meta+alt+1', scope: 'renderer', group: 'View', description: "Deep: the exploration's Page" },
   { action: 'force_reload', defaultChord: 'meta+shift+r', scope: 'menu', group: 'View', description: 'Reload the Lee UI, discarding caches (prompts if terminals are open)' },
   {
     action: 'scroll_bottom',
@@ -109,7 +114,16 @@ export const SHORTCUTS: ShortcutDef[] = [
   // --- Editor (implemented inside EditorPanel / CodeMirror, listed for docs) ---
   { action: 'editor_markdown_preview', defaultChord: 'meta+e', scope: 'renderer', documentationOnly: true, group: 'Editor', description: 'Toggle markdown preview (markdown files only; handled inside the editor panel)' },
   { action: 'editor_find', defaultChord: 'meta+f', scope: 'renderer', documentationOnly: true, group: 'Editor', description: "Find in file (CodeMirror's search keymap)" },
+  { action: 'deep_actions', defaultChord: 'meta+.', scope: 'renderer', group: 'Editor', description: "Deep only: the selection's action row (Capture, Keep, Ask, Explore), or the visible typing affordance" },
 ];
+
+/**
+ * Renamed actions: a `keybindings:` entry under the old name still applies to
+ * the new action, unless the new name has its own entry.
+ */
+export const LEGACY_ACTIONS: Record<string, string> = {
+  mode_switcher: 'cockpit_toggle',
+};
 
 /**
  * System-wide hotkey to bring Lee forward from any other app.
@@ -145,7 +159,9 @@ export function resolveChord(
   action: string,
   keybindings?: Record<string, string> | null,
 ): string {
-  const override = keybindings?.[action];
+  const legacy = LEGACY_ACTIONS[action];
+  const own = keybindings?.[action];
+  const override = typeof own === 'string' && own.trim() ? own : legacy ? keybindings?.[legacy] : undefined;
   const def = SHORTCUTS.find((s) => s.action === action);
   if (typeof override === 'string' && override.trim()) return normalizeChord(override);
   return def ? def.defaultChord : '';

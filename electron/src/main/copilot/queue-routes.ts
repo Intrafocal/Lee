@@ -2,7 +2,8 @@
  * HTTP routes for the attention queue, focus, handoff and the Claude Code
  * hook relay on Lee main :9001.
  *
- * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §4.4, §5.6, §6.4.
+ * Contract: docs/plans/2026-09-25-copilot-v0-v1-contracts.md §4.4, §5.6, §6.4;
+ * Deep sessions: docs/plans/2026-09-26-deep-d1-contracts.md §2.1.
  */
 
 import * as crypto from 'crypto';
@@ -139,6 +140,8 @@ export function registerQueueRoutes(app: Application, deps: { ptyManager: PTYMan
     res.json({ success: true, data: q().focusState() });
   });
 
+  // Deep D1 §2.1: a device's focus start is Go deep with nothing open; stop
+  // ends a Deep session with reason 'deep_end' and no rating.
   app.post('/focus/start', (req: Request, res: Response) => {
     const actor = requireHuman(res);
     if (!actor) return;
@@ -149,6 +152,19 @@ export function registerQueueRoutes(app: Application, deps: { ptyManager: PTYMan
     const actor = requireHuman(res);
     if (!actor) return;
     send(res, q().focusStop(actor));
+  });
+
+  // Deep D1 §2.1. The renderer uses IPC; over HTTP only paired devices are people.
+  app.post('/deep/start', (req: Request, res: Response) => {
+    const actor = requireHuman(res);
+    if (!actor) return;
+    send(res, q().deepStart(req.body ?? null, actor, 'device'));
+  });
+
+  app.post('/deep/end', (req: Request, res: Response) => {
+    const actor = requireHuman(res);
+    if (!actor) return;
+    send(res, q().deepEnd(req.body ?? null, actor));
   });
 
   app.get('/away', (_req: Request, res: Response) => {
