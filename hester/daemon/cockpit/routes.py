@@ -403,6 +403,8 @@ def create_cockpit_router() -> APIRouter:
             ctx = context_for()
             await deep_ask.get_runner().ensure_recovered(ctx)
             store = ctx.explorations()
+            async with ctx.lock:
+                await asyncio.to_thread(store.backfill_page, exp_id)
             exp = store.require(exp_id)
             body = store.body(exp_id)
             data = to_api_with_conversations(exp, body)
@@ -456,6 +458,7 @@ def create_cockpit_router() -> APIRouter:
             ctx = context_for(body.pop("workspace", None))
             store = ctx.explorations()
             async with ctx.lock:
+                store.backfill_page(exp_id)
                 exp = store.touch(exp_id)
             opened = await open_session(store, exp_id)
         except BadRequest as e:

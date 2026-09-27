@@ -281,7 +281,9 @@ def read_page_text(store: ExplorationStore, exp_id: str) -> str:
 
 
 def read_page(store: ExplorationStore, exp_id: str) -> Dict[str, Any]:
+    """GET /page (under the workspace lock): an empty Page with a seed is filled from it, once."""
     _dir(store, exp_id)
+    store.backfill_page(exp_id)
     text = read_page_text(store, exp_id)
     return {"text": text, "version": page_version(text)}
 

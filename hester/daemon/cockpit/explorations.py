@@ -78,7 +78,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
-from .plain import plain_title
+from .plain import _clip_words, looks_like_code, plain_title, strip_markdown
 from .tasks import atomic_write, iso_s
 
 logger = logging.getLogger("hester.daemon.cockpit.explorations")
@@ -104,7 +104,10 @@ FIELDS = (
     "created_at", "updated_at", "last_touched_at", "archived_at", "version",
     "nodes", "active_node", "serves", "promoted", "knowledge_path", "links", "questions",
     "purpose",
+    # the Page was given, or filled from the seed (create or the one-time backfill); not in the API
+    "page_seeded",
 )
+INTERNAL_FIELDS = ("page_seeded",)
 # Derived on load from the exploration's directory (never written to frontmatter).
 DEEP_FIELDS = (
     "page_chars", "page_updated_at", "answers_unread", "answers_pending", "open_questions", "last_session",
@@ -113,6 +116,7 @@ EXPLORATION_FILE = "exploration.md"
 PAGE_FILE = "page.md"
 LINK_RELS = ("child", "parent")
 MAX_TITLE = 200
+SEED_TITLE_CHARS = 60
 MAX_LABEL = 200
 MAX_SEED = 8000
 MAX_TURN_TEXT = 8000
@@ -161,6 +165,28 @@ def exploration_id_from_session(session_id: Any) -> Optional[str]:
         return None
     exp_id = session_id[len(SESSION_PREFIX):]
     return exp_id if EXP_ID_RE.match(exp_id) else None
+
+
+def seed_title(seed: Any, limit: int = SEED_TITLE_CHARS) -> str:
+    """
+    A title from a seed: its first line when it has several, else its first
+    sentence; cut at a word to ``limit`` chars, with '…' only when cut.
+    """
+    lines = [l for l in strip_markdown(seed) if l and not looks_like_code(l) and re.search(r"[A-Za-z0-9]", l)]
+    if not lines:
+        return ""
+    line = lines[0]
+    if len(lines) == 1:
+        m = re.match(r"^(.+?[.!?])(?=\s+\S)", line)
+        if m:
+            line = m.group(1)
+    return _clip_words(line.strip(), limit)
+
+
+def seed_page(seed: Any) -> str:
+    """The Page's opening text from a seed: verbatim, then a blank line."""
+    text = str(seed or "").strip("\n")
+    return f"{text}\n\n" if text.strip() else ""
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -475,6 +501,7 @@ class ExplorationStore:
         exp["links"] = _norm_links(meta.get("links"))
         exp["questions"] = _norm_questions(meta.get("questions"))
         exp["purpose"] = meta.get("purpose") if meta.get("purpose") in PURPOSES else None
+        exp["page_seeded"] = meta.get("page_seeded") is True
         if deep and path.name == EXPLORATION_FILE:
             from . import deep as deep_files
 
@@ -599,7 +626,7 @@ class ExplorationStore:
         title = body.get("title")
         if title is not None and not isinstance(title, str):
             raise ExplorationError("title must be a string")
-        title = _clip(title, MAX_TITLE) if title and title.strip() else (plain_title(seed, 80) or "")
+        title = _clip(title, MAX_TITLE) if title and title.strip() else (seed_title(seed) or "")
         if not title:
             raise ExplorationError("title or seed is required")
         origin = body.get("origin") or {"kind": "cockpit", "ref": None}
@@ -639,8 +666,13 @@ class ExplorationStore:
             "links": _norm_links(body.get("links")),
             "questions": [],
             "purpose": purpose,
+            "page_seeded": True,
         })
         exp["nodes"] = [root_node(exp)]
+        if page is None:
+            # An exploration from existing text (Someday, Explore, a task) opens on it.
+            raw = body.get("seed") or ""
+            page = seed_page(raw) if len(raw.encode("utf-8")) <= MAX_PAGE_BYTES else seed_page(seed)
         text = f"# {title}\n\n## Seed\n\n{seed or '(none)'}\n\n{LOG_HEADING}\n"
         self._save(exp, text, now)
         self._ensure_page(exp_id, page or "")
@@ -710,6 +742,36 @@ class ExplorationStore:
         if exp["status"] == "archived":
             exp["status"], exp["archived_at"] = "active", None
         return self._save(exp, text, now)
+
+    def backfill_page(self, exp_id: str, now: Optional[datetime] = None) -> bool:
+        """
+        Once per exploration: an empty (or whitespace) ``page.md`` with a
+        non-empty seed gets the seed. Never overwrites text. Callers hold the
+        workspace lock. True when the Page was written.
+        """
+        exp, body = self._open(exp_id)
+        if exp.get("page_seeded"):
+            return False
+        text = seed_page(exp.get("seed"))
+        if not text:
+            return False
+        page = self.page_path(exp_id)
+        try:
+            current = page.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current = ""
+        except (OSError, UnicodeDecodeError):
+            return False
+        if current.strip():
+            return False
+        atomic_write(page, text)
+        try:
+            os.chmod(page, 0o600)
+        except OSError:
+            pass
+        exp["page_seeded"] = True
+        self._save(exp, body, now or utc_now())
+        return True
 
     def touch(self, exp_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
@@ -1149,7 +1211,7 @@ def render_outline(exp: Dict[str, Any], node_ids: Optional[List[str]] = None) ->
 
 
 def to_api(exp: Dict[str, Any]) -> Dict[str, Any]:
-    data = {k: copy.deepcopy(exp.get(k)) for k in FIELDS}
+    data = {k: copy.deepcopy(exp.get(k)) for k in FIELDS if k not in INTERNAL_FIELDS}
     data["links"] = data.get("links") or []
     data["questions"] = data.get("questions") or []
     for k in DEEP_FIELDS:
