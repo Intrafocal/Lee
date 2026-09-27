@@ -1,6 +1,6 @@
-# The Desktop: a direction for Deep's next phase
+# The Desk: a direction for Deep's next phase
 
-> **Status:** Direction (not yet a spec), 2026-09-27. Captures decisions made in conversation after the first real Deep sessions; D2 will be specified from this.
+> **Status:** Direction (not yet a spec), 2026-09-27. Named **Desk** (not Desktop) on 2026-09-27: the modes are Desk (deep work), Cockpit (orchestration) and Manual (hands on). Captures decisions made in conversation after the first real Deep sessions; D2 will be specified from this.
 > **Replaces, when specified:** 14 §4's four separate views (Page, Board, Browse, Workbench) and the "exploration" as Deep's unit.
 > **Origin:** the Deep Canvas Page (`.hester/explore/exp-30e56c7e`, 2026-09-27): "Canvas becomes the container for all Deep work… These all get arranged visually on the canvas…"
 
@@ -15,14 +15,14 @@
 - a list item;
 - a special case: the Goals Page and hand-off origins.
 
-That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read alike and do different things. Deep work also isn't only writing. It's writing, looking, researching and building, side by side, so the Desktop gives each of those its own kind of card on one surface.
+That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read alike and do different things. Deep work also isn't only writing. It's writing, looking, researching and building, side by side, so the Desk gives each of those its own kind of card on one surface.
 
-## 2. The Desktop
+## 2. The Desk
 
 *Decided 2026-09-27.*
 
-- **One Desktop per workspace.** Deep mode is *being at the Desktop*.
-- **Areas** are named regions of the one Desktop surface: zoom out to see them all, zoom in to work in one. They replace explorations as the way thinking is grouped by topic.
+- **One Desk per workspace.** Deep mode is *being at the Desk*.
+- **Areas** are named regions of the one Desk surface: zoom out to see them all, zoom in to work in one. They replace explorations as the way thinking is grouped by topic.
 - **Drawers** hold whole Areas you've put away (archived or parked). Cards always travel with their Area. You can take an Area back out.
 - **Goals** are pinned to every Area: a small Goals card fixed in a corner of whichever Area you're in. Zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything. Revisit when there's a reason.
@@ -46,7 +46,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 
 *Decided 2026-09-27.*
 
-- **A Deep session belongs to the Desktop**, not to one card or Area: it's time at the Desktop across whatever cards you touch.
+- **A Deep session belongs to the Desk**, not to one card or Area: it's time at the Desk across whatever cards you touch.
 - The ending ritual lists the cards you touched.
 - "Pick up where you left off" is your last card and the last sentence you wrote in it.
 
@@ -54,12 +54,12 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 
 | Today | Becomes |
 |---|---|
-| The folder (`.hester/explore/<id>/`) | `.hester/desktop/`: `desktop.json` (Areas, card positions, Drawers) plus one folder per card (for example `pages/<id>/page.md`, its answers, references, questions) |
+| The folder (`.hester/explore/<id>/`) | `.hester/desk/`: `desk.json` (Areas, card positions, Drawers) plus one folder per card (for example `pages/<id>/page.md`, its answers, references, questions) |
 | A topic | An **Area** |
-| The session unit | The Desktop (§4) |
+| The session unit | The Desk (§4) |
 | The v3 node tree and "Dive in" Hester chat | **Retired** (*decided 2026-09-27*); old ones aren't kept. Spikes became hand-offs, evidence became hand-off results, decisions became Page sections |
 | The verb "Explore" | **New Page from this** (a Page placed next to the one you're in); Someday triage "Start a Page"; tasks "Think it through on a Page" |
-| Library › Explorations | Library › the Desktop's cards by Area, and Drawers |
+| Library › Explorations | Library › the Desk's cards by Area, and Drawers |
 | Hand-off origin `exp#answer` | `page#answer` |
 | The Goals Page (`purpose: goals`) | The pinned Goals card (§2) |
 | Carry on devices | Your last card and its stopped-at line |
@@ -70,8 +70,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 
 - **The action row's vocabulary** (Capture vs Explore vs Keep), to settle after the current Deep round ships. The working proposal: drop Capture from the Page row; "New Page from this"; "Keep as reference".
 - **Hand-off results:** do they appear as cards next to the Page that asked, or stay in the Page's margin and in Work?
-- **Opening Deep:** the overview of the whole Desktop, or zoomed into your last card? Does typing on an empty region always start a Page?
+- **Opening Deep:** the overview of the whole Desk, or zoomed into your last card? Does typing on an empty region always start a Page?
 - **Workbook:** which languages (the project's Python, JS/TS, shell, SQL through the configured `sql:` connections)? Can its output become a Board card?
 - **Browser and Hester:** only watching (pages as context for Asks), or also acting (navigating, filling in forms) when asked?
-- **Devices:** a read-only view of the Desktop on the phone or T-Deck, or Carry only?
-- **"Desktop"** also means the macOS desktop. Fine inside Lee, but worth watching in docs and speech.
+- **Devices:** a read-only view of the Desk on the phone or T-Deck, or Carry only?
