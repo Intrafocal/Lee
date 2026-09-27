@@ -3,14 +3,19 @@
  * chord, nothing required:
  *
  * 1. Where did you stop? (pre-filled with the last sentence written)
- * 2. Open questions: this session's marked `?` lines and unread Asks,
- *    checked ("keep open") by default. Unchecked questions are closed;
- *    unchecked Asks are marked read.
- * 3. How deep was that? Deep / mixed / shallow, none selected.
- * 4. Anything for agents while you're away? "Hand off…" (the v1 dialog).
- * 5. Close Lee (the default, Enter) or Stay open. While Asks are still
- *    running, a line says so and Stay open becomes the default: closing Lee
- *    stops the daemon, and Enter must never quietly stop work.
+ * 2. Open questions: this session's marked `?` lines, checked ("keep
+ *    open") by default. Unchecked questions are closed.
+ * 3. This session (Deep next R6, replacing D1's hand-off step):
+ *    - Asked: this session's Asks with their state; unread and pending ones
+ *      are checked (kept open), and an unchecked unread one is marked read;
+ *    - Handed off: each hand-off with its kind and state;
+ *    - Still open on the Page: unanswered question lines and
+ *      requirement-style sections, each one click from Ask or Hand off.
+ *    The v1 hand-off dialog lives in Work's ⋯ menu now.
+ * 4. How deep was that? Deep / mixed / shallow, none selected.
+ * 5. Close Lee (the default, Enter) or Stay open. While Asks or hand-offs
+ *    are still running, a line says so and Stay open becomes the default:
+ *    closing Lee stops them, and Enter must never quietly stop work.
  *
  * Either button writes the SessionRecord, ends the Deep session and returns
  * this window to the Cockpit; Close Lee then quits. Esc ends the session
@@ -27,11 +32,19 @@ import ReactDOM from 'react-dom';
 import type { DepthRating } from '../../../shared/cockpit';
 import type { CopilotAPI, FocusState } from '../../../shared/copilot';
 import { cockpitModeStore } from '../cockpit/cockpitMode';
-import { HandoffDialog } from '../copilot/HandoffDialog';
 import { Btn } from '../cockpit/ui';
-import { patchAnswer, patchQuestion, postSession } from '../../lib/hesterDeep';
+import {
+  handoffKindLabel,
+  patchAnswer,
+  patchQuestion,
+  postSession,
+  type SessionAsk,
+  type SessionHandoff,
+  type StillOpen,
+} from '../../lib/hesterDeep';
 import { deepEnd, quitLee } from './deepBridge';
 import './deep.css';
+import './HandoffSheet.css';
 
 export interface RitualQuestion {
   id: string;
@@ -46,11 +59,24 @@ interface EndSessionSheetProps {
   prefill: string;
   questions: RitualQuestion[];
   focus: FocusState | null;
-  copilotApi: CopilotAPI | null;
+  /** Unused since the hand-off step moved to Work (kept so older callers still type). */
+  copilotApi?: CopilotAPI | null;
   /** Asks still queued or running; closing Lee stops them (they come back as Retry). */
   running?: number;
+  /** Hand-offs still launching, running or waiting; closing Lee stops their agents. */
+  runningHandoffs?: number;
+  /** R6 "This session": what was asked and handed off, and what's still open on the Page. */
+  session?: { asked: SessionAsk[]; handedOff: SessionHandoff[]; stillOpen: StillOpen[] };
+  /** Ask about a still-open item (its line, with its section). */
+  onAsk?: (item: StillOpen) => void;
+  /** Hand off a still-open item (opens the Hand off sheet over this one). */
+  onHandOff?: (item: StillOpen) => void;
+  /** Another sheet is open over this one: its keys aren't ours. */
+  suspended?: boolean;
   /** Called before anything is written, so the Page can flush its last save. */
   beforeEnd?: () => Promise<void>;
+  /** After the session record is written and the session ended (not on ×): the Page may clean up after itself. */
+  onEnded?: () => void;
   onClose: () => void;
 }
 
@@ -66,16 +92,26 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
   prefill,
   questions,
   focus,
-  copilotApi,
   running = 0,
+  runningHandoffs = 0,
+  session,
+  onAsk,
+  onHandOff,
+  suspended = false,
   beforeEnd,
+  onEnded,
   onClose,
 }) => {
-  const closeByDefault = running === 0;
+  const closeByDefault = running + runningHandoffs === 0;
+  const asked = session?.asked ?? [];
+  const handedOff = session?.handedOff ?? [];
+  const stillOpen = session?.stillOpen ?? [];
   const [stoppedAt, setStoppedAt] = useState(prefill);
   const [kept, setKept] = useState<Set<string>>(() => new Set(questions.map((q) => q.id)));
+  // Asks you marked resolved (the rest stay open); the list is live, so new Asks start open.
+  const [resolved, setResolved] = useState<Set<string>>(() => new Set());
   const [rating, setRating] = useState<DepthRating | null>(null);
-  const [handoff, setHandoff] = useState(false);
+  const [actedOn, setActedOn] = useState<Record<string, 'asked'>>({});
   const [busy, setBusy] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const edited = stoppedAt !== prefill;
@@ -98,7 +134,10 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
     const ended = new Date().toISOString();
     const stopped = reason === 'esc' && !edited ? null : stoppedAt.trim().slice(0, 1000) || null;
     const ritual = reason === 'ritual';
-    const keptIds = ritual ? questions.filter((q) => kept.has(q.id)).map((q) => q.id) : questions.map((q) => q.id);
+    const openAsks = asked.filter((a) => a.state === 'unread' || a.state === 'pending');
+    const keptIds = ritual
+      ? [...questions.filter((q) => kept.has(q.id)).map((q) => q.id), ...openAsks.filter((a) => !resolved.has(a.id)).map((a) => a.id)]
+      : [...questions.map((q) => q.id), ...openAsks.map((a) => a.id)];
     const writes: Array<Promise<unknown>> = [];
     if (explorationId) {
       writes.push(
@@ -117,11 +156,14 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           if (kept.has(q.id)) continue;
           writes.push(q.kind === 'question' ? patchQuestion(workspace, explorationId, q.id, 'closed') : patchAnswer(workspace, explorationId, q.id, { read: true }));
         }
+        // An Ask you marked resolved: read (a pending one is left to finish).
+        for (const a of asked) if (a.state === 'unread' && resolved.has(a.id)) writes.push(patchAnswer(workspace, explorationId, a.id, { read: true }));
       }
     }
     await Promise.allSettled(writes);
     await deepEnd(ritual ? { reason: 'ritual', rating, stopped_at_chars: stopped ? stopped.length : 0 } : { reason: 'esc', rating: null, ...(stopped ? { stopped_at_chars: stopped.length } : {}) });
     cockpitModeStore.set('cockpit', 'deep_end');
+    onEnded?.();
     onClose();
     if (close) quitLee();
   };
@@ -132,7 +174,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyRef.current = (e: KeyboardEvent) => {
-    if (handoff || e.isComposing) return;
+    if (suspended || e.isComposing) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -154,12 +196,20 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  // Back from Hand off…: focus returns to the sheet so the keys keep a home.
-  const hadHandoff = useRef(false);
+  // Back from the Hand off sheet: focus returns to this one so the keys keep a home.
+  const wasSuspended = useRef(false);
   useEffect(() => {
-    if (hadHandoff.current && !handoff) sheetRef.current?.focus({ preventScroll: true });
-    hadHandoff.current = handoff;
-  }, [handoff]);
+    if (wasSuspended.current && !suspended) sheetRef.current?.focus({ preventScroll: true });
+    wasSuspended.current = suspended;
+  }, [suspended]);
+
+  const toggleKept = (id: string, on: boolean) =>
+    setKept((s) => {
+      const n = new Set(s);
+      if (on) n.add(id);
+      else n.delete(id);
+      return n;
+    });
 
   return ReactDOM.createPortal(
     <div className="deep-sheet-scrim">
@@ -192,18 +242,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
             <div className="deep-sheet-questions">
               {questions.map((q) => (
                 <label key={q.id} className="deep-sheet-q">
-                  <input
-                    type="checkbox"
-                    checked={kept.has(q.id)}
-                    onChange={(e) =>
-                      setKept((s) => {
-                        const n = new Set(s);
-                        if (e.target.checked) n.add(q.id);
-                        else n.delete(q.id);
-                        return n;
-                      })
-                    }
-                  />
+                  <input type="checkbox" checked={kept.has(q.id)} onChange={(e) => toggleKept(q.id, e.target.checked)} />
                   <span className="deep-sheet-q-text">{q.text}</span>
                   {q.kind === 'answer' && <span className="deep-muted"> · unread answer</span>}
                 </label>
@@ -211,6 +250,86 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
             </div>
             <div className="deep-muted deep-sheet-note">Checked ones stay open.</div>
           </>
+        )}
+
+        <div className="deep-sheet-label">This session</div>
+        {asked.length === 0 && handedOff.length === 0 && stillOpen.length === 0 && (
+          <div className="deep-muted">Nothing asked or handed off, and nothing left open on the Page.</div>
+        )}
+        {asked.length > 0 && (
+          <div className="session-group" role="group" aria-label="Asked">
+            <div className="session-group-label">Asked</div>
+            {asked.map((a) => {
+              const open = a.state === 'unread' || a.state === 'pending';
+              return (
+                <label key={a.id} className="session-row" title={open ? 'Checked stays open; unchecked is resolved' : undefined}>
+                  {open ? (
+                    <input
+                      type="checkbox"
+                      checked={!resolved.has(a.id)}
+                      onChange={(e) =>
+                        setResolved((s) => {
+                          const n = new Set(s);
+                          if (e.target.checked) n.delete(a.id);
+                          else n.add(a.id);
+                          return n;
+                        })
+                      }
+                    />
+                  ) : (
+                    <span className="session-row-state">✓</span>
+                  )}
+                  <span className="session-row-text">{a.question}</span>
+                  <span className="session-row-state">{a.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {handedOff.length > 0 && (
+          <div className="session-group" role="group" aria-label="Handed off">
+            <div className="session-group-label">Handed off</div>
+            {handedOff.map((h) => (
+              <div key={h.id} className="session-row">
+                <span className="session-row-text">{h.question}</span>
+                <span className="session-row-state">
+                  {handoffKindLabel(h.kind)} · {h.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {stillOpen.length > 0 && (
+          <div className="session-group" role="group" aria-label="Still open on the Page">
+            <div className="session-group-label">Still open on the Page</div>
+            {stillOpen.map((o) => (
+              <div key={`${o.kind}:${o.text}`} className="session-row">
+                <span className={`session-row-text${o.kind === 'requirements' ? ' is-block' : ''}`}>{o.text}</span>
+                {actedOn[`${o.kind}:${o.text}`] ? (
+                  <span className="session-row-state">asked</span>
+                ) : (
+                  <span className="session-row-actions">
+                    {onAsk && (
+                      <Btn
+                        kind="quiet"
+                        onClick={() => {
+                          onAsk(o);
+                          setActedOn((m) => ({ ...m, [`${o.kind}:${o.text}`]: 'asked' }));
+                        }}
+                      >
+                        Ask
+                      </Btn>
+                    )}
+                    {onHandOff && (
+                      <Btn kind="quiet" onClick={() => onHandOff(o)}>
+                        Hand off
+                      </Btn>
+                    )}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         )}
 
         <div className="deep-sheet-label">How deep was that?</div>
@@ -228,14 +347,14 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           ))}
         </div>
 
-        <div className="deep-sheet-label">Anything for agents while you're away?</div>
-        <Btn kind="quiet" disabled={!copilotApi} onClick={() => setHandoff(true)}>
-          Hand off…
-        </Btn>
-
         {running > 0 && (
           <div className="deep-muted">
             {running} {running === 1 ? 'Ask' : 'Asks'} still running. Closing Lee stops {running === 1 ? 'it' : 'them'}; {running === 1 ? "it'll" : "they'll"} come back as Retry.
+          </div>
+        )}
+        {runningHandoffs > 0 && (
+          <div className="deep-muted">
+            {runningHandoffs} {runningHandoffs === 1 ? 'hand-off is' : 'hand-offs are'} still out with an agent. Closing Lee stops {runningHandoffs === 1 ? 'it' : 'them'}; {runningHandoffs === 1 ? "it'll" : "they'll"} come back as Retry.
           </div>
         )}
 
@@ -250,9 +369,6 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           </Btn>
         </div>
       </div>
-      {handoff && copilotApi && (
-        <HandoffDialog api={copilotApi} workspace={workspace} onClose={() => setHandoff(false)} onLaunched={() => setHandoff(false)} />
-      )}
     </div>,
     document.body,
   );
