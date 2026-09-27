@@ -85,27 +85,32 @@ class _AgentScreenState extends ConsumerState<AgentScreen> {
   }
 
   /// Fetches the full item text, or the agent's full last message, once per
-  /// version when the compact one looks clipped.
+  /// version when the compact one looks clipped. A new item or message drops
+  /// the text fetched for the old one, so it never shows under the new one.
   void _maybeFetchFull(AttentionItem? item, AgentSummary? agent) {
     final notifier = ref.read(attentionProvider.notifier);
-    if (item != null && item.text.isNotEmpty) {
-      final key = 'item:${item.id}:${item.version}';
-      if (_fullTextKey == key || !looksClipped(item.text)) return;
-      _fullTextKey = key;
-      unawaited(notifier.fetchFullItem(item).then((full) {
-        if (mounted && full != null && _fullTextKey == key) setState(() => _fullText = full.text);
-      }));
-      return;
-    }
     final summary = agent?.lastSummary;
-    if (agent == null || summary == null) return;
-    final key = 'agent:${agent.ptyId}:${summary.hashCode}';
-    if (_fullTextKey == key || !looksClipped(summary)) return;
+    final String? key;
+    final String text;
+    if (item != null && item.text.isNotEmpty) {
+      key = 'item:${item.id}:${item.version}';
+      text = item.text;
+    } else if (agent != null && summary != null) {
+      key = 'agent:${agent.ptyId}:${summary.hashCode}';
+      text = summary;
+    } else {
+      key = null;
+      text = '';
+    }
+    if (_fullTextKey == key) return;
     _fullTextKey = key;
-    unawaited(notifier.fetchFullAgentSummary(agent.ptyId).then((full) {
-      if (mounted && full?.lastSummary != null && _fullTextKey == key) {
-        setState(() => _fullText = full!.lastSummary);
-      }
+    _fullText = null;
+    if (key == null || !looksClipped(text)) return;
+    final Future<String?> fetch = key.startsWith('item:')
+        ? notifier.fetchFullItem(item!).then((full) => full?.text)
+        : notifier.fetchFullAgentSummary(agent!.ptyId).then((full) => full?.lastSummary);
+    unawaited(fetch.then((full) {
+      if (mounted && full != null && _fullTextKey == key) setState(() => _fullText = full);
     }));
   }
 

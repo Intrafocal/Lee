@@ -27,6 +27,17 @@ class _FakeAttentionNotifier extends AttentionNotifier {
   final replies = <_Reply>[];
   int fullSummaryFetches = 0;
   String? fullSummary;
+  String? fullItemText;
+
+  void setSnapshot(AttentionSnapshot snapshot) => state = AttentionUiState(snapshot: snapshot);
+
+  @override
+  Future<AttentionItem?> fetchFullItem(AttentionItem item) async {
+    final text = fullItemText;
+    return text == null
+        ? null
+        : AttentionItem(id: item.id, version: item.version, kind: item.kind, text: text, source: item.source, actions: item.actions);
+  }
 
   @override
   Future<ActionResult> reply(String itemId, {required String action, String? text, int? choice, required int version}) async {
@@ -227,6 +238,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(notifier.fullSummaryFetches, 1);
     expect(find.textContaining('the whole message', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('a new unclipped item drops the full text fetched for the old one', (tester) async {
+    final clipped = AttentionItem(
+      id: 'att_a',
+      version: 1,
+      kind: AttentionKind.waiting,
+      severity: AttentionSeverity.needsYou,
+      text: '${'q' * 279}…',
+      source: const AttentionSource(ptyId: 7),
+      actions: const [AttentionActionName.reply],
+    );
+    late _FakeAttentionNotifier notifier;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          attentionProvider.overrideWith((ref) {
+            notifier = _FakeAttentionNotifier(ref, AttentionSnapshot(items: [clipped], agents: [_agent()]))
+              ..fullItemText = 'the whole first question';
+            return notifier;
+          }),
+        ],
+        child: MaterialApp(theme: AeronautTheme.darkTheme, home: const AgentScreen(ptyId: 7)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('the whole first question', findRichText: true), findsOneWidget);
+
+    const second = AttentionItem(
+      id: 'att_b',
+      version: 1,
+      kind: AttentionKind.waiting,
+      severity: AttentionSeverity.needsYou,
+      text: 'Ship it now?',
+      source: AttentionSource(ptyId: 7),
+      actions: [AttentionActionName.reply],
+    );
+    notifier.setSnapshot(AttentionSnapshot(items: const [second], agents: [_agent()]));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('the whole first question', findRichText: true), findsNothing);
+    expect(find.textContaining('Ship it now?', findRichText: true), findsOneWidget);
+
+    notifier.setSnapshot(AttentionSnapshot(agents: [_agent(lastSummary: 'Done for now.')]));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Ship it now?', findRichText: true), findsNothing);
+    expect(find.textContaining('Done for now.', findRichText: true), findsOneWidget);
   });
 
   testWidgets('a finished agent with no item says so', (tester) async {

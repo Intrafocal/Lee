@@ -302,6 +302,21 @@ test('queue: Stop emits agent.usage; snapshots carry usage and limits; status lo
   }
 });
 
+// log() pushes (changed()), so a limits.snapshot reaches the renderer and devices at once.
+test('queue: a status line that changes the limits schedules a push', () => {
+  const q = new CopilotQueue(new FakePty());
+  let pushes = 0;
+  q.changed = () => pushes++;
+  const status = (pct) => ({ session_id: 'push-x', rate_limits: { five_hour: { used_percentage: pct, resets_at: 1790000000 } } });
+  q.handleStatus({ event: null, ptyId: null, windowId: null }, status(49));
+  const first = pushes;
+  assert.ok(first >= 1, 'first limits push');
+  q.handleStatus({ event: null, ptyId: null, windowId: null }, status(49.4));
+  assert.strictEqual(pushes, first, 'same whole percent: no push');
+  q.handleStatus({ event: null, ptyId: null, windowId: null }, status(52));
+  assert.ok(pushes > first, 'limits moved: push');
+});
+
 test('queue: snapshot limits are null before any status line', () => {
   const q = new CopilotQueue(new FakePty());
   assert.strictEqual(q.snapshot().limits, null);

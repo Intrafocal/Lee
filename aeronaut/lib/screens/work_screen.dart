@@ -179,8 +179,10 @@ class _AwayBanner extends ConsumerWidget {
   }
 }
 
-/// "Waiting on you" (§4.1): one card per live item, blocking first, then
-/// needs-you, then the rest, longest-waiting first within each. The first
+/// "Waiting on you" (§4.1): one card per item that needs you
+/// ([waitingOnYou], as the headline counts them), blocking first, then
+/// needs-you, longest-waiting first within each. Ambient and summary items
+/// stay off it, as on the Mac: they aren't waiting on you. The first
 /// card is raised, so its Allow is the view's one phosphor control. A card
 /// opens the one-agent screen.
 class _WaitingSection extends ConsumerWidget {
@@ -196,9 +198,7 @@ class _WaitingSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final attention = ref.watch(attentionProvider);
     final snapshot = attention.snapshot;
-    final items = snapshot.items
-        .where((i) => i.state == AttentionItemState.open || i.state == AttentionItemState.snoozed)
-        .toList()
+    final items = waitingOnYou(snapshot)
       ..sort((a, b) {
         final cmp = _severityOrder[a.severity]!.compareTo(_severityOrder[b.severity]!);
         if (cmp != 0) return cmp;

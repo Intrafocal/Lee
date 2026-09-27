@@ -261,6 +261,46 @@ void main() {
       expect(allowFill('x'), Phosphor.phosphor, reason: 'the raised first card holds the one phosphor control');
       expect(allowFill('y'), isNot(Phosphor.phosphor));
     });
+
+    testWidgets('ambient items and summaries stay out of Waiting on you', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            machinesProvider.overrideWith((ref) => _FixedMachinesNotifier()),
+            attentionProvider.overrideWith(_RecordingAttentionNotifier.new),
+          ],
+          child: MaterialApp(theme: AeronautTheme.darkTheme, home: const WorkScreen()),
+        ),
+      );
+      await tester.pump();
+      final container = ProviderScope.containerOf(tester.element(find.byType(WorkScreen)));
+      final notifier = container.read(attentionProvider.notifier) as _RecordingAttentionNotifier;
+
+      notifier.setSnapshot(const AttentionSnapshot(items: [
+        AttentionItem(id: 'amb', kind: AttentionKind.summary, severity: AttentionSeverity.ambient, title: 'Claude finished a turn'),
+      ]));
+      await tester.pump();
+      expect(find.text('All clear.'), findsOneWidget);
+      expect(find.text('WAITING ON YOU'), findsNothing);
+      expect(find.byKey(const ValueKey('waiting-amb')), findsNothing);
+
+      notifier.setSnapshot(const AttentionSnapshot(items: [
+        AttentionItem(id: 'amb', kind: AttentionKind.summary, severity: AttentionSeverity.ambient, title: 'Claude finished a turn'),
+        AttentionItem(id: 'sum', kind: AttentionKind.summary, severity: AttentionSeverity.needsYou, title: 'A summary'),
+        AttentionItem(
+          id: 'q',
+          kind: AttentionKind.question,
+          severity: AttentionSeverity.needsYou,
+          title: 'Which table?',
+          actions: [AttentionActionName.reply],
+        ),
+      ]));
+      await tester.pump();
+      expect(find.text('One thing needs you.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('waiting-q')), findsOneWidget);
+      expect(find.byKey(const ValueKey('waiting-amb')), findsNothing);
+      expect(find.byKey(const ValueKey('waiting-sum')), findsNothing);
+    });
   });
 
   group('Work header', () {
