@@ -89,11 +89,13 @@ To eyeball every pairing state without a network:
 idf.py -DDIRIGIBLE_UI_DEMO=1 build flash monitor   # cycles the steps every 3 s
 ```
 
-The same build gives the Waiting screen a canned queue (a blocker, an
+The same build gives the Work screen a canned queue (a blocker, an
 approval with long text, a waiting item, a multiple-choice question, an old
-style AskUserQuestion approval, and two finished turns for the empty state).
+style AskUserQuestion approval, and two finished turns for the empty state),
+In flight three agents (busy, waiting, idle) and Library a canned Carry with
+two explorations.
 Answering, dismissing or snoozing removes an item locally; once the queue is
-empty, `x` refills it. Without a paired machine, Back from the first pairing
+empty, `x` refills it, and `z` on Work starts or ends a pretend Deep session. Without a paired machine, Back from the first pairing
 step leaves for Waiting. The menu also gets **MD sample**: the viewer on a
 built-in markdown page with headings, inline styles, nested and task lists,
 quotes, a rule, fenced code and three tables (one that fits, one that wraps,
@@ -132,7 +134,9 @@ python3 tools/dirigible-provision/dirigible_provision.py flash --port /dev/tty.u
 
 | Screen   | What it does                                                    |
 |----------|-----------------------------------------------------------------|
-| Waiting  | the default screen: Lee's attention queue as a pager, one item that needs you per page (see below): a kind chip (red blocking, amber needs you), `Claude · tab`, age and `1/3`; the title; the agent's words (the full text is fetched when the snapshot's copy was clipped), scrolled by the ball; and two or three big bordered buttons naming their key: **Approve (Y)**, **Deny (N)**, **Reply (R)**, **Dismiss (D)**, **Snooze (S)**. Nothing waiting: "Nothing needs you", the last few finished turns (tap one to read it) and **Capture (C)** / **Focus (F)** / **Tabs (T)** buttons. The header centre reads `N waiting` (`focus:` / `away:` in front when on) |
+| Work (`w`) | the default screen: Lee's attention queue as a pager, one item that needs you per page (see below): a kind chip (red blocking, amber needs you), `Claude · tab`, age and `1/3`; the title; the agent's words (the full text is fetched when the snapshot's copy was clipped), scrolled by the ball; and big bordered buttons naming their key: **Approve (Y)** / **Deny (N)** on an approval, the quick replies **Go (G)** / **Wait (W)** / **Why (E)** / **Reply (R)** on anything that takes text. Nothing waiting: "Nothing needs you", the last few finished turns (tap one to read it) and **Capture (C)** / **In flight (I)** / **Library (L)** buttons. The header centre is Work's line, as in Lee: "One thing needs you.", "Working on it.", "All clear." (`away:` counts while away), or **In deep work** while a Deep session runs at the machine |
+| In flight (`i`) | the agents Lee is running, as a trackball list: a state dot (amber waiting on you, phosphor working, grey idle), the name, what it is doing now in words ("Running tests", "Editing queue.ts"), its age and its tokens ("412k tok"). Click (or Enter, or tap) opens its words as a page with earlier turns and "Along the way"; `j` / `k` step between agents there. `c` checks in. The footer shows the subscription windows ("5h 42%") when Lee has seen them |
+| Library (`l`) | Carry (14 §8.1): one exploration per page, `j` / `k` between them. "You stopped at" and one open question in Montserrat italic (your words), then **Add a thought (C)** (a paragraph into that exploration) and **Open next (O)** (the next Deep session opens it first). Nothing to carry: a thought goes to Someday instead |
 | Tabs     | live list of Lee tabs with a type badge and a focus marker; tap a row (or roll the ball to highlight one and click) to focus it on the host, and open the terminal if it has a PTY, Files for a `files` tab, or the viewer for an editor tab. Disconnected, it names the machine it cannot reach and offers Reconnect / Re-pair. With several Lee windows open on the host, the header shows the one being followed (`lee 1/2`) and a **Win (W)** button picks another; tabs, Files and commands all follow that window, like Aeronaut's workspace switcher |
 | Files    | the workspace tree (like Aeronaut's Files): lazy per-directory fetch, cached; select a file to view it. Also on the menu |
 | Viewer   | read-only file view, scrolled by the pixel: code with a line gutter (pans, or wraps on click / `w`); markdown rendered (headings, **strong** / *em* / `code` / links in colour, bullet / numbered / task lists with hanging indents, quotes, rules, fenced code, pipe tables — see below); plain text wrapped. Follows an editor tab's file, cursor line and unsaved mark |
@@ -145,16 +149,20 @@ its click activates; touch does every tap.
 
 | Input                   | Effect                                          |
 |-------------------------|-------------------------------------------------|
-| trackball roll          | lists (Tabs, menu, Windows, pairing lists, Waiting's empty screen): moves a highlighted row and keeps it in view, two detents a row. Text (Viewer, Hester, Waiting's words): scrolls smoothly, faster the faster you roll. Files: moves the selection; a firm sideways roll expands / collapses. Viewer: sideways pans code and wide tables. Waiting: a deliberate sideways flick turns the page. Terminal: arrow keys |
-| trackball click         | opens / activates the highlighted row (a first click with nothing highlighted just highlights). Viewer: wrap toggle on code. Waiting: opens the reply box on items that take text, or sends the highlighted option of a question. Never approves |
-| trackball hold (0.8 s)  | back, everywhere; on Waiting it opens the menu: Waiting / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
+| trackball roll          | lists (Tabs, In flight, menu, Windows, pairing lists, Work's empty screen): moves a highlighted row and keeps it in view, two detents a row. Text (Viewer, Hester, Work's and Library's words, an opened agent): scrolls smoothly, faster the faster you roll. Files: moves the selection; a firm sideways roll expands / collapses. Viewer: sideways pans code and wide tables. Work, Library: a deliberate sideways flick turns the page. Terminal: arrow keys |
+| trackball click         | opens / activates the highlighted row (a first click with nothing highlighted just highlights). Viewer: wrap toggle on code. Work: opens the reply box on items that take text, or sends the highlighted option of a question. Never approves or sends a quick reply. Library: opens the thought box |
+| trackball hold (0.8 s)  | back, everywhere (In flight and Library go back to Work); on Work it opens the menu: Work / In flight / Library / Tabs / Files / Hester / Capture / Windows / Pairing / Reconnect |
 | header back button      | the same back, as a touch target (a close button in the Terminal) |
-| swipe left / right, j / k (Waiting) | next / previous item                |
-| space / b (Waiting, Viewer) | scroll a screen down / up                   |
-| y / n (Waiting)         | approve / deny an approval (never on a question) |
-| r or Enter (Waiting)    | open the reply box; Enter sends; **Cancel** (or back, or Backspace in an empty box) closes it and keeps the draft |
-| d / s / o (Waiting)     | dismiss / snooze 15 minutes / open the item's tab on Lee |
-| c / f / t (Waiting)     | capture to Someday, start or end focus, show the tab list |
+| w / i / l               | Work / In flight / Library, from any of the three (i and l from Tabs too) |
+| swipe left / right, j / k (Work, Library) | next / previous item or exploration |
+| space / b (Work, Library, Viewer) | scroll a screen down / up             |
+| y / n (Work)            | approve / deny an approval (never on a question) |
+| g / w / e (Work)        | quick replies on an item that takes text: "Yes, go ahead", "Stop and wait for me", "Explain first", sent at once as written. On Work, w is Wait |
+| r or Enter (Work)       | open the reply box; Enter sends; **Cancel** (or back, or Backspace in an empty box) closes it and keeps the draft |
+| d / s / o (Work)        | dismiss / snooze 15 minutes / open the item's tab on Lee |
+| c / t (Work)            | capture to Someday, show the tab list. `f` (Focus) is retired: Library's Open next replaces it |
+| c (In flight)           | check in on the highlighted or opened agent     |
+| c / o / r (Library)     | add a thought, open next, reload                |
 | w (on Tabs)             | pick which Lee window to follow                 |
 | h / l, w, r, o (Viewer) | pan, wrap (code), reload, open in Lee           |
 | touch                   | every button and row; footer buttons have a hit area that reaches a few pixels above the 15 px footer |
@@ -190,7 +198,11 @@ blockers, finished turns); `docs/13-Copilot.md` §5 and
   when it is answered elsewhere the next one slides in. Only letters are
   shortcuts, since symbols and digits need chords on the T-Deck keyboard.
 - **Reply.** An approval shows **Approve (Y)** / **Deny (N)** (/ **Snooze (S)**);
-  anything that takes text shows **Reply (R)** / **Dismiss (D)** (/ **Snooze (S)**).
+  anything that takes text shows the quick replies **Go (G)** ("Yes, go ahead"),
+  **Wait (W)** ("Stop and wait for me"), **Why (E)** ("Explain first") and
+  **Reply (R)**: the first three are Lee's `QUICK_REPLIES` and send at once
+  through the same reply path, their words shown on the header as they go
+  (`sending: Yes, go ahead`). `d` and `s` still dismiss and snooze.
   Reply opens a full-screen text box with **Cancel** and **Send (Enter)**
   buttons: Enter sends (there is no newline), Cancel closes it and keeps the
   draft. Every write echoes the `version` the page
@@ -210,14 +222,24 @@ blockers, finished turns); `docs/13-Copilot.md` §5 and
   full-screen box; Enter sends it to Hester's Someday list for the followed
   window's workspace. "Saved - reaches Someday when Hester is back" means Lee
   spooled it; the box closes itself after a successful send.
-- **Focus.** `f` starts a focus session (`POST /focus/start`, Lee picks the
-  workspace) or ends it (`/focus/stop`); the header shows `focus:` while on.
+- **Deep.** There is no Focus key any more (`f` is retired; 14 §8.1): Deep
+  can't start from a device. While a Deep session runs at the machine, the
+  snapshot's `deep` is set, the header says **In deep work** and nothing
+  alerts. Library's **Open next (O)** picks what the next session opens.
 - **Alerts.** Pull-first: the only alert is the header blinking amber when an
   item's `notify` flips on (Lee decides: blocking outside quiet hours, or a
   wake-marked item while you are away). Nothing goes through a push service.
 
 A Lee without the queue (404 on `/attention`) shows "no queue" and the rest of
-the firmware works as before.
+the firmware works as before. The snapshot's newer fields (`agents[].now`,
+`recent`, `updates`, `usage`, `limits`, `deep`) are all optional: an older Lee
+just gives a plainer In flight.
+
+The words In flight uses are ports: `core/src/activity.cpp` copies
+`describeActivity` and `formatTokens` from `electron/src/shared/cockpit.ts` and
+`workLine` from the renderer's `cockpitModel.ts`, with the same cases as Lee's
+smoke test in `tools/activity-test` (which also covers the snapshot's agents
+and `GET /carry` parsing): `cd tools/activity-test && make check`.
 
 ## Wire protocol
 
@@ -232,7 +254,9 @@ or Lee's shared API token (`~/.lee/api-token`) on older setups.
 | device → Lee  | `GET http://host:9001/attention?compact=1` → `{success,data:AttentionSnapshot}` |
 | device → Lee  | `POST http://host:9001/attention/<id>/reply` — `{action:"approve"\|"deny"\|"text",text?,version}`; 409 stale, 410 agent gone, 403 shared token |
 | device → Lee  | `POST http://host:9001/attention/<id>/dismiss`, `…/snooze` `{minutes:15}` |
-| device → Lee  | `POST http://host:9001/focus/start` `{}`, `POST /focus/stop` |
+| device → Lee  | `GET http://host:9001/carry?workspace=…` → `{workspace,pick_up,open_questions,captured_count,reading_count,open_next}`; 503 `hester_offline` |
+| device → Lee  | `POST http://host:9001/carry/capture` `{workspace,text,exploration_id?}`, `POST /carry/open-next` `{workspace,exploration_id}` |
+| device → Lee  | `POST http://host:9001/command` `{domain:"tab",action:"checkin",params:{pty_id}}` — In flight's check-in |
 | device → Lee  | `POST http://host:9001/capture` — `{text,workspace}` → `{success,someday_id,spooled}` |
 | device → Lee  | `GET http://host:9001/fs/list?path=…`, `GET /fs/read?path=…[&stat=1]` — bearer; read-only, workspace-scoped |
 | device → Lee  | `POST http://host:9001/pair/request` — **no auth**; `{device,kind,code,nonce}` → `{status:"pending",expires_in}` |

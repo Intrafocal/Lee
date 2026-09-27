@@ -1834,12 +1834,9 @@ bool waiting_key(uint8_t k)
     case 'i': case 'l':
         cockpit_nav_key(k);
         return true;
-    case 'g': case 'e':
-        if (!quick_reply((char)k) && it) flash("no quick reply here");
-        return true;
-    case 'w':
-        // On Work already: w is Wait wherever a quick reply fits.
-        if (!quick_reply('w') && it && takes_text(*it)) flash("no quick reply here");
+    case 'g': case 'w': case 'e':
+        // Go / Wait / Why.  On Work already, so w is Wait, not "go to Work".
+        if (!quick_reply((char)k) && it && !takes_text(*it)) flash("no quick reply here");
         return true;
     case ' ': scroll_words(WORDS_H - 24);    return true;
     case 'b': scroll_words(-(WORDS_H - 24)); return true;
