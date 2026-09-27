@@ -67,6 +67,18 @@ const u = (input, output, cacheRead, cacheWrite, thinking) => ({
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
+test('resume guard: --resume is dropped when Claude has no transcript for that session and directory', () => {
+  const { claudeProjectKey, claudeTranscriptPath, dropStaleResume } = require(path.join(dist, 'copilot', 'claude-resume.js'));
+  assert.equal(claudeProjectKey('/Users/ben/Development/Lee/.claude/worktrees/task-b615'), '-Users-ben-Development-Lee--claude-worktrees-task-b615');
+  const home = '/h';
+  const want = claudeTranscriptPath('/w/proj', 'abc-123', home);
+  assert.equal(want, '/h/.claude/projects/-w-proj/abc-123.jsonl');
+  const args = ['--resume', 'abc-123'];
+  assert.deepEqual(dropStaleResume(args, '/w/proj', (p) => p === want, home), { args, dropped: null }, 'transcript exists: resume');
+  assert.deepEqual(dropStaleResume(args, '/w/proj', () => false, home), { args: [], dropped: 'abc-123' }, 'never used: fresh');
+  assert.deepEqual(dropStaleResume(['--name', 'x'], '/w/proj', () => false, home), { args: ['--name', 'x'], dropped: null }, 'no resume: unchanged');
+});
+
 test('dedupe by message.id: repeated streaming lines count once, last wins', () => {
   const t = new UsageTracker();
   const { id, file } = newTranscript();

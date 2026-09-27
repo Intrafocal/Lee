@@ -17,6 +17,7 @@ import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
 import { isClaude, withClaudeHooks } from './copilot/hook-install';
+import { dropStaleResume } from './copilot/claude-resume';
 import { withShellIntegration } from './cockpit/shell-integration';
 import { isPi, withPiExtension } from './cockpit/pi-extension';
 import { withClaudePermissionDefault } from './cockpit/cockpit-config';
@@ -1858,7 +1859,15 @@ export class PTYManager extends EventEmitter {
     } else if (def.path_arg === 'cwd' && cwd) {
       spawnCwd = cwd;
     }
-    args.push(...extraArgs);
+    // A Claude session that never had a message has no transcript to resume:
+    // start it fresh rather than leave a dead tab ("No conversation found").
+    let agentArgs = extraArgs;
+    if (isClaude(def.command)) {
+      const r = dropStaleResume(extraArgs, spawnCwd ?? cwd);
+      if (r.dropped) this.log('INFO', 'No transcript to resume; starting a new Claude session', { session: r.dropped, cwd: spawnCwd ?? cwd });
+      agentArgs = r.args;
+    }
+    args.push(...agentArgs);
 
     return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId, def.shell === true);
   }
