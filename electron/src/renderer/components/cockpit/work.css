@@ -219,7 +219,14 @@
   cursor: default;
 }
 
-/* Nothing needs you */
+/* Where things stand: "Two things need you." / "Working on it." / "All clear." */
+
+.work-line {
+  margin: var(--space-2) 0 var(--space-1);
+  font-family: var(--font-write);
+  font-size: 22px;
+  color: var(--text-1);
+}
 
 .work-empty {
   display: flex;
@@ -229,11 +236,8 @@
   margin: var(--space-6) 0 var(--space-5);
 }
 
-.work-empty-words {
+.work-empty .work-line {
   margin: 0;
-  font-family: var(--font-write);
-  font-size: 22px;
-  color: var(--text-1);
 }
 
 /* In flight: one Card of Rows */

@@ -2,7 +2,7 @@
  * WorkSection - Work: what needs you and what's in flight, in one column
  * (cockpit-design §4; package R2). Replaces Feed, Tasks and the agent tiles.
  *
- * The list: "Waiting on you" cards in the queue's order (the first raised,
+ * The list: a line ("Two things need you.") over the waiting cards in the queue's order (the first raised,
  * its Allow the view's one next step), then "In flight" rows (busy agents
  * with what they're doing now, then ready to review, then idle; idle over
  * 2h folds into "n earlier today"; running and failed operations), else
@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AttentionItem } from '../../../../shared/copilot';
 import type { AboutRef } from '../../../../shared/cockpit';
-import { quietLine, taskTitle, type TileModel } from '../../../lib/cockpitModel';
+import { taskTitle, workLine, type TileModel } from '../../../lib/cockpitModel';
 import {
   SWIPE_UNDO_MS,
   agentTimes,
@@ -358,7 +358,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
 
       {hasWaiting ? (
         <>
-          <Eyebrow tone="needs">Waiting on you</Eyebrow>
+          <p className="work-line">{workLine({ waiting: waiting.length })}</p>
           <div className="work-waiting">
             {allWaiting.map((w) => {
               const s = swiped[w.item.id];
@@ -380,7 +380,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
         </>
       ) : (
         <div className="work-empty">
-          <p className="work-empty-words">{quietLine(flight.rows.filter((r) => r.group === 'busy').length)}</p>
+          <p className="work-line">{workLine({ waiting: 0, working: flight.rows.filter((r) => r.group === 'busy').length })}</p>
           <Btn kind="next" kbd="⇧⌘0" onClick={() => goDeep(ctx.copilotApi, ctx.workspace)}>
             Continue
           </Btn>

@@ -1378,12 +1378,19 @@ export interface MeanwhileDigest {
  * are the digest's verified progress; `waiting` is what needs you now.
  */
 /**
- * The line for "nothing is waiting on you": "Working on it." while agents are
- * busy, else "All clear." Shared by Work's empty state, Home's Meanwhile and
- * the attention flyout so they always agree.
+ * Where things stand, in one line: "Two things need you." when something is
+ * waiting, else "Working on it." while agents are busy, else "All clear."
+ * Shared by Work, Home's Meanwhile and the attention flyout so they agree.
  */
+export function workLine(counts: { waiting: number; working?: number }): string {
+  const waiting = Math.max(0, counts.waiting);
+  if (waiting > 0) return `${numberWord(waiting, true)} ${plural(waiting, 'thing needs', 'things need')} you.`;
+  return (counts.working ?? 0) > 0 ? 'Working on it.' : 'All clear.';
+}
+
+/** workLine() for when nothing is waiting. */
 export function quietLine(working: number): string {
-  return working > 0 ? 'Working on it.' : 'All clear.';
+  return workLine({ waiting: 0, working });
 }
 
 export function meanwhileSentence(
@@ -1408,8 +1415,8 @@ export function meanwhileSentence(
     // After "N agents finished", "One is waiting" reads as one of them; otherwise say what.
     parts.push(
       finished > 0
-        ? `${numberWord(waiting, true)} ${plural(waiting, 'is', 'are')} waiting on you.`
-        : `${numberWord(waiting, true)} ${plural(waiting, 'thing is', 'things are')} waiting on you.`,
+        ? `${numberWord(waiting, true)} ${plural(waiting, 'needs', 'need')} you.`
+        : workLine({ waiting }),
     );
   } else {
     const quiet = quietLine(attention.working ?? 0);

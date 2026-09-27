@@ -1154,6 +1154,7 @@ const leeRows = [
     homeQuestion,
     meanwhileSentence,
     quietLine,
+    workLine,
     homeNeeds,
     homeFeedNeeds,
     workNeedsCount,
@@ -1198,18 +1199,21 @@ const leeRows = [
     assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), 'Quiet while you were away. All clear.');
     assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), 'Three things shipped while you were away. All clear.');
     assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), 'One thing shipped while you were away. All clear.');
-    assert.equal(meanwhileSentence(d(0, []), { waiting: 1 }), 'One thing is waiting on you.');
-    assert.equal(meanwhileSentence(null, { waiting: 2 }), 'Two things are waiting on you.');
-    assert.equal(meanwhileSentence(d(2, []), { waiting: 1 }), 'Two things shipped while you were away. One thing is waiting on you.');
+    assert.equal(meanwhileSentence(d(0, []), { waiting: 1 }), 'One thing needs you.');
+    assert.equal(meanwhileSentence(null, { waiting: 2 }), 'Two things need you.');
+    assert.equal(meanwhileSentence(d(2, []), { waiting: 1 }), 'Two things shipped while you were away. One thing needs you.');
     // The contract's example: finished turns count once per agent session.
-    assert.equal(meanwhileSentence(d(0, ['a', 'b', 'a']), { waiting: 1 }), 'Two agents finished while you were away. One is waiting on you.');
+    assert.equal(meanwhileSentence(d(0, ['a', 'b', 'a']), { waiting: 1 }), 'Two agents finished while you were away. One needs you.');
     assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), 'One agent finished while you were away. All clear.');
     assert.equal(meanwhileSentence(null, { waiting: 0, working: 2 }), 'Quiet while you were away. Working on it.');
     assert.equal(quietLine(0), 'All clear.');
     assert.equal(quietLine(1), 'Working on it.');
+    assert.equal(workLine({ waiting: 1 }), 'One thing needs you.');
+    assert.equal(workLine({ waiting: 2, working: 3 }), 'Two things need you.');
+    assert.equal(workLine({ waiting: 0, working: 0 }), 'All clear.');
     assert.equal(
       meanwhileSentence(d(4, ['a', 'b']), { waiting: 3 }),
-      'Two agents finished while you were away, and four things shipped. Three are waiting on you.',
+      'Two agents finished while you were away, and four things shipped. Three need you.',
     );
     assert.ok(!/claim/i.test(meanwhileSentence(d(1, ['a']), { waiting: 1 })), 'no "claims"');
     assert.equal(numberWord(13), '13');
@@ -1488,7 +1492,7 @@ const leeRows = [
     assert.match(s, /“whether the merge needs a tiebreak”/);
     assert.match(s, /2 answers came back · 1 open question/);
     for (const t of ['A blank page', '1 open question', '1 thought from your phone', 'G1 has nothing open serving it']) assert.ok(s.includes(t), t);
-    assert.ok(s.includes('One agent finished while you were away, and one thing shipped. Four are waiting on you.'), 'one sentence');
+    assert.ok(s.includes('One agent finished while you were away, and one thing shipped. Four need you.'), 'one sentence');
     assert.equal((s.match(/class="home-need[ "]/g) ?? []).length, 3, 'up to three needs-you rows');
     assert.ok(s.includes('1 more in Work'));
     assert.match(s, /ui-btn is-plain[^>]*>Allow</, 'Allow is plain on Home, not the phosphor step');
@@ -1508,7 +1512,7 @@ const leeRows = [
     assert.match(s, /ui-btn is-quiet[^>]*>Dismiss</);
     assert.match(s, /title="How is it going\?"[^>]*>Check in</, 'the text it types is on the button');
     assert.ok(!s.includes('home-need-confirm-text'), 'and shown verbatim after the first click, before it is sent (C3)');
-    assert.ok(s.includes('Six are waiting on you.'), 'the sentence counts them');
+    assert.ok(s.includes('Six need you.'), 'the sentence counts them');
   });
 
   test('rail: icons with labels and tooltips; the only badge is a dot', () => {

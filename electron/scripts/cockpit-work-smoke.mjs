@@ -468,7 +468,7 @@ const withItems = (items, over = {}) => fixtureCtx({ snapshot: { ...fixtureCtx()
 test('render: the raised approval’s Allow is the list’s one next step; a list card shows 3 quick replies', () => {
   const html = render.work(withItems([textItem, approvalItem], { tiles: [tile(3), tile(4), tile(5, { working: true })] }));
   assert.equal(nextCount(html), 1);
-  assert.match(html, /Waiting on you/);
+  assert.match(html, /Two things need you\./);
   assert.match(html, /rm -rf build/);
   assert.match(html, /In flight/);
   assert.equal(chipCount(html), 3);
