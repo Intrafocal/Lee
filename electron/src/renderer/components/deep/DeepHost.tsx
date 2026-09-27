@@ -31,6 +31,17 @@
  *   exploration on the first save with content; switching away from, or
  *   ending the session on, an Untitled empty Page deletes it (409 ignored).
  * - R12: Draft goals and Draft from README on the Goals Page.
+ *
+ * Desk D2 (docs/plans/2026-09-27-desk-foundation-contract.md §7; package D):
+ * DeepHost renders the Desk. The overlay always holds DeskSurface (the
+ * overview, an Area, the Drawers) and, over it, the card this window has, in
+ * the Page editor below, unchanged: zoomed in it's full screen and editable;
+ * zoomed out it stays mounted and hidden, so coming back is exact. The Page's
+ * calls take a card id (hesterDeep routes `pg-` ids to /desk/pages), an
+ * in-memory Page is created with POST /desk/pages where it was started, the
+ * palette and events carry card_id, and the ritual lists the cards touched
+ * this session. `explorationId` is unused (the store's DeepNav says which
+ * card); App.tsx still passes it until the merge step.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -40,7 +51,7 @@ import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { cockpitModeStore, useCockpitModeState } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
-import { getExploration, listTasks, patchExploration, workspacePath } from '../../lib/hesterCockpit';
+import { listTasks, workspacePath } from '../../lib/hesterCockpit';
 import {
   GOALS_PROMPTS,
   HANDOFF_PROVIDERS,
@@ -49,12 +60,10 @@ import {
   askDeep,
   autoTitle,
   captureSomeday,
-  createDeepExploration,
   deleteExploration,
-  draftCreateBody,
+  deskCreateBody,
   draftFromReadme,
   dropDraft,
-  exploreFrom,
   firstLineInsertion,
   getDraft,
   getPage,
@@ -62,6 +71,8 @@ import {
   handoffKindLabel,
   handoffStateLabel,
   isDraftId,
+  getPage as getPageText,
+  isCardId,
   isHandoff,
   isUntitled,
   listAnswers,
@@ -78,6 +89,8 @@ import {
   type DraftPage,
   type PageDoc,
   type ReferenceCreate,
+  type SessionAsk,
+  type SessionHandoff,
   type StillOpen,
 } from '../../lib/hesterDeep';
 import {
@@ -107,16 +120,20 @@ import { HandoffSheet } from './HandoffSheet';
 import { GoalsDraftSheet } from './GoalsDraftSheet';
 import { countLabel } from './deepView';
 import {
-  deepStart,
   logDeep,
   onDeepAnswer,
   readMirror,
   rememberCursor,
-  rememberDeep,
   savedCursor,
   writeMirror,
   type DeepCursor,
 } from './deepBridge';
+import { createDeskPage, getDeskPage, patchDeskPage } from '../../lib/hesterDesk';
+import { landingCursor, lineEnd, type EscLayer, escapeStep } from '../../lib/deskModel';
+import type { DeskCardKind } from '../../../shared/desk';
+import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from '../cockpit/cockpitMode';
+import { DeskSurface } from '../desk/DeskSurface';
+import { DeskContext, useDesk, useDeskContext } from '../desk/useDesk';
 import './deep.css';
 import './HandoffSheet.css';
 
@@ -142,43 +159,35 @@ const INPUT_FLUSH_MS = 60000;
 const FLASH_MS = 6000;
 
 export function DeepHost(props: DeepHostProps): JSX.Element | null {
-  const { workspace, visible, explorationId, copilot } = props;
+  const { workspace, visible, copilot } = props;
   const mode = useCockpitModeState();
-  const title = mode.deep.exploration_id === explorationId ? mode.deep.title : '';
+  const nav = mode.deep;
+  const cardId = nav.card_id;
+  const zoomed = nav.zoom === 'card' && !!cardId;
+  const desk = useDesk(workspace, visible && mode.enabled);
 
-  // The mode chip's "End session" opens the ritual here (showing Deep first if needed).
+  // The mode chip's "End session" opens the ritual: on the card this window has, else a bare sheet.
   const [endNonce, setEndNonce] = useState(0);
   const [bareSheet, setBareSheet] = useState(false);
   useEffect(
     () =>
       cockpitModeStore.onEndSessionRequest(() => {
-        if (explorationId) {
-          if (!visible) cockpitModeStore.openDeep(explorationId, cockpitModeStore.getDeep().title || title);
-          setEndNonce((n) => n + 1);
-        } else setBareSheet(true);
+        if (cardId) setEndNonce((n) => n + 1);
+        else setBareSheet(true);
       }),
-    [explorationId, visible, title],
+    [cardId],
   );
 
-  // Remember what Deep shows, for restarts (§4.4). An in-memory Page isn't remembered until it exists.
-  useEffect(() => {
-    if (workspace && explorationId && !isDraftId(explorationId)) rememberDeep(workspace, { exploration_id: explorationId, title, view: 'page' });
-  }, [workspace, explorationId, title]);
-
-  // An in-memory Page that got its exploration keeps its surface (and undo history): real id → surface key.
+  // An in-memory Page that became a card keeps its surface (and undo history): real id → surface key.
   const aliases = useRef(new Map<string, string>());
-  const surfaceKey = explorationId ? aliases.current.get(explorationId) ?? explorationId : null;
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
+  const surfaceKey = cardId ? aliases.current.get(cardId) ?? cardId : null;
   const onPromoted = useCallback(
-    (key: string, realId: string, realTitle: string) => {
+    (key: string, realId: string, realTitle: string, areaId: string | null) => {
       aliases.current.set(realId, key);
-      void deepStart({ workspace, exploration_id: realId, title: realTitle, surface: 'lee' });
-      rememberDeep(workspace, { exploration_id: realId, title: realTitle, view: 'page' });
-      // Point this window at it; while Deep is hidden that would switch modes, so it waits for the next visit.
-      if (visibleRef.current) cockpitModeStore.openDeep(realId, realTitle);
+      promoteCard(key, realId, realTitle, areaId);
+      void desk.refresh();
     },
-    [workspace],
+    [desk],
   );
 
   // ---- overlay geometry: between the title bar and the status bar ----
@@ -205,13 +214,13 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
   useEffect(() => {
     const el = rootRef.current as (HTMLDivElement & { inert?: boolean }) | null;
     if (el) el.inert = !visible;
-  }, [visible, explorationId]);
+  }, [visible]);
 
   // ---- focus trap (C3, like CockpitHost's) ----
   // With the wall gone, a tab activated under the overlay (Hester's focus_tab,
-  // a create-tab, ⌘1–9) focuses a hidden terminal; keys must stay on the Page.
+  // a create-tab, ⌘1–9) focuses a hidden terminal; keys must stay on the Desk.
   useEffect(() => {
-    if (!visible || !explorationId) return;
+    if (!visible) return;
     let last: HTMLElement | null = null;
     const inside = (el: EventTarget | null) => el instanceof Node && !!rootRef.current?.contains(el);
     const underneath = (el: EventTarget | null) =>
@@ -220,7 +229,7 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
       const target =
         last && last.isConnected && inside(last)
           ? last
-          : (rootRef.current?.querySelector('.cm-content') as HTMLElement | null) ?? rootRef.current;
+          : (rootRef.current?.querySelector('.desk-card-layer.is-zoomed .cm-content') as HTMLElement | null) ?? rootRef.current;
       target?.focus({ preventScroll: true });
     };
     const onFocusIn = (e: FocusEvent) => {
@@ -252,43 +261,76 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
       window.removeEventListener('keypress', onKey, true);
       window.removeEventListener('paste', onKey, true);
     };
-  }, [visible, explorationId]);
+  }, [visible]);
+
+  // ---- Esc from a zoomed card: back to the overview (decision 2), innermost thing first ----
+  useEffect(() => {
+    if (!visible || !zoomed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.isComposing) return;
+      const root = rootRef.current;
+      if (!root || !(e.target instanceof Node) || !(root.contains(e.target) || e.target === document.body)) return;
+      const open = new Set<EscLayer>();
+      if (document.querySelector('.deep-sheet-scrim')) open.add('sheet');
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) open.add('input');
+      if (root.querySelector('.desk-card-layer .deep-popover')) open.add('popover');
+      if (root.querySelector('.desk-card-layer .deep-source')) open.add('source');
+      if (root.querySelector('.desk-card-layer .deep-reader')) open.add('reading');
+      const step = escapeStep(open, 'card', e.defaultPrevented);
+      if (step.kind !== 'zoom') return;
+      e.preventDefault();
+      zoomOut('overview', 'key');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible, zoomed]);
 
   const focus = copilot.focus ?? copilot.snapshot?.focus ?? null;
 
   if (!workspace) return null;
-  if (!explorationId || !surfaceKey) {
-    return bareSheet ? (
-      <EndSessionSheet
-        workspace={workspace}
-        explorationId={null}
-        prefill=""
-        questions={[]}
-        focus={focus}
-        onClose={() => setBareSheet(false)}
-      />
-    ) : null;
-  }
+  const land = mode.deskLand && mode.deskLand.card_id === cardId ? mode.deskLand : null;
 
   return ReactDOM.createPortal(
-    <div
-      ref={rootRef}
-      tabIndex={-1}
-      className={`deep-overlay${visible ? '' : ' is-hidden'}`}
-      style={{ top: box.top, bottom: box.bottom }}
-      aria-hidden={!visible}
-      role="region"
-      aria-label="Deep"
-    >
-      <DeepSurface
-        key={surfaceKey}
-        {...props}
-        explorationId={explorationId}
-        title={title}
-        endNonce={endNonce}
-        onPromoted={(realId, t) => onPromoted(surfaceKey, realId, t)}
-      />
-    </div>,
+    <DeskContext.Provider value={desk}>
+      <div
+        ref={rootRef}
+        tabIndex={-1}
+        className={`deep-overlay${visible ? '' : ' is-hidden'}`}
+        style={{ top: box.top, bottom: box.bottom }}
+        aria-hidden={!visible}
+        role="region"
+        aria-label="Desk"
+      >
+        <DeskSurface workspace={workspace} visible={visible && !zoomed} copilot={copilot} onHop={props.onHop} />
+        {cardId && surfaceKey && (
+          <div className={`desk-card-layer${zoomed ? ' is-zoomed' : ''}`} aria-hidden={!zoomed}>
+            <DeepSurface
+              key={surfaceKey}
+              {...props}
+              visible={visible && zoomed}
+              explorationId={cardId}
+              title={nav.title}
+              endNonce={endNonce}
+              land={land}
+              areaInView={nav.area_id}
+              onPromoted={(realId, t, areaId) => onPromoted(surfaceKey, realId, t, areaId)}
+            />
+          </div>
+        )}
+        {bareSheet && (
+          <EndSessionSheet
+            workspace={workspace}
+            explorationId={null}
+            prefill=""
+            questions={[]}
+            focus={focus}
+            desk={{ touched: touchedCards().map((id) => ({ id, title: desk.titleOf(id) })), stoppedCardId: touchedCards().slice(-1)[0] ?? null }}
+            onClose={() => setBareSheet(false)}
+          />
+        )}
+      </div>
+    </DeskContext.Provider>,
     document.body,
   );
 }
@@ -298,11 +340,52 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
 // ---------------------------------------------------------------------------
 
 interface DeepSurfaceProps extends DeepHostProps {
+  /** The card (a `pg-` id), or a `draft-` id for an in-memory Page. Named for D1. */
   explorationId: string;
   title: string;
   endNonce: number;
-  /** An in-memory Page just got its exploration. */
-  onPromoted: (realId: string, title: string) => void;
+  /** A landing to carry out on this card (the cursor at the end of its stopped-at line). */
+  land: DeskLand | null;
+  /** The Area in view: where an in-memory Page with no place of its own is created. */
+  areaInView: string | null;
+  /** An in-memory Page just became a card. */
+  onPromoted: (realId: string, title: string, areaId: string | null) => void;
+}
+
+type OnCard = { card_id: string; card_title: string };
+interface OtherCards {
+  asked: Array<SessionAsk & OnCard>;
+  handedOff: Array<SessionHandoff & OnCard>;
+  stillOpen: Array<StillOpen & OnCard>;
+  /** Each card's Page text, for anchors. */
+  texts: Record<string, string>;
+}
+const NO_OTHERS: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
+
+/** The ritual's lists from the other cards touched this session (each item names its card). */
+async function gatherOthers(workspace: string, ids: string[], since: string | null, titleOf: (id: string) => string): Promise<OtherCards> {
+  const out: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
+  await Promise.all(
+    ids.map(async (cid) => {
+      const [ans, pg] = await Promise.all([listAnswers(workspace, cid), getPageText(workspace, cid)]);
+      const answers = ans.ok && Array.isArray(ans.data) ? ans.data : [];
+      const text = pg.ok ? pg.data.text : '';
+      const on = { card_id: cid, card_title: titleOf(cid) || 'Untitled' };
+      out.texts[cid] = text;
+      const lists = sessionLists(answers, since);
+      out.asked.push(...lists.asked.map((a) => ({ ...a, ...on })));
+      out.handedOff.push(...lists.handedOff.map((h) => ({ ...h, ...on })));
+      if (text) out.stillOpen.push(...stillOpenOnPage(text, answers, 4).map((o) => ({ ...o, ...on })));
+    }),
+  );
+  return out;
+}
+
+/** The id fields of a Deep event for this card (legacy explorations keep exploration_id). */
+function eventIds(id: string): { card_id?: string; card_kind?: DeskCardKind; exploration_id?: string } {
+  if (isCardId(id)) return { card_id: id, card_kind: 'page' };
+  if (isDraftId(id)) return { card_kind: 'page' };
+  return { exploration_id: id };
 }
 
 /** An Ask made while Hester was offline, waiting to be sent (§4.1 degraded). */
@@ -322,7 +405,12 @@ function blankDraft(workspace: string, title: string): DraftPage {
   return { workspace, title: title || untitledTitle(new Date()), page: '', sendTitle: true, origin: { kind: 'opener' } };
 }
 
-function DeepSurface({ workspace, visible, explorationId: propId, title, copilot, onHop, endNonce, onPromoted }: DeepSurfaceProps): JSX.Element {
+function DeepSurface({ workspace, visible, explorationId: propId, title, copilot, onHop, endNonce, land, areaInView, onPromoted }: DeepSurfaceProps): JSX.Element {
+  const deskCtx = useDeskContext();
+  const deskRef = useRef(deskCtx);
+  deskRef.current = deskCtx;
+  const areaRef = useRef(areaInView);
+  areaRef.current = areaInView;
   const editor = useRef<PageEditorHandle | null>(null);
   const alive = useRef(true);
   useEffect(() => {
@@ -387,10 +475,11 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   useEffect(() => {
     if (!realId) return;
     let cancelled = false;
-    getExploration(workspace, realId).then((r) => {
+    getDeskPage(workspace, realId).then((r) => {
       if (cancelled || !r.ok) return;
       if (!shownTitleRef.current || !title) setShownTitle(r.data.title);
       setPurpose(r.data.purpose === 'goals' ? 'goals' : null);
+      if (!title && r.data.title) cockpitModeStore.setDeskNav({ title: r.data.title });
     });
     return () => {
       cancelled = true;
@@ -409,8 +498,9 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   }, [workspace]);
 
   /**
-   * The exploration id, creating it from the in-memory Page first (with the
-   * Page as written now). Null when Hester can't create it.
+   * The card id, creating the card from the in-memory Page first (with the
+   * Page as written now, where it was started: POST /desk/pages). Null when
+   * Hester can't create it.
    */
   const ensureId = useCallback(async (): Promise<string | null> => {
     if (realIdRef.current) return realIdRef.current;
@@ -419,33 +509,42 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     if (!d) return null;
     const run = (async (): Promise<string | null> => {
       const page = text.current;
-      const r = await createDeepExploration(workspace, draftCreateBody({ ...d, title: shownTitleRef.current || d.title }, page));
+      const at = d.purpose === 'goals' ? { area_id: null } : { ...(d.desk ?? {}), area_id: d.desk?.area_id ?? deskRef.current?.defaultArea(areaRef.current) ?? null };
+      const r = await createDeskPage(workspace, deskCreateBody({ ...d, desk: at, title: shownTitleRef.current || d.title }, page));
       if (!r.ok) {
         if (!r.status) setOffline(true);
         else say(r.error, 'warn');
         return null;
       }
-      const newId = r.data.id;
-      const pg = await getPage(workspace, newId);
-      version.current = pg.ok ? pg.data.version : null;
+      const newId = r.data.card.id;
+      version.current = r.data.page.version;
       lastSent.current = page;
+      if (!r.data.created) {
+        // The Goals card already existed (another window got there first): keep its text, then yours.
+        const theirs = r.data.page.text;
+        const mine = text.current.trim();
+        const merged = mine && !theirs.includes(mine) ? `${theirs.replace(/\s*$/, '')}${theirs.trim() ? '\n\n' : ''}${text.current}` : theirs;
+        lastSent.current = theirs;
+        text.current = merged;
+        editor.current?.replaceAll(merged);
+      }
       draftRef.current = null;
       loaded.current = true;
       promotedTo.current = newId;
       realIdRef.current = newId;
       dropDraft(draftKey.current);
-      writeMirror(workspace, newId, { text: text.current, base: version.current, dirty: text.current !== page });
+      writeMirror(workspace, newId, { text: text.current, base: version.current, dirty: text.current !== lastSent.current });
       if (alive.current) {
         setOffline(false);
-        setShownTitle(r.data.title);
-        if (r.data.purpose === 'goals' || d.purpose === 'goals') setPurpose('goals');
+        setShownTitle(r.data.card.title);
+        if (r.data.card.purpose === 'goals' || d.purpose === 'goals') setPurpose('goals');
         setRealId(newId);
-        if (text.current === page) {
+        if (text.current === lastSent.current) {
           setDirty(false);
           setSaveState('saved');
-        } else scheduleSave(SAVE_DEBOUNCE_MS);
+        } else scheduleSave(r.data.created ? SAVE_DEBOUNCE_MS : 0);
       }
-      onPromotedRef.current(newId, r.data.title);
+      onPromotedRef.current(newId, r.data.card.title, r.data.card.area_id);
       return newId;
     })();
     creating.current = run;
@@ -470,14 +569,24 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     const firstLine = takePendingFirstLine(id);
     getPage(workspace, id).then(async (r) => {
       if (cancelled) return;
-      const cursor = savedCursor(workspace, id);
+      const saved = savedCursor(workspace, id);
+      // Landing (§7.2): the end of the stopped-at line, else the saved cursor, else the end of the Page.
+      const landing = landRef.current && landRef.current.card_id === id ? landRef.current : null;
+      const landAt = (t: string): DeepCursor | null => {
+        if (!landing) return saved;
+        const l = landingCursor(t, landing.line, saved);
+        if (l.reveal) revealOnMount.current = l.cursor.head;
+        cockpitModeStore.clearDeskLand(landing.nonce);
+        landDone.current = landing.nonce;
+        return l.cursor;
+      };
       if (r.ok) {
         version.current = r.data.version;
         loaded.current = true;
         if (mirror?.dirty && mirror.text !== r.data.text) {
           // Unsaved writing from before a crash or an offline stretch.
           text.current = mirror.text;
-          setInitial({ text: mirror.text, cursor });
+          setInitial({ text: mirror.text, cursor: landAt(mirror.text) });
           setDirty(true);
           if (mirror.base === r.data.version) scheduleSave(0);
           else {
@@ -489,7 +598,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           const ins = firstLine ? firstLineInsertion(r.data.text, firstLine) : null;
           const t = ins ? ins.insert + r.data.text : r.data.text;
           text.current = t;
-          setInitial({ text: t, cursor: ins ? { anchor: ins.insert.length, head: ins.insert.length, scroll: 0 } : cursor });
+          setInitial({ text: t, cursor: ins ? { anchor: ins.insert.length, head: ins.insert.length, scroll: 0 } : landAt(t) });
           if (ins) {
             setDirty(true);
             scheduleSave(0);
@@ -499,7 +608,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       } else {
         if (r.status === 404) {
           // Deleted (an empty Untitled Page) or never made: write on an in-memory Page instead.
-          const exp = await getExploration(workspace, id);
+          const exp = await getDeskPage(workspace, id);
           if (cancelled) return;
           if (!exp.ok && exp.status === 404) {
             becomeDraft();
@@ -514,7 +623,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
         version.current = mirror?.base ?? null;
         text.current = mirror?.text ?? '';
         setNearlyEmpty(pageNearlyEmpty(text.current));
-        setInitial({ text: text.current, cursor });
+        setInitial({ text: text.current, cursor: landAt(text.current) });
         if (mirror?.dirty) {
           setDirty(true);
           scheduleSave(saveBackoffMs(0));
@@ -526,6 +635,28 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, id]);
+
+  const landRef = useRef(land);
+  landRef.current = land;
+  const landDone = useRef<number | null>(null);
+  const revealOnMount = useRef<number | null>(null);
+  useEffect(() => {
+    if (!initial || revealOnMount.current == null) return;
+    const at = revealOnMount.current;
+    revealOnMount.current = null;
+    // After the editor's own first scroll (its rAF).
+    const t = window.setTimeout(() => editor.current?.reveal(Math.min(at, editor.current.getText().length)), 60);
+    return () => window.clearTimeout(t);
+  }, [initial]);
+  useEffect(() => {
+    // Landing again on this card while it's open (a hop back from the Cockpit's door).
+    if (!land || !initial || landDone.current === land.nonce) return;
+    landDone.current = land.nonce;
+    cockpitModeStore.clearDeskLand(land.nonce);
+    const ed = editor.current;
+    if (!ed || land.line == null) return;
+    ed.reveal(lineEnd(ed.getText(), land.line));
+  }, [land, initial]);
 
   const save = useCallback(async (): Promise<void> => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -690,7 +821,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     if (!realId) return;
     void refreshAnswers();
     return onDeepAnswer((e) => {
-      if (e.exploration_id === realId && (!e.workspace || e.workspace === workspace)) void refreshAnswers();
+      if ((e.card_id ?? e.exploration_id) === realId && (!e.workspace || e.workspace === workspace)) void refreshAnswers();
     });
   }, [refreshAnswers, realId, workspace]);
 
@@ -707,12 +838,12 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
         return;
       }
       const rid = realIdRef.current;
-      const r = await patchExploration(workspace, rid, { title: t });
+      const r = await patchDeskPage(workspace, rid, { title: t });
       if (!r.ok) return say(r.error, 'warn');
       if (!alive.current) return;
       setShownTitle(r.data.title);
-      rememberDeep(workspace, { exploration_id: rid, title: r.data.title, view: 'page' });
-      cockpitModeStore.openDeep(rid, r.data.title);
+      if (cockpitModeStore.getDeep().card_id === rid) cockpitModeStore.setDeskNav({ title: r.data.title });
+      void deskRef.current?.refresh();
     },
     [workspace, say],
   );
@@ -776,7 +907,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   const ask = (question: string, anchor: Anchor, follow_up_of?: string, sectionText?: string) => {
     if (!follow_up_of) maybeAutoTitle();
     void sendAsk({ question, anchor, ...(follow_up_of ? { follow_up_of } : {}), ...(sectionText ? { section_text: sectionText } : {}) });
-    logDeep({ type: 'deep.action', data: { action: follow_up_of ? 'follow_up' : 'ask', exploration_id: id, chars: question.length } });
+    logDeep({ type: 'deep.action', data: { action: follow_up_of ? 'follow_up' : 'ask', ...eventIds(id), chars: question.length } });
   };
 
   const patchLocal = (aid: string, patch: Partial<DeepAnswer>) => setAnswers((prev) => prev.map((a) => (a.id === aid ? { ...a, ...patch } : a)));
@@ -805,7 +936,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     ed.insert(change.from, change.insert);
     patchLocal(a.id, { inserted_at: new Date().toISOString() });
     void patchAnswer(workspace, realIdRef.current, a.id, { inserted: true });
-    logDeep({ type: 'deep.action', data: { action: 'insert', exploration_id: id, chars: a.answer.length } });
+    logDeep({ type: 'deep.action', data: { action: 'insert', ...eventIds(id), chars: a.answer.length } });
   };
 
   const keepAnswer = async (a: DeepAnswer) => {
@@ -816,7 +947,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     if (!r.ok) return say(r.error, 'warn');
     patchLocal(a.id, { kept_at: new Date().toISOString() });
     void patchAnswer(workspace, rid, a.id, { kept: true });
-    logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: id, chars: a.answer.length } });
+    logDeep({ type: 'deep.action', data: { action: 'keep', ...eventIds(id), chars: a.answer.length } });
     say('Kept as a reference');
   };
 
@@ -825,7 +956,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     patchLocal(a.id, { dismissed_at: new Date().toISOString() });
     setOpenMarker(null);
     void patchAnswer(workspace, realIdRef.current, a.id, { dismissed: true });
-    logDeep({ type: 'deep.action', data: { action: 'dismiss', exploration_id: id } });
+    logDeep({ type: 'deep.action', data: { action: 'dismiss', ...eventIds(id) } });
   };
 
   const retry = async (a: DeepAnswer) => {
@@ -1101,13 +1232,13 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     if (!eid) return say('Hester offline: capture needs Hester', 'warn');
     const r = await captureSomeday(workspace, t, {
       surface: 'lee',
-      exploration_id: eid,
+      ...(isCardId(eid) ? { card_id: eid } : { exploration_id: eid }),
       section: sectionAt(doc, from),
       context: contextAround(doc, from, to, 300),
     });
     if (r.ok) say('Captured to Someday');
     else say(r.error, 'warn');
-    logDeep({ type: 'deep.action', data: { action: 'capture', exploration_id: eid, chars: t.length } });
+    logDeep({ type: 'deep.action', data: { action: 'capture', ...eventIds(eid), chars: t.length } });
   };
 
   const onAction = async (action: DeepRowAction, sel: PageSelection, question?: string) => {
@@ -1127,13 +1258,15 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
         : { kind: 'quote' as const, quote: sel.text, section: sectionAt(doc, sel.from), source: { kind: 'page' as const } };
       const r = await addReference(workspace, eid, body);
       say(r.ok ? 'Kept as a reference' : r.error, r.ok ? 'ok' : 'warn');
-      logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: eid, chars } });
+      logDeep({ type: 'deep.action', data: { action: 'keep', ...eventIds(eid), chars } });
       return;
     }
     if (action === 'explore') {
-      const r = await exploreFrom(workspace, eid, { seed: sel.text, anchor: anchorFor(doc, sel.from, sel.to) });
-      say(r.ok ? `Explored: ${r.data.title}` : r.error, r.ok ? 'ok' : 'warn');
-      logDeep({ type: 'deep.action', data: { action: 'explore', exploration_id: eid, chars } });
+      // Desk D2 §7.2: "Explore" (the name isn't settled) makes a Page next to this card, seeded with the selection.
+      const r = await createDeskPage(workspace, { from: { card_id: eid, anchor: anchorFor(doc, sel.from, sel.to) }, text: sel.text });
+      say(r.ok ? `A new Page next to this one: ${r.data.card.title}` : r.error, r.ok ? 'ok' : 'warn');
+      if (r.ok) void deskRef.current?.refresh();
+      logDeep({ type: 'deep.action', data: { action: 'explore', ...eventIds(eid), chars } });
     }
   };
 
@@ -1165,7 +1298,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           source: { kind: 'page' },
         });
         say(r.ok ? 'Kept as a reference' : r.error, r.ok ? 'ok' : 'warn');
-        logDeep({ type: 'deep.action', data: { action: 'keep', exploration_id: eid, chars: opt.url.length } });
+        logDeep({ type: 'deep.action', data: { action: 'keep', ...eventIds(eid), chars: opt.url.length } });
         return;
       }
       case 'capture':
@@ -1259,14 +1392,15 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     const c = counts.current;
     const now = Date.now();
     if (c.keys + c.clicks + c.wheels > 0) {
-      logDeep({ type: 'deep.input', data: { exploration_id: id, view: 'page', keys: c.keys, clicks: c.clicks, wheels: c.wheels, span_ms: now - c.since } });
+      // Only ever from inside a card (§5.1): the Desk's overview doesn't count as deep work.
+      logDeep({ type: 'deep.input', data: { ...eventIds(id), view: 'page', keys: c.keys, clicks: c.clicks, wheels: c.wheels, span_ms: now - c.since } });
     }
     counts.current = { keys: 0, clicks: 0, wheels: 0, since: now };
   }, [id]);
   useEffect(() => {
     if (!visible) return;
     counts.current = { keys: 0, clicks: 0, wheels: 0, since: Date.now() };
-    logDeep({ type: 'deep.view', data: { exploration_id: id, view: 'page' } });
+    logDeep({ type: 'deep.view', data: { ...eventIds(id), view: 'page' } });
     const t = window.setInterval(flushInput, INPUT_FLUSH_MS);
     return () => {
       window.clearInterval(t);
@@ -1283,7 +1417,9 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   }, [workspace]);
   useEffect(
     () => () => {
-      void deleteIfEmpty();
+      void deleteIfEmpty().then((gone) => {
+        if (gone) void deskRef.current?.refresh();
+      });
     },
     [deleteIfEmpty],
   );
@@ -1301,15 +1437,24 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
 
   const startedAt = (copilot.focus ?? copilot.snapshot?.focus)?.started_at ?? null;
   const [sheet, setSheet] = useState<{ prefill: string; questions: RitualQuestion[] } | null>(null);
+  /** The ritual's lists from the other cards touched this session (Desk D2 §7.2), with their text for Ask and Hand off. */
+  const [others, setOthers] = useState<OtherCards>(NO_OTHERS);
   const openSheet = useCallback(() => {
     maybeAutoTitle();
     const doc = text.current;
     const qs: RitualQuestion[] = questions
       .filter((q) => q.status === 'open' && (markedThisSession.has(q.id) || (q.source === 'page' && !!startedAt && q.at >= startedAt)))
-      .map((q) => ({ id: q.id, kind: 'question' as const, text: q.text }));
+      .map((q) => ({ id: q.id, kind: 'question' as const, text: q.text, ...(realIdRef.current ? { card_id: realIdRef.current } : {}) }));
     setPopover(null);
+    setOthers(NO_OTHERS);
     setSheet({ prefill: lastSentence(doc, lastEdit.current ?? doc.length), questions: qs });
-  }, [questions, markedThisSession, startedAt, maybeAutoTitle]);
+    const rest = touchedCards().filter((c) => c !== realIdRef.current);
+    if (rest.length) {
+      void gatherOthers(workspace, rest, startedAt, (cid) => deskRef.current?.titleOf(cid) ?? '').then((o) => {
+        if (alive.current) setOthers(o);
+      });
+    }
+  }, [questions, markedThisSession, startedAt, maybeAutoTitle, workspace]);
   const endSeen = useRef(endNonce);
   useEffect(() => {
     if (endNonce === endSeen.current) return;
@@ -1318,11 +1463,53 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   }, [endNonce, openSheet]);
 
   const session = sheet
-    ? { ...sessionLists(answers, startedAt, madeHere.current), stillOpen: stillOpenOnPage(text.current, answers) }
+    ? (() => {
+        const here = sessionLists(answers, startedAt, madeHere.current);
+        return {
+          asked: [...here.asked, ...others.asked],
+          handedOff: [...here.handedOff, ...others.handedOff],
+          stillOpen: [...stillOpenOnPage(text.current, answers), ...others.stillOpen],
+        };
+      })()
     : undefined;
-  const askStillOpen = (o: StillOpen) =>
-    ask(o.kind === 'question' ? o.text : 'What is still open here, and what would settle it?', anchorFor(text.current, o.from, o.to), undefined, o.sectionText);
-  const handOffStillOpen = (o: StillOpen) => void openHandoff(o.sectionText, anchorFor(text.current, o.from, o.to));
+  const stillOpenQuestion = (o: StillOpen) => (o.kind === 'question' ? o.text : 'What is still open here, and what would settle it?');
+  const askStillOpen = (o: StillOpen & { card_id?: string }) => {
+    const other = o.card_id && o.card_id !== realIdRef.current ? o.card_id : null;
+    if (!other) {
+      ask(stillOpenQuestion(o), anchorFor(text.current, o.from, o.to), undefined, o.sectionText);
+      return;
+    }
+    // On another touched card: asked there, where the line is.
+    const t = others.texts[other] ?? '';
+    void askDeep(workspace, other, { question: stillOpenQuestion(o), anchor: anchorFor(t, o.from, o.to), section_text: o.sectionText }).then((r) => {
+      if (!r.ok) say(r.error, 'warn');
+    });
+    logDeep({ type: 'deep.action', data: { action: 'ask', ...eventIds(other), chars: stillOpenQuestion(o).length } });
+  };
+  const handOffStillOpen = (o: StillOpen & { card_id?: string }) => {
+    const other = o.card_id && o.card_id !== realIdRef.current ? o.card_id : null;
+    if (!other) {
+      void openHandoff(o.sectionText, anchorFor(text.current, o.from, o.to));
+      return;
+    }
+    const t = others.texts[other] ?? '';
+    setHandoff({ eid: other, title: deskRef.current?.titleOf(other) || 'Untitled', sectionText: o.sectionText, anchor: anchorFor(t, o.from, o.to) });
+  };
+  const ritualDesk = sheet
+    ? (() => {
+        const ids = touchedCards();
+        const list = realIdRef.current && !ids.includes(realIdRef.current) ? [...ids, realIdRef.current] : ids;
+        const titleOf = (cid: string) => (cid === realIdRef.current ? shownTitleRef.current : deskRef.current?.titleOf(cid) ?? '');
+        return {
+          touched: list.map((cid) => ({ id: cid, title: titleOf(cid) })),
+          stoppedCardId: realIdRef.current ?? list[list.length - 1] ?? null,
+          onZoom: (cid: string) => {
+            if (cid === realIdRef.current) editor.current?.focus();
+            else void zoomIntoCard({ card_id: cid, title: titleOf(cid) }, 'click');
+          },
+        };
+      })()
+    : undefined;
 
   const asks = answers.filter((a) => !isHandoff(a));
   const tray = answersTray([...asks, ...localAsks.map(() => ({ status: 'queued' as const }))]);
@@ -1337,6 +1524,14 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       onKeyDownCapture={() => {
         if (visible && !overlay) counts.current.keys++;
       }}
+      onKeyDown={(e) => {
+        // Esc closes a header popover before it takes you to the Desk.
+        if (e.key === 'Escape' && popover && !e.defaultPrevented) {
+          e.preventDefault();
+          setPopover(null);
+          editor.current?.focus();
+        }
+      }}
       onMouseDownCapture={() => {
         if (visible && !overlay) counts.current.clicks++;
       }}
@@ -1345,6 +1540,12 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       }}
     >
       <header className="deep-header">
+        <button className="deep-quiet desk-back" onClick={() => zoomOut('overview', 'click')} title="Back to the Desk (Esc)">
+          Desk
+        </button>
+        <span className="desk-crumb-sep" aria-hidden="true">
+          /
+        </span>
         {renaming != null ? (
           <input
             className="deep-title-input"
@@ -1585,6 +1786,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           session={session}
           onAsk={askStillOpen}
           onHandOff={handOffStillOpen}
+          desk={ritualDesk}
           suspended={!!handoff}
           beforeEnd={async () => {
             if (saveTimer.current || inFlight.current || unsaved()) await save();
@@ -1608,7 +1810,9 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           sectionText={handoff.sectionText}
           anchor={handoff.anchor}
           provider={handoff.provider}
-          onRecord={upsertAnswer}
+          onRecord={(a) => {
+            if (handoff.eid === realIdRef.current) upsertAnswer(a);
+          }}
           onLaunched={() => {
             setHandoff(null);
             say('Handed off · it shows in Work');

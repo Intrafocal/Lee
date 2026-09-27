@@ -1,0 +1,472 @@
+/*
+ * desk.css - the Desk (docs/16-Desk.md; D2 contract §7): the overview and
+ * Areas on one transformed layer, cards, the Goals corner, the hover
+ * preview, the Drawers strip and panel, and the zoomed card's layer. Themed
+ * from the Phosphor tokens (styles/tokens.css); no new tokens.
+ *
+ * The same room as Deep (deep.css): --ground-0, your words (titles, Area
+ * names, ideas) in --font-write, quiet chrome with no fill. Ember is only a
+ * card's dot for a hand-off waiting on you; phosphor never shows here (the
+ * Desk has no `next` step).
+ *
+ * Text on the Desk layer is counter-scaled with --desk-scale so the overview
+ * stays legible without growing past its size when zoomed in.
+ */
+
+/* ---- the Desk under the card layer ---- */
+
+.desk {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+
+/* Zoomed into a card: the Desk stays mounted underneath, out of the way. */
+.desk.is-behind {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.desk-header {
+  position: relative;
+  z-index: 2;
+}
+
+.desk-crumb,
+.desk-back {
+  color: var(--text-3);
+}
+
+.desk-crumb[aria-current='page'] {
+  color: var(--text-2);
+}
+
+.desk-crumb-sep {
+  color: var(--text-3);
+  opacity: 0.6;
+}
+
+.desk-crumb-area {
+  font-family: var(--font-write);
+  font-size: 15px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-new-area {
+  width: 220px;
+}
+
+.desk-note {
+  padding: var(--space-5) var(--space-6);
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+}
+
+/* ---- the viewport and the transformed layer ---- */
+
+.desk-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: default;
+  touch-action: none;
+}
+
+.desk-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* A zoom-level change glides; your own pan and zoom follow the pointer exactly. */
+.desk-world.is-fitting {
+  transition: transform 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desk-world.is-fitting {
+    transition: none;
+  }
+}
+
+/* ---- Areas ---- */
+
+.desk-area {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--ground-3);
+  border-radius: var(--radius-modal);
+  background: var(--ground-1);
+}
+
+.desk-area.is-current {
+  border-color: var(--ground-4);
+}
+
+.desk-area-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  box-sizing: border-box;
+}
+
+.desk-area-name {
+  font-family: var(--font-write);
+  font-size: calc(18px / max(var(--desk-scale, 1), 0.25));
+  line-height: 1.2;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 70%;
+}
+
+.desk-area-rename {
+  font-family: var(--font-write);
+  font-size: 18px;
+}
+
+.desk-area-menu {
+  position: relative;
+  /* Menus stay a readable size whatever the zoom. */
+  transform: scale(calc(1 / max(var(--desk-scale, 1), 0.25)));
+  transform-origin: right center;
+}
+
+.desk-area-pop {
+  min-width: 160px;
+}
+
+/* ---- cards ---- */
+
+.desk-card {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  cursor: default;
+  overflow: hidden;
+  outline: none;
+}
+
+.desk-card:hover {
+  border-color: var(--ground-5);
+}
+
+.desk-card:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.desk-card-title {
+  font-family: var(--font-write);
+  font-size: calc(18px / max(var(--desk-scale, 1), 0.5));
+  line-height: 1.3;
+  color: var(--text-1);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.desk-card-count {
+  font-size: calc(12px / max(var(--desk-scale, 1), 0.5));
+  color: var(--text-3);
+}
+
+/* A hand-off in this card is waiting on you: the one ember on the Desk. */
+.desk-card-dot {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--needs-you);
+  transform: scale(calc(1 / max(var(--desk-scale, 1), 0.5)));
+}
+
+.desk-card-zoom {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  opacity: 0;
+  transform: scale(calc(1 / max(var(--desk-scale, 1), 0.5)));
+  transform-origin: right bottom;
+}
+
+.desk-card:hover .desk-card-zoom,
+.desk-card:focus-within .desk-card-zoom,
+.desk-card:focus .desk-card-zoom {
+  opacity: 1;
+}
+
+/* ---- the Goals corner ---- */
+
+.desk-goals {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px dashed var(--ground-4);
+  border-radius: var(--radius-card);
+  background: var(--ground-1);
+  overflow: hidden;
+  cursor: pointer;
+  outline: none;
+}
+
+.desk-goals:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.desk-goals-label {
+  font-size: calc(12px / max(var(--desk-scale, 1), 0.5));
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.desk-goals.is-empty .desk-goals-label {
+  font-family: var(--font-write);
+  font-size: calc(15px / max(var(--desk-scale, 1), 0.5));
+  color: var(--text-2);
+}
+
+.desk-goals-line {
+  font-family: var(--font-write);
+  font-size: calc(14px / max(var(--desk-scale, 1), 0.5));
+  color: var(--text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.desk-goals-input {
+  font-family: var(--font-write);
+  font-size: 15px;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--ground-4);
+  padding: 2px 0;
+  outline: none;
+  caret-color: var(--caret);
+}
+
+/* ---- the hover preview (read-only) ---- */
+
+.desk-preview {
+  position: absolute;
+  z-index: 3;
+  width: 380px;
+  max-height: 60%;
+  overflow: hidden;
+  padding: var(--space-4);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.6);
+  pointer-events: none;
+}
+
+.desk-preview-title {
+  font-family: var(--font-write);
+  font-size: 17px;
+  color: var(--text-1);
+  margin-bottom: var(--space-2);
+}
+
+.desk-preview-body {
+  font-family: var(--font-write);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+/* ---- the Drawers ---- */
+
+.desk-drawers {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 40px;
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--ground-3);
+  flex-shrink: 0;
+}
+
+.desk-drawer-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+}
+
+.desk-drawer-btn:hover,
+.desk-drawer-btn.is-open {
+  color: var(--text-1);
+  border-color: var(--ground-4);
+}
+
+.desk-hint {
+  font-size: 12px;
+}
+
+/* One column at the side, not a scrim: ideas drag onto Areas behind it. */
+.desk-drawer {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  bottom: 40px;
+  z-index: 4;
+  width: min(380px, 90%);
+  display: flex;
+  flex-direction: column;
+  background: var(--ground-1);
+  border-left: 1px solid var(--ground-3);
+  box-shadow: -8px 0 24px rgba(var(--ground-0-rgb), 0.5);
+}
+
+.desk-drawer-head {
+  display: flex;
+  align-items: baseline;
+  padding: var(--space-4);
+  font-size: 15px;
+  color: var(--text-1);
+}
+
+.desk-drawer-list {
+  flex: 1;
+  overflow: auto;
+  padding: 0 var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.desk-idea {
+  padding: var(--space-3);
+  border: 1px solid var(--ground-3);
+  border-radius: var(--radius-card);
+  background: var(--ground-2);
+}
+
+.desk-idea[draggable='true'] {
+  cursor: grab;
+}
+
+.desk-idea-text {
+  font-family: var(--font-write);
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.desk-idea-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+/* ---- the zoomed card (the Page editor, unchanged) ---- */
+
+.desk-card-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground-0);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.desk-card-layer.is-zoomed {
+  visibility: visible;
+  pointer-events: auto;
+  animation: desk-zoom-in 180ms ease-out;
+}
+
+@keyframes desk-zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desk-card-layer.is-zoomed {
+    animation: none;
+  }
+}
+
+/* ---- the ending ritual's touched cards ---- */
+
+.desk-touched {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--space-3);
+}
+
+.desk-touched-card {
+  font-family: var(--font-write);
+  font-size: 15px;
+  color: var(--text-1);
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+}
+
+.desk-touched-card:hover:not(:disabled) {
+  background: var(--ground-2);
+}
+
+.desk-touched-card.is-last::after {
+  content: ' · where you stopped';
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-3);
+}

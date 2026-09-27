@@ -22,6 +22,12 @@
  * unrated (reason 'esc'). The × means "never mind" and keeps the session.
  * No timers, no reminders.
  *
+ * Desk D2 (contract §7.2): at the Desk the sheet first lists the cards you
+ * touched this session (titles in Newsreader, one click zooms back), and the
+ * Asked, Handed off and Still open lists span them (each item carries its
+ * card). The record goes to POST /desk/sessions with cards_touched,
+ * stopped_card_id and questions_kept as card-and-question pairs.
+ *
  * Look (cockpit-design §6.1): the Cockpit primitives. "Where did you stop?"
  * and the questions are your words, in Newsreader; the default action is the
  * sheet's one `Btn next`, the other `plain`.
@@ -42,6 +48,7 @@ import {
   type SessionHandoff,
   type StillOpen,
 } from '../../lib/hesterDeep';
+import { postDeskSession } from '../../lib/hesterDesk';
 import { deepEnd, quitLee } from './deepBridge';
 import './deep.css';
 import './HandoffSheet.css';
@@ -50,6 +57,20 @@ export interface RitualQuestion {
   id: string;
   kind: 'question' | 'answer';
   text: string;
+  /** The card it's on (Desk); absent = the stopped-at card. */
+  card_id?: string;
+}
+
+/** A ritual item from one of the touched cards (Desk). */
+type OnCard = { card_id?: string; card_title?: string };
+
+/** The Desk's part of the ritual: the touched cards and where you stopped. */
+export interface RitualDesk {
+  touched: Array<{ id: string; title: string }>;
+  /** The card the stopped-at line is in (the last card zoomed into). */
+  stoppedCardId: string | null;
+  /** Zoom back into a touched card (the sheet closes; the session goes on). */
+  onZoom?: (cardId: string) => void;
 }
 
 interface EndSessionSheetProps {
@@ -65,12 +86,14 @@ interface EndSessionSheetProps {
   running?: number;
   /** Hand-offs still launching, running or waiting; closing Lee stops their agents. */
   runningHandoffs?: number;
-  /** R6 "This session": what was asked and handed off, and what's still open on the Page. */
-  session?: { asked: SessionAsk[]; handedOff: SessionHandoff[]; stillOpen: StillOpen[] };
+  /** R6 "This session": what was asked and handed off, and what's still open on the Page (or the touched cards). */
+  session?: { asked: Array<SessionAsk & OnCard>; handedOff: Array<SessionHandoff & OnCard>; stillOpen: Array<StillOpen & OnCard> };
   /** Ask about a still-open item (its line, with its section). */
-  onAsk?: (item: StillOpen) => void;
+  onAsk?: (item: StillOpen & OnCard) => void;
   /** Hand off a still-open item (opens the Hand off sheet over this one). */
-  onHandOff?: (item: StillOpen) => void;
+  onHandOff?: (item: StillOpen & OnCard) => void;
+  /** At the Desk: the touched cards; the record goes to /desk/sessions. */
+  desk?: RitualDesk;
   /** Another sheet is open over this one: its keys aren't ours. */
   suspended?: boolean;
   /** Called before anything is written, so the Page can flush its last save. */
@@ -101,6 +124,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
   beforeEnd,
   onEnded,
   onClose,
+  desk,
 }) => {
   const closeByDefault = running + runningHandoffs === 0;
   const asked = session?.asked ?? [];
@@ -139,7 +163,37 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
       ? [...questions.filter((q) => kept.has(q.id)).map((q) => q.id), ...openAsks.filter((a) => !resolved.has(a.id)).map((a) => a.id)]
       : [...questions.map((q) => q.id), ...openAsks.map((a) => a.id)];
     const writes: Array<Promise<unknown>> = [];
-    if (explorationId) {
+    if (desk) {
+      // Desk D2 §5.2: one record for the session, across the touched cards.
+      const home = desk.stoppedCardId ?? explorationId;
+      const cardOf = (id: string): string | null =>
+        questions.find((q) => q.id === id)?.card_id ?? asked.find((a) => a.id === id)?.card_id ?? home ?? null;
+      const refs = keptIds.map((id) => ({ card_id: cardOf(id), question_id: id })).filter((r): r is { card_id: string; question_id: string } => !!r.card_id);
+      writes.push(
+        postDeskSession(workspace, {
+          focus_session_id: focus?.session_id ?? '',
+          started_at: focus?.started_at ?? ended,
+          ended_at: ended,
+          reason,
+          stopped_at: stopped,
+          stopped_card_id: desk.stoppedCardId,
+          rating: ritual ? rating : null,
+          questions_kept: refs,
+          cards_touched: desk.touched.map((c) => c.id),
+        }),
+      );
+      if (ritual) {
+        for (const q of questions) {
+          const cid = q.card_id ?? home;
+          if (kept.has(q.id) || !cid) continue;
+          writes.push(q.kind === 'question' ? patchQuestion(workspace, cid, q.id, 'closed') : patchAnswer(workspace, cid, q.id, { read: true }));
+        }
+        for (const a of asked) {
+          const cid = a.card_id ?? home;
+          if (a.state === 'unread' && resolved.has(a.id) && cid) writes.push(patchAnswer(workspace, cid, a.id, { read: true }));
+        }
+      }
+    } else if (explorationId) {
       writes.push(
         postSession(workspace, explorationId, {
           focus_session_id: focus?.session_id ?? '',
@@ -222,6 +276,29 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           </button>
         </div>
 
+        {desk && desk.touched.length > 0 && (
+          <>
+            <div className="deep-sheet-label">{desk.touched.length === 1 ? 'The card you worked on' : 'The cards you worked on'}</div>
+            <div className="desk-touched" role="list">
+              {desk.touched.map((c) => (
+                <button
+                  key={c.id}
+                  role="listitem"
+                  className={`desk-touched-card${c.id === desk.stoppedCardId ? ' is-last' : ''}`}
+                  disabled={!desk.onZoom}
+                  onClick={() => {
+                    onClose();
+                    desk.onZoom?.(c.id);
+                  }}
+                  title="Back to this card"
+                >
+                  {c.title || 'Untitled'}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
         <label className="deep-sheet-label" htmlFor="deep-stopped-at">
           Where did you stop?
         </label>
@@ -280,7 +357,10 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
                     <span className="session-row-state">✓</span>
                   )}
                   <span className="session-row-text">{a.question}</span>
-                  <span className="session-row-state">{a.label}</span>
+                  <span className="session-row-state">
+                    {a.card_title ? `${a.card_title} · ` : ''}
+                    {a.label}
+                  </span>
                 </label>
               );
             })}
@@ -293,6 +373,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
               <div key={h.id} className="session-row">
                 <span className="session-row-text">{h.question}</span>
                 <span className="session-row-state">
+                  {h.card_title ? `${h.card_title} · ` : ''}
                   {handoffKindLabel(h.kind)} · {h.label}
                 </span>
               </div>
@@ -301,9 +382,9 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
         )}
         {stillOpen.length > 0 && (
           <div className="session-group" role="group" aria-label="Still open on the Page">
-            <div className="session-group-label">Still open on the Page</div>
+            <div className="session-group-label">{desk && desk.touched.length > 1 ? 'Still open on these Pages' : 'Still open on the Page'}</div>
             {stillOpen.map((o) => (
-              <div key={`${o.kind}:${o.text}`} className="session-row">
+              <div key={`${o.card_id ?? ''}:${o.kind}:${o.text}`} className="session-row">
                 <span className={`session-row-text${o.kind === 'requirements' ? ' is-block' : ''}`}>{o.text}</span>
                 {actedOn[`${o.kind}:${o.text}`] ? (
                   <span className="session-row-state">asked</span>

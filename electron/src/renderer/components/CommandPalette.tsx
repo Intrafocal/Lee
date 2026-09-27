@@ -8,6 +8,10 @@
  * **Keep** (⌘K): the last response becomes a `quote` reference in that
  * exploration, source `palette`.
  *
+ * At the Desk (D2 §7.2) the palette is about the zoomed Page card (`about:
+ * page <title>`, through the steward), and Keep goes to that card; at the
+ * overview there's no card to keep into.
+ *
  * About (cockpit-design §6.2): opened while the Cockpit has a selected item,
  * the palette shows "about: <kind> <title> ×" above the field and asks
  * through POST /cockpit/ask (the steward); × makes the question general
@@ -24,7 +28,7 @@ import { addReference } from '../lib/hesterDeep';
 import { askSteward } from '../lib/hesterCockpit';
 import type { AboutRef, StewardAnswer } from '../../shared/cockpit';
 import { cockpitModeStore } from './cockpit/cockpitMode';
-import { aboutLine, paletteAboutFor, paletteRoute, publishedPaletteAbout, stewardExtras } from './paletteAbout';
+import { aboutLine, deskAboutFor, paletteAboutFor, paletteRoute, publishedPaletteAbout, stewardExtras } from './paletteAbout';
 
 const HESTER_DAEMON_PORT = 9000;
 
@@ -92,8 +96,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   initialPrompt = null,
   autoSubmit = true,
   onPromptConsumed,
-  exploration,
+  exploration: explorationProp,
 }) => {
+  // At the Desk, Keep needs a card zoomed in (the overview has none to keep into).
+  const deskNav = cockpitModeStore.get().deep;
+  const exploration = explorationProp && (deskNav.zoom === 'card' || !deskNav.card_id) ? explorationProp : undefined;
   const [query, setQuery] = useState('');
   const hasAutoSubmittedRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -115,7 +122,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   useEffect(() => {
     if (isOpen) {
       // The Cockpit's selected item, if any, is what this question is about.
-      setAbout(paletteAboutFor(cockpitModeStore.get(), publishedPaletteAbout()));
+      const st = cockpitModeStore.get();
+      setAbout(paletteAboutFor(st, publishedPaletteAbout()) ?? deskAboutFor(st));
       checkDaemonHealth();
       // Focus input when opened
       setTimeout(() => inputRef.current?.focus(), 50);
@@ -361,7 +369,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     setKept(r.ok ? 'kept' : 'error');
     if (r.ok) {
       try {
-        window.lee?.cockpit?.logEvent({ type: 'deep.action', data: { action: 'keep', exploration_id: exploration.id, chars: text.length } });
+        const ids = /^pg-[0-9a-f]{8}$/.test(exploration.id) ? { card_id: exploration.id, card_kind: 'page' as const } : { exploration_id: exploration.id };
+        window.lee?.cockpit?.logEvent({ type: 'deep.action', data: { action: 'keep', ...ids, chars: text.length } });
       } catch {
         /* cockpit IPC not available */
       }
