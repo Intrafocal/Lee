@@ -9,11 +9,12 @@ import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import 'phosphor_icon.dart';
+import 'work_ui.dart';
 
-/// Quick-reply chips offered on text-capable items (contracts §5.2:
-/// Aeronaut is strong at touch/buttons/swipes and weak at typing, so offer
-/// tap targets for anything common). Kept short (3-4 entries) by design —
-/// this is the one place to edit to change what's offered.
+/// The quick replies (cockpit design §4.4): Work's waiting cards show the
+/// first three, the one-agent screen all four. Same list as
+/// `QUICK_REPLIES` in `electron/src/shared/cockpit.ts`; change both
+/// together. Each is sent exactly as shown, through the item's Reply.
 const List<String> quickReplyChips = [
   'Yes, go ahead',
   'Stop and wait for me',
@@ -23,7 +24,7 @@ const List<String> quickReplyChips = [
 
 /// Item kinds that take a free-text reply and so get [quickReplyChips]
 /// (contracts §5.2: "waiting/question, blocker, decision, review" — not
-/// approval, which uses Approve/Deny, and not failure/summary, which don't
+/// approval, which uses Allow/Deny, and not failure/summary, which don't
 /// take a reply in practice).
 const Set<AttentionKind> _chipKinds = {
   AttentionKind.waiting,
@@ -32,24 +33,48 @@ const Set<AttentionKind> _chipKinds = {
   AttentionKind.review,
 };
 
-/// One row in the Now screen's Waiting list (contracts §9.2): title, source,
-/// the agent's own words, and inline actions per `item.actions` — approve/
-/// deny, reply, snooze, dismiss, wake — matching the Lee status bar flyout.
+/// Whether [item] takes the quick replies.
+bool takesQuickReplies(AttentionItem item) =>
+    item.canReply && _chipKinds.contains(item.kind) && item.kind != AttentionKind.question;
+
+/// One waiting card in Work (cockpit design §4.1, §8.1): the needs-you dot,
+/// the title and age, the agent's words, and by kind: 44px Allow/Deny for
+/// approvals, the quick-reply chips in a sideways scroll for text items, the
+/// options for a question. Snooze, dismiss and wake sit in the `⋯` menu.
 ///
-/// Also offers phone-appropriate gestures (contracts §5.2): quick-reply
-/// chips on text-capable items, and swipe-to-snooze/swipe-to-dismiss on the
-/// tile itself. Approve/Deny are never bound to a swipe — they stay
-/// explicit taps only (C3: a stray gesture must never approve something).
+/// Swipe right snoozes and swipe left dismisses (contracts §5.2). Allow and
+/// Deny are never bound to a swipe — they stay explicit taps only (C3: a
+/// stray gesture must never approve something).
 class AttentionTile extends ConsumerStatefulWidget {
   final AttentionItem item;
   final bool awayActive;
 
-  const AttentionTile({required this.item, this.awayActive = false, super.key});
+  /// The first card in Work: its Allow is the view's one phosphor control.
+  final bool raised;
+
+  /// Opens the one-agent screen (a tap on the card outside its controls).
+  final VoidCallback? onOpen;
+
+  /// "Write a reply…": opens the one-agent screen with its reply bar; when
+  /// null the card opens an inline field instead.
+  final VoidCallback? onWriteReply;
+
+  /// A quiet usage label for the agent behind the item ("412k tok").
+  final String? tokenLabel;
+
+  const AttentionTile({
+    required this.item,
+    this.awayActive = false,
+    this.raised = false,
+    this.onOpen,
+    this.onWriteReply,
+    this.tokenLabel,
+    super.key,
+  });
 
   @override
   ConsumerState<AttentionTile> createState() => _AttentionTileState();
 }
-
 class _AttentionTileState extends ConsumerState<AttentionTile> {
   bool _replying = false;
   bool _busy = false;
@@ -177,172 +202,185 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
     final notifier = ref.read(attentionProvider.notifier);
     final isQuestion = item.kind == AttentionKind.question;
     final legacyAskQuestion = item.isLegacyAskQuestionApproval;
+    final isApproval = item.canApproveDeny && !legacyAskQuestion;
+    final chips = item.canReply && _chipKinds.contains(item.kind) && !isQuestion;
 
-    final card = Container(
-      padding: const EdgeInsets.all(AeronautTheme.spacingMd),
-      decoration: BoxDecoration(
-        color: AeronautColors.bgSurface,
-        borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-        border: Border.all(
-          color: _severityColor(item.severity).withValues(
-            alpha: item.severity == AttentionSeverity.blocking ? 0.6 : 0.2,
-          ),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 5),
-                child: _SeverityDot(severity: item.severity),
-              ),
-              const SizedBox(width: AeronautTheme.spacingSm),
-              Expanded(
-                child: Text(
-                  item.title,
-                  style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-              if (item.parked)
-                const Padding(
-                  padding: EdgeInsets.only(left: 4),
-                  child: PhosphorIcon(PhosphorIcons.clock, size: 14, color: AeronautColors.textTertiary),
-                ),
-              const SizedBox(width: 4),
-              Text(_age(item.createdAt), style: AeronautTheme.caption2),
-            ],
-          ),
-          if (item.sourceLabel.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              item.sourceLabel,
-              style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
+    final meta = [
+      if (item.sourceLabel.isNotEmpty) item.sourceLabel,
+      if (widget.tokenLabel != null && widget.tokenLabel!.isNotEmpty) widget.tokenLabel!,
+    ].join(' · ');
+
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Meta line: the needs-you dot, the title, the age on the right.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: WorkDot(item.severity == AttentionSeverity.ambient ? DotKind.idle : DotKind.needs),
             ),
-          ],
-          if (isQuestion) ...[
-            const SizedBox(height: AeronautTheme.spacingSm),
-            _QuestionBody(
-              question: _fullQuestion ?? item.question,
-              // Lee only puts `choose` in `actions` for a single-select,
-              // single-question, option-preview-free question — trust that
-              // over guessing from shape alone (it's the server's call, not
-              // ours: C3).
-              canChoose: item.canChoose,
+            const SizedBox(width: AeronautTheme.spacingSm),
+            Expanded(
+              child: Text(
+                item.title,
+                style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (item.parked)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: PhosphorIcon(PhosphorIcons.clock, size: 14, color: AeronautColors.textTertiary),
+              ),
+            const SizedBox(width: 4),
+            Text(_age(item.createdAt), style: AeronautTheme.caption2),
+            _MoreMenu(
+              item: item,
+              awayActive: widget.awayActive,
               busy: _busy,
-              choosingIndex: _choosingIndex,
-              onChoose: (i) => unawaited(_choose(item, i)),
+              onSnooze: () => unawaited(_showSnoozeMenu(context, notifier, item)),
+              onDismiss: () => _run(() => notifier.dismiss(item.id)),
+              onWake: () => _run(() => notifier.setWake(item.id, !item.wake)),
               onOpenTab: () => _run(() => notifier.open(item.id)),
             ),
           ],
-          if (!isQuestion && item.text.isNotEmpty) ...[
-            const SizedBox(height: AeronautTheme.spacingSm),
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => unawaited(_toggleTextExpand(item)),
-              child: Text(
-                _textExpanded && _fullText != null ? _fullText! : item.text,
-                style: AeronautTheme.footnote,
-                maxLines: _textExpanded ? null : 4,
-                overflow: _textExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-          if (legacyAskQuestion) ...[
-            const SizedBox(height: AeronautTheme.spacingSm),
-            Text(
-              'Claude is asking a question — open the tab to answer.',
-              style: AeronautTheme.footnote.copyWith(color: AeronautColors.warning),
-            ),
-          ],
+        ),
+        if (meta.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 15),
+            child: Text(meta, style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary)),
+          ),
+        if (isQuestion) ...[
           const SizedBox(height: AeronautTheme.spacingSm),
-          if (_replying)
-            _ReplyField(
-              controller: _replyController,
-              busy: _busy,
-              showChips: item.canReply && _chipKinds.contains(item.kind),
-              onCancel: () => setState(() => _replying = false),
-              onSend: (text) {
-                final trimmed = text.trim();
-                if (trimmed.isEmpty) return;
-                setState(() => _replying = false);
-                _run(() => notifier.reply(item.id, action: 'text', text: trimmed, version: item.version));
-                _replyController.clear();
-              },
-            )
-          else
-            Wrap(
-              spacing: AeronautTheme.spacingSm,
-              runSpacing: 4,
+          _QuestionBody(
+            question: _fullQuestion ?? item.question,
+            // Lee only puts `choose` in `actions` for a single-select,
+            // single-question, option-preview-free question — trust that
+            // over guessing from shape alone (it's the server's call, not
+            // ours: C3).
+            canChoose: item.canChoose,
+            busy: _busy,
+            choosingIndex: _choosingIndex,
+            onChoose: (i) => unawaited(_choose(item, i)),
+            onOpenTab: () => _run(() => notifier.open(item.id)),
+          ),
+        ],
+        if (isApproval && item.tool != null && item.tool!.preview.isNotEmpty) ...[
+          const SizedBox(height: AeronautTheme.spacingSm),
+          _CommandPreview(item.tool!.preview),
+        ],
+        if (!isQuestion && item.text.isNotEmpty) ...[
+          const SizedBox(height: AeronautTheme.spacingSm),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => unawaited(_toggleTextExpand(item)),
+            child: Text(
+              _textExpanded && _fullText != null ? _fullText! : item.text,
+              style: AeronautTheme.footnote,
+              maxLines: _textExpanded ? null : 6,
+              overflow: _textExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+        if (legacyAskQuestion) ...[
+          const SizedBox(height: AeronautTheme.spacingSm),
+          Text(
+            'Claude is asking a question — open the tab to answer.',
+            style: AeronautTheme.footnote.copyWith(color: AeronautColors.textSecondary),
+          ),
+          const SizedBox(height: AeronautTheme.spacingSm),
+          WorkButton(
+            label: 'Open tab',
+            kind: BtnKind.plain,
+            busy: _busy,
+            onPressed: () => _run(() => notifier.open(item.id)),
+          ),
+        ],
+        if (isApproval) ...[
+          const SizedBox(height: AeronautTheme.spacingMd),
+          // Allow and Deny: explicit 44px taps, never a swipe (C3). Allow is
+          // the view's one phosphor control only on the raised card.
+          Row(
+            children: [
+              Expanded(
+                child: WorkButton(
+                  key: const ValueKey('attention-allow'),
+                  label: 'Allow',
+                  kind: widget.raised ? BtnKind.next : BtnKind.plain,
+                  busy: _busy,
+                  onPressed: () => _run(() => notifier.reply(item.id, action: 'approve', version: item.version)),
+                ),
+              ),
+              const SizedBox(width: AeronautTheme.spacingSm),
+              Expanded(
+                child: WorkButton(
+                  key: const ValueKey('attention-deny'),
+                  label: 'Deny',
+                  kind: BtnKind.plain,
+                  busy: _busy,
+                  onPressed: () => _run(() => notifier.reply(item.id, action: 'deny', version: item.version)),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (chips && !_replying) ...[
+          const SizedBox(height: AeronautTheme.spacingMd),
+          // Quick replies in a sideways scroll (§4.4: the card shows the
+          // first three). A chip sends at once, through the same Reply path
+          // as typed text.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
               children: [
-                if (item.canApproveDeny && !legacyAskQuestion) ...[
-                  _ActionButton(
-                    icon: PhosphorIcons.check,
-                    label: 'Approve',
-                    filled: true,
-                    busy: _busy,
-                    onTap: () => _run(
-                      () => notifier.reply(item.id, action: 'approve', version: item.version),
-                    ),
+                for (final chip in quickReplyChips.take(3)) ...[
+                  QuickChip(
+                    label: chip,
+                    onTap: _busy ? null : () => _sendText(chip),
                   ),
-                  _ActionButton(
-                    icon: PhosphorIcons.close,
-                    label: 'Deny',
-                    busy: _busy,
-                    onTap: () => _run(
-                      () => notifier.reply(item.id, action: 'deny', version: item.version),
-                    ),
-                  ),
+                  const SizedBox(width: AeronautTheme.spacingSm),
                 ],
-                // Safety net for an older Lee that still files AskUserQuestion
-                // as a plain approval: Approve there would silently accept
-                // whatever option is highlighted (C3), so offer only a path
-                // to the real answer UI instead.
-                if (legacyAskQuestion)
-                  _ActionButton(
-                    icon: PhosphorIcons.external,
-                    label: 'Open tab',
-                    filled: true,
-                    busy: _busy,
-                    onTap: () => _run(() => notifier.open(item.id)),
-                  ),
-                if (item.canReply && !isQuestion)
-                  _ActionButton(
-                    icon: PhosphorIcons.send,
-                    label: 'Reply',
-                    filled: true,
-                    busy: _busy,
-                    onTap: () => setState(() => _replying = true),
-                  ),
-                if (item.canSnooze)
-                  _ActionButton(
-                    icon: PhosphorIcons.clock,
-                    label: 'Snooze',
-                    busy: _busy,
-                    onTap: () => unawaited(_showSnoozeMenu(context, notifier, item)),
-                  ),
-                if (item.canDismiss)
-                  _ActionButton(
-                    icon: PhosphorIcons.trash,
-                    label: 'Dismiss',
-                    busy: _busy,
-                    onTap: () => _run(() => notifier.dismiss(item.id)),
-                  ),
-                if (widget.awayActive && item.canWake)
-                  _ActionButton(
-                    icon: PhosphorIcons.bell,
-                    label: item.wake ? 'Waking me' : 'Wake me',
-                    filled: item.wake,
-                    busy: _busy,
-                    onTap: () => _run(() => notifier.setWake(item.id, !item.wake)),
-                  ),
               ],
             ),
+          ),
         ],
-      ),
+        if (_replying) ...[
+          const SizedBox(height: AeronautTheme.spacingSm),
+          _ReplyField(
+            controller: _replyController,
+            busy: _busy,
+            onCancel: () => setState(() => _replying = false),
+            onSend: (text) {
+              final trimmed = text.trim();
+              if (trimmed.isEmpty) return;
+              setState(() => _replying = false);
+              _sendText(trimmed);
+              _replyController.clear();
+            },
+          ),
+        ] else if (item.canReply && !isQuestion)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: AeronautColors.textSecondary,
+                padding: const EdgeInsets.symmetric(horizontal: 0, vertical: AeronautTheme.spacingSm),
+                minimumSize: const Size(0, 44),
+                textStyle: AeronautTheme.footnote,
+              ),
+              onPressed: _busy
+                  ? null
+                  : () => chips && widget.onWriteReply != null
+                      ? widget.onWriteReply!()
+                      : setState(() => _replying = true),
+              child: Text(chips ? 'Write a reply…' : 'Reply'),
+            ),
+          ),
+      ],
     );
+
+    final card = WorkCard(raised: widget.raised, onOpen: widget.onOpen, child: body);
 
     const margin = EdgeInsets.symmetric(
       horizontal: AeronautTheme.spacingMd,
@@ -376,7 +414,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
               ? const _SwipeIndicator(
                   icon: PhosphorIcons.clock,
                   label: 'Snooze',
-                  color: AeronautColors.warning,
+                  color: AeronautColors.textSecondary,
                   alignRight: false,
                 )
               : const SizedBox.shrink(),
@@ -395,7 +433,7 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
               await _run(() => notifier.dismiss(item.id));
             }
             // Never actually remove the tile here — same as the Snooze/
-            // Dismiss buttons above, the queue only drops it once the
+            // Dismiss menu entries, the queue only drops it once the
             // server confirms (next snapshot/refresh).
             return false;
           },
@@ -405,6 +443,10 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
     );
   }
 
+  void _sendText(String text) {
+    final item = widget.item;
+    _run(() => ref.read(attentionProvider.notifier).reply(item.id, action: 'text', text: text, version: item.version));
+  }
   Future<void> _showSnoozeMenu(BuildContext context, AttentionNotifier notifier, AttentionItem item) {
     return showModalBottomSheet<void>(
       context: context,
@@ -441,16 +483,6 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
   }
 }
 
-Color _severityColor(AttentionSeverity severity) {
-  switch (severity) {
-    case AttentionSeverity.blocking:
-      return AeronautColors.offline;
-    case AttentionSeverity.needsYou:
-      return AeronautColors.warning;
-    case AttentionSeverity.ambient:
-      return AeronautColors.textTertiary;
-  }
-}
 
 /// `Xs` / `Xm` / `Xh` / `Xd` — no `intl` dependency for one small label.
 String _age(DateTime? createdAt) {
@@ -462,6 +494,85 @@ String _age(DateTime? createdAt) {
   return '${diff.inDays}d';
 }
 
+enum _MoreAction { snooze, dismiss, wake, openTab }
+
+/// The card's quiet `⋯` menu: snooze, dismiss, wake me and open the tab —
+/// the same actions a swipe reaches, for when a swipe isn't handy.
+class _MoreMenu extends StatelessWidget {
+  final AttentionItem item;
+  final bool awayActive;
+  final bool busy;
+  final VoidCallback onSnooze;
+  final VoidCallback onDismiss;
+  final VoidCallback onWake;
+  final VoidCallback onOpenTab;
+
+  const _MoreMenu({
+    required this.item,
+    required this.awayActive,
+    required this.busy,
+    required this.onSnooze,
+    required this.onDismiss,
+    required this.onWake,
+    required this.onOpenTab,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = <PopupMenuEntry<_MoreAction>>[
+      if (item.canSnooze) const PopupMenuItem(value: _MoreAction.snooze, child: Text('Snooze')),
+      if (item.canDismiss) const PopupMenuItem(value: _MoreAction.dismiss, child: Text('Dismiss')),
+      if (awayActive && item.canWake)
+        PopupMenuItem(value: _MoreAction.wake, child: Text(item.wake ? 'Stop waking me' : 'Wake me')),
+      if (item.actions.contains(AttentionActionName.open))
+        const PopupMenuItem(value: _MoreAction.openTab, child: Text('Open tab on the Mac')),
+    ];
+    if (entries.isEmpty) return const SizedBox(width: 4);
+    return SizedBox(
+      width: 32,
+      height: 24,
+      child: PopupMenuButton<_MoreAction>(
+        tooltip: 'More',
+        enabled: !busy,
+        padding: EdgeInsets.zero,
+        color: AeronautColors.bgElevated,
+        icon: const PhosphorIcon(PhosphorIcons.more, size: 18, color: AeronautColors.textTertiary),
+        onSelected: (action) => switch (action) {
+          _MoreAction.snooze => onSnooze(),
+          _MoreAction.dismiss => onDismiss(),
+          _MoreAction.wake => onWake(),
+          _MoreAction.openTab => onOpenTab(),
+        },
+        itemBuilder: (_) => entries,
+      ),
+    );
+  }
+}
+
+/// The exact command or preview an approval would run, in mono.
+class _CommandPreview extends StatelessWidget {
+  final String text;
+
+  const _CommandPreview(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AeronautTheme.spacingSm),
+      decoration: BoxDecoration(
+        color: AeronautColors.chrome,
+        borderRadius: BorderRadius.circular(AeronautTheme.radiusSm),
+      ),
+      child: Text(
+        text,
+        maxLines: 6,
+        overflow: TextOverflow.ellipsis,
+        style: AeronautTheme.mono.copyWith(fontSize: 12, color: AeronautColors.textSecondary),
+      ),
+    );
+  }
+}
 /// Body of a `kind: question` tile (Claude's `AskUserQuestion`). Shows a
 /// tappable button per option only when [canChoose] is true — Lee sets
 /// `choose` in `actions` only for a single, single-select question with
@@ -548,13 +659,7 @@ class _QuestionBody extends StatelessWidget {
             ),
           ],
         const SizedBox(height: AeronautTheme.spacingSm),
-        _ActionButton(
-          icon: PhosphorIcons.external,
-          label: 'Open tab',
-          filled: true,
-          busy: busy,
-          onTap: onOpenTab,
-        ),
+        WorkButton(label: 'Open tab', kind: BtnKind.plain, busy: busy, onPressed: onOpenTab),
       ],
     );
   }
@@ -631,21 +736,6 @@ class _QuestionOptionButton extends StatelessWidget {
   }
 }
 
-class _SeverityDot extends StatelessWidget {
-  final AttentionSeverity severity;
-
-  const _SeverityDot({required this.severity});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: _severityColor(severity)),
-    );
-  }
-}
-
 /// The colored panel revealed behind a tile while swiping (contracts §5.2).
 /// Same rounded shape as the card (clipped by the caller) so it reads as
 /// "underneath the card", not a full-bleed row.
@@ -692,107 +782,45 @@ class _SwipeIndicator extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  final PhosphorIconData icon;
-  final String label;
-  final bool filled;
-  final bool busy;
-  final VoidCallback onTap;
-
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    this.filled = false,
-    this.busy = false,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final child = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        PhosphorIcon(icon, size: 14, color: filled ? AeronautColors.onAccent : AeronautColors.textSecondary),
-        const SizedBox(width: 4),
-        Text(label),
-      ],
-    );
-    const padding = EdgeInsets.symmetric(horizontal: 12, vertical: 6);
-    if (filled) {
-      return ElevatedButton(
-        onPressed: busy ? null : onTap,
-        style: ElevatedButton.styleFrom(padding: padding, textStyle: AeronautTheme.caption1),
-        child: child,
-      );
-    }
-    return OutlinedButton(
-      onPressed: busy ? null : onTap,
-      style: OutlinedButton.styleFrom(padding: padding, textStyle: AeronautTheme.caption1),
-      child: child,
-    );
-  }
-}
-
+/// The card's inline reply field (for items without a one-agent screen).
 class _ReplyField extends StatelessWidget {
   final TextEditingController controller;
   final bool busy;
-  final bool showChips;
   final VoidCallback onCancel;
   final ValueChanged<String> onSend;
 
   const _ReplyField({
     required this.controller,
     required this.busy,
-    this.showChips = false,
     required this.onCancel,
     required this.onSend,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        if (showChips) ...[
-          Wrap(
-            spacing: AeronautTheme.spacingSm,
-            runSpacing: AeronautTheme.spacingXs,
-            children: [
-              for (final chip in quickReplyChips)
-                ActionChip(
-                  label: Text(chip),
-                  visualDensity: VisualDensity.compact,
-                  // Same call as a typed reply: text action, item's current
-                  // version, same success/stale/error feedback (_run).
-                  onPressed: busy ? null : () => onSend(chip),
-                ),
-            ],
+        Expanded(
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            minLines: 1,
+            maxLines: 4,
+            textInputAction: TextInputAction.send,
+            onSubmitted: onSend,
+            decoration: const InputDecoration(hintText: 'Reply…', isDense: true),
           ),
-          const SizedBox(height: AeronautTheme.spacingSm),
-        ],
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: controller,
-                autofocus: true,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onSubmitted: onSend,
-                decoration: const InputDecoration(hintText: 'Reply…', isDense: true),
-              ),
-            ),
-            IconButton(
-              icon: const PhosphorIcon(PhosphorIcons.send, size: 18),
-              onPressed: busy ? null : () => onSend(controller.text),
-            ),
-            IconButton(
-              icon: const PhosphorIcon(PhosphorIcons.close, size: 18),
-              onPressed: onCancel,
-            ),
-          ],
+        ),
+        IconButton(
+          tooltip: 'Send',
+          icon: const PhosphorIcon(PhosphorIcons.send, size: 18),
+          onPressed: busy ? null : () => onSend(controller.text),
+        ),
+        IconButton(
+          tooltip: 'Cancel',
+          icon: const PhosphorIcon(PhosphorIcons.close, size: 18),
+          onPressed: onCancel,
         ),
       ],
     );

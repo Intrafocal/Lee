@@ -339,11 +339,11 @@ class HesterApi {
   /// `GET /cockpit/explorations?workspace=` — active explorations for
   /// Library's Explorations tab, newest touched first. Null on any failure
   /// ("Hester offline"), same convention as [getSomeday].
-  Future<List<ExplorationSummary>?> getExplorations({required String workspace}) async {
+  Future<List<ExplorationSummary>?> getExplorations({String? workspace}) async {
     if (_baseUrl == null) return null;
     try {
       final uri = Uri.parse('$_baseUrl/cockpit/explorations')
-          .replace(queryParameters: {'workspace': workspace, 'status': 'active'});
+          .replace(queryParameters: {if (workspace != null) 'workspace': workspace, 'status': 'active'});
       final response =
           await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
       _isUnauthorized(response);

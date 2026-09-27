@@ -3,20 +3,23 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/activity.dart';
 import '../models/attention.dart';
 import '../providers/attention_provider.dart';
 import '../providers/machines_provider.dart';
 import '../providers/windows_provider.dart';
+import '../screens/agent_screen.dart';
 import '../screens/root_shell.dart';
 import '../services/lee_api.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import 'phosphor_icon.dart';
+import 'work_ui.dart';
 
 /// Idle agents that finished longer ago than this fold into a
-/// "N earlier" row instead of taking space on Now.
-const Duration staleIdleAfter = Duration(hours: 1);
+/// "n earlier today" row (cockpit design §4.1).
+const Duration staleIdleAfter = Duration(hours: 2);
 
 /// The In flight list split for display: [visible] in order (busy, then
 /// waiting, then idle/unknown), and [older] idle agents folded away.
@@ -27,9 +30,9 @@ class InFlightGroups {
   const InFlightGroups(this.visible, this.older);
 }
 
-/// Orders [agents] for the Now screen: busy first (longest-running first),
-/// then waiting, then idle (most recently finished first), then unknown.
-/// Idle agents that finished more than [staleAfter] before [now] go to
+/// Orders [agents] for Work: busy first (longest-running first), then
+/// waiting, then idle (most recently finished first), then unknown. Idle
+/// agents that finished more than [staleAfter] before [now] go to
 /// [InFlightGroups.older]. Pure, so ordering is unit-testable.
 InFlightGroups inFlightGroups(
   List<AgentSummary> agents,
@@ -62,7 +65,7 @@ InFlightGroups inFlightGroups(
   return InFlightGroups(visible, older);
 }
 
-/// "just now", "12m", "1h 5m", "2d".
+/// "<1m", "12m", "1h 5m", "2d".
 String shortDuration(Duration d) {
   if (d.isNegative || d.inMinutes < 1) return '<1m';
   if (d.inHours < 1) return '${d.inMinutes}m';
@@ -73,8 +76,46 @@ String shortDuration(Duration d) {
   return '${d.inDays}d';
 }
 
+/// The "doing now" sub-line for an agent row (cockpit design §4.1, §7.1).
+String agentSubLine(AgentSummary a, {AttentionItem? waitingItem}) {
+  switch (a.state) {
+    case AgentRunState.busy:
+      if (a.now != null && a.now!.tool.isNotEmpty) return describeNow(a.now!);
+      if (a.lastTool != null && a.lastTool!.isNotEmpty) return describeActivity(tool: a.lastTool!);
+      return 'Working';
+    case AgentRunState.waiting:
+      final title = waitingItem?.title ?? '';
+      return title.isEmpty ? 'needs you' : 'needs you · $title';
+    case AgentRunState.idle:
+      return a.idleSince != null ? 'done · ready to review' : 'idle';
+    case AgentRunState.unknown:
+      return 'idle';
+  }
+}
+
+DotKind agentDot(AgentRunState state) => switch (state) {
+      AgentRunState.busy => DotKind.working,
+      AgentRunState.waiting => DotKind.needs,
+      AgentRunState.idle => DotKind.done,
+      AgentRunState.unknown => DotKind.idle,
+    };
+
+/// "12m · 412k tok": how long, then the session's tokens (docs/15-Usage.md §6.2).
+String agentMeta(AgentSummary a, DateTime now) {
+  final since = switch (a.state) {
+    AgentRunState.busy || AgentRunState.waiting => a.busySince,
+    AgentRunState.idle => a.idleSince,
+    AgentRunState.unknown => null,
+  };
+  final tokens = a.usage != null && a.usage!.shownTokens > 0 ? formatTokens(a.usage!.shownTokens) : '';
+  return [
+    if (since != null) shortDuration(now.difference(since)),
+    if (tokens.isNotEmpty) tokens,
+  ].join(' · ');
+}
+
 /// Opens [agent]'s tab: selects its window, focuses the tab in Lee and
-/// switches to the Tabs root, which shows the active tab (the terminal).
+/// switches to the Machine tab's Tabs view, which shows the active tab.
 Future<void> openAgentTab(WidgetRef ref, AgentSummary agent) async {
   final machine = ref.read(machinesProvider).activeMachine;
   if (machine == null || agent.tabId == null) return;
@@ -82,7 +123,8 @@ Future<void> openAgentTab(WidgetRef ref, AgentSummary agent) async {
   if (agent.windowId != null) {
     ref.read(windowsProvider.notifier).setActiveWindow(agent.windowId!);
   }
-  ref.read(rootTabProvider.notifier).state = RootTab.tabs;
+  ref.read(machineViewProvider.notifier).state = MachineView.tabs;
+  ref.read(rootTabProvider.notifier).state = RootTab.machine;
   final api = LeeApi(machine: machine);
   try {
     await api.sendCommand('system', 'focus_tab', {'tab_id': agent.tabId}, windowId);
@@ -91,17 +133,16 @@ Future<void> openAgentTab(WidgetRef ref, AgentSummary agent) async {
   }
 }
 
-/// Now's "In flight" section (every agent Lee is running, not just the ones
-/// waiting): state, elapsed time, last tool and the agent's last words.
-/// Read-only and tap-driven: a tap opens the agent's tab.
+/// Work's "In flight" (cockpit design §4.1): one grouped card of rows —
+/// busy agents with what they're doing now, then those waiting on you, then
+/// done — with idle ones over two hours folded into "n earlier today". A tap
+/// opens the one-agent screen.
 class InFlightSection extends ConsumerStatefulWidget {
-  /// Scrolls to a Waiting item; used by a waiting agent's "needs you" link.
-  final void Function(String itemId)? onShowItem;
-
-  /// Overrides what a tap on an agent does (tests); defaults to [openAgentTab].
+  /// Overrides what a tap on an agent does (tests); defaults to pushing
+  /// [AgentScreen].
   final void Function(AgentSummary agent)? onOpenAgent;
 
-  const InFlightSection({this.onShowItem, this.onOpenAgent, super.key});
+  const InFlightSection({this.onOpenAgent, super.key});
 
   @override
   ConsumerState<InFlightSection> createState() => _InFlightSectionState();
@@ -137,276 +178,146 @@ class _InFlightSectionState extends ConsumerState<InFlightSection> {
 
     AttentionItem? waitingItemFor(AgentSummary a) {
       for (final i in liveItems) {
-        if (i.source.ptyId == a.ptyId &&
-            (i.kind == AttentionKind.approval || i.kind == AttentionKind.waiting)) {
-          return i;
-        }
+        if (i.source.ptyId == a.ptyId) return i;
       }
       return null;
     }
 
-    void open(AgentSummary a) =>
-        widget.onOpenAgent != null ? widget.onOpenAgent!(a) : unawaited(openAgentTab(ref, a));
+    void open(AgentSummary a) {
+      if (widget.onOpenAgent != null) {
+        widget.onOpenAgent!(a);
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => AgentScreen(ptyId: a.ptyId)),
+      );
+    }
 
     Widget row(AgentSummary a) => AgentRow(
           key: ValueKey('agent-${a.ptyId}'),
           agent: a,
           now: now,
           waitingItem: a.state == AgentRunState.waiting ? waitingItemFor(a) : null,
-          onOpen: a.tabId == null ? null : () => open(a),
-          onShowItem: widget.onShowItem,
+          onOpen: () => open(a),
         );
 
-    final count = snapshot.agents.length;
+    final rows = <Widget>[
+      for (final a in groups.visible) row(a),
+      if (groups.older.isNotEmpty)
+        InkWell(
+          key: const ValueKey('in-flight-older'),
+          onTap: () => setState(() => _showOlder = !_showOlder),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd, vertical: 12),
+            child: Row(
+              children: [
+                Text(
+                  '${groups.older.length} earlier today',
+                  style: AeronautTheme.footnote.copyWith(color: AeronautColors.textTertiary),
+                ),
+                const Spacer(),
+                PhosphorIcon(
+                  _showOlder ? PhosphorIcons.chevronUp : PhosphorIcons.chevronDown,
+                  size: 14,
+                  color: AeronautColors.textTertiary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      if (_showOlder)
+        for (final a in groups.older) row(a),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingLg,
-            AeronautTheme.spacingMd,
-            AeronautTheme.spacingXs,
-          ),
-          child: Row(
-            children: [
-              const Text('In flight', style: AeronautTheme.headline),
-              const SizedBox(width: AeronautTheme.spacingSm),
-              if (count > 0)
-                Text('$count', style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary)),
-            ],
-          ),
-        ),
-        if (count == 0)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AeronautTheme.spacingMd,
-              vertical: AeronautTheme.spacingSm,
-            ),
-            child: Text(
-              'No agents running.',
-              style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
-            ),
+        const Eyebrow('In flight'),
+        if (snapshot.agents.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
+            child: QuietText('No agents running.'),
           )
-        else ...[
-          for (final a in groups.visible) row(a),
-          if (groups.older.isNotEmpty) ...[
-            InkWell(
-              onTap: () => setState(() => _showOlder = !_showOlder),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AeronautTheme.spacingMd,
-                  vertical: AeronautTheme.spacingSm,
-                ),
-                child: Row(
-                  children: [
-                    PhosphorIcon(
-                      _showOlder ? PhosphorIcons.chevronUp : PhosphorIcons.chevronDown,
-                      size: 14,
-                      color: AeronautColors.textTertiary,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${groups.older.length} idle over an hour',
-                      style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary),
-                    ),
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
+            child: WorkCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (var i = 0; i < rows.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, indent: AeronautTheme.spacingMd),
+                    rows[i],
                   ],
-                ),
+                ],
               ),
             ),
-            if (_showOlder)
-              for (final a in groups.older) row(a),
-          ],
-        ],
+          ),
       ],
     );
   }
 }
 
-/// One agent in In flight. Tapping the row opens its tab; tapping the
-/// summary expands it (fetching the full, unclipped summary from Lee's
-/// non-compact snapshot if the compact one looked truncated); a waiting
-/// agent links to its Waiting item.
-class AgentRow extends ConsumerStatefulWidget {
+/// One agent in In flight: a dot, the name, the "doing now" sub-line, and
+/// how long plus its tokens on the right.
+class AgentRow extends StatelessWidget {
   final AgentSummary agent;
   final DateTime now;
   final AttentionItem? waitingItem;
   final VoidCallback? onOpen;
-  final void Function(String itemId)? onShowItem;
 
   const AgentRow({
     required this.agent,
     required this.now,
     this.waitingItem,
     this.onOpen,
-    this.onShowItem,
     super.key,
   });
 
   @override
-  ConsumerState<AgentRow> createState() => _AgentRowState();
-}
-
-class _AgentRowState extends ConsumerState<AgentRow> {
-  bool _expanded = false;
-
-  /// The unclipped `last_summary` for this agent, fetched from the full
-  /// snapshot on first expand — see [AttentionNotifier.fetchFullAgentSummary].
-  /// Null until it arrives (or if the compact summary was never clipped, or
-  /// the fetch failed), in which case the compact summary keeps showing.
-  String? _fullSummary;
-
-  @override
-  void didUpdateWidget(covariant AgentRow oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.agent.ptyId != widget.agent.ptyId ||
-        oldWidget.agent.lastSummary != widget.agent.lastSummary) {
-      _fullSummary = null;
-    }
-  }
-
-  Future<void> _toggleExpand() async {
-    setState(() => _expanded = !_expanded);
-    final summary = widget.agent.lastSummary;
-    if (_expanded && _fullSummary == null && summary != null && looksClipped(summary)) {
-      final full = await ref.read(attentionProvider.notifier).fetchFullAgentSummary(widget.agent.ptyId);
-      if (mounted && full?.lastSummary != null) setState(() => _fullSummary = full!.lastSummary);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final a = widget.agent;
-    final (Color color, String status) = switch (a.state) {
-      AgentRunState.busy => (
-          AeronautColors.accent,
-          a.busySince != null ? 'busy ${shortDuration(widget.now.difference(a.busySince!))}' : 'busy',
-        ),
-      AgentRunState.waiting => (AeronautColors.warning, 'needs you'),
-      AgentRunState.idle => (
-          AeronautColors.textTertiary,
-          a.idleSince != null ? 'finished ${shortDuration(widget.now.difference(a.idleSince!))} ago' : 'idle',
-        ),
-      AgentRunState.unknown => (AeronautColors.textTertiary, 'ready'),
-    };
-    final meta = [
-      if (a.lastTool != null && a.lastTool!.isNotEmpty) a.lastTool!,
-      if (a.filesTouchedCount > 0) '${a.filesTouchedCount} file${a.filesTouchedCount == 1 ? '' : 's'}',
-      if (a.workspaceName != null && !a.label.contains(a.workspaceName!)) a.workspaceName!,
-    ].join(' · ');
-    final summary = (_expanded ? _fullSummary : null)?.trim() ?? a.lastSummary?.trim() ?? '';
-    final item = widget.waitingItem;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(AeronautTheme.spacingMd, 0, AeronautTheme.spacingMd, AeronautTheme.spacingSm),
-      child: Material(
-        color: AeronautColors.bgSurface,
-        borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-          onTap: widget.onOpen,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd, vertical: 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AeronautTheme.radiusMd),
-              border: Border.all(
-                color: a.state == AgentRunState.waiting
-                    ? AeronautColors.warning.withValues(alpha: 0.4)
-                    : AeronautColors.border,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    final a = agent;
+    final meta = agentMeta(a, now);
+    return InkWell(
+      onTap: onOpen,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 56),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd, vertical: 10),
+          child: Row(
+            children: [
+              WorkDot(agentDot(a.state)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    _StateDot(color: color, glow: a.state == AgentRunState.busy),
-                    const SizedBox(width: AeronautTheme.spacingSm),
-                    Expanded(
-                      child: Text(
-                        a.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    const SizedBox(width: AeronautTheme.spacingSm),
-                    Text(status, style: AeronautTheme.caption1.copyWith(color: color)),
-                    if (widget.onOpen != null) ...[
-                      const SizedBox(width: 4),
-                      const PhosphorIcon(PhosphorIcons.chevronRight, size: 14, color: AeronautColors.textTertiary),
-                    ],
-                  ],
-                ),
-                if (meta.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, top: 2),
-                    child: Text(
-                      meta,
+                    Text(
+                      a.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AeronautTheme.caption2.copyWith(color: AeronautColors.textTertiary),
+                      style: AeronautTheme.subheadline.copyWith(fontWeight: FontWeight.w500),
                     ),
-                  ),
-                if (item != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, top: 6),
-                    child: InkWell(
-                      onTap: widget.onShowItem == null ? null : () => widget.onShowItem!(item.id),
-                      child: Row(
-                        children: [
-                          const PhosphorIcon(PhosphorIcons.bell, size: 12, color: AeronautColors.warning),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AeronautTheme.caption1.copyWith(color: AeronautColors.warning),
-                            ),
-                          ),
-                        ],
-                      ),
+                    const SizedBox(height: 2),
+                    Text(
+                      agentSubLine(a, waitingItem: waitingItem),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AeronautTheme.footnote.copyWith(color: AeronautColors.textTertiary),
                     ),
-                  ),
-                if (summary.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 16, top: 6),
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => unawaited(_toggleExpand()),
-                      child: Text(
-                        summary,
-                        maxLines: _expanded ? null : 2,
-                        overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-                        style: AeronautTheme.footnote.copyWith(color: AeronautColors.textSecondary),
-                      ),
-                    ),
-                  ),
+                  ],
+                ),
+              ),
+              if (meta.isNotEmpty) ...[
+                const SizedBox(width: AeronautTheme.spacingSm),
+                Text(meta, style: AeronautTheme.caption1.copyWith(color: AeronautColors.textTertiary)),
               ],
-            ),
+              const SizedBox(width: 4),
+              const PhosphorIcon(PhosphorIcons.chevronRight, size: 14, color: AeronautColors.textTertiary),
+            ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _StateDot extends StatelessWidget {
-  final Color color;
-  final bool glow;
-
-  const _StateDot({required this.color, this.glow = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color,
-        boxShadow: glow ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 6)] : null,
       ),
     );
   }

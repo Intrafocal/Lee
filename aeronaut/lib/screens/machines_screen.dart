@@ -17,7 +17,8 @@ import 'root_shell.dart';
 
 /// List of saved machines with online/offline status.
 ///
-/// First tab on launch. Tap a machine to connect and jump to its Tabs.
+/// The Machine tab's root until a machine is chosen, and "All machines"
+/// after. Tap a machine to connect and jump to Work.
 class MachinesScreen extends ConsumerWidget {
   const MachinesScreen({super.key});
 
@@ -117,7 +118,10 @@ class MachinesScreen extends ConsumerWidget {
 
   void _connectToMachine(BuildContext context, WidgetRef ref, String id) {
     ref.read(machinesProvider.notifier).setActiveMachine(id);
-    ref.read(rootTabProvider.notifier).state = RootTab.now;
+    ref.read(rootTabProvider.notifier).state = RootTab.work;
+    // Pushed from the Machine tab's "All machines": go back to that machine.
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.popUntil((r) => r.isFirst);
   }
 
   void _showMachineActions(
