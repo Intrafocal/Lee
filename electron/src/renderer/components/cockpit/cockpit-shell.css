@@ -64,72 +64,30 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Header                                                                  */
+/* Toast (the old header's; now a quiet line over the bottom of the view)   */
 /* ---------------------------------------------------------------------- */
-
-.cockpit-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
-  min-height: 40px;
-  flex-wrap: wrap;
-}
-
-.cockpit-header-ws {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-weight: 600;
-  color: var(--text-primary);
-  max-width: 220px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 
 .cockpit-header-spacer {
   flex: 1;
 }
 
-.cockpit-mode-switch {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  overflow: hidden;
-}
-
-.cockpit-mode-switch button {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  padding: 3px 10px;
-  font-size: 11px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.cockpit-mode-switch button.is-on {
-  background: var(--bg-tertiary);
-  color: var(--accent-light);
-  cursor: default;
-}
-
-.cockpit-mode-switch button:not(.is-on):hover {
-  color: var(--text-primary);
-}
-
 .cockpit-toast {
-  font-size: 11px;
-  color: var(--text-secondary);
-  max-width: 40%;
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: min(560px, 80%);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  background: var(--ground-3);
+  color: var(--text-2);
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .cockpit-toast.is-error {
@@ -345,122 +303,328 @@
   min-height: 0;
 }
 
-.cockpit-nav {
-  width: 140px;
+/* The icon rail (cockpit-design §2.1) */
+
+.cockpit-rail-col {
+  width: var(--rail);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding: var(--space-2) var(--space-1);
-  border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
-  gap: 2px;
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-right: 1px solid var(--ground-3);
+  background: var(--ground-1);
 }
 
-.cockpit-nav-item {
+.cockpit-rail {
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: var(--space-1);
-  padding: 5px 8px;
+}
+
+.cockpit-rail-item {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: none;
   border-radius: var(--radius-control);
   background: none;
-  color: var(--text-secondary);
-  font-size: 12px;
+  color: var(--text-3);
   cursor: pointer;
-  text-align: left;
 }
 
-.cockpit-nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+.cockpit-rail-item:hover {
+  background: var(--ground-2);
+  color: var(--text-2);
 }
 
-.cockpit-nav-item.is-active {
-  background: var(--bg-tertiary);
-  color: var(--accent-light);
+.cockpit-rail-item.is-active {
+  background: var(--ground-3);
+  color: var(--text-1);
 }
 
-.cockpit-nav-label {
-  flex: 1;
+/* The only badge: needs you, a dot, never a number. */
+.cockpit-rail-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--needs-you);
 }
 
-.cockpit-center {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.cockpit-rail-keys {
+  margin-top: auto;
 }
 
 .cockpit-section {
+  position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-2) var(--space-3) var(--space-4);
 }
 
-.cockpit-badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  flex-shrink: 0;
+/* ---------------------------------------------------------------------- */
+/* Home: the desk (cockpit-design §3). One column of --col-home.           */
+/* ---------------------------------------------------------------------- */
+
+.home {
+  max-width: var(--col-home);
+  margin: 0 auto;
+  padding: 104px 0 var(--space-6);
+  font-size: 14px;
+  color: var(--text-1);
 }
 
-/* Copilot section (Hester's home; replaced the right rail) */
-
-.cockpit-brief-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--bg-secondary);
-  padding: var(--space-2) var(--space-3);
+.home-greeting {
+  font-size: 13px;
+  color: var(--text-3);
   margin-bottom: var(--space-2);
-  max-width: 860px;
 }
 
-.cockpit-brief-card.is-selected {
-  border-color: var(--accent);
+/* Your words: the question and the field are Newsreader. */
+.home-question {
+  display: block;
+  font-family: var(--font-write);
+  font-size: 40px;
+  font-weight: 400;
+  line-height: 1.15;
+  color: var(--text-1);
+  margin-bottom: var(--space-4);
 }
 
-.cockpit-brief-head {
+.home-field {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--ground-5);
+  padding-bottom: var(--space-1);
+}
+
+.home-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-write);
+  font-size: 22px;
+  color: var(--text-1);
+  caret-color: var(--caret);
+}
+
+.home-input::placeholder {
+  color: var(--text-3);
+}
+
+.home-enter {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.home-error {
+  margin-top: var(--space-2);
+  font-size: 13px;
+  color: var(--error);
+}
+
+.home-muted {
+  font-size: 13px;
+  color: var(--text-3);
+  margin: var(--space-2) 0;
+}
+
+.home-block {
+  margin-top: var(--space-6);
+}
+
+.home-pickup .ui-eyebrow {
+  margin-top: 0;
+}
+
+.home-pickup-title {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--text-1);
+  margin-bottom: var(--space-2);
+}
+
+.home-pickup-arrived {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-top: var(--space-2);
+}
+
+.home-pickup-actions {
+  margin-top: var(--space-3);
+}
+
+/* Or start from: sentences as plain links in a wrapping row. */
+.home-starts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.home-start-link {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.home-start-link:hover:not(:disabled),
+.home-start-link.is-on {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--ground-5);
+  text-underline-offset: 3px;
+}
+
+.home-start-link:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.home-start-list {
+  margin-top: var(--space-3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.home-writing {
+  font-family: var(--font-write);
+  font-size: 15px;
+}
+
+/* Meanwhile: below a rule. */
+.home-meanwhile {
+  margin-top: var(--space-6);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--ground-3);
+}
+
+.home-sentence {
+  margin: 0 0 var(--space-3);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-1);
+}
+
+.home-sentence.is-muted {
+  color: var(--text-3);
+}
+
+.home-needs {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--space-2);
+}
+
+.home-need {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-1);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-control);
 }
 
-.cockpit-brief-topline {
-  color: var(--text-secondary);
-  margin-bottom: var(--space-2);
+.home-need + .home-need {
+  border-top: 1px solid var(--ground-3);
 }
 
-.cockpit-brief-group {
-  margin-bottom: var(--space-2);
+.home-need.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
 }
 
-.cockpit-brief-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin-bottom: var(--space-1);
+.home-need-main {
+  flex: 1;
+  min-width: 0;
 }
 
-.cockpit-brief-line {
-  color: var(--text-secondary);
-  margin-bottom: 3px;
-  line-height: 1.4;
+.home-need-name {
+  font-size: 14px;
+  color: var(--text-1);
 }
 
-.cockpit-brief-about {
-  color: var(--text-muted);
-  font-size: 11px;
+.home-need-ask {
+  font-size: 13px;
+  color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-bottom: var(--space-1);
+}
+
+.home-need-ask.is-command {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.home-need-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.home-more {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.home-more:hover {
+  color: var(--text-1);
+}
+
+.home-shipped,
+.home-answer {
+  margin-top: var(--space-3);
+}
+
+.home-changed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: var(--space-2);
+}
+
+.home-file {
+  border: none;
+  background: none;
+  padding: 1px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.home-file:hover {
+  color: var(--text-1);
+}
+
+.home-away {
+  margin-top: var(--space-3);
+  font-size: 13px;
+  color: var(--text-2);
 }
 
 .cockpit-tile-actions,
@@ -618,73 +782,6 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Drawer                                                                  */
-/* ---------------------------------------------------------------------- */
-
-.cockpit-drawer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
-  min-height: 32px;
-}
-
-.cockpit-drawer.is-focused {
-  box-shadow: inset 0 1px 0 var(--accent);
-}
-
-.cockpit-drawer-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.cockpit-drawer-tabs {
-  flex: 1;
-  display: flex;
-  gap: var(--space-1);
-  overflow-x: auto;
-  min-width: 0;
-}
-
-.cockpit-drawer-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
-  background: none;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.cockpit-drawer-tab:hover,
-.cockpit-drawer-tab.is-selected {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.cockpit-drawer-tab.is-selected {
-  border-color: var(--accent);
-}
-
-.cockpit-drawer-key {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-/* ---------------------------------------------------------------------- */
 /* Popovers (launcher, run, reply, check-in, keys)                         */
 /* ---------------------------------------------------------------------- */
 
@@ -764,7 +861,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: none;
-  color: var(--accent-light);
+  color: var(--text-2);
   font-size: 10px;
   cursor: pointer;
 }
@@ -776,6 +873,52 @@
 
 .cockpit-mode-chip:hover {
   background: var(--bg-tertiary);
+}
+
+/* The status bar in the Cockpit (cockpit-design §2.1): quiet words, no ember. */
+.status-lee {
+  color: var(--text-3);
+  margin-right: -6px;
+}
+
+.status-cockpit-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+}
+
+.status-cockpit-sep {
+  color: var(--text-3);
+}
+
+.status-cockpit-waiting,
+.status-cockpit-new {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* "1 waiting" is --text-2, never ember: the rail's dot says it needs you. */
+.status-cockpit-waiting {
+  color: var(--text-2);
+}
+
+.status-cockpit-new {
+  color: var(--text-3);
+}
+
+.status-cockpit-waiting:hover,
+.status-cockpit-new:hover {
+  color: var(--text-1);
+}
+
+.daemon-context-menu .status-menu-label {
+  padding: 4px 12px;
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -871,20 +1014,27 @@
   color: var(--text-muted);
 }
 
-/* ---------------------------------------------------------------------- */
-/* Narrow windows                                                          */
-/* ---------------------------------------------------------------------- */
-
-@media (max-width: 1000px) {
-  .cockpit-nav {
-    width: 110px;
-  }
-}
-
 /* Ambient summary rows (e.g. N suggested operations): neutral, clickable. */
 .cockpit-row.is-ambient {
   cursor: pointer;
   color: var(--text-secondary);
+}
+
+/* Launcher: New ⌘N and its three choices (cockpit-design §2.1) */
+.cockpit-launch-choices {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--ground-3);
+}
+
+.cockpit-launch-new {
+  margin-right: var(--space-2);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
 }
 
 /* Launcher context picker (addendum 2026-09-26b) */
@@ -1023,72 +1173,227 @@ button.cockpit-tag.is-goal:hover {
   margin-top: var(--space-2);
 }
 
-.cockpit-steward-line {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: 11px;
+/* Goals, Ops and History (cockpit-design §6.3): a centred column in the
+   primitives' type scale. */
+
+.cockpit-goals,
+.cockpit-ops,
+.cockpit-history {
+  max-width: var(--col-library);
+  margin: 0 auto;
+  padding-top: var(--space-5);
+  font-size: 14px;
 }
 
-/* Goals section */
+/* Ops and History: a Card per operation, lint findings and closed tasks as blocks in a Card. */
 
-.cockpit-goal.is-flagged {
-  border-left: 2px solid var(--ember);
+.cockpit-op-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.cockpit-op-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cockpit-op-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cockpit-op-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-op-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.cockpit-op-sub code {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.cockpit-op-text {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.cockpit-op-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.cockpit-lint,
+.cockpit-history-task {
+  padding: var(--space-2) 0;
+}
+
+.cockpit-lint + .cockpit-lint,
+.cockpit-history-task + .cockpit-history-task {
+  border-top: 1px solid var(--ground-3);
+}
+
+.cockpit-lint:first-child,
+.cockpit-history-task:first-child {
+  padding-top: 0;
+}
+
+.cockpit-lint:last-child,
+.cockpit-history-task:last-child {
+  padding-bottom: 0;
+}
+
+.cockpit-history-task.is-selected {
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  border-radius: var(--radius-control);
+}
+
+.cockpit-lint-evidence {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-history-goal {
+  padding: 0 var(--space-1);
+  font-size: 12px;
+}
+
+/* Goals (cockpit-design §6.3): a Card per goal, the primitives' type scale,
+   ember only as the Dot on a goal that needs you. */
+
+.cockpit-goal-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.cockpit-goal-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cockpit-goal-head .ui-dot {
+  align-self: center;
 }
 
 .cockpit-goal-id {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--accent-light);
+  font-size: 12px;
+  color: var(--text-3);
   min-width: 22px;
 }
 
+.cockpit-goal-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cockpit-goal-when {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cockpit-goal-meta {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.cockpit-goal-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.cockpit-goal-link:hover {
+  color: var(--text-1);
+}
+
+.cockpit-goal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.cockpit-goals-line {
+  margin-top: var(--space-1);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 .cockpit-metrics {
-  margin: var(--space-1) 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 .cockpit-metric {
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
-  padding: 1px 6px;
-  font-size: 11px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text-secondary);
+  padding: 1px 8px;
+  font-size: 12px;
+  border: 1px solid var(--ground-4);
+  border-radius: 16px;
+  color: var(--text-2);
 }
 
 .cockpit-metric-name {
   font-family: var(--font-mono);
-  color: var(--text-primary);
-}
-
-.cockpit-metric.is-ok {
-  border-color: var(--phosphor-deep);
+  color: var(--text-1);
 }
 
 .cockpit-metric.is-ok .cockpit-metric-trend {
-  color: var(--accent-light);
+  color: var(--text-3);
 }
 
 .cockpit-metric.is-bad {
-  border-color: rgba(var(--ember-rgb), 0.6);
+  border-color: var(--ground-5);
 }
 
 .cockpit-metric.is-bad .cockpit-metric-trend {
-  color: var(--ember);
+  color: var(--error);
 }
 
 .cockpit-goal-serving {
   display: flex;
   flex-direction: column;
-  margin: var(--space-1) 0;
-}
-
-.cockpit-goal-serving .cockpit-menu-item {
-  justify-content: flex-start;
-  align-items: center;
+  margin: var(--space-2) 0 0;
+  border-top: 1px solid var(--ground-3);
 }
 
 .cockpit-diff {
@@ -1106,13 +1411,13 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .cockpit-diff .is-add {
-  color: var(--lit);
-  background: rgba(var(--phosphor-rgb), 0.1);
+  color: var(--text-1);
+  background: rgba(var(--text-1-rgb), 0.06);
 }
 
 .cockpit-diff .is-del {
-  color: var(--ember);
-  background: rgba(var(--ember-rgb), 0.08);
+  color: var(--error);
+  background: rgba(var(--error-rgb), 0.08);
 }
 
 .cockpit-diff .is-hunk,
@@ -1120,10 +1425,11 @@ button.cockpit-tag.is-goal:hover {
   color: var(--text-muted);
 }
 
-/* human_balance strip. Play has its own positive colour. */
+/* human_balance strip: a neutral ramp (ember and phosphor are roles, not
+   chart colours); play keeps the brightest. */
 
 .cockpit-balance {
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
 }
 
 .cockpit-balance-bar {
@@ -1161,15 +1467,15 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .band-Q1 {
-  background: var(--ember);
+  background: var(--error);
 }
 
 .band-Q2 {
-  background: var(--phosphor);
+  background: var(--info);
 }
 
 .band-Q3 {
-  background: var(--info);
+  background: var(--text-2);
 }
 
 .band-Q4 {
@@ -1177,7 +1483,7 @@ button.cockpit-tag.is-goal:hover {
 }
 
 .band-play {
-  background: var(--lit);
+  background: var(--text-1);
 }
 
 .band-unclassified {
@@ -1226,8 +1532,8 @@ button.cockpit-quadrant:hover {
 }
 
 .cockpit-quadrant.q-play {
-  border-color: var(--lit);
-  color: var(--lit);
+  border-color: var(--ground-5);
+  color: var(--text-1);
 }
 
 .cockpit-quadrant.q-none {

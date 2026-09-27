@@ -14,14 +14,19 @@
  * `claude --name`) and an optional context picker: workspace files (fuzzy
  * search) and Hester context bundles, attached as `@path` references to the
  * agent's initial prompt. Deterministic and offline; nothing is summarised.
+ *
+ * Cockpit design §2.1: New ⌘N. Three choices sit at the top, Task (this
+ * form; Enter still launches), Explore (a new exploration in the Library)
+ * and Run… (the operations menu, also ⌘{), replacing the old header's
+ * + Task, + Explore and Run ▾.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Icon } from '../Icon';
 import type { LaunchRequest, TaskKind, TaskLead, TaskOrigin } from '../../../shared/cockpit';
-import { fuzzyFilter, q4NoteVisible } from '../../lib/cockpitModel';
+import { fuzzyFilter, q4NoteVisible, LAUNCHER_CHOICES } from '../../lib/cockpitModel';
 import { fetchBundles, fetchGoals, type ContextBundleRef, type GoalRef } from '../../lib/hesterCockpit';
 import type { CockpitCtx } from './CockpitHost';
+import { Btn } from './ui';
 
 export interface LauncherPrefill {
   text?: string;
@@ -54,9 +59,13 @@ interface LauncherProps {
   ctx: CockpitCtx;
   prefill?: LauncherPrefill;
   onClose: () => void;
+  /** Explore: close and start a new exploration (the Library's field). */
+  onExplore: () => void;
+  /** Run…: swap to the operations menu. */
+  onRun: () => void;
 }
 
-export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => {
+export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onExplore, onRun }) => {
   const [text, setText] = useState(prefill?.text ?? '');
   const [name, setName] = useState('');
   const [kind, setKind] = useState<TaskKind | null>(prefill?.kind ?? null);
@@ -271,9 +280,27 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
 
   return (
     <div className="cockpit-popover-backdrop" onClick={onClose}>
-      <div className="cockpit-popover is-wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New task">
-        <div className="cockpit-popover-title">
-          <Icon name="plus" size={14} /> New task
+      <div className="cockpit-popover is-wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New" data-view-root="launcher">
+        <div className="cockpit-launch-choices" role="group" aria-label="New">
+          <span className="cockpit-launch-new">
+            New <span className="ui-kbd">⌘N</span>
+          </span>
+          {LAUNCHER_CHOICES.map((c) => (
+            <Btn
+              key={c.id}
+              kind={c.id === 'task' ? 'plain' : 'quiet'}
+              kbd={c.id === 'run' ? c.kbd : undefined}
+              aria-pressed={c.id === 'task'}
+              className={c.id === 'task' ? 'is-on' : undefined}
+              onClick={() => {
+                if (c.id === 'explore') onExplore();
+                else if (c.id === 'run') onRun();
+                else textRef.current?.focus();
+              }}
+            >
+              {c.label}
+            </Btn>
+          ))}
         </div>
         <textarea
           ref={textRef}
@@ -467,12 +494,12 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose }) => 
         </div>
         {error && <div className="cockpit-error">{error}</div>}
         <div className="cockpit-popover-actions">
-          <button className="cockpit-btn is-primary" disabled={busy || !canLaunch} onClick={launch}>
-            {lead === 'human' ? 'Add task' : 'Launch'} <kbd>⏎</kbd>
-          </button>
-          <button className="cockpit-btn" onClick={onClose}>
-            Cancel <kbd>Esc</kbd>
-          </button>
+          <Btn kind="next" kbd="⏎" disabled={busy || !canLaunch} onClick={launch}>
+            {lead === 'human' ? 'Add task' : 'Launch'}
+          </Btn>
+          <Btn kind="quiet" kbd="Esc" onClick={onClose}>
+            Cancel
+          </Btn>
         </div>
       </div>
     </div>

@@ -3,13 +3,19 @@
  * wins, closed tasks with outcome and acceptance, and operation readings.
  * v4 §6: closed tasks show the goals they served, readings of a GOALS
  * metric show their change as a chip ("G1 +180 ms").
+ *
+ * Cockpit design §6.3: built from the primitives. Nothing here needs you,
+ * so there is no ember and no next step; goal links are quiet text.
  */
 
 import React, { useEffect, useState } from 'react';
-import { Icon } from '../../Icon';
 import { formatAge, goalDeltaChip } from '../../../lib/cockpitModel';
 import { fetchHistory, type HistoryResponse } from '../../../lib/hesterCockpit';
+import { Btn, Card, Eyebrow, Row, SectionHead } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
+
+/** Row takes no data attributes: tag it for the keyboard's scrollIntoView through its ref. */
+const rowAttr = (id: string) => (el: HTMLElement | null) => el?.setAttribute('data-cockpit-row', id);
 
 export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const [data, setData] = useState<HistoryResponse | null>(null);
@@ -48,95 +54,92 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     return same[1];
   };
 
+  const openGoal = (g: string) => {
+    ctx.setSection('goals');
+    ctx.selectRow(`goal:${g}`);
+  };
+
   return (
-    <section className="cockpit-sec">
-      <header className="cockpit-sec-head">
-        <h2>History</h2>
-        <span className="cockpit-muted">Last 7 days</span>
-      </header>
+    <section className="cockpit-sec cockpit-history">
+      <SectionHead title="History" summary="Last 7 days" />
       {error && <div className="cockpit-offline">{error}</div>}
       {data && wins.length === 0 && tasks.length === 0 && readings.length === 0 && <div className="cockpit-empty">Nothing verified this week yet.</div>}
       {wins.length > 0 && (
-        <div className="cockpit-group">
-          <div className="cockpit-group-title">Wins</div>
-          {wins.map((w, i) => {
-            const id = `win:${w.ref ?? i}`;
-            return (
-              <div key={id} data-cockpit-row={id} className={`cockpit-row${isSel(id) ? ' is-selected' : ''}`} onClick={() => ctx.selectRow(id)}>
-                <div className="cockpit-row-head">
-                  {w.verified ? <Icon name="check" size={12} /> : <Icon name="dot" size={12} />}
-                  <span className="cockpit-row-title">{w.title}</span>
-                  <span className="cockpit-tag">{w.kind}</span>
-                  {w.ref && <code className="cockpit-muted">{w.ref}</code>}
-                  <span className="cockpit-muted">{formatAge(w.at, ctx.now)}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <Eyebrow>Wins</Eyebrow>
+          <Card>
+            {wins.map((w, i) => {
+              const id = `win:${w.ref ?? i}`;
+              return (
+                <Row
+                  key={id}
+                  ref={rowAttr(id)}
+                  dot={w.verified ? 'done' : 'idle'}
+                  selected={isSel(id)}
+                  title={w.title}
+                  sub={[w.kind, w.ref].filter(Boolean).join(' · ')}
+                  meta={formatAge(w.at, ctx.now)}
+                />
+              );
+            })}
+          </Card>
+        </>
       )}
       {tasks.length > 0 && (
-        <div className="cockpit-group">
-          <div className="cockpit-group-title">Closed tasks</div>
-          {tasks.map((t) => {
-            const id = `closed:${t.id}`;
-            return (
-              <div key={id} data-cockpit-row={id} className={`cockpit-row${isSel(id) ? ' is-selected' : ''}`} onClick={() => ctx.selectRow(id)}>
-                <div className="cockpit-row-head">
-                  <span className={`cockpit-status st-${t.status}`}>{t.status}</span>
-                  <span className="cockpit-row-title">{t.title}</span>
-                  {t.accepted === true && <span className="cockpit-tag is-ok">accepted</span>}
-                  {t.accepted === false && <span className="cockpit-tag">not accepted</span>}
-                  {(t.goal_impact ?? []).map((g) => (
-                    <button
-                      key={g}
-                      className="cockpit-tag is-goal"
-                      title={`Served ${g}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        ctx.setSection('goals');
-                        ctx.selectRow(`goal:${g}`);
-                      }}
-                    >
-                      {g}
-                    </button>
-                  ))}
-                  <span className="cockpit-muted">{formatAge(t.closed_at, ctx.now)}</span>
+        <>
+          <Eyebrow>Closed tasks</Eyebrow>
+          <Card>
+            {tasks.map((t) => {
+              const id = `closed:${t.id}`;
+              const accepted = t.accepted === true ? 'accepted' : t.accepted === false ? 'not accepted' : null;
+              return (
+                <div key={id} data-cockpit-row={id} className={`cockpit-history-task${isSel(id) ? ' is-selected' : ''}`} onClick={() => ctx.selectRow(id)}>
+                  <div className="cockpit-op-head">
+                    <span className="cockpit-op-name">{t.title}</span>
+                    <span className="cockpit-op-meta">{formatAge(t.closed_at, ctx.now)}</span>
+                  </div>
+                  <div className="cockpit-op-sub">
+                    {[t.status, accepted, t.commits.length ? t.commits.map((c) => c.slice(0, 7)).join(' · ') : null].filter(Boolean).join(' · ')}
+                    {(t.goal_impact ?? []).map((g) => (
+                      <Btn
+                        key={g}
+                        kind="quiet"
+                        className="cockpit-history-goal"
+                        title={`Served ${g}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openGoal(g);
+                        }}
+                      >
+                        {g}
+                      </Btn>
+                    ))}
+                  </div>
+                  {t.outcome && <div className="cockpit-op-text">{t.outcome}</div>}
                 </div>
-                {t.outcome && <div className="cockpit-row-text">{t.outcome}</div>}
-                {t.commits.length > 0 && <div className="cockpit-row-meta">{t.commits.map((c) => c.slice(0, 7)).join(' · ')}</div>}
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </Card>
+        </>
       )}
       {readings.length > 0 && (
-        <div className="cockpit-group">
-          <div className="cockpit-group-title">Readings</div>
-          {Array.from(new Set(readings.map((r) => r.metric))).map((metric) => {
-            const latest = readings.find((r) => r.metric === metric)!;
-            const prev = readingFor(metric);
-            return (
-              <div key={metric} className="cockpit-row">
-                <div className="cockpit-row-head">
-                  <span className="cockpit-row-title">
-                    {metric} {latest.value}
-                    {latest.unit ? ` ${latest.unit}` : ''}
-                    {prev ? ` (was ${prev.value})` : ''}
-                  </span>
-                  {latest.goal_id && (
-                    <span className="cockpit-tag is-goal" title={`${metric} serves ${latest.goal_id}`}>
-                      {goalDeltaChip(latest.goal_id, latest.delta, latest.unit)}
-                    </span>
-                  )}
-                  <span className="cockpit-muted">
-                    {latest.source.op} · {formatAge(latest.ts, ctx.now)}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <Eyebrow>Readings</Eyebrow>
+          <Card>
+            {Array.from(new Set(readings.map((r) => r.metric))).map((metric) => {
+              const latest = readings.find((r) => r.metric === metric)!;
+              const prev = readingFor(metric);
+              return (
+                <Row
+                  key={metric}
+                  title={`${metric} ${latest.value}${latest.unit ? ` ${latest.unit}` : ''}${prev ? ` (was ${prev.value})` : ''}`}
+                  sub={latest.goal_id ? goalDeltaChip(latest.goal_id, latest.delta, latest.unit) : undefined}
+                  meta={`${latest.source.op} · ${formatAge(latest.ts, ctx.now)}`}
+                />
+              );
+            })}
+          </Card>
+        </>
       )}
     </section>
   );

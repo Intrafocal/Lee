@@ -10,7 +10,12 @@
  * and the cockpitMode store's landing, Deep memory and switcher (bundled
  * with react external). Cockpit design scaffold: describeActivity's table
  * (both tenses, failures, several files), LEGACY_SECTION / readSection, the
- * six sections, QUICK_REPLIES and the nextGuard.
+ * six sections, QUICK_REPLIES and the nextGuard. Cockpit design R1:
+ * greeting() and meanwhileSentence(), Home's needs rows and sentences, the
+ * Launcher's three choices, the rail's dots, the status-bar counts, section
+ * migration from every legacy id, and one next button at most per view
+ * (Home, Goals, Ops, History and the Launcher rendered from fixtures with
+ * react-dom/server, counted through nextGuard).
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -685,11 +690,12 @@ test('keyAction: map of §3.7 (⌘ chords for actions, bare keys only navigate)'
   const cmd = (key, ctx = {}) => k(key, { meta: true, ...ctx });
   assert.deepEqual(k('ArrowDown'), { kind: 'row', delta: 1 });
   assert.deepEqual(k('ArrowUp'), { kind: 'row', delta: -1 });
-  assert.deepEqual(k('ArrowLeft'), { kind: 'tile', delta: -1 });
-  assert.deepEqual(k('ArrowRight'), { kind: 'tile', delta: 1 });
+  // The agent dock is gone from the Cockpit (cockpit-design §2.1): ←/→ do nothing.
+  assert.equal(k('ArrowLeft'), null);
+  assert.equal(k('ArrowRight'), null);
   assert.deepEqual(k('Enter'), { kind: 'enter' });
   assert.deepEqual(k('Escape'), { kind: 'escape' });
-  for (const [key, kind] of [['Enter', 'approve'], ['d', 'deny'], ['e', 'rename'], ['Backspace', 'dismiss'], ['t', 'drawer']]) {
+  for (const [key, kind] of [['Enter', 'approve'], ['d', 'deny'], ['e', 'rename'], ['Backspace', 'dismiss'], ['t', 'manual']]) {
     assert.deepEqual(cmd(key), { kind }, `⌘${key}`);
   }
   assert.deepEqual(cmd('D'), { kind: 'deny' }, 'caps lock does not matter');
@@ -698,8 +704,6 @@ test('keyAction: map of §3.7 (⌘ chords for actions, bare keys only navigate)'
     assert.deepEqual(cmd(',', { shift: true, code }), { kind }, code);
     assert.deepEqual(cmd(key, { shift: true }), { kind }, key);
   }
-  assert.deepEqual(k('ArrowLeft', { drawer: true }), { kind: 'drawer-move', delta: -1 });
-  assert.deepEqual(k('ArrowRight', { drawer: true }), { kind: 'drawer-move', delta: 1 });
 });
 
 test('keyAction: no bare letter, digit or symbol does anything', () => {
@@ -1099,6 +1103,362 @@ test('v4: renderer_action is read from lint.fix and from feed.act (nested) resul
 
   test('QUICK_REPLIES: the four, in order (same list as Aeronaut quickReplyChips)', () => {
     assert.deepEqual([...QUICK_REPLIES], ['Yes, go ahead', 'Stop and wait for me', 'Explain first', 'Show me the diff']);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cockpit design R1 (cockpit-design §2, §3, §6.3, §10 R1): greeting(),
+// meanwhileSentence(), Home's needs rows and sentences, the Launcher's three
+// choices, the rail's dots, the status-bar counts, section migration from
+// every legacy id, and one next button at most per Cockpit view (sections
+// rendered from fixtures with react-dom/server, counted through nextGuard).
+// ---------------------------------------------------------------------------
+
+{
+  const {
+    greeting,
+    homeQuestion,
+    meanwhileSentence,
+    homeNeeds,
+    q2Sentence,
+    startSentence,
+    arrivedLine,
+    numberWord,
+    LAUNCHER_CHOICES,
+    evaluationDue,
+    EVALUATION_DUE_DAYS,
+    railDots,
+    cockpitStatusCounts,
+    cockpitStatusParts,
+    COCKPIT_KEYS,
+  } = mod;
+
+  test('greeting: weekday and part of day at every boundary (local time)', () => {
+    const at = (d, h, m) => greeting(new Date(2026, 8, d, h, m));
+    // 2026-09-27 is a Sunday.
+    assert.equal(at(27, 4, 59), 'Sunday night');
+    assert.equal(at(27, 5, 0), 'Sunday morning');
+    assert.equal(at(27, 11, 59), 'Sunday morning');
+    assert.equal(at(27, 12, 0), 'Sunday afternoon');
+    assert.equal(at(27, 16, 59), 'Sunday afternoon');
+    assert.equal(at(27, 17, 0), 'Sunday evening');
+    assert.equal(at(27, 21, 59), 'Sunday evening');
+    assert.equal(at(27, 22, 0), 'Sunday night');
+    assert.equal(at(28, 0, 30), 'Monday night', 'past midnight is the new day, still night');
+    assert.equal(at(26, 9, 0), 'Saturday morning');
+  });
+
+  test('homeQuestion: with a name, and without one', () => {
+    assert.equal(homeQuestion('Ben'), "What's on your mind, Ben?");
+    assert.equal(homeQuestion('  Ben '), "What's on your mind, Ben?");
+    assert.equal(homeQuestion(null), "What's on your mind?");
+    assert.equal(homeQuestion(''), "What's on your mind?");
+  });
+
+  test('meanwhileSentence: nothing, only wins, waiting only, both', () => {
+    const d = (wins, sessions) => ({ wins: Array.from({ length: wins }, (_, i) => ({ title: `w${i}` })), agent_claims: sessions.map((s) => ({ session_id: s })) });
+    assert.equal(meanwhileSentence(null, { waiting: 0 }), 'Quiet while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(d(0, []), { waiting: 0 }), 'Quiet while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(d(3, []), { waiting: 0 }), 'Three things shipped while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(d(1, []), { waiting: 0 }), 'One thing shipped while you were away. Nothing needs you.');
+    assert.equal(meanwhileSentence(d(0, []), { waiting: 1 }), 'One thing is waiting on you.');
+    assert.equal(meanwhileSentence(null, { waiting: 2 }), 'Two things are waiting on you.');
+    assert.equal(meanwhileSentence(d(2, []), { waiting: 1 }), 'Two things shipped while you were away. One thing is waiting on you.');
+    // The contract's example: finished turns count once per agent session.
+    assert.equal(meanwhileSentence(d(0, ['a', 'b', 'a']), { waiting: 1 }), 'Two agents finished while you were away. One is waiting on you.');
+    assert.equal(meanwhileSentence(d(0, ['a']), { waiting: 0 }), 'One agent finished while you were away. Nothing needs you.');
+    assert.equal(
+      meanwhileSentence(d(4, ['a', 'b']), { waiting: 3 }),
+      'Two agents finished while you were away, and four things shipped. Three are waiting on you.',
+    );
+    assert.ok(!/claim/i.test(meanwhileSentence(d(1, ['a']), { waiting: 1 })), 'no "claims"');
+    assert.equal(numberWord(13), '13');
+  });
+
+  test('homeNeeds: attention rows that need you, blocking first then oldest, at most three', () => {
+    const row = (id, severity, created, kind = 'waiting', source = 'attention') =>
+      source === 'attention'
+        ? { source, id: `att:${id}`, kind: 'decision', severity, at: created, title: id, item: item({ id, severity, kind, created_at: created, updated_at: created }) }
+        : { source, id: `lee:${id}`, kind: 'failure', severity, at: created, title: id, entry: {} };
+    const rows = [
+      row('new', 'needs-you', ago(1)),
+      row('amb', 'ambient', ago(50), 'review'),
+      row('sum', 'needs-you', ago(60), 'summary'),
+      row('old', 'needs-you', ago(30)),
+      row('blk', 'blocking', ago(2), 'approval'),
+      row('fail', 'needs-you', ago(90), 'waiting', 'lee'),
+      row('mid', 'needs-you', ago(10)),
+    ];
+    assert.deepEqual(homeNeeds(rows).map((r) => r.item.id), ['blk', 'old', 'mid']);
+    assert.deepEqual(homeNeeds(rows, 5).map((r) => r.item.id), ['blk', 'old', 'mid', 'new']);
+    assert.deepEqual(homeNeeds([]), []);
+  });
+
+  test('Or start from: sentences, not labels (phone vs devices, singulars, empties)', () => {
+    assert.equal(startSentence({ kind: 'blank' }), 'A blank page');
+    assert.equal(startSentence({ kind: 'open_questions', count: 2, items: [{}, {}] }), '2 open questions');
+    assert.equal(startSentence({ kind: 'open_questions', count: 1, items: [{}] }), '1 open question');
+    assert.equal(startSentence({ kind: 'captured_away', count: 3, items: [{ surface: 'aeronaut' }, { surface: 'aeronaut' }, { surface: 'aeronaut' }] }), '3 thoughts from your phone');
+    assert.equal(startSentence({ kind: 'captured_away', count: 2, items: [{ surface: 'aeronaut' }, { surface: 'dirigible' }] }), '2 thoughts from your devices');
+    assert.equal(startSentence({ kind: 'reading_list', count: 4, items: [{}] }), '4 things to read');
+    assert.equal(startSentence({ kind: 'quiet', items: [{}, {}] }), '2 quiet explorations');
+    assert.equal(startSentence({ kind: 'reading_list', count: 0, items: [] }), null);
+    assert.equal(startSentence({ kind: 'q2', items: [{}] }), null, 'Q2 is written per item');
+    assert.equal(q2Sentence({ kind: 'goal-unserved', goal_id: 'G1', title: 'Ship v6', detail: 'Nothing open serves G1.' }), 'G1 has nothing open serving it');
+    assert.equal(q2Sentence({ kind: 'evaluation-due', goal_id: 'G2', title: 'Deep', detail: 'Never evaluated.' }), 'G2 has never been evaluated');
+    assert.equal(q2Sentence({ kind: 'evaluation-due', goal_id: 'G2', title: 'Deep', detail: 'Last evaluated 20 days ago.' }), 'G2 was last evaluated 20 days ago');
+    assert.equal(q2Sentence({ kind: 'exploration-quiet', goal_id: null, title: 'Vector clocks', detail: 'Untouched for 9 days.' }), 'Vector clocks: untouched for 9 days');
+    assert.equal(arrivedLine({ answers: 2, open_questions: 1 }), '2 answers came back · 1 open question');
+    assert.equal(arrivedLine({ answers: 1, open_questions: 0 }), '1 answer came back');
+    assert.equal(arrivedLine({ answers: 0, open_questions: 0 }), '');
+  });
+
+  test('Launcher: New ⌘N offers Task, Explore and Run… at the top (Task first; Run keeps ⌘{)', () => {
+    assert.deepEqual(
+      LAUNCHER_CHOICES.map((c) => c.id),
+      ['task', 'explore', 'run'],
+    );
+    assert.deepEqual(
+      LAUNCHER_CHOICES.map((c) => c.label),
+      ['Task', 'Explore', 'Run…'],
+    );
+    assert.equal(LAUNCHER_CHOICES.find((c) => c.id === 'run').kbd, '⌘{');
+    assert.equal(LAUNCHER_CHOICES.find((c) => c.id === 'task').kbd, '⏎', 'Enter still launches a task');
+    assert.ok(COCKPIT_KEYS.some(([k, v]) => k === '⌘N' && /task.*exploration.*run/i.test(v)));
+    assert.ok(COCKPIT_KEYS.some(([k, v]) => k === '⌘T' && /Manual/.test(v)), '⌘T goes to Manual');
+    assert.ok(!COCKPIT_KEYS.some(([k]) => k === '← / →'), 'no tile keys: the dock is gone');
+  });
+
+  test('rail: one ember dot per section that needs you, never a count', () => {
+    const now = NOW;
+    const fresh = new Date(now - 86400000).toISOString();
+    const stale = new Date(now - (EVALUATION_DUE_DAYS + 1) * 86400000).toISOString();
+    assert.equal(evaluationDue(null, now), true);
+    assert.equal(evaluationDue(fresh, now), false);
+    assert.equal(evaluationDue(stale, now), true);
+    const quiet = railDots({ work: 0, goals: [{ flagged: false, last_evaluated_at: fresh }], opsFailing: 0, opsProposals: 0, now });
+    assert.deepEqual(quiet, { home: false, work: false, goals: false, library: false, ops: false, history: false });
+    const busy = railDots({ work: 2, goals: [{ flagged: false, last_evaluated_at: stale }], opsFailing: 0, opsProposals: 1, now });
+    assert.deepEqual(busy, { home: false, work: true, goals: true, library: false, ops: true, history: false });
+    assert.equal(railDots({ work: 0, goals: [{ flagged: true, last_evaluated_at: fresh }], opsFailing: 1, opsProposals: 0, now }).goals, true);
+    for (const v of Object.values(busy)) assert.equal(typeof v, 'boolean');
+  });
+
+  test('status bar in the Cockpit: agents working · waiting, for this workspace', () => {
+    const agents = [
+      { state: 'busy', workspace: WS },
+      { state: 'busy', workspace: WS },
+      { state: 'idle', workspace: WS },
+      { state: 'busy', workspace: '/other' },
+    ];
+    const items = [
+      item({ id: 'a', severity: 'needs-you' }),
+      item({ id: 'b', severity: 'ambient', kind: 'review' }),
+      item({ id: 'c', severity: 'blocking', kind: 'approval', source: { ...item({}).source, workspace: '/other' } }),
+      item({ id: 'd', severity: 'needs-you', state: 'resolved' }),
+    ];
+    const c = cockpitStatusCounts({ workspace: WS, agents, items });
+    assert.deepEqual(c, { working: 2, waiting: 1 });
+    assert.deepEqual(cockpitStatusParts(c), { working: '2 agents working', waiting: '1 waiting' });
+    assert.deepEqual(cockpitStatusParts({ working: 1, waiting: 0 }), { working: '1 agent working', waiting: null });
+    assert.deepEqual(cockpitStatusParts({ working: 0, waiting: 0 }), { working: null, waiting: null });
+  });
+
+  test('sections: every legacy id migrates (localStorage and setSection callers)', () => {
+    const legacy = { copilot: 'home', tabs: 'home', feed: 'work', tasks: 'work', explore: 'library', someday: 'library', files: 'library' };
+    for (const [from, to] of Object.entries(legacy)) assert.equal(readSection(from), to, from);
+    for (const id of SECTIONS) assert.equal(readSection(id), id, id);
+    assert.deepEqual([...SECTIONS], ['home', 'work', 'goals', 'library', 'ops', 'history']);
+    assert.equal(DEFAULT_SECTION, 'home');
+  });
+}
+
+{
+  // Render each R1 view with fixture data (react-dom/server) and count its
+  // next buttons through nextGuard: at most one per view root (§0 rule 1).
+  const entry = `
+    import React from 'react';
+    import { renderToStaticMarkup } from 'react-dom/server';
+    import { HomeSection } from './sections/HomeSection';
+    import { GoalsSection } from './sections/GoalsSection';
+    import { OperationsSection } from './sections/OperationsSection';
+    import { HistorySection } from './sections/HistorySection';
+    import { Launcher } from './Launcher';
+    import { CockpitNav } from './CockpitNav';
+    export { createNextGuard } from './ui/nextGuard';
+    export const render = (el) => renderToStaticMarkup(el);
+    export { React, HomeSection, GoalsSection, OperationsSection, HistorySection, Launcher, CockpitNav };
+  `;
+  const built = await esbuild.build({
+    stdin: { contents: entry, resolveDir: join(__dirname, '../src/renderer/components/cockpit'), loader: 'tsx' },
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    write: false,
+    jsx: 'automatic',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    loader: { '.css': 'empty', '.woff2': 'empty', '.svg': 'text' },
+    logLevel: 'silent',
+  });
+  const dir = mkdtempSync(join(__dirname, '.cockpit-views-smoke-'));
+  const file = join(dir, 'views.mjs');
+  writeFileSync(file, built.outputFiles[0].text);
+  let v;
+  try {
+    v = await import(pathToFileURL(file).href);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const h = v.React.createElement;
+
+  const noop = () => {};
+  const due = new Date(NOW - 30 * 86400000).toISOString();
+  const fresh = new Date(NOW - 86400000).toISOString();
+  const attRow = (id, kind, severity) => ({
+    source: 'attention',
+    id: `att:${id}`,
+    kind: 'decision',
+    severity,
+    at: ago(5),
+    title: id,
+    item: item({ id, kind, severity, tool: kind === 'approval' ? { name: 'Bash', preview: 'npm test', signature: 's' } : null, source: { ...item({}).source, tab_label: `Agent ${id}` } }),
+  });
+  const ctx = {
+    workspace: WS,
+    api: null,
+    copilotApi: null,
+    snapshot: { items: [], agents: [] },
+    runtime: [],
+    ops: {
+      workspace: WS,
+      operations: [
+        { def: { name: 'test', command: 'npm test', kind: 'oneshot' }, status: 'failed', source: 'config', running: null, last_run: { run_id: 'r1', status: 'failed', exit_code: 1, started_at: ago(3), ended_at: ago(2), duration_ms: 60000, readings: [] }, linked_pty_id: null },
+        { def: { name: 'dev', command: 'npm run dev', kind: 'long-running' }, status: 'running', source: 'config', running: { run_id: 'r2', status: 'running', started_at: ago(10), pty_id: null }, last_run: null, linked_pty_id: null },
+      ],
+      suggestions: [{ def: { name: 'lint', command: 'npm run lint', kind: 'oneshot' }, detected_from: 'package.json' }],
+      proposals: [{ id: 'p1', by: 'hester', op: 'test', command: 'npm test', cwd: null, reason: 'Tests failed', created_at: ago(1) }],
+    },
+    hester: { snapshot: null, refresh: noop },
+    tiles: [],
+    feedRows: [attRow('a1', 'approval', 'blocking'), attRow('w1', 'waiting', 'needs-you'), attRow('q1', 'question', 'needs-you'), attRow('d1', 'decision', 'needs-you')],
+    tabs: [],
+    mode: { selected: null },
+    isAgentTab: () => false,
+    now: NOW,
+    goInto: noop,
+    openOwnTab: noop,
+    openFile: noop,
+    openExploration: async () => {},
+    openLibrary: noop,
+    openWorkstream: noop,
+    focusPty: noop,
+    notify: noop,
+    openLauncher: noop,
+    openReply: noop,
+    openCheckin: noop,
+    openRename: noop,
+    closeAgent: noop,
+    registerRows: noop,
+    selectRow: noop,
+    setSection: noop,
+    goals: {
+      data: {
+        generated_at: ago(0),
+        days: 7,
+        goals: [
+          { id: 'G0', title: 'Deep time', priority: 0, prose: '', metrics: [], serving: { tasks: [], workstreams: [], explorations: [] }, flagged: false, last_evaluated_at: fresh, focus_ms_7d: 0 },
+          { id: 'G1', title: 'Less toil', priority: 1, prose: '', metrics: [{ name: 'toil_load', value: 3, ok: false, trend: 'up', source: 'op' }], serving: { tasks: [], workstreams: [], explorations: [] }, flagged: true, last_evaluated_at: due, focus_ms_7d: 0 },
+          { id: 'G2', title: 'Faster answers', priority: 2, prose: '', metrics: [], serving: { tasks: [], workstreams: [], explorations: [] }, flagged: false, last_evaluated_at: null, focus_ms_7d: 0 },
+        ],
+        constraints: [{ id: 'C1', title: 'No runtime network for fonts', violations: 1 }],
+        tensions: [{ a: 'G0', b: 'G1', label: 'time', default: 'G0 wins', arbiter: 'you' }],
+        human_balance: { share: 0.5, ms: { Q1: 1, Q2: 1, Q3: 0, Q4: 0, play: 0, unclassified: 0 }, by_goal: {}, line: 'Half important.' },
+      },
+      error: null,
+      loading: false,
+      refresh: noop,
+    },
+    requestSteward: noop,
+    pendingSteward: null,
+  };
+  const opener = {
+    generated_at: ago(0),
+    workspace: WS,
+    pick_up: { exploration: { id: 'e1', title: 'Vector clocks', last_touched_at: ago(90) }, stopped_at: 'whether the merge needs a tiebreak', arrived: { answers: 2, open_questions: 1 } },
+    surfaces: [
+      { kind: 'blank' },
+      { kind: 'open_questions', count: 1, items: [{ exploration_id: 'e1', exploration_title: 'Vector clocks', question_id: 'q', text: 'Is it causal?' }] },
+      { kind: 'captured_away', count: 1, items: [{ someday_id: 's', text: 'Try CRDTs', surface: 'aeronaut', created_at: ago(20) }] },
+      { kind: 'q2', items: [{ kind: 'goal-unserved', goal_id: 'G1', ref: 'G1', title: 'Less toil', detail: 'Nothing open serves G1.' }] },
+    ],
+  };
+  const digest = { wins: [{ kind: 'commit', title: 'Fix merge', at: ago(30), verified: true, related: true }], agent_claims: [{ session_id: 's1', summary: 'done', at: ago(20) }], changed: { agent_files: ['a.ts'], commits: 1 }, waiting: [], someday: { open: 0, untriaged_over_7d: 0 }, retro: { due: true, week: '2026-W39' }, q2_candidates: [] };
+
+  const nextCount = (html) => (html.match(/class="ui-btn is-next/g) ?? []).length;
+  const warnings = [];
+  const guard = v.createNextGuard({ warn: (m) => warnings.push(m) });
+  const views = {
+    home: h(v.HomeSection, { ctx, returnNonce: 0, seed: { opener, digest, name: 'Ben' } }),
+    'home (nothing to pick up)': h(v.HomeSection, { ctx: { ...ctx, feedRows: [] }, returnNonce: 0, seed: { opener: { ...opener, pick_up: null }, digest, name: null } }),
+    goals: h(v.GoalsSection, { ctx }),
+    ops: h(v.OperationsSection, { ctx }),
+    history: h(v.HistorySection, { ctx }),
+    launcher: h(v.Launcher, { ctx, onClose: noop, onExplore: noop, onRun: noop }),
+  };
+  const html = {};
+  for (const [name, el] of Object.entries(views)) {
+    html[name] = v.render(el);
+    const root = {};
+    for (let i = 0; i < nextCount(html[name]); i++) guard.register(root, name);
+  }
+
+  test('views: no Cockpit view mounts more than one next button (nextGuard)', () => {
+    assert.deepEqual(warnings, []);
+    assert.equal(nextCount(html.home), 1, 'Home: Continue');
+    assert.match(html.home, /ui-btn is-next[^>]*>Continue<span class="ui-kbd">⇧⌘0</);
+    assert.equal(nextCount(html['home (nothing to pick up)']), 0);
+    assert.equal(nextCount(html.goals), 1, 'Goals: Evaluate on the first goal due');
+    assert.equal(nextCount(html.ops), 0, 'Ops: none');
+    assert.equal(nextCount(html.history), 0);
+    assert.equal(nextCount(html.launcher), 1, 'Launcher: Launch');
+  });
+
+  test('Home: the desk from fixtures (greeting, Newsreader question, Pick up, sentences, Meanwhile)', () => {
+    const s = html.home;
+    assert.match(s, /class="home-greeting">[A-Z][a-z]+day (morning|afternoon|evening|night)</);
+    assert.match(s, /class="home-question"[^>]*>What&#x27;s on your mind, Ben\?</);
+    assert.match(s, /placeholder="Start writing\. Enter opens a Page\."/);
+    assert.match(s, /Pick up where you left off/);
+    assert.match(s, /“whether the merge needs a tiebreak”/);
+    assert.match(s, /2 answers came back · 1 open question/);
+    for (const t of ['A blank page', '1 open question', '1 thought from your phone', 'G1 has nothing open serving it']) assert.ok(s.includes(t), t);
+    assert.ok(s.includes('One agent finished while you were away, and one thing shipped. Four are waiting on you.'), 'one sentence');
+    assert.equal((s.match(/class="home-need[ "]/g) ?? []).length, 3, 'up to three needs-you rows');
+    assert.ok(s.includes('1 more in Work'));
+    assert.match(s, /ui-btn is-plain[^>]*>Allow</, 'Allow is plain on Home, not the phosphor step');
+    for (const t of ['See what shipped', 'Ask Hester what to do next', 'This week&#x27;s retro']) assert.ok(s.includes(t), t);
+    assert.ok(!/Ask Hester<\/div>|about:|Copilot mode/.test(s), 'the Ask card, about chips and the Copilot mode placeholder are gone');
+    assert.ok(!/cockpit-badge/.test(s), 'no count badges');
+    assert.match(html['home (nothing to pick up)'], />What&#x27;s on your mind\?</);
+  });
+
+  test('rail: icons with labels and tooltips; the only badge is a dot', () => {
+    const dots = { home: false, work: true, goals: false, library: false, ops: true, history: false };
+    const s = v.render(h(v.CockpitNav, { section: 'home', dots, onSelect: noop }));
+    assert.equal((s.match(/class="cockpit-rail-item/g) ?? []).length, 6);
+    assert.equal((s.match(/class="cockpit-rail-dot"/g) ?? []).length, 2);
+    assert.match(s, /aria-label="Work, needs you"/);
+    assert.match(s, /title="Library"/);
+    assert.match(s, /class="cockpit-rail-item is-active"[^>]*aria-label="Home"/);
+    assert.ok(!/\d<\/span>/.test(s.replace(/<svg[\s\S]*?<\/svg>/g, '')), 'no counts');
+  });
+
+  test('Goals, Ops: ember only as the needs-you Dot', () => {
+    assert.equal((html.goals.match(/ui-dot is-needs/g) ?? []).length, 3, 'G1 flagged, G2 never evaluated, C1 violated');
+    assert.ok(!/cockpit-tag is-ember|cockpit-badge/.test(html.goals));
+    assert.match(html.ops, /ui-eyebrow is-needs/, 'the proposal is Waiting on you');
+    assert.ok((html.ops.match(/ui-dot is-needs/g) ?? []).length >= 2, 'the failed op and the proposal');
+    assert.match(html.ops, /Work lint/);
   });
 }
 

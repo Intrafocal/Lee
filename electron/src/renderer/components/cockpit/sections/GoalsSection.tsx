@@ -10,13 +10,18 @@
  * Edit (GOALS.md in Manual) and Guided edit… (a proposed diff; Apply
  * writes only on that click, never commits). Below: tensions, constraints
  * and the human_balance strip. Sections have no keys (click only).
+ *
+ * Cockpit design §6.3: built from the primitives. Ember (a Dot) only on a
+ * goal that needs you: nothing serving it, or its evaluation due. At most
+ * one next step: Evaluate on the first goal whose evaluation is due; every
+ * other action is plain or quiet. No count badges.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon } from '../../Icon';
 import type { OperationInfo } from '../../../../shared/cockpit';
 import {
   balanceSegments,
+  evaluationDue,
   formatAge,
   formatHours,
   formatMetricValue,
@@ -40,6 +45,7 @@ import { StewardAnswerView } from '../StewardAnswerView';
 import { openItem } from '../Proposals';
 import { RunOpDialog } from '../RunMenu';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
+import { Btn, Card, Dot, Eyebrow, Row, SectionHead } from '../ui';
 
 const BAND_LABELS: Record<BalanceBand, string> = {
   Q1: 'Q1 important + urgent',
@@ -100,13 +106,15 @@ type DraftState =
   | { phase: 'applying'; draft: GoalDraftAnswer }
   | { phase: 'error'; error: string; draft?: GoalDraftAnswer };
 
-const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; selected: boolean; onChanged: () => void }> = ({
-  ctx,
-  goal,
-  handle,
-  selected,
-  onChanged,
-}) => {
+const GoalRow: React.FC<{
+  ctx: CockpitCtx;
+  goal: GoalStatus;
+  handle: RowHandle;
+  selected: boolean;
+  /** This goal's Evaluate is the view's one next step (the first goal due). */
+  next: boolean;
+  onChanged: () => void;
+}> = ({ ctx, goal, handle, selected, next, onChanged }) => {
   const [expanded, setExpanded] = useState(false);
   const [evalState, setEvalState] = useState<EvalState>({ phase: 'idle' });
   const [staleDeclined, setStaleDeclined] = useState(false);
@@ -216,182 +224,173 @@ const GoalRow: React.FC<{ ctx: CockpitCtx; goal: GoalStatus; handle: RowHandle; 
     }
   };
 
+  const due = evaluationDue(goal.last_evaluated_at, ctx.now);
   const stale = evalState.phase === 'done' ? evalState.answer.stale_measure ?? null : null;
   const draftObj = draft.phase === 'ready' || draft.phase === 'applying' ? draft.draft : draft.phase === 'error' ? draft.draft ?? null : null;
 
   return (
-    <div
-      data-cockpit-row={handle.id}
-      className={`cockpit-row cockpit-goal${selected ? ' is-selected' : ''}${goal.flagged ? ' is-flagged' : ''}`}
-      onClick={() => ctx.selectRow(handle.id)}
-    >
-      <div className="cockpit-row-head">
-        <span className="cockpit-goal-id">{goal.id}</span>
-        <span className="cockpit-row-title" title={goal.prose || goal.title}>
-          {goal.title}
-        </span>
-        {goal.flagged && (
-          <span className="cockpit-tag is-ember" title="Nothing serves this goal and a metric is failing or trending the wrong way">
-            <Icon name="warning" size={10} /> Nothing serving
+    <Card className="cockpit-goal" selected={selected}>
+      <div data-cockpit-row={handle.id} onClick={() => ctx.selectRow(handle.id)}>
+        <div className="cockpit-goal-head">
+          {(goal.flagged || due) && <Dot kind="needs" label={goal.flagged ? 'Nothing serving' : 'Evaluation due'} />}
+          <span className="cockpit-goal-id">{goal.id}</span>
+          <span className="cockpit-goal-title" title={goal.prose || goal.title}>
+            {goal.title}
           </span>
+          <span className="cockpit-goal-when">
+            {goal.flagged && <span title="Nothing serves this goal and a metric is failing or trending the wrong way">Nothing serving · </span>}
+            {goal.last_evaluated_at ? `evaluated ${formatAge(goal.last_evaluated_at, ctx.now)}` : 'never evaluated'}
+            {due && goal.last_evaluated_at ? ' · due' : ''}
+          </span>
+        </div>
+        {goal.metrics.length > 0 && (
+          <div className="cockpit-chips cockpit-metrics">
+            {goal.metrics.map((m) => (
+              <MetricChip key={m.name} m={m} />
+            ))}
+          </div>
         )}
-        <span className="cockpit-header-spacer" />
-        <span className="cockpit-muted">{goal.last_evaluated_at ? `evaluated ${formatAge(goal.last_evaluated_at, ctx.now)}` : 'never evaluated'}</span>
-      </div>
-      {goal.metrics.length > 0 && (
-        <div className="cockpit-chips cockpit-metrics">
-          {goal.metrics.map((m) => (
-            <MetricChip key={m.name} m={m} />
-          ))}
+        <div className="cockpit-goal-meta">
+          {servingCount === 0 && !goal.flagged ? (
+            'Nothing serving'
+          ) : servingCount > 0 ? (
+            <button
+              className="cockpit-goal-link"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded((x) => !x);
+              }}
+              aria-expanded={expanded}
+            >
+              {expanded ? '▾' : '▸'} {s.tasks.length} task{s.tasks.length === 1 ? '' : 's'} · {s.workstreams.length} workstream
+              {s.workstreams.length === 1 ? '' : 's'} · {s.explorations.length} exploration{s.explorations.length === 1 ? '' : 's'}
+            </button>
+          ) : null}
+          {goal.focus_ms_7d > 0 ? ` · ${formatHours(goal.focus_ms_7d)} of your focus this week` : ' · none of your focus this week'}
         </div>
-      )}
-      <div className="cockpit-row-meta">
-        {servingCount === 0 && !goal.flagged ? (
-          'Nothing serving'
-        ) : servingCount > 0 ? (
-          <button
-            className="cockpit-link"
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((x) => !x);
-            }}
-            aria-expanded={expanded}
+        {expanded && servingCount > 0 && (
+          <div className="cockpit-goal-serving" onClick={(e) => e.stopPropagation()}>
+            {s.tasks.map((t) => (
+              <Row key={`t:${t.id}`} title={t.title} sub={`task · ${t.status}${t.quadrant ? ` · ${t.quadrant}` : ''}`} onOpen={() => void openItem(ctx, 'task', t.id)} />
+            ))}
+            {s.workstreams.map((w) => (
+              <Row key={`w:${w.id}`} title={w.title} sub={`workstream · ${w.phase}`} onOpen={() => ctx.openWorkstream(w.id, w.title)} />
+            ))}
+            {s.explorations.map((x) => (
+              <Row key={`x:${x.id}`} title={x.title} sub="exploration" onOpen={() => void openItem(ctx, 'exploration', x.id)} />
+            ))}
+          </div>
+        )}
+        <div className="cockpit-goal-actions" onClick={(e) => e.stopPropagation()}>
+          <Btn
+            kind={next ? 'next' : 'plain'}
+            disabled={evalState.phase === 'loading' || evalState.phase === 'measuring'}
+            title="Hester reads the evidence (metrics, what serves it, commits, your focus time) and says what to do"
+            onClick={() => void evaluate()}
           >
-            {expanded ? '▾' : '▸'} {s.tasks.length} task{s.tasks.length === 1 ? '' : 's'} · {s.workstreams.length} workstream
-            {s.workstreams.length === 1 ? '' : 's'} · {s.explorations.length} exploration{s.explorations.length === 1 ? '' : 's'}
-          </button>
-        ) : null}
-        {goal.focus_ms_7d > 0 ? ` · ${formatHours(goal.focus_ms_7d)} of your focus this week` : ' · none of your focus this week'}
-      </div>
-      {expanded && servingCount > 0 && (
-        <div className="cockpit-goal-serving" onClick={(e) => e.stopPropagation()}>
-          {s.tasks.map((t) => (
-            <button key={`t:${t.id}`} className="cockpit-menu-item" onClick={() => void openItem(ctx, 'task', t.id)}>
-              <span className={`cockpit-status st-${t.status}`}>{t.status}</span> {t.title}
-              {t.quadrant && <span className="cockpit-tag">{t.quadrant}</span>}
-            </button>
-          ))}
-          {s.workstreams.map((w) => (
-            <button key={`w:${w.id}`} className="cockpit-menu-item" onClick={() => ctx.openWorkstream(w.id, w.title)}>
-              <span className="cockpit-tag">workstream</span> {w.title} <span className="cockpit-muted">{w.phase}</span>
-            </button>
-          ))}
-          {s.explorations.map((x) => (
-            <button key={`x:${x.id}`} className="cockpit-menu-item" onClick={() => void openItem(ctx, 'exploration', x.id)}>
-              <span className="cockpit-tag">exploration</span> {x.title}
-            </button>
-          ))}
+            {evalState.phase === 'loading' ? 'Evaluating…' : 'Evaluate'}
+          </Btn>
+          <Btn kind="quiet" disabled={building} title={`Start a workstream that serves ${goal.id}`} onClick={() => void buildToward()}>
+            Build toward
+          </Btn>
+          <Btn kind="quiet" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
+            Edit
+          </Btn>
+          <Btn
+            kind="quiet"
+            onClick={() => {
+              draftSeq.current++;
+              setDraft(draft.phase === 'closed' ? { phase: 'input' } : { phase: 'closed' });
+            }}
+          >
+            Guided edit…
+          </Btn>
         </div>
-      )}
-      <div className="cockpit-row-actions" onClick={(e) => e.stopPropagation()}>
-        <button
-          className="cockpit-btn is-primary"
-          disabled={evalState.phase === 'loading' || evalState.phase === 'measuring'}
-          title="Hester reads the evidence (metrics, what serves it, commits, your focus time) and says what to do"
-          onClick={() => void evaluate()}
-        >
-          {evalState.phase === 'loading' ? 'Evaluating…' : 'Evaluate'}
-        </button>
-        <button className="cockpit-btn" disabled={building} title={`Start a workstream that serves ${goal.id}`} onClick={() => void buildToward()}>
-          Build toward
-        </button>
-        <button className="cockpit-btn" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
-          Edit
-        </button>
-        <button
-          className="cockpit-btn"
-          onClick={() => {
-            draftSeq.current++;
-            setDraft(draft.phase === 'closed' ? { phase: 'input' } : { phase: 'closed' });
-          }}
-        >
-          Guided edit…
-        </button>
-      </div>
 
-      {evalState.phase === 'loading' && (
-        <div className="cockpit-muted cockpit-spinner-line">
-          <span className="cockpit-spinner" /> Evaluating {goal.id}
-          {evalState.note ? ` ${evalState.note}` : ''}…
-        </div>
-      )}
-      {evalState.phase === 'measuring' && (
-        <div className="cockpit-muted cockpit-spinner-line">
-          <span className="cockpit-spinner" /> Running {evalState.name}, then evaluating again…
-        </div>
-      )}
-      {evalState.phase === 'error' && <div className="cockpit-error">{evalState.error}</div>}
-      {evalState.phase === 'done' && (
-        <div onClick={(e) => e.stopPropagation()}>
-          {stale && !staleDeclined && (
-            <div className="cockpit-confirm">
-              <div className="cockpit-muted">
-                <code>{stale}</code> has no reading in the last 24 h. Run it first, then evaluate again?
+        {evalState.phase === 'loading' && (
+          <div className="cockpit-muted cockpit-spinner-line">
+            <span className="cockpit-spinner" /> Evaluating {goal.id}
+            {evalState.note ? ` ${evalState.note}` : ''}…
+          </div>
+        )}
+        {evalState.phase === 'measuring' && (
+          <div className="cockpit-muted cockpit-spinner-line">
+            <span className="cockpit-spinner" /> Running {evalState.name}, then evaluating again…
+          </div>
+        )}
+        {evalState.phase === 'error' && <div className="cockpit-error">{evalState.error}</div>}
+        {evalState.phase === 'done' && (
+          <div onClick={(e) => e.stopPropagation()}>
+            {stale && !staleDeclined && (
+              <div className="cockpit-confirm">
+                <div className="cockpit-muted">
+                  <code>{stale}</code> has no reading in the last 24 h. Run it first, then evaluate again?
+                </div>
+                <div className="cockpit-row-actions">
+                  <Btn kind="plain" disabled={!ctx.api} onClick={() => void measureThenEvaluate(stale)}>
+                    Run {stale} and re-evaluate
+                  </Btn>
+                  <Btn kind="quiet" onClick={() => setStaleDeclined(true)}>
+                    No, keep this answer
+                  </Btn>
+                </div>
               </div>
-              <div className="cockpit-row-actions">
-                <button className="cockpit-btn is-primary" disabled={!ctx.api} onClick={() => void measureThenEvaluate(stale)}>
-                  Run {stale} and re-evaluate
-                </button>
-                <button className="cockpit-btn" onClick={() => setStaleDeclined(true)}>
-                  No, keep this answer
-                </button>
-              </div>
-            </div>
-          )}
-          <StewardAnswerView key={evalState.answer.request_id} ctx={ctx} answer={evalState.answer} onClose={() => setEvalState({ phase: 'idle' })} />
-        </div>
-      )}
-      {opDialog && <RunOpDialog ctx={ctx} op={opDialog} onClose={() => setOpDialog(null)} />}
+            )}
+            <StewardAnswerView key={evalState.answer.request_id} ctx={ctx} answer={evalState.answer} onClose={() => setEvalState({ phase: 'idle' })} />
+          </div>
+        )}
+        {opDialog && <RunOpDialog ctx={ctx} op={opDialog} onClose={() => setOpDialog(null)} />}
 
-      {draft.phase !== 'closed' && (
-        <div className="cockpit-confirm" onClick={(e) => e.stopPropagation()}>
-          {(draft.phase === 'input' || draft.phase === 'loading' || (draft.phase === 'error' && !draft.draft)) && (
-            <div className="cockpit-capture">
-              <input
-                autoFocus
-                className="cockpit-input"
-                value={instruction}
-                placeholder={`How should ${goal.id} change? (Hester drafts GOALS.md; nothing is written until Apply)`}
-                onChange={(e) => setInstruction(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void requestDraft();
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setDraft({ phase: 'closed' });
-                  }
-                }}
-              />
-              <button className="cockpit-btn is-primary" disabled={draft.phase === 'loading' || !instruction.trim()} onClick={() => void requestDraft()}>
-                {draft.phase === 'loading' ? 'Drafting…' : 'Draft'}
-              </button>
-            </div>
-          )}
-          {draftObj && (
-            <>
-              {draftObj.text && <AgentMarkdown text={draftObj.text} />}
-              {draftObj.diff ? <DiffView diff={draftObj.diff} /> : <div className="cockpit-muted">No changes proposed.</div>}
-              <div className="cockpit-row-actions">
-                <button
-                  className="cockpit-btn is-primary"
-                  disabled={draft.phase === 'applying' || !draftObj.diff}
-                  title="Write GOALS.md from this draft (not committed)"
-                  onClick={() => void applyDraft(draftObj)}
-                >
-                  {draft.phase === 'applying' ? 'Applying…' : 'Apply'}
-                </button>
-                <button className="cockpit-btn" onClick={() => setDraft({ phase: 'closed' })}>
-                  Discard
-                </button>
+        {draft.phase !== 'closed' && (
+          <div className="cockpit-confirm" onClick={(e) => e.stopPropagation()}>
+            {(draft.phase === 'input' || draft.phase === 'loading' || (draft.phase === 'error' && !draft.draft)) && (
+              <div className="cockpit-capture">
+                <input
+                  autoFocus
+                  className="cockpit-input"
+                  value={instruction}
+                  placeholder={`How should ${goal.id} change? (Hester drafts GOALS.md; nothing is written until Apply)`}
+                  onChange={(e) => setInstruction(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void requestDraft();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDraft({ phase: 'closed' });
+                    }
+                  }}
+                />
+                <Btn kind="plain" disabled={draft.phase === 'loading' || !instruction.trim()} onClick={() => void requestDraft()}>
+                  {draft.phase === 'loading' ? 'Drafting…' : 'Draft'}
+                </Btn>
               </div>
-            </>
-          )}
-          {draft.phase === 'error' && <div className="cockpit-error">{draft.error}</div>}
-        </div>
-      )}
-    </div>
+            )}
+            {draftObj && (
+              <>
+                {draftObj.text && <AgentMarkdown text={draftObj.text} />}
+                {draftObj.diff ? <DiffView diff={draftObj.diff} /> : <div className="cockpit-muted">No changes proposed.</div>}
+                <div className="cockpit-row-actions">
+                  <Btn
+                    kind="plain"
+                    disabled={draft.phase === 'applying' || !draftObj.diff}
+                    title="Write GOALS.md from this draft (not committed)"
+                    onClick={() => void applyDraft(draftObj)}
+                  >
+                    {draft.phase === 'applying' ? 'Applying…' : 'Apply'}
+                  </Btn>
+                  <Btn kind="quiet" onClick={() => setDraft({ phase: 'closed' })}>
+                    Discard
+                  </Btn>
+                </div>
+              </>
+            )}
+            {draft.phase === 'error' && <div className="cockpit-error">{draft.error}</div>}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 };
 
@@ -399,12 +398,8 @@ const BalanceStrip: React.FC<{ balance: GoalsStatusResponse['human_balance'] }> 
   const segs = balanceSegments(balance.ms);
   const total = segs.reduce((a, s) => a + s.ms, 0);
   return (
-    <div className="cockpit-brief-card cockpit-balance">
-      <div className="cockpit-brief-head">
-        Your time this week
-        <span className="cockpit-header-spacer" />
-        {balance.share != null && <span className="cockpit-muted">{Math.round(balance.share * 100)}% important (Q1 + Q2)</span>}
-      </div>
+    <div className="cockpit-balance">
+      <Eyebrow right={balance.share != null ? `${Math.round(balance.share * 100)}% important (Q1 + Q2)` : undefined}>Your time this week</Eyebrow>
       <div className="cockpit-balance-bar" role="img" aria-label={balance.line}>
         {total > 0 &&
           segs
@@ -418,7 +413,7 @@ const BalanceStrip: React.FC<{ balance: GoalsStatusResponse['human_balance'] }> 
           </span>
         ))}
       </div>
-      {balance.line && <div className="cockpit-brief-line">{balance.line}</div>}
+      {balance.line && <div className="cockpit-goals-line">{balance.line}</div>}
     </div>
   );
 };
@@ -440,68 +435,74 @@ export const GoalsSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     ctx.registerRows(handles);
   });
   const sel = ctx.mode.selected;
-  const flagged = goals.filter((g) => g.flagged).length;
   const constraints = data?.constraints ?? [];
+  // The one next step: Evaluate on the first goal (by priority) whose evaluation is due.
+  const nextId = goals.find((g) => evaluationDue(g.last_evaluated_at, ctx.now))?.id ?? null;
 
   return (
     <section className="cockpit-sec cockpit-goals">
-      <header className="cockpit-sec-head">
-        <h2>Goals</h2>
-        <span className="cockpit-muted">
-          {data ? `${goals.length} goal${goals.length === 1 ? '' : 's'}${flagged ? ` · ${flagged} with nothing serving` : ''} · from GOALS.md` : 'GOALS.md'}
-        </span>
-        <span className="cockpit-header-spacer" />
-        <button className="cockpit-btn is-icon" onClick={refresh} disabled={loading} title="Refresh" aria-label="Refresh goal status">
-          <Icon name="refresh" size={12} />
-        </button>
-      </header>
+      <SectionHead
+        title="Goals"
+        summary={data ? `${goals.length} goal${goals.length === 1 ? '' : 's'} · from GOALS.md` : 'GOALS.md'}
+        right={
+          <Btn kind="quiet" onClick={refresh} disabled={loading} title="Refresh goal status">
+            Refresh
+          </Btn>
+        }
+      />
       {error && !data && <div className="cockpit-offline">{error}: goal status needs Hester.</div>}
       {!data && !error && <div className="cockpit-muted">Loading…</div>}
       {data && goals.length === 0 && (
         <div className="cockpit-empty">
           No goals in GOALS.md.{' '}
-          <button className="cockpit-link" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
+          <Btn kind="quiet" onClick={() => ctx.openFile(workspacePath(ctx.workspace, 'GOALS.md'))}>
             Open GOALS.md
-          </button>
+          </Btn>
         </div>
       )}
-      <div className="cockpit-rows">
+      <div className="cockpit-goal-list">
         {goals.map((g, i) => (
           // Keyed by workspace too: a switch drops that goal's Evaluate/draft state.
-          <GoalRow key={`${ctx.workspace}:${g.id}`} ctx={ctx} goal={g} handle={handles[i]} selected={sel?.kind === 'row' && sel.id === handles[i].id} onChanged={refresh} />
+          <GoalRow
+            key={`${ctx.workspace}:${g.id}`}
+            ctx={ctx}
+            goal={g}
+            handle={handles[i]}
+            selected={sel?.kind === 'row' && sel.id === handles[i].id}
+            next={g.id === nextId}
+            onChanged={refresh}
+          />
         ))}
       </div>
-      {data && (data.tensions.length > 0 || constraints.length > 0) && (
-        <div className="cockpit-brief-card">
-          {data.tensions.length > 0 && (
-            <div className="cockpit-brief-group">
-              <div className="cockpit-brief-label">Tensions</div>
-              {data.tensions.map((t) => (
-                <div key={`${t.a}-${t.b}-${t.label}`} className="cockpit-brief-line">
-                  <strong>
-                    {t.a} → {t.b}
-                  </strong>{' '}
-                  ({t.label}){t.default ? `: ${t.default}` : ''}
-                  {t.arbiter && <span className="cockpit-muted"> · arbiter {t.arbiter}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-          {constraints.length > 0 && (
-            <div className="cockpit-brief-group">
-              <div className="cockpit-brief-label">Constraints</div>
-              {constraints.map((c) => (
-                <div key={c.id} className="cockpit-brief-line">
-                  <span className={`cockpit-tag${c.violations ? ' is-ember' : ''}`}>{c.id}</span> {c.title}
-                  <span className="cockpit-muted">
-                    {' · '}
-                    {c.violations == null ? 'not measured' : `${c.violations} violation${c.violations === 1 ? '' : 's'}`}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {data && data.tensions.length > 0 && (
+        <>
+          <Eyebrow>Tensions</Eyebrow>
+          <Card>
+            {data.tensions.map((t) => (
+              <Row
+                key={`${t.a}-${t.b}-${t.label}`}
+                title={`${t.a} → ${t.b} (${t.label})`}
+                sub={t.default || undefined}
+                meta={t.arbiter ? `arbiter ${t.arbiter}` : undefined}
+              />
+            ))}
+          </Card>
+        </>
+      )}
+      {constraints.length > 0 && (
+        <>
+          <Eyebrow>Constraints</Eyebrow>
+          <Card>
+            {constraints.map((c) => (
+              <Row
+                key={c.id}
+                dot={c.violations ? 'needs' : undefined}
+                title={`${c.id} ${c.title}`}
+                meta={c.violations == null ? 'not measured' : `${c.violations} violation${c.violations === 1 ? '' : 's'}`}
+              />
+            ))}
+          </Card>
+        </>
       )}
       {data?.human_balance && <BalanceStrip balance={data.human_balance} />}
     </section>
