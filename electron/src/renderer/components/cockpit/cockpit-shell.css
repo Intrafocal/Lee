@@ -1640,6 +1640,14 @@ button.cockpit-quadrant:hover {
   color: var(--text-secondary);
 }
 
+/* Launcher limit note (docs/15-Usage.md §6.1): informational, neutral, never a gate */
+
+.cockpit-launch-limit {
+  margin: var(--space-1) 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* Launcher Q4 note: one quiet line, never a gate */
 
 .cockpit-q4-note {

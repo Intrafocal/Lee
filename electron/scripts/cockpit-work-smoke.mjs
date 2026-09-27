@@ -11,6 +11,11 @@
  * esbuild, no React, no DOM. Then renders WorkSection, WorkDetail and
  * LibrarySection to static HTML with fixture data (react-dom/server) and
  * checks the one-next-step rule and the chips each place shows.
+ * Usage (docs/15-Usage.md §6.1, §6.2; package UR): usageModel.ts's token and
+ * dollar labels (dollars only for billed / estimate), the limits in Work's
+ * summary (hidden to 50%, "as of" past 10 minutes, resets in the tooltip,
+ * a reset window dropped), the Launcher's 85% note, and tokens on list
+ * rows, waiting cards and the detail's meta line.
  *
  * Run: node scripts/cockpit-work-smoke.mjs
  */
@@ -748,6 +753,101 @@ test('render: Library has no next step', () => {
   assert.equal(nextCount(html), 0);
   assert.match(html, /Explorations/);
   assert.match(html, /New exploration/);
+});
+
+// ---------------------------------------------------------------------------
+// Usage (docs/15-Usage.md §6.1, §6.2)
+// ---------------------------------------------------------------------------
+
+const usageBuilt = await esbuild.build({ entryPoints: [join(__dirname, '../src/renderer/lib/usageModel.ts')], bundle: true, format: 'esm', platform: 'node', write: false });
+assert.ok(!/^\s*import\s/m.test(usageBuilt.outputFiles[0].text), 'usageModel.ts must be pure');
+const usageDir = mkdtempSync(join(tmpdir(), 'lee-usage-smoke-'));
+let u;
+try {
+  const f = join(usageDir, 'usageModel.mjs');
+  writeFileSync(f, usageBuilt.outputFiles[0].text);
+  u = await import(pathToFileURL(f).href);
+} finally {
+  rmSync(usageDir, { recursive: true, force: true });
+}
+
+const later = (min) => new Date(NOW + min * 60000).toISOString();
+const subUsage = { tokens: { input: 2000, output: 10000, cache_write: 400000, cache_read: 9000000 }, shown_tokens: 412000, cost_basis: 'subscription', cost_usd: 9.99 };
+const billedUsage = { tokens: { input: 1000, output: 1500000 }, shown_tokens: 1501000, cost_basis: 'billed', cost_usd: 3.1 };
+
+test('usage: tokens next to an agent; dollars only for billed or estimate', () => {
+  assert.equal(u.agentTokensLabel(subUsage), '412k tok');
+  assert.equal(u.agentTokensLabel(null), '');
+  assert.equal(u.agentTokensLabel({ shown_tokens: 0 }), '', 'nothing before the first turn ends');
+  assert.equal(u.agentUsageDetail(subUsage), '412k tokens', 'a subscription run never shows dollars');
+  assert.equal(u.agentUsageDetail(billedUsage), '1.5M tokens · $3.10');
+  assert.equal(u.agentUsageDetail({ ...billedUsage, cost_basis: 'estimate', cost_usd: 0.004 }), '1.5M tokens · <$0.01');
+  assert.equal(u.agentUsageDetail({ ...billedUsage, cost_basis: 'local' }), '1.5M tokens');
+  assert.equal(u.formatUsd(120.4), '$120');
+  assert.equal(u.shownTokens({ input: 1, output: 2, cache_write: 3, cache_read: 1000, thinking: 1 }), 6, 'cache reads and thinking are not added');
+});
+
+test('usage: limits join the summary past 50%, with "as of" past 10 minutes and resets in the tooltip', () => {
+  const limits = (pct, asOfMin = 1, over = {}) => ({
+    five_hour: { used_pct: pct, resets_at: later(100) },
+    seven_day: { used_pct: 18.2, resets_at: later(3 * 1440) },
+    as_of: ago(asOfMin),
+    ...over,
+  });
+  assert.equal(u.limitsSummary(limits(50), NOW), null, 'hidden at 50%');
+  assert.equal(u.limitsSummary(null, NOW), null);
+  const s = u.limitsSummary(limits(61.6), NOW);
+  assert.equal(s.text, '5h 62% · 7d 18%');
+  assert.match(s.title, /^5h resets \d{1,2}:\d{2}(am|pm) · 7d resets [A-Z][a-z]{2} \d{1,2}:\d{2}(am|pm)$/);
+  assert.equal(u.limitsSummary(limits(62, 10), NOW).text, '5h 62% · 7d 18%', 'exactly 10 minutes is not stale');
+  assert.equal(u.limitsSummary(limits(62, 125), NOW).text, '5h 62% · 7d 18% as of 2h ago');
+  assert.equal(u.limitsSummary(limits(62, 1, { five_hour: { used_pct: 90, resets_at: ago(5) } }), NOW), null, 'a window that has reset says nothing');
+  assert.equal(u.limitsSummary(limits(62, 1, { seven_day: undefined }), NOW).text, '5h 62%');
+});
+
+test('usage: the Launcher notes the 5-hour window from 85%', () => {
+  const lim = (pct, resets_at = later(40)) => ({ five_hour: { used_pct: pct, resets_at }, as_of: ago(1) });
+  assert.equal(u.launcherLimitNote(lim(84.4), NOW), null);
+  assert.match(u.launcherLimitNote(lim(91), NOW), /^5h window at 91%, resets \d{1,2}:\d{2}(am|pm)$/);
+  assert.equal(u.launcherLimitNote(lim(91, null), NOW), '5h window at 91%');
+  assert.equal(u.launcherLimitNote(lim(91, ago(1)), NOW), null, 'already reset');
+  assert.equal(u.launcherLimitNote(null, NOW), null);
+});
+
+test('usage: waiting items and In flight rows carry the agent’s tokens after the time', () => {
+  const agents = [{ pty_id: 3, usage: subUsage }, { pty_id: 5, usage: billedUsage }];
+  const w = m.waitingItems({ items: [item('a', { source: { ...item('x').source, pty_id: 3 } }), item('b')], workspace: WS, agents });
+  assert.equal(w.find((x) => x.item.id === 'a').tokens, '412k tok');
+  assert.equal(w.find((x) => x.item.id === 'b').tokens, '');
+  const f = m.inFlight({ tiles: [tile(5, { working: true }), tile(6)], agents, times: new Map([[5, { busySince: ago(18), idleSince: null }]]), now: NOW });
+  const busy = f.rows.find((r) => r.ptyId === 5);
+  assert.equal(busy.meta, '18m · 1.5M tok', 'tokens only, even for billed runs, in the list');
+  assert.equal(f.rows.find((r) => r.ptyId === 6).meta, '', 'no usage, no meta');
+});
+
+test('render: Work’s summary shows the limits (tooltip) past 50% only; waiting cards and rows show tokens', () => {
+  const limits = { five_hour: { used_pct: 62, resets_at: later(100) }, seven_day: { used_pct: 18, resets_at: later(3000) }, as_of: ago(2) };
+  const agents = [{ pty_id: 3, usage: subUsage }, { pty_id: 5, usage: billedUsage }];
+  const base = fixtureCtx().snapshot;
+  const html = render.work(fixtureCtx({ snapshot: { ...base, items: [approvalItem], agents, limits }, tiles: [tile(3), tile(5, { working: true })] }));
+  assert.match(html, /ui-section-summary">1 waiting on you · 1 working · <span class="work-limits" title="5h resets [^"]+ · 7d resets [^"]+">5h 62% · 7d 18%<\/span>/);
+  assert.match(html, /class="work-card-usage">· 412k tok</);
+  assert.match(html, /1\.5M tok/);
+  assert.ok(!/\$3\.10/.test(html), 'no dollars in the list');
+  assert.equal(nextCount(html), 1, 'the limits add no next step');
+  const low = render.work(fixtureCtx({ snapshot: { ...base, agents, limits: { ...limits, five_hour: { used_pct: 40, resets_at: later(100) } } }, tiles: [tile(5, { working: true })] }));
+  assert.ok(!/work-limits|5h \d/.test(low), 'hidden under 50%');
+  const onlyLimits = render.work(fixtureCtx({ snapshot: { ...base, limits } }));
+  assert.match(onlyLimits, /ui-section-summary"><span class="work-limits"[^>]*>5h 62% · 7d 18%</, 'no leading separator');
+});
+
+test('render: the detail meta line has tokens after "started", dollars only for billed runs', () => {
+  const sub = render.detail(fixtureCtx(), subject({ agent: { pty_id: 3, usage: subUsage } }));
+  assert.match(sub, /work-detail-meta">Claude · lee · started 18m ago · 412k tokens</);
+  const billed = render.detail(fixtureCtx(), subject({ agent: { pty_id: 3, usage: billedUsage } }));
+  assert.match(billed, /started 18m ago · 1\.5M tokens · \$3\.10/);
+  const none = render.detail(fixtureCtx(), subject({ agent: { pty_id: 3 } }));
+  assert.ok(!/tokens/.test(none));
 });
 
 console.log(`cockpit-work-smoke: ${passed} tests passed`);

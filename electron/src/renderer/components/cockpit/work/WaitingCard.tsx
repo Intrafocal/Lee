@@ -107,6 +107,7 @@ export const WaitingCard: React.FC<WaitingCardProps> = ({ ctx, w, raised, select
           <span className="work-card-name">{w.name}</span>
           {where && <span className="work-card-where">· {where}</span>}
           <span className="work-card-age">{shortAge(w.since, ctx.now)}</span>
+          {w.tokens && <span className="work-card-usage">· {w.tokens}</span>}
           <MoreMenu
             label={`More for ${w.name}`}
             items={[

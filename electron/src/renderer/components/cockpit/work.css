@@ -89,6 +89,17 @@
   flex-shrink: 0;
 }
 
+/* docs/15-Usage.md §6.2: the agent's tokens, quiet, after the time */
+.work-card-usage {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* §6.1: the limits in the summary line stay neutral text */
+.work-limits {
+  font-variant-numeric: tabular-nums;
+}
+
 .work-card-line {
   margin-top: var(--space-2);
   font-size: 14px;

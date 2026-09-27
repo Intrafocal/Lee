@@ -15,7 +15,10 @@
  * Launcher's three choices, the rail's dots, the status-bar counts, section
  * migration from every legacy id, and one next button at most per view
  * (Home, Goals, Ops, History and the Launcher rendered from fixtures with
- * react-dom/server, counted through nextGuard).
+ * react-dom/server, counted through nextGuard). Usage (docs/15-Usage.md
+ * §6.1, §6.3; package UR): History's Usage tab from a fixture (spend and
+ * subscription tokens never summed, Hester cloud / local and who asked, top
+ * work items, no next step) and the Launcher's 85% note.
  *
  * Run: node scripts/cockpit-renderer-smoke.mjs
  */
@@ -1480,6 +1483,30 @@ const leeRows = [
   };
   const digest = { wins: [{ kind: 'commit', title: 'Fix merge', at: ago(30), verified: true, related: true }], agent_claims: [{ session_id: 's1', summary: 'done', at: ago(20) }], changed: { agent_files: ['a.ts'], commits: 1 }, waiting: [], someday: { open: 0, untriaged_over_7d: 0 }, retro: { due: true, week: '2026-W39' }, q2_candidates: [] };
 
+  // GET /cockpit/usage (docs/15-Usage.md §5), as the Hester package returns it.
+  const usageSeed = {
+    range: 'today',
+    limits: { five_hour: { used_pct: 42, resets_at: new Date(NOW + 3600000).toISOString() }, seven_day: { used_pct: 18, resets_at: null }, as_of: ago(3) },
+    totals: {
+      claude: { spend_usd: 0, subscription_tokens: 3100000, local_tokens: 0, shown_tokens: 3100000, calls: null },
+      pi: { spend_usd: 1.25, subscription_tokens: 0, local_tokens: 0, shown_tokens: 90000 },
+      hester_cloud: { by_basis: { estimate: { cost_usd: 0.42, shown_tokens: 120000 }, subscription: { cost_usd: 50, shown_tokens: 1000 } } },
+      hester_local: { spend_usd: 0, subscription_tokens: 0, local_tokens: 240000, shown_tokens: 240000 },
+    },
+    by_day: [],
+    hester: {
+      cloud: { calls: 14, spend_usd: 0.42, shown_tokens: 120000 },
+      local: { calls: 30, local_tokens: 240000, shown_tokens: 240000 },
+      user: { calls: 9, spend_usd: 0.3, shown_tokens: 80000 },
+      automatic: { calls: 35, spend_usd: 0.12, local_tokens: 240000, shown_tokens: 280000 },
+    },
+    top_items: [
+      { task_id: 't1', title: 'Fix the parser', shown_tokens: 2400000, cost_basis: 'subscription', cost_usd: 31 },
+      { task_id: 't2', title: 'Pi refactor', shown_tokens: 90000, cost_basis: 'billed', cost_usd: 1.25 },
+    ],
+  };
+  const launchLimits = (pct) => ({ five_hour: { used_pct: pct, resets_at: new Date(NOW + 40 * 60000).toISOString() }, as_of: ago(1) });
+
   const nextCount = (html) => (html.match(/class="ui-btn is-next/g) ?? []).length;
   const warnings = [];
   const guard = v.createNextGuard({ warn: (m) => warnings.push(m) });
@@ -1491,6 +1518,9 @@ const leeRows = [
     ops: h(v.OperationsSection, { ctx }),
     history: h(v.HistorySection, { ctx }),
     launcher: h(v.Launcher, { ctx, onClose: noop, onExplore: noop, onRun: noop }),
+    'history (usage)': h(v.HistorySection, { ctx, initialTab: 'usage', usageSeed }),
+    'launcher (limits)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(91) } }, onClose: noop, onExplore: noop, onRun: noop }),
+    'launcher (limits low)': h(v.Launcher, { ctx: { ...ctx, snapshot: { ...ctx.snapshot, limits: launchLimits(84) } }, onClose: noop, onExplore: noop, onRun: noop }),
   };
   const html = {};
   for (const [name, el] of Object.entries(views)) {
@@ -1560,6 +1590,34 @@ const leeRows = [
     assert.match(html.ops, /ui-eyebrow is-needs/, 'the proposal is Waiting on you');
     assert.ok((html.ops.match(/ui-dot is-needs/g) ?? []).length >= 2, 'the failed op and the proposal');
     assert.match(html.ops, /Work lint/);
+  });
+
+  test('History: Activity and Usage tabs; Activity first', () => {
+    assert.match(html.history, /role="tablist" aria-label="History"/);
+    assert.match(html.history, /aria-selected="true" class="library-tabs-item is-on">Activity</);
+    assert.match(html['history (usage)'], /aria-selected="true" class="library-tabs-item is-on">Usage</);
+  });
+
+  test('History › Usage: spend and subscription tokens apart, per source, Hester split, top items; no next step', () => {
+    const s = html['history (usage)'];
+    assert.equal(nextCount(s), 0);
+    assert.ok(!/is-needs/.test(s), 'no ember');
+    for (const t of ['Today', 'Week', 'Month', 'By source', 'Hester', 'Top work items']) assert.ok(s.includes(t), t);
+    assert.ok(s.includes('$1.67 spent · 3.1M tok on the subscription · 240k tok local today.'), 'the total line: $1.25 + $0.42, never the subscription list price');
+    assert.ok(!s.includes('$50') && !s.includes('$31'), 'subscription dollars never show');
+    for (const t of ['Claude', 'Pi', 'Hester cloud', 'Hester local', 'Cloud', 'Local', 'You asked', 'On its own']) assert.ok(s.includes(`ui-row-title">${t}<`), t);
+    assert.ok(s.includes('14 calls · $0.42 spent'));
+    assert.ok(s.includes('Fix the parser') && s.includes('2.4M tok<'), 'a subscription item is tokens only');
+    assert.ok(s.includes('90k tok · $1.25'), 'a billed item shows dollars');
+    assert.ok(s.indexOf('Pi refactor') < s.indexOf('Fix the parser'), 'dollars first');
+    assert.match(s, /Claude subscription: 5h 42%, resets \d{1,2}:\d{2}(am|pm) · 7d 18%/);
+  });
+
+  test('Launcher: the 5-hour window at 85% or more is one neutral line, no extra step', () => {
+    assert.match(html['launcher (limits)'], /class="cockpit-launch-limit">5h window at 91%, resets \d{1,2}:\d{2}(am|pm)</);
+    assert.equal(nextCount(html['launcher (limits)']), 1, 'still just Launch');
+    assert.ok(!html['launcher (limits low)'].includes('cockpit-launch-limit'));
+    assert.ok(!html.launcher.includes('cockpit-launch-limit'));
   });
 }
 

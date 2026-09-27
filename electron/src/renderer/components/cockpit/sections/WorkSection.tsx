@@ -38,6 +38,7 @@ import {
   type SwipeAction,
   type WaitingItem,
 } from '../../../lib/workModel';
+import { limitsSummary } from '../../../lib/usageModel';
 import { Btn, Card, Eyebrow, Row, SectionHead } from '../ui';
 import { goDeep } from '../cockpitMode';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
@@ -149,7 +150,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
 
   // ---- the model ----
   const allWaiting = useMemo(
-    () => waitingItems({ items: snapshot?.items, workspace: ctx.workspace, tiles: ctx.tiles, hidden: gone }),
+    () => waitingItems({ items: snapshot?.items, workspace: ctx.workspace, tiles: ctx.tiles, hidden: gone, agents: snapshot?.agents }),
     [snapshot, ctx.workspace, ctx.tiles, gone],
   );
   const waiting = allWaiting.filter((w) => !swiped[w.item.id]);
@@ -181,6 +182,20 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     working: flight.rows.filter((r) => r.group === 'busy').length,
     done: doneToday(closed, ctx.now) + [...flight.rows, ...flight.notOpen].filter((r) => r.group === 'review').length,
   });
+  // docs/15-Usage.md §6.1: the subscription windows join the neutral summary once the 5h one passes 50%.
+  const limits = limitsSummary(snapshot?.limits, ctx.now);
+  const summaryLine =
+    summary || limits ? (
+      <>
+        {summary}
+        {summary && limits ? ' · ' : null}
+        {limits && (
+          <span className="work-limits" title={limits.title || undefined}>
+            {limits.text}
+          </span>
+        )}
+      </>
+    ) : undefined;
 
   // ---- selection and the detail view ----
   const sel = ctx.mode.selected?.kind === 'row' ? ctx.mode.selected.id : null;
@@ -369,7 +384,7 @@ export const WorkSection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
     <div className="work" onKeyDown={onKeyDown}>
       <SectionHead
         title="Work"
-        summary={summary || undefined}
+        summary={summaryLine}
         right={
           <span className="work-new">
             <Btn kind="quiet" onClick={() => ctx.openLauncher({ kind: 'bug' })}>

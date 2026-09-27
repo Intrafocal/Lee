@@ -6,6 +6,9 @@
  *
  * Cockpit design §6.3: built from the primitives. Nothing here needs you,
  * so there is no ember and no next step; goal links are quiet text.
+ *
+ * docs/15-Usage.md §6.3: a Usage tab beside Activity ("what happened" and
+ * "what it cost" together), pulled when opened (UsagePanel).
  */
 
 import React, { useEffect, useState } from 'react';
@@ -13,11 +16,28 @@ import { formatAge, goalDeltaChip } from '../../../lib/cockpitModel';
 import { fetchHistory, type HistoryResponse } from '../../../lib/hesterCockpit';
 import { Btn, Card, Eyebrow, Row, SectionHead } from '../ui';
 import type { CockpitCtx, RowHandle } from '../CockpitHost';
+import { UsagePanel } from './UsagePanel';
+
+export type HistoryTab = 'activity' | 'usage';
+
+const TABS: ReadonlyArray<{ id: HistoryTab; label: string }> = [
+  { id: 'activity', label: 'Activity' },
+  { id: 'usage', label: 'Usage' },
+];
 
 /** Row takes no data attributes: tag it for the keyboard's scrollIntoView through its ref. */
 const rowAttr = (id: string) => (el: HTMLElement | null) => el?.setAttribute('data-cockpit-row', id);
 
-export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
+interface HistorySectionProps {
+  ctx: CockpitCtx;
+  /** The tab to open on (smokes); Activity by default. */
+  initialTab?: HistoryTab;
+  /** Fixture usage for the Usage tab (smokes). */
+  usageSeed?: unknown;
+}
+
+export const HistorySection: React.FC<HistorySectionProps> = ({ ctx, initialTab = 'activity', usageSeed }) => {
+  const [tab, setTab] = useState<HistoryTab>(initialTab);
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +58,7 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
   const tasks = data?.tasks ?? [];
   const wins = data?.wins ?? [];
   const readings = data?.readings ?? [];
-  const handles: RowHandle[] = [
+  const handles: RowHandle[] = tab !== 'activity' ? [] : [
     ...wins.map((w, i) => ({ id: `win:${w.ref ?? i}`, title: w.title })),
     ...tasks.map((t) => ({ id: `closed:${t.id}`, title: t.title })),
   ];
@@ -61,28 +81,45 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
 
   return (
     <section className="cockpit-sec cockpit-history">
-      <SectionHead title="History" summary="Last 7 days" />
-      {error && <div className="cockpit-offline">{error}</div>}
-      {data && wins.length === 0 && tasks.length === 0 && readings.length === 0 && <div className="cockpit-empty">Nothing verified this week yet.</div>}
-      {wins.length > 0 && (
+      <SectionHead title="History" summary={tab === 'activity' ? 'Last 7 days' : 'What it cost'} />
+      <div className="library-tabs cockpit-history-tabs" role="tablist" aria-label="History">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`library-tabs-item${tab === t.id ? ' is-on' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'usage' && <UsagePanel ctx={ctx} seed={usageSeed} />}
+      {tab === 'activity' && error && <div className="cockpit-offline">{error}</div>}
+      {tab === 'activity' && (
         <>
-          <Eyebrow>Wins</Eyebrow>
-          <Card>
-            {wins.map((w, i) => {
-              const id = `win:${w.ref ?? i}`;
-              return (
-                <Row
-                  key={id}
-                  ref={rowAttr(id)}
-                  dot={w.verified ? 'done' : 'idle'}
-                  selected={isSel(id)}
-                  title={w.title}
-                  sub={[w.kind, w.ref].filter(Boolean).join(' · ')}
-                  meta={formatAge(w.at, ctx.now)}
-                />
-              );
-            })}
-          </Card>
+          {data && wins.length === 0 && tasks.length === 0 && readings.length === 0 && <div className="cockpit-empty">Nothing verified this week yet.</div>}
+          {wins.length > 0 && (
+            <>
+              <Eyebrow>Wins</Eyebrow>
+              <Card>
+                {wins.map((w, i) => {
+                  const id = `win:${w.ref ?? i}`;
+                  return (
+                    <Row
+                      key={id}
+                      ref={rowAttr(id)}
+                      dot={w.verified ? 'done' : 'idle'}
+                      selected={isSel(id)}
+                      title={w.title}
+                      sub={[w.kind, w.ref].filter(Boolean).join(' · ')}
+                      meta={formatAge(w.at, ctx.now)}
+                    />
+                  );
+                })}
+              </Card>
         </>
       )}
       {tasks.length > 0 && (
@@ -139,6 +176,8 @@ export const HistorySection: React.FC<{ ctx: CockpitCtx }> = ({ ctx }) => {
               );
             })}
           </Card>
+        </>
+      )}
         </>
       )}
     </section>
