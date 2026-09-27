@@ -36,6 +36,7 @@ import { useCopilot } from './hooks/useCopilot';
 import { attentionByPty } from './lib/copilotAttention';
 import { CockpitHost } from './components/cockpit/CockpitHost';
 import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
+import { digitTarget } from './lib/cockpitModel';
 import { ModeSwitcher, switcherIntercept } from './components/cockpit/ModeSwitcher';
 import { DeepHost } from './components/deep/DeepHost';
 import { requestDeepActions } from './components/deep/deepBridge';
@@ -2445,8 +2446,6 @@ const App: React.FC = () => {
     handlers['mode_switcher'] = () => cockpitModeStore.switcher({ kind: 'zero', now: Date.now(), lastMode: cockpitModeStore.get().lastMode });
     handlers['mode_deep'] = () => cockpitModeStore.toggleDeep();
     handlers['mode_manual'] = () => cockpitModeStore.toggleManual();
-    // The Page is D1's only Deep view: ⌥⌘1 shows Deep on it.
-    handlers['deep_view_page'] = () => cockpitModeStore.showDeepView('page');
     // ⌘. in Deep: the Page's action row or affordance, wherever focus is.
     handlers['deep_actions'] = () => {
       if (cockpitModeStore.get().mode === 'deep') requestDeepActions();
@@ -2466,15 +2465,21 @@ const App: React.FC = () => {
     handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
     // Tab switching (Cmd+1-9) over every center tab.
-    handlers['tab_1'] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
-    handlers['tab_2'] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
-    handlers['tab_3'] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
-    handlers['tab_4'] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
-    handlers['tab_5'] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
-    handlers['tab_6'] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
-    handlers['tab_7'] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
-    handlers['tab_8'] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
-    handlers['tab_9'] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
+    // ⌘1–⌘9 pick within the current mode: the rail in the Cockpit, Deep's
+    // views in Deep, tabs in Manual (digitTarget).
+    for (let i = 0; i < 9; i++) {
+      handlers[`tab_${i + 1}`] = () => {
+        const m = cockpitModeStore.get();
+        const t = digitTarget(m.mode, m.enabled, i);
+        if (!t) return;
+        if (t.kind === 'section') cockpitModeStore.setSection(t.section);
+        else if (t.kind === 'view') cockpitModeStore.showDeepView(t.view);
+        else {
+          activateTab(centerTabs[t.index]);
+          setFocusedPanel('center');
+        }
+      };
+    }
 
     // Tab navigation: the plain neighbour among the center tabs.
     const neighbour = (delta: 1 | -1): TabData | null => {

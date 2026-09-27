@@ -517,9 +517,8 @@ lee --workspace ./myproject
 | `Cmd+0` | **Mode switcher** - Tap for the last mode, hold for Cockpit / Deep / Manual |
 | `Cmd+Shift+0` | Cockpit ↔ Deep |
 | `Cmd+Option+0` | Cockpit ↔ Manual |
-| `Cmd+Option+1` | Deep: the exploration's Page |
 | `Cmd+.` | Deep: selection actions (Capture, Keep, Ask, Explore) |
-| `Cmd+1-9` | Switch to tab by number |
+| `Cmd+1-9` | Pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (1 Home … 6 History), views in Deep (1 Page) |
 | `Cmd+W` | **Watch** - Toggle idle detection on current tab |
 | `Cmd+I` | **Idle tabs** - Cycle through tabs marked as idle |
 | `Cmd+Esc` | Close current tab |

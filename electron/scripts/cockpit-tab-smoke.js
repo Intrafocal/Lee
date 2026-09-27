@@ -844,7 +844,7 @@ async function main() {
 
   await check('shortcuts (Deep D1 §1.3): mode chords resolve; cockpit_toggle override maps to mode_switcher; Reset Zoom has no chord', () => {
     const { SHORTCUTS, resolveChord, menuAccelerator } = require(path.join(dist, '..', 'shared', 'shortcuts.js'));
-    const expect = { mode_switcher: 'meta+0', mode_deep: 'meta+shift+0', mode_manual: 'meta+alt+0', deep_view_page: 'meta+alt+1', deep_actions: 'meta+.' };
+    const expect = { mode_switcher: 'meta+0', mode_deep: 'meta+shift+0', mode_manual: 'meta+alt+0', deep_actions: 'meta+.' };
     for (const [action, chord] of Object.entries(expect)) {
       assert.strictEqual(resolveChord(action, null), chord, action);
       assert.strictEqual(SHORTCUTS.find((s) => s.action === action).scope, 'renderer', action);

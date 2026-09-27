@@ -50,15 +50,15 @@ keybindings:
 | `⌃⇧Tab` | `prev_tab` | renderer | Previous center tab |
 | `⌘W` | `toggle_watch` | renderer | Toggle idle-watching on the focused agent tab |
 | `⌘I` | `cycle_idle` | renderer | Cycle through watched agent tabs that have gone idle |
-| `⌘1` | `tab_1` | renderer | Switch to center tab 1 |
-| `⌘2` | `tab_2` | renderer | Switch to center tab 2 |
-| `⌘3` | `tab_3` | renderer | Switch to center tab 3 |
-| `⌘4` | `tab_4` | renderer | Switch to center tab 4 |
-| `⌘5` | `tab_5` | renderer | Switch to center tab 5 |
-| `⌘6` | `tab_6` | renderer | Switch to center tab 6 |
-| `⌘7` | `tab_7` | renderer | Switch to center tab 7 |
-| `⌘8` | `tab_8` | renderer | Switch to center tab 8 |
-| `⌘9` | `tab_9` | renderer | Switch to center tab 9 |
+| `⌘1` | `tab_1` | renderer | Tab 1 in Manual, rail section 1 in the Cockpit, view 1 in Deep |
+| `⌘2` | `tab_2` | renderer | Tab 2 in Manual, rail section 2 in the Cockpit, view 2 in Deep |
+| `⌘3` | `tab_3` | renderer | Tab 3 in Manual, rail section 3 in the Cockpit, view 3 in Deep |
+| `⌘4` | `tab_4` | renderer | Tab 4 in Manual, rail section 4 in the Cockpit, view 4 in Deep |
+| `⌘5` | `tab_5` | renderer | Tab 5 in Manual, rail section 5 in the Cockpit, view 5 in Deep |
+| `⌘6` | `tab_6` | renderer | Tab 6 in Manual, rail section 6 in the Cockpit, view 6 in Deep |
+| `⌘7` | `tab_7` | renderer | Tab 7 in Manual, rail section 7 in the Cockpit, view 7 in Deep |
+| `⌘8` | `tab_8` | renderer | Tab 8 in Manual, rail section 8 in the Cockpit, view 8 in Deep |
+| `⌘9` | `tab_9` | renderer | Tab 9 in Manual, rail section 9 in the Cockpit, view 9 in Deep |
 
 ## Tools
 
@@ -88,7 +88,6 @@ keybindings:
 | `⌘0` | `mode_switcher` | renderer | Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual |
 | `⇧⌘0` | `mode_deep` | renderer | Cockpit ↔ Deep |
 | `⌥⌘0` | `mode_manual` | renderer | Cockpit ↔ Manual |
-| `⌥⌘1` | `deep_view_page` | renderer | Deep: the exploration's Page |
 | `⇧⌘R` | `force_reload` | menu | Reload the Lee UI, discarding caches (prompts if terminals are open) |
 | `⌘↓` | `scroll_bottom` | renderer | Scroll the focused terminal to the bottom (ignored while a code editor has focus, where it means go-to-end) |
 | — | View ▸ Reset Zoom | menu | Reset the zoom level. Menu only, no chord: `⌘0` is the mode switcher and `⇧⌘0` is Deep |
@@ -112,7 +111,7 @@ field. Implemented by `keyAction` in `electron/src/renderer/lib/cockpitModel.ts`
 registry, so these can't be overridden in `keybindings:`. Actions follow the
 ⌘-chord convention; only navigation is a bare key, so a stray keystroke can't
 approve, deny or send anything. Every global chord above keeps working,
-including `⌘1`–`⌘9` (tabs). Sections have no keys; click them.
+including `⌘1`–`⌘9`, which pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (`⌘1` Home, `⌘2` Work, `⌘3` Goals, `⌘4` Library, `⌘5` Ops, `⌘6` History) and views in Deep (`⌘1` Page).
 
 | Chord | What it does |
 |---|---|

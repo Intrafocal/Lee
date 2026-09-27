@@ -235,7 +235,7 @@ function flushOpener(): void {
 }
 
 /**
- * Deep was entered on the remembered exploration (⇧⌘0, the switcher, ⌥⌘1)
+ * Deep was entered on the remembered exploration (⇧⌘0, the switcher, ⌘1)
  * with no Deep session running (after "Stay open" or a restart): start one,
  * so the Page never shows without attention policy 'none' behind it (D1 §0,
  * §2). A session started elsewhere arrives through the snapshot as usual.
@@ -432,7 +432,7 @@ export const cockpitModeStore = {
     if (!state.enabled) return;
     cockpitModeStore.set('deep', state.deepActive ? 'hop' : 'deep_start');
   },
-  /** ⌥⌘1 (D1: the Page is the only view): show Deep on that view. */
+  /** ⌘1 in Deep (D1: the Page is the only view): show Deep on that view. */
   showDeepView(v: DeepView): void {
     const d = state.deep;
     if (d.view !== v) emit({ deep: { ...d, view: v } });

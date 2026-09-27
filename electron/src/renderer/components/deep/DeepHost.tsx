@@ -24,6 +24,7 @@ import type { Anchor, DeepAnswer, DeepQuestion, LeeMode } from '../../../shared/
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { cockpitModeStore, useCockpitModeState } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
+import { IconAction } from '../cockpit/ui';
 import { getExploration, patchExploration } from '../../lib/hesterCockpit';
 import {
   addQuestion,
@@ -817,7 +818,7 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
           </button>
         )}
         {dirty && <span className={`deep-dirty${saveState === 'retrying' ? ' is-retrying' : ''}`} title={offline ? 'Unsaved: Hester offline, saving when it’s back' : 'Unsaved changes'} />}
-        <span className="deep-view-name" title="Page (⌥⌘1)" aria-current="page">
+        <span className="deep-view-name" title="Page (⌘1)" aria-current="page">
           Page
         </span>
         <span className="deep-spacer" />
@@ -878,9 +879,10 @@ function DeepSurface({ workspace, visible, explorationId: id, title, copilot, on
             </div>
           )}
         </div>
-        <button className="deep-btn deep-end" onClick={openSheet}>
-          End session
-        </button>
+        <span className="deep-window-actions">
+          <IconAction icon="minimize" label="Back to Cockpit" kbd="⇧⌘0" onClick={() => onHop('cockpit')} />
+          <IconAction icon="close" label="End session…" onClick={openSheet} />
+        </span>
       </header>
 
       {conflict && (

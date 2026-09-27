@@ -296,18 +296,12 @@
   flex-shrink: 0;
 }
 
-/* End session: a plain outline button. */
-.deep-btn.deep-end {
-  font-size: 13px;
-  color: var(--text-2);
-  background: none;
-  border-color: var(--ground-5);
-  padding: 3px var(--space-3);
+/* – Back to Cockpit and × End session…: icon actions, top right, in the
+   order of the macOS window buttons they echo. */
+.deep-window-actions {
+  display: inline-flex;
+  gap: var(--space-1);
   margin-left: var(--space-2);
-}
-
-.deep-btn.deep-end:hover {
-  color: var(--text-1);
 }
 
 .deep-pop-anchor {

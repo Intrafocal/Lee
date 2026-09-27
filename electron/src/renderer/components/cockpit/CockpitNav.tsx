@@ -35,7 +35,7 @@ interface CockpitNavProps {
 
 export const CockpitNav: React.FC<CockpitNavProps> = ({ section, dots, onSelect }) => (
   <nav className="cockpit-rail" aria-label="Cockpit sections">
-    {SECTIONS.map((id) => {
+    {SECTIONS.map((id, i) => {
       const label = SECTION_LABELS[id];
       const active = section === id;
       return (
@@ -46,7 +46,8 @@ export const CockpitNav: React.FC<CockpitNavProps> = ({ section, dots, onSelect 
           onClick={() => onSelect(id)}
           aria-label={dots[id] ? `${label}, needs you` : label}
           aria-current={active ? 'page' : undefined}
-          data-tip={label}
+          data-tip={`${label} ⌘${i + 1}`}
+          aria-keyshortcuts={`Meta+${i + 1}`}
         >
           <Icon name={SECTION_ICONS[id]} size={18} />
           {dots[id] && <span className="cockpit-rail-dot" aria-hidden="true" />}

@@ -1169,6 +1169,7 @@ const leeRows = [
     homeQuestion,
     meanwhileSentence,
     quietLine,
+    digitTarget,
     workLine,
     kindPrefix,
     homeNeeds,
@@ -1224,6 +1225,12 @@ const leeRows = [
     assert.equal(meanwhileSentence(null, { waiting: 0, working: 2 }), 'Quiet while you were away. Working on it.');
     assert.equal(quietLine(0), 'All clear.');
     assert.equal(quietLine(1), 'Working on it.');
+    assert.deepEqual(digitTarget('cockpit', true, 1), { kind: 'section', section: 'work' });
+    assert.equal(digitTarget('cockpit', true, 6), null, '⌘7 has no section');
+    assert.deepEqual(digitTarget('deep', true, 0), { kind: 'view', view: 'page' });
+    assert.equal(digitTarget('deep', true, 1), null, 'D1 has one view');
+    assert.deepEqual(digitTarget('manual', true, 2), { kind: 'tab', index: 2 });
+    assert.deepEqual(digitTarget('cockpit', false, 0), { kind: 'tab', index: 0 }, 'Cockpit off: tabs');
     assert.equal(workLine({ waiting: 1 }), 'One thing needs you.');
     assert.equal(workLine({ waiting: 2, working: 3 }), 'Two things need you.');
     assert.equal(workLine({ waiting: 0, working: 0 }), 'All clear.');
@@ -1542,7 +1549,7 @@ const leeRows = [
     assert.equal((s.match(/class="cockpit-rail-item/g) ?? []).length, 6);
     assert.equal((s.match(/class="cockpit-rail-dot"/g) ?? []).length, 2);
     assert.match(s, /aria-label="Work, needs you"/);
-    assert.match(s, /data-tip="Library"/);
+    assert.match(s, /data-tip="Library ⌘4" aria-keyshortcuts="Meta+4"/);
     assert.match(s, /class="cockpit-rail-item is-active"[^>]*aria-label="Home"/);
     assert.ok(!/\d<\/span>/.test(s.replace(/<svg[\s\S]*?<\/svg>/g, '')), 'no counts');
   });

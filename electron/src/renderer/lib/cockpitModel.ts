@@ -14,6 +14,7 @@ import type {
   FeedKind,
   FeedSeverity,
   LaunchRequest,
+  DeepView,
   LeeMode,
   ModeReason,
   Proposal,
@@ -34,6 +35,24 @@ export type { SectionId };
 
 /** Nav order (sections have no keys: click only). Home first (cockpit-design §2.2). */
 export const SECTIONS: readonly SectionId[] = ['home', 'work', 'goals', 'library', 'ops', 'history'];
+
+/** Deep's views in ⌘digit order (D1: the Page only; Board, Browse, Workbench in D2). */
+export const DEEP_VIEWS: readonly DeepView[] = ['page'];
+
+/**
+ * What ⌘1–⌘9 pick in each mode: the rail's section in the Cockpit, Deep's
+ * view in Deep, the center tab in Manual (or with the Cockpit off). Null
+ * when that digit has nothing to pick in this mode.
+ */
+export function digitTarget(
+  mode: LeeMode,
+  enabled: boolean,
+  index: number,
+): { kind: 'section'; section: SectionId } | { kind: 'view'; view: DeepView } | { kind: 'tab'; index: number } | null {
+  if (enabled && mode === 'cockpit') return SECTIONS[index] ? { kind: 'section', section: SECTIONS[index] } : null;
+  if (enabled && mode === 'deep') return DEEP_VIEWS[index] ? { kind: 'view', view: DEEP_VIEWS[index] } : null;
+  return { kind: 'tab', index };
+}
 
 /** Where the Cockpit lands on app start and on return (Deep D1 §8.3; cockpit-design §2.2). */
 export const DEFAULT_SECTION: SectionId = 'home';
