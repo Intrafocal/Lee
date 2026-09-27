@@ -6,7 +6,9 @@
  *   use from the @codemirror/lang-* packages already installed; a fence in any
  *   other language is left unhighlighted) and a quiet highlight style (no
  *   phosphor: rule 1 keeps it for the caret, selection and new-answer dot).
- * - liveFormatting(onWiki): line classes (headings, quotes, code blocks), the
+ * - liveFormatting(onWiki): line classes (headings, quotes, code blocks,
+ *   rules, done tasks), task checkboxes (click to toggle) and rules drawn off
+ *   the cursor's line, the
  *   markdown marks hidden off the cursor's lines (deepModel.liveHidden), and
  *   `[[…]]` links shown as their label off the cursor's line, opening the
  *   source panel when clicked (R10).
@@ -121,6 +123,55 @@ class WikiWidget extends WidgetType {
 }
 
 // ---------------------------------------------------------------------------
+// Task checkboxes and horizontal rules
+// ---------------------------------------------------------------------------
+
+/** A task's `[ ]` / `[x]` off the cursor's line: a quiet checkbox; clicking it toggles the mark. */
+class TaskWidget extends WidgetType {
+  constructor(
+    readonly done: boolean,
+    readonly at: number,
+  ) {
+    super();
+  }
+  eq(other: TaskWidget): boolean {
+    return other.done === this.done && other.at === this.at;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const el = document.createElement('span');
+    el.className = `deep-task-box${this.done ? ' is-done' : ''}`;
+    el.setAttribute('role', 'checkbox');
+    el.setAttribute('aria-checked', String(this.done));
+    el.title = this.done ? 'Done: click to reopen' : 'Click to mark done';
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pos = this.at + 1;
+      view.dispatch({ changes: { from: pos, to: pos + 1, insert: this.done ? ' ' : 'x' }, userEvent: 'input.format' });
+    });
+    return el;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** `---` off the cursor's line: a thin rule across the column. */
+class RuleWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = 'deep-hr';
+    el.setAttribute('aria-hidden', 'true');
+    return el;
+  }
+}
+
+const ruleWidget = new RuleWidget();
+
+// ---------------------------------------------------------------------------
 // Line classes, hidden marks and link labels
 // ---------------------------------------------------------------------------
 
@@ -183,6 +234,25 @@ function buildLive(view: EditorView, openWiki: (link: WikiLink) => void): Decora
           return;
         }
         if (name === 'Table') return false; // the table field renders it
+        if (name === 'HorizontalRule') {
+          const l = state.doc.lineAt(node.from);
+          addLine(l.from, 'deep-hr-line');
+          if (!touchesActive(node.from, node.to, active)) decos.push(Decoration.replace({ widget: ruleWidget }).range(node.from, node.to));
+          return;
+        }
+        if (name === 'TaskMarker') {
+          const done = /x/i.test(state.doc.sliceString(node.from, node.to));
+          if (done) addLine(state.doc.lineAt(node.from).from, 'deep-task-done');
+          if (!touchesActive(node.from, node.to, active)) decos.push(Decoration.replace({ widget: new TaskWidget(done, node.from) }).range(node.from, node.to));
+          return;
+        }
+        // A task's bullet goes with its checkbox off the cursor's line.
+        if (name === 'ListMark' && node.node.parent?.getChild('Task') && !touchesActive(node.from, node.to, active)) {
+          let end = node.to;
+          if (state.doc.sliceString(end, end + 1) === ' ') end += 1;
+          decos.push(hide.range(node.from, end));
+          return;
+        }
         const parent = node.node.parent?.name ?? null;
         if (!liveHidden(name, parent, node.from, node.to, active)) return;
         if (wikiRanges.some(([a, b]) => node.from < b && node.to > a)) return;
