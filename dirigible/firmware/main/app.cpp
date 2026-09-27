@@ -439,6 +439,9 @@ void app_back()
     case View::Library:
         if (!library_back()) waiting_open();
         return;
+    case View::DeepIdle:
+        if (!deep_idle_back()) waiting_open();
+        return;
     }
 }
 
@@ -464,6 +467,7 @@ static bool key_hook(uint8_t ascii, void*)
     case View::Waiting:  return waiting_key(ascii);
     case View::InFlight: return inflight_key(ascii);
     case View::Library:  return library_key(ascii);
+    case View::DeepIdle: return deep_idle_key(ascii);
     case View::Terminal: return terminal_key(ascii);
     case View::Pairing:  return pairing_key(ascii);
     case View::Files:    return files_key(ascii);
@@ -607,6 +611,7 @@ static void ball_hook(int dx, int dy, bool click, void*)
     case View::Waiting:  waiting_ball(dx, dy, click);  break;
     case View::InFlight: inflight_ball(dx, dy, click); break;
     case View::Library:  library_ball(dx, dy, click);  break;
+    case View::DeepIdle: deep_idle_ball(dx, dy, click); break;
     case View::Tabs:     ball_list(a.tab_list, dy, click); break;
     case View::Hester:   hester_ball(dx, dy, click);   break;
     case View::Pairing:  pairing_ball(dx, dy, click);  break;
@@ -632,6 +637,7 @@ void app_show(View v)
     lv_obj_add_flag(a.view_waiting,  LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_inflight, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_library,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(a.view_deep_idle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_tabs,     LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_terminal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(a.view_hester,   LV_OBJ_FLAG_HIDDEN);
@@ -673,6 +679,11 @@ void app_show(View v)
         lv_obj_clear_flag(a.view_library, LV_OBJ_FLAG_HIDDEN);
         chrome_set_back_glyph(LV_SYMBOL_LEFT);    // back: Work
         chrome_set_title("Library");
+        break;
+    case View::DeepIdle:
+        lv_obj_clear_flag(a.view_deep_idle, LV_OBJ_FLAG_HIDDEN);
+        chrome_set_back_glyph(LV_SYMBOL_LEFT);    // back: Work
+        chrome_set_title("Deep");
         break;
     case View::Tabs:
         lv_obj_clear_flag(a.view_tabs, LV_OBJ_FLAG_HIDDEN);
@@ -979,6 +990,7 @@ void app_start()
     waiting_build(a.content);
     inflight_build(a.content);
     library_build(a.content);
+    deep_idle_build(a.content);
     tabs_build(a.content);
     terminal_build(a.content);
     hester_build(a.content);
@@ -1017,6 +1029,7 @@ void app_start()
     dirigible::EventBus::instance().on(dirigible::Event::AttentionChanged, []() {
         waiting_render(true);
         inflight_render();
+        deep_idle_render();
     });
     dirigible::EventBus::instance().on(dirigible::Event::AttentionAlert, []() {
         waiting_alert();

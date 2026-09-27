@@ -23,7 +23,12 @@ namespace dirigible {
 // ---------------------------------------------------------------------------
 
 enum class AttentionKind : uint8_t {
-    Approval, Waiting, Blocker, Decision, Failure, Review, Summary, Question, Other,
+    Approval, Waiting, Blocker, Decision, Failure, Review, Summary, Question,
+    /// Desk D2 §9.2: "Still thinking?", the one push before an idle Deep
+    /// session ends.  Answered with POST /deep/idle-end (extend, end_rate)
+    /// or a Carry capture into its card; never an agent's item.
+    DeepIdle,
+    Other,
 };
 
 enum class AttentionSeverity : uint8_t { Ambient, NeedsYou, Blocking };
@@ -74,6 +79,13 @@ struct AttentionItem {
     std::string       tool_name;
     /// Question items only.
     std::vector<AttentionQuestion> questions;
+    /// DeepIdle items only: the Deep session, its card (empty at the Desk
+    /// overview) and how long until it ends, host clock (ends_at -
+    /// generated_at; -1 unknown).
+    std::string       deep_session_id;
+    std::string       deep_card_id;
+    std::string       deep_card_title;
+    int64_t           deep_ends_in_ms = -1;
 
     bool can(AttentionAction a) const { return (actions & a) != 0; }
 
@@ -179,6 +191,9 @@ struct AttentionSnapshot {
     bool        deep_active = false;
     std::string deep_title;
     std::string deep_exploration_id;
+    /// Desk D2: the card the session is in ("" at the overview or from an
+    /// older Lee, which sends exploration_id only).
+    std::string deep_card_id;
     std::string mode;          // cockpit | deep | manual; "" from an older Lee
 
     /// Items that want you now (what Lee's pill counts).
@@ -186,6 +201,8 @@ struct AttentionSnapshot {
     /// Agents busy in a turn.
     int working() const;
     const AttentionItem* find(const std::string& id) const;
+    /// The open "Still thinking?" push, or null (Desk D2 §9.2).
+    const AttentionItem* deep_idle() const;
 };
 
 inline constexpr size_t ATTENTION_MAX_ITEMS = 25;
@@ -226,6 +243,12 @@ bool attention_notify_rose(const AttentionSnapshot& prev,
                            const AttentionSnapshot& next);
 
 const char* attention_kind_name(AttentionKind k);
+
+/// In flight's fold (Desk D2 §9.4; workModel's rule on the Mac, Aeronaut's
+/// inFlightGroups): an agent idle for more than two hours goes under
+/// "Earlier (n)".  `since_snapshot_ms` is how long ago the snapshot came.
+inline constexpr int64_t INFLIGHT_EARLIER_MS = 2LL * 60 * 60 * 1000;
+bool agent_is_earlier(const AgentSummary& a, int64_t since_snapshot_ms = 0);
 
 /// Parse one agents[] entry.  `generated_ms` (the snapshot's generated_at,
 /// -1 unknown) turns its timestamps into ages.  False without a pty_id.

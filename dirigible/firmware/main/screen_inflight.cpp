@@ -23,6 +23,10 @@
  * scrolls, and back returns to the list.  c checks in (Lee's tab-domain
  * check-in: it asks the agent where it is, and the answer arrives as its
  * words), from the list's highlighted row or the open page.
+ *
+ * Agents idle for more than two hours fold into one "Earlier (n)" row at the
+ * bottom (Desk D2 §9.4, the Mac's rule); pressing it shows them for as long
+ * as the view stays open.
  */
 
 #include <algorithm>
@@ -64,6 +68,8 @@ constexpr int BTN_Y    = BODY_H - BTN_H - 3;        // 171
 constexpr int WORDS_Y  = 42;
 constexpr int SUMMARY_LINE_MAX = 90;
 constexpr uint32_t FLASH_MS = 2500;
+/// Row::pty of the "Earlier (n)" row.
+constexpr int EARLIER_ROW = -2;
 
 struct Row {
     lv_obj_t* obj  = nullptr;
@@ -80,6 +86,8 @@ struct State {
     Row       rows[MAX_ROWS];
     int       order[MAX_ROWS] = {};   // indices into snapshot agents
     int       count = 0;
+    int       folded = 0;             // agents under "Earlier (n)"
+    bool      show_earlier = false;
 
     // ---- one agent, opened
     lv_obj_t* page   = nullptr;
@@ -301,10 +309,18 @@ void rebuild_order()
 {
     auto& s = st();
     s.count = 0;
+    s.folded = 0;
     const auto* sn = snap();
     if (!sn) return;
     const int n = std::min((int)sn->agents.size(), MAX_ROWS);
-    for (int i = 0; i < n; i++) s.order[s.count++] = i;
+    const int64_t since = (int64_t)lv_tick_elaps(s.snapshot_tick);
+    for (int i = 0; i < n; i++) {
+        if (!s.show_earlier && dirigible::agent_is_earlier(sn->agents[i], since)) {
+            s.folded++;
+            continue;
+        }
+        s.order[s.count++] = i;
+    }
     const auto& agents = sn->agents;
     std::stable_sort(s.order, s.order + s.count, [&](int x, int y) {
         const AgentSummary& a = agents[x];
@@ -341,6 +357,21 @@ void render_list()
     lv_obj_t* refocus = nullptr;
     for (int i = 0; i < MAX_ROWS; i++) {
         Row& row = s.rows[i];
+        if (i == s.count && s.folded > 0) {
+            // "Earlier (3)": a quiet row; a press unfolds it.
+            row.pty = EARLIER_ROW;
+            lv_obj_clear_flag(row.obj, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(row.dot, dg::ground5(), 0);
+            char name[32];
+            snprintf(name, sizeof(name), "Earlier (%d)", s.folded);
+            lv_label_set_text(row.name, name);
+            lv_label_set_text(row.meta, "");
+            lv_label_set_text(row.sub, "idle over two hours");
+            lv_obj_set_style_text_color(row.sub, dg::text3(), 0);
+            lv_obj_set_width(row.name, SCREEN_W - 2 * PAD - 26);
+            if (focused_pty == EARLIER_ROW) refocus = row.obj;
+            continue;
+        }
         if (i >= s.count) {
             row.pty = -1;
             lv_obj_add_flag(row.obj, LV_OBJ_FLAG_HIDDEN);
@@ -361,7 +392,7 @@ void render_list()
     }
     if (refocus && refocus != f && app().view == View::InFlight) lv_group_focus_obj(refocus);
 
-    const bool none = s.count == 0;
+    const bool none = s.count == 0 && s.folded == 0;
     if (none) {
         lv_obj_t* l = lv_obj_get_child(s.empty, 0);
         if (!cockpit_linked())    lv_label_set_text(l, "Not connected");
@@ -477,10 +508,17 @@ void close_agent()
 // Events
 // ---------------------------------------------------------------------------
 
+void show_earlier()
+{
+    st().show_earlier = true;
+    render_list();
+}
+
 void row_cb(lv_event_t* e)
 {
     const Row* r = (const Row*)lv_event_get_user_data(e);
-    if (r && r->pty >= 0) open_agent(r->pty);
+    if (r && r->pty == EARLIER_ROW) show_earlier();
+    else if (r && r->pty >= 0) open_agent(r->pty);
 }
 
 void tick_cb(lv_timer_t*)
@@ -671,6 +709,7 @@ void inflight_open()
 {
     auto& s = st();
     s.open_pty = -1;
+    s.show_earlier = false;
     app_show(View::InFlight);
     lv_obj_add_flag(s.page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s.list, LV_OBJ_FLAG_HIDDEN);
@@ -728,6 +767,7 @@ bool inflight_key(uint8_t k)
         if (s.open_pty < 0) {
             lv_obj_t* f = focused_row_obj();
             for (const Row& r : s.rows) {
+                if (r.obj == f && r.pty == EARLIER_ROW) { show_earlier(); break; }
                 if (r.obj == f && r.pty >= 0) { open_agent(r.pty); break; }
             }
         }

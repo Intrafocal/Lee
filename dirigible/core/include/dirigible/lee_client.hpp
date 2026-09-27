@@ -171,15 +171,25 @@ public:
     /// offline.  Valid only for the callback.
     void fetchCarry(std::function<void(int status, const CarryState* carry)> cb);
 
-    /// POST /carry/capture {text, exploration_id?}: a thought captured into
-    /// an exploration (or, with an empty id, into Someday).
-    void carryCapture(const std::string& text, const std::string& exploration_id,
+    /// POST /carry/capture {text, card_id?}: a thought captured into a
+    /// Desk card (or, with an empty id, into Someday).  Lee spools it while
+    /// Hester is offline and answers spooled: true.
+    void carryCapture(const std::string& text, const std::string& card_id,
                       std::function<void(const CaptureOutcome&)> cb);
 
-    /// POST /carry/open-next {exploration_id}: the next Deep session opens
-    /// this exploration first.
-    void carryOpenNext(const std::string& exploration_id,
+    /// POST /carry/open-next {card_id}: the next Deep session opens this
+    /// card first.  (An id from a Lee before the Desk is an exploration id;
+    /// Lee main sends it on as one.)
+    void carryOpenNext(const std::string& card_id,
                        std::function<void(const ReplyResult&)> cb);
+
+    /// POST /deep/idle-end (Desk D2 §9.2): answer the "Still thinking?"
+    /// push.  `action` is "extend" or "end_rate"; `rating` is "deep",
+    /// "mixed", "shallow" or null (unrated); `stopped_at` is sent when not
+    /// empty.  A 409 means the push was answered or the session moved on.
+    void deepIdleEnd(const std::string& item_id, int version, const char* action,
+                     const char* rating, const std::string& stopped_at,
+                     std::function<void(const ReplyResult&)> cb);
 
     /// POST /command {domain:'tab', action:'checkin', params:{pty_id}}: ask a
     /// running agent where it is.  The answer lands in the agent's words.

@@ -42,6 +42,7 @@ AttentionKind parse_kind(const std::string& s) {
     if (s == "review")   return AttentionKind::Review;
     if (s == "summary")  return AttentionKind::Summary;
     if (s == "question") return AttentionKind::Question;
+    if (s == "deep_idle") return AttentionKind::DeepIdle;
     return AttentionKind::Other;
 }
 
@@ -129,6 +130,18 @@ const AttentionItem* AttentionSnapshot::find(const std::string& id) const {
     return nullptr;
 }
 
+bool agent_is_earlier(const AgentSummary& a, int64_t since_snapshot_ms) {
+    if (a.state != AgentState::Idle || a.idle_ms < 0) return false;
+    return a.idle_ms + (since_snapshot_ms > 0 ? since_snapshot_ms : 0) > INFLIGHT_EARLIER_MS;
+}
+
+const AttentionItem* AttentionSnapshot::deep_idle() const {
+    for (const auto& it : items) {
+        if (it.kind == AttentionKind::DeepIdle) return &it;
+    }
+    return nullptr;
+}
+
 namespace {
 
 void parse_questions(cJSON* q, std::vector<AttentionQuestion>& out) {
@@ -180,6 +193,13 @@ bool parse_item(cJSON* it, AttentionItem& item, size_t text_limit, bool question
         item.tool_name = get_str(tool, "name", 48);
     }
     if (questions) parse_questions(get(it, "question"), item.questions);
+    if (cJSON* idle = get(it, "deep_idle"); cJSON_IsObject(idle)) {
+        item.deep_session_id = get_str(idle, "session_id", ATTENTION_MAX_ID);
+        if (cJSON* card = get(idle, "card"); cJSON_IsObject(card)) {
+            item.deep_card_id    = get_str(card, "card_id", ATTENTION_MAX_ID);
+            item.deep_card_title = get_str(card, "title", ATTENTION_MAX_TITLE);
+        }
+    }
     return true;
 }
 
@@ -218,6 +238,10 @@ bool attention_snapshot_parse(cJSON* json, AttentionSnapshot& out) {
         const int64_t created = get_time(it, "created_at");
         if (generated >= 0 && created >= 0) {
             item.age_ms = generated > created ? generated - created : 0;
+        }
+        if (cJSON* idle = get(it, "deep_idle"); cJSON_IsObject(idle) && generated >= 0) {
+            const int64_t ends = get_time(idle, "ends_at");
+            if (ends >= 0) item.deep_ends_in_ms = ends > generated ? ends - generated : 0;
         }
         s.items.push_back(std::move(item));
     }
@@ -268,6 +292,7 @@ const char* attention_kind_name(AttentionKind k) {
     case AttentionKind::Review:   return "review";
     case AttentionKind::Summary:  return "summary";
     case AttentionKind::Question: return "question";
+    case AttentionKind::DeepIdle: return "deep_idle";
     default:                      return "item";
     }
 }
@@ -410,6 +435,7 @@ void parse_agents_and_more(cJSON* snap, int64_t generated, AttentionSnapshot& s)
         s.deep_active = true;
         s.deep_title = get_str(deep, "title", ATTENTION_MAX_TITLE);
         s.deep_exploration_id = get_str(deep, "exploration_id", ATTENTION_MAX_ID);
+        s.deep_card_id = get_str(deep, "card_id", ATTENTION_MAX_ID);
     }
     s.mode = get_str(snap, "mode", 16);
 }

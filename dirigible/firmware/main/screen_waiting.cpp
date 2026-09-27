@@ -42,7 +42,9 @@
  *   Why (E)    "Explain first"
  *   Reply (R)  opens the reply box
  *
- * (Lee's fourth, "Show me the diff", has no letter here.)  Approvals keep
+ * Lee's fourth, "Show me the diff", is on f (Desk D2 §9.4; d is Dismiss
+ * here): a key, not a button, since the bar holds four; the footer names it
+ * on a page that takes it.  Approvals keep
  * Approve (Y) / Deny (N); d dismisses and s snoozes any item from the keys.
  * The header says Work's line (cockpit_status) and "In deep work" while a
  * Deep session runs at the machine.  The old f (Focus) key is retired: Deep
@@ -122,7 +124,8 @@ constexpr uint32_t BALL_WINDOW_MS    = 400;   // sideways detents must be this c
 constexpr uint32_t BALL_COOLDOWN_MS  = 500;   // one flick, one page
 
 /// Lee's QUICK_REPLIES (electron/src/shared/cockpit.ts; Aeronaut's
-/// quickReplyChips), the first three, with their letters.  Change together.
+/// quickReplyChips), all four, with their letters.  Change together.  The
+/// first QUICK_ON_BAR get buttons; the rest are keys only.
 struct Quick {
     char        key;
     const char* name;
@@ -132,7 +135,9 @@ constexpr Quick QUICK[] = {
     { 'g', "Go",   "Yes, go ahead" },
     { 'w', "Wait", "Stop and wait for me" },
     { 'e', "Why",  "Explain first" },
+    { 'f', "Diff", "Show me the diff" },
 };
+constexpr int QUICK_ON_BAR = 3;
 
 const Quick* quick_for(char k)
 {
@@ -476,6 +481,8 @@ int waiting_count(const AttentionSnapshot& snap)
     return n;
 }
 
+bool takes_text(const AttentionItem& it);
+
 void footer()
 {
     auto& s = st();
@@ -485,8 +492,10 @@ void footer()
     case Compose::Capture: chrome_set_footer("Enter sends  hold: cancel", "idea");  return;
     default: break;
     }
-    if (current()) {
-        chrome_set_footer(s.pinned_id.empty() ? "j/k or swipe: items" : LV_SYMBOL_LEFT " or hold: back",
+    if (const auto* it = current()) {
+        const bool diff = takes_text(*it);
+        chrome_set_footer(s.pinned_id.empty() ? (diff ? "f diff  j/k items" : "j/k or swipe: items")
+                                              : (diff ? "f diff  " LV_SYMBOL_LEFT " back" : LV_SYMBOL_LEFT " or hold: back"),
                           "c i l t");
         return;
     }
@@ -664,7 +673,7 @@ bool takes_text(const AttentionItem& it)
            !it.question_as_approval() && !it.can(dirigible::ActApprove);
 }
 
-/// Go / Wait / Why: send the quick reply's words now, through the reply path.
+/// Go / Wait / Why / Diff: send the quick reply's words now, through the reply path.
 /// Returns false when the page's item doesn't take them.
 bool quick_reply(char k)
 {
@@ -1053,8 +1062,8 @@ void layout_buttons(const AttentionItem& it)
         spec[n++] = { "Approve", 'y' };
         if (it.can(dirigible::ActDeny)) spec[n++] = { "Deny", 'n' };
     } else if (takes_text(it)) {
-        // Go / Wait / Why / Reply; dismiss and snooze stay on d and s.
-        for (const Quick& q : QUICK) spec[n++] = { q.name, q.key };
+        // Go / Wait / Why / Reply; Diff, dismiss and snooze stay on f, d and s.
+        for (int i = 0; i < QUICK_ON_BAR; i++) spec[n++] = { QUICK[i].name, QUICK[i].key };
         spec[n++] = { "Reply", 'r' };
     } else {
         if (it.can(dirigible::ActReply))   spec[n++] = { "Reply", 'r' };
@@ -1256,7 +1265,7 @@ void key_action(char k)
     case 's': act("snooze"); break;
     case 'r': open_compose(Compose::Reply); break;
     case 'o': act("open"); break;
-    case 'g': case 'w': case 'e': quick_reply(k); break;
+    case 'g': case 'w': case 'e': case 'f': quick_reply(k); break;
     default: break;
     }
 }
@@ -1724,6 +1733,8 @@ std::string cockpit_status()
         auto* c = conn();
         return c && c->attentionUnsupported() ? "no queue" : "loading";
     }
+    // Desk D2 §9.2: the idle-end push is the one thing a Deep session sends.
+    if (snap->deep_idle()) return "Still thinking?  x";
     // A Deep session at the machine: nothing is pushed here (agents park),
     // and the header says why.
     if (snap->deep_active) return "In deep work";
@@ -1740,6 +1751,10 @@ bool cockpit_nav_key(uint8_t k)
     case 'w': if (app().view != View::Waiting)  waiting_open();  return true;
     case 'i': if (app().view != View::InFlight) inflight_open(); return true;
     case 'l': if (app().view != View::Library)  library_open();  return true;
+    case 'x':
+        if (!deep_idle_pending()) return false;
+        if (app().view != View::DeepIdle) deep_idle_open();
+        return true;
     default:  return false;
     }
 }
@@ -1834,8 +1849,8 @@ bool waiting_key(uint8_t k)
     case 'i': case 'l':
         cockpit_nav_key(k);
         return true;
-    case 'g': case 'w': case 'e':
-        // Go / Wait / Why.  On Work already, so w is Wait, not "go to Work".
+    case 'g': case 'w': case 'e': case 'f':
+        // Go / Wait / Why / Diff.  On Work already, so w is Wait, not "go to Work".
         if (!quick_reply((char)k) && it && !takes_text(*it)) flash("no quick reply here");
         return true;
     case ' ': scroll_words(WORDS_H - 24);    return true;
