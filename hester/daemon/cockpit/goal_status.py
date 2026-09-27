@@ -247,12 +247,22 @@ def _workstreams(workspace: Path) -> List[Dict[str, Any]]:
 
 
 def _explorations(workspace: Path) -> List[Dict[str, Any]]:
+    """
+    Desk D2: the Page cards on the Desk (not put away), shaped as explorations
+    were here: ``{id: 'pg-…', title, serves (the card's goals), last_touched_at}``.
+    The key stays ``explorations`` this round.
+    """
     try:
-        from .explorations import ExplorationStore
+        from .desk import DeskStore
 
-        return [e for e in ExplorationStore(Path(workspace)).load_all() if e.get("status") == "active"]
+        desk = DeskStore(Path(workspace))
+        return [
+            {"id": b["id"], "title": b["title"], "serves": b["goals"],
+             "last_touched_at": b.get("last_touched_at"), "updated_at": b.get("created_at")}
+            for b in desk.briefs(desk.load(ensure_main=False), on_desk=True)
+        ]
     except Exception as e:
-        logger.debug(f"explorations unavailable for {workspace}: {e}")
+        logger.debug(f"Desk cards unavailable for {workspace}: {e}")
         return []
 
 
@@ -473,7 +483,7 @@ def q2_candidates(
 ) -> List[Dict[str, Any]]:
     """
     Deterministic Q2 (important, not urgent) candidates, in goal priority
-    order, at most 5: goals nothing live serves, active explorations
+    order, at most 5: goals nothing live serves, Page cards on the Desk
     untouched for 7 days, goals not evaluated in 14 days.
     """
     now = now or utc_now()
@@ -503,7 +513,7 @@ def q2_candidates(
         for e, age in quiet:
             if e["id"] not in placed and gid in (e.get("serves") or []):
                 placed.add(e["id"])
-                out.append({"kind": "exploration-quiet", "goal_id": gid, "ref": e["id"], "title": e.get("title"),
+                out.append({"kind": "page-quiet", "goal_id": gid, "ref": e["id"], "title": e.get("title"),
                             "detail": f"Untouched for {age} days."})
         last = parse_ts(evaluated.get(gid)) if evaluated.get(gid) else None
         if last is None or now - last > timedelta(days=EVALUATION_DUE_DAYS):
@@ -512,7 +522,7 @@ def q2_candidates(
     if not goal_id:
         for e, age in quiet:
             if e["id"] not in placed and not (set(e.get("serves") or []) & goal_ids):
-                out.append({"kind": "exploration-quiet", "goal_id": None, "ref": e["id"], "title": e.get("title"),
+                out.append({"kind": "page-quiet", "goal_id": None, "ref": e["id"], "title": e.get("title"),
                             "detail": f"Untouched for {age} days."})
     return out[:MAX_Q2]
 

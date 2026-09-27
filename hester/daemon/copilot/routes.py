@@ -23,8 +23,8 @@ from fastapi.responses import JSONResponse
 
 from ...shared.auth import auth_headers
 from ...shared.workspace import get_current_workspace
-from ..cockpit.explorations import ExplorationError, new_exploration_id
-from ..cockpit.explorations import to_api as exploration_to_api
+from ..cockpit.desk import DeskConflict
+from ..cockpit.explorations import ExplorationError
 from ..cockpit.tasks import first_line, new_task_id
 from ..cockpit.tasks import to_api as task_to_api
 from ..workspaces.registry import get_registry
@@ -215,18 +215,28 @@ def create_copilot_router() -> APIRouter:
                 elif to == "explore":
                     if action != "explore":
                         raise BadRequest("to explore is only valid with action explore")
-                    exp_id = new_exploration_id()
-                    if not note:
-                        note = f"explore:{exp_id}"
+                    exp_id = item_id
                 else:
                     raise BadRequest("to must be 'task' or 'explore'")
             store = SomedayStore(ws)
-            if exp_id is not None and store.get(item_id) is None:
-                raise KeyError(item_id)
-            item = store.triage(item_id, action, note=note)
+            if exp_id is not None:
+                # Desk D2: the idea becomes a Page card in a new Area (as POST /desk/ideas/{id}/page),
+                # which marks it explored; ``exploration`` is a legacy alias of the card.
+                if store.get(item_id) is None:
+                    raise KeyError(item_id)
+                ctx = get_registry().get(ws, source="request")
+                async with ctx.lock:
+                    made = await asyncio.to_thread(ctx.desk().idea_to_page, item_id, {})
+                item = store.get(item_id)
+            else:
+                item = store.triage(item_id, action, note=note)
         except BadRequest as e:
             return _err(str(e), e.status)
         except SomedayError as e:
+            return _err(str(e))
+        except DeskConflict as e:
+            return _err(e.code, 409)
+        except ExplorationError as e:
             return _err(str(e))
         except KeyError:
             return _err("not found", 404)
@@ -237,17 +247,9 @@ def create_copilot_router() -> APIRouter:
             actor=caller_actor(request),
         )
         if exp_id is not None:
-            ctx = get_registry().get(ws, source="request")
-            async with ctx.lock:
-                try:
-                    exp = ctx.explorations().create({
-                        "id": exp_id,
-                        "seed": item.text,
-                        "origin": {"kind": "someday", "ref": item.id},
-                    })
-                except ExplorationError as e:
-                    return _err(str(e))
-            return _ok({"item": item.to_dict(), "exploration": exploration_to_api(exp)})
+            card = made["card"]
+            return _ok({"item": item.to_dict(), "card": card, "area": made["area"],
+                        "exploration": {"id": card["id"], "title": card["title"]}})
         if task_id is None:
             return _ok(item.to_dict())
         ctx = get_registry().get(ws, source="request")
@@ -327,7 +329,7 @@ def create_copilot_router() -> APIRouter:
         except BadRequest as e:
             return _err(str(e), e.status)
         ctx = get_registry().get(ws, source="request")
-        await deep_ask.get_runner().ensure_recovered(ctx)
+        await deep_ask.get_runner().ensure_recovered(ctx, "desk")
         async with ctx.lock:
             data = await asyncio.to_thread(build_opener, ws)
         lee_events.ingest(
@@ -355,7 +357,7 @@ def create_copilot_router() -> APIRouter:
 
     @router.post("/copilot/open-next")
     async def copilot_open_next_set(request: Request):
-        """``{workspace?, exploration_id?, someday_id?}``; the caller's surface is recorded (devices allowed)."""
+        """``{workspace?, card_id? (or the legacy exploration_id), someday_id?}``; the caller's surface is recorded (devices allowed)."""
         try:
             body = await _json_body(request)
             ws = resolve_workspace(body.get("workspace"))
@@ -366,7 +368,8 @@ def create_copilot_router() -> APIRouter:
             try:
                 data = await asyncio.to_thread(
                     open_next_mod.set_, ws,
-                    exploration_id=body.get("exploration_id"), someday_id=body.get("someday_id"),
+                    card_id=body.get("card_id"), exploration_id=body.get("exploration_id"),
+                    someday_id=body.get("someday_id"),
                     surface=_relayed_surface(request, body),
                 )
             except open_next_mod.OpenNextError as e:

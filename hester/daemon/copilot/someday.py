@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from ..cockpit.desk import PAGE_ID_RE
 from ..cockpit.explorations import EXP_ID_RE
 
 ID_RE = re.compile(r"^sd_\d{8}T\d{6}_[0-9a-f]{4}$")
@@ -76,7 +77,8 @@ def _workspace_relative(value: Any) -> Optional[str]:
 
 def normalize_source(source: Any) -> Dict[str, Any]:
     """
-    ``surface`` (and ``device_id``), plus, from a Deep capture: ``exploration_id``,
+    ``surface`` (and ``device_id``), plus, from a Deep capture: ``card_id`` (a Page
+    card, Desk D2) or the legacy ``exploration_id``,
     ``section`` (<= 200), ``url`` (http/https, <= 2000), ``file`` (workspace-relative,
     <= 500) and ``context`` (<= 500). Invalid values and unknown keys are dropped.
     """
@@ -92,6 +94,9 @@ def normalize_source(source: Any) -> Dict[str, Any]:
     exp_id = src.get("exploration_id")
     if isinstance(exp_id, str) and EXP_ID_RE.match(exp_id):
         out["exploration_id"] = exp_id
+    card_id = src.get("card_id")  # Desk D2: the Page card a capture is about
+    if isinstance(card_id, str) and PAGE_ID_RE.match(card_id):
+        out["card_id"] = card_id
     section = _clip_str(src.get("section"), MAX_SOURCE_SECTION)
     if section:
         out["section"] = section
