@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
-import type { AgentState, AttentionSnapshot, CopilotAPI, DeepEndRequest, DeepStartRequest, FocusState } from '../../../shared/copilot';
+import type { AgentState, AttentionSnapshot, CopilotAPI } from '../../../shared/copilot';
 import type { AboutRef, DeepView, GoIntoFrom, LeeMode, ModeReason, TabRunState } from '../../../shared/cockpit';
 import {
   agentPtysFromSnapshot,
@@ -178,7 +178,11 @@ function readDeep(workspace: string): DeepNav {
 function writeDeep(workspace: string, deep: DeepNav): void {
   if (!workspace) return;
   try {
-    window.localStorage.setItem(deepKey(workspace), JSON.stringify(deep));
+    // The Deep surface keeps its per-exploration cursors in the same record
+    // (deepBridge.rememberCursor); keep whatever else is there.
+    const raw = window.localStorage.getItem(deepKey(workspace));
+    const prev = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    window.localStorage.setItem(deepKey(workspace), JSON.stringify({ ...prev, ...deep }));
   } catch {
     /* storage unavailable */
   }
@@ -450,16 +454,6 @@ export const cockpitModeStore = {
 // Go deep, Dive in, End session (Deep D1 §2.1, §8.3, §14)
 // ---------------------------------------------------------------------------
 
-/** The Deep calls on CopilotAPI (package M adds them; absent on an older main). */
-interface DeepCalls {
-  deepStart?: (req: DeepStartRequest) => Promise<FocusState>;
-  deepEnd?: (req: DeepEndRequest) => Promise<FocusState>;
-}
-
-function deepCalls(api: CopilotAPI | null | undefined): DeepCalls {
-  return (api ?? {}) as DeepCalls;
-}
-
 /**
  * Open an exploration in Deep: start (or move) the Deep session on it, then
  * show it in this window. The Page opens even when the session call fails.
@@ -470,12 +464,11 @@ export async function openExplorationInDeep(
   exploration_id: string,
   title: string,
 ): Promise<void> {
-  const start = deepCalls(api).deepStart;
   const s = state;
   const onIt = s.deepActive && s.deepSessionExploration === exploration_id;
-  if (start && !onIt) {
+  if (api && !onIt) {
     try {
-      await start({ workspace, exploration_id, title, surface: 'lee' });
+      await api.deepStart({ workspace, exploration_id, title, surface: 'lee' });
     } catch {
       /* the Page still opens; M logs the failure */
     }
@@ -507,8 +500,7 @@ export function endDeepSession(api: CopilotAPI | null | undefined): void {
     cockpitModeStore.requestEndSession();
     return;
   }
-  const end = deepCalls(api).deepEnd;
-  if (end) void end({ reason: 'esc', rating: null }).catch(() => {});
+  if (api) void api.deepEnd({ reason: 'esc', rating: null }).catch(() => {});
   cockpitModeStore.set('cockpit', 'deep_end');
 }
 

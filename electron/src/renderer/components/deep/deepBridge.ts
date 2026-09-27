@@ -1,9 +1,8 @@
 /**
  * deepBridge - the Deep surface's runtime glue (Deep D1 §4, §8.2, §9, §14):
  *
- * - The main-process calls package M adds (`copilot.deepStart`/`deepEnd`,
- *   `deep.onAnswer`, `app.quit`), reached through feature checks so the
- *   renderer builds and degrades before M's preload lands.
+ * - The main-process calls (`copilot.deepStart`/`deepEnd`, `deep.onAnswer`,
+ *   `app.quit`), wrapped so a failure (or no Electron) degrades to a no-op.
  * - openInDeep: deepStart, then cockpitModeStore.openDeep (the §14 seam).
  * - Deep event logging (counts and ids only, never text; §10.1).
  * - The per-workspace Deep memory in localStorage (§4.4) and the Page's crash
@@ -17,20 +16,10 @@ import type { DeepEndRequest, DeepStartRequest, FocusState } from '../../../shar
 import { cockpitModeStore } from '../cockpit/cockpitMode';
 import { deepMemoryKey, pageMirrorKey } from '../../lib/deepModel';
 
-interface DeepMainApi {
-  deepStart?: (req: DeepStartRequest) => Promise<FocusState>;
-  deepEnd?: (req: DeepEndRequest) => Promise<FocusState>;
-}
-
-function copilotDeep(): DeepMainApi | null {
-  const c = (typeof window !== 'undefined' ? window.lee?.copilot : null) as unknown as DeepMainApi | null | undefined;
-  return c ?? null;
-}
-
-/** Start (or retarget) the machine-wide Deep session. Null when main can't (no M build yet, or it failed). */
+/** Start (or retarget) the machine-wide Deep session. Null outside Electron or when the call fails. */
 export async function deepStart(req: DeepStartRequest): Promise<FocusState | null> {
-  const api = copilotDeep();
-  if (!api?.deepStart) return null;
+  const api = typeof window !== 'undefined' ? window.lee?.copilot : undefined;
+  if (!api) return null;
   try {
     return await api.deepStart(req);
   } catch {
@@ -39,8 +28,8 @@ export async function deepStart(req: DeepStartRequest): Promise<FocusState | nul
 }
 
 export async function deepEnd(req: DeepEndRequest): Promise<FocusState | null> {
-  const api = copilotDeep();
-  if (!api?.deepEnd) return null;
+  const api = typeof window !== 'undefined' ? window.lee?.copilot : undefined;
+  if (!api) return null;
   try {
     return await api.deepEnd(req);
   } catch {
@@ -50,8 +39,8 @@ export async function deepEnd(req: DeepEndRequest): Promise<FocusState | null> {
 
 /** `deep:answer` from main (§6): an answer finished somewhere. Returns an unsubscribe. */
 export function onDeepAnswer(cb: (e: DeepAnswerEvent) => void): () => void {
-  const deep = (typeof window !== 'undefined' ? (window.lee as unknown as { deep?: { onAnswer?: (cb: (e: DeepAnswerEvent) => void) => () => void } })?.deep : null) ?? null;
-  if (!deep?.onAnswer) return () => undefined;
+  const deep = typeof window !== 'undefined' ? window.lee?.deep : undefined;
+  if (!deep) return () => undefined;
   try {
     return deep.onAnswer(cb);
   } catch {
@@ -59,10 +48,10 @@ export function onDeepAnswer(cb: (e: DeepAnswerEvent) => void): () => void {
   }
 }
 
-/** Close Lee (the ritual's default button). False when main has no app.quit yet. */
+/** Close Lee (the ritual's default button). False outside Electron. */
 export function quitLee(): boolean {
-  const app = (typeof window !== 'undefined' ? (window.lee as unknown as { app?: { quit?: () => void } })?.app : null) ?? null;
-  if (!app?.quit) return false;
+  const app = typeof window !== 'undefined' ? window.lee?.app : undefined;
+  if (!app) return false;
   app.quit();
   return true;
 }

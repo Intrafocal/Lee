@@ -38,6 +38,7 @@ import { CockpitHost } from './components/cockpit/CockpitHost';
 import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
 import { ModeSwitcher, switcherIntercept } from './components/cockpit/ModeSwitcher';
 import { DeepHost } from './components/deep/DeepHost';
+import { requestDeepActions } from './components/deep/deepBridge';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -53,14 +54,6 @@ const BROWSER_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', '
 
 // Check if we're running inside Electron
 const isElectron = !!lee;
-
-/** Deep D1 §1.3 mode chords, bound here only while shared/shortcuts.ts lacks them. */
-const D1_MODE_CHORDS: ReadonlyArray<readonly [string, string]> = [
-  ['mode_switcher', 'meta+0'],
-  ['mode_deep', 'meta+shift+0'],
-  ['mode_manual', 'meta+alt+0'],
-  ['deep_view_page', 'meta+alt+1'],
-];
 
 
 export interface TabData extends Tab {
@@ -2450,12 +2443,14 @@ const App: React.FC = () => {
     // Modes (Deep D1 §1.3). ⌘0 feeds the switcher (tap, hold, cycle); its
     // keyup and Esc are handled by switcherIntercept below.
     handlers['mode_switcher'] = () => cockpitModeStore.switcher({ kind: 'zero', now: Date.now(), lastMode: cockpitModeStore.get().lastMode });
-    // A `keybindings:` override for the retired cockpit_toggle still binds the switcher.
-    handlers['cockpit_toggle'] = handlers['mode_switcher'];
     handlers['mode_deep'] = () => cockpitModeStore.toggleDeep();
     handlers['mode_manual'] = () => cockpitModeStore.toggleManual();
     // The Page is D1's only Deep view: ⌥⌘1 shows Deep on it.
     handlers['deep_view_page'] = () => cockpitModeStore.showDeepView('page');
+    // ⌘. in Deep: the Page's action row or affordance, wherever focus is.
+    handlers['deep_actions'] = () => {
+      if (cockpitModeStore.get().mode === 'deep') requestDeepActions();
+    };
     handlers['pi'] = () => createTab('agent' as Tab['type'], undefined, 'pi');
     handlers['devops'] = () => getOrCreateTab('devops');
     // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
@@ -2581,20 +2576,14 @@ const App: React.FC = () => {
           }
         : handler;
     }
-    // The D1 mode chords, until the registry lists them (package M owns
-    // shared/shortcuts.ts): bound at their contract chords when free.
-    for (const [action, chord] of D1_MODE_CHORDS) {
-      if (shortcuts.some((sc) => sc.action === action) || map[chord]) continue;
-      map[chord] = handlers[action];
-    }
 
     return map;
   }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
   // While Deep shows an exploration, the palette can Keep its answer there (D1 §5).
   const deepExplorationId = cockpitMode.state.mode === 'deep' ? cockpitMode.state.deep.exploration_id : null;
-  const paletteDeep = useMemo(
-    () => (deepExplorationId ? { exploration: { workspace, id: deepExplorationId } } : {}),
+  const paletteExploration = useMemo(
+    () => (deepExplorationId ? { workspace, id: deepExplorationId } : undefined),
     [deepExplorationId, workspace],
   );
 
@@ -2642,7 +2631,7 @@ const App: React.FC = () => {
         }}
       />
       <CommandPalette
-        {...paletteDeep}
+        exploration={paletteExploration}
         isOpen={showCommandPalette}
         onClose={() => setShowCommandPalette(false)}
         onOpenAsTab={handleOpenHesterTab}
