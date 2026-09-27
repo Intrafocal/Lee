@@ -14,7 +14,7 @@
   --bg-hover: var(--ground-3);
   --accent: var(--phosphor);
   --accent-color: var(--phosphor);
-  --accent-light: var(--lit);
+  --accent-light: var(--phosphor-hi); /* --lit is the terminal's; never UI (§1.1) */
   --accent-hover: var(--phosphor-hi);
   --text-primary: var(--text-1);
   --text-secondary: var(--text-2);
@@ -84,16 +84,40 @@ body {
   background: rgba(var(--error-rgb), 0.12);
 }
 
+/*
+ * Global focus (cockpit-design §1.4). Controls (buttons, rows, chips,
+ * [tabindex]) get a quiet 1px --focus-ring and brighten one ground step
+ * (a --text-1 wash over whatever fill they have). Text inputs get no ring:
+ * their border brightens to --ground-5 and the caret (--caret) shows where
+ * you're typing. tabindex="-1" is a script-focused container (an overlay, a
+ * sheet), never a keyboard stop, so it gets no ring either.
+ */
 .btn:focus-visible,
 .btn-primary:focus-visible,
 .btn-danger:focus-visible,
 button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
 select:focus-visible,
-[tabindex]:focus-visible {
+[role="button"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+input[type="range"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--lit);
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  background-image: linear-gradient(rgba(var(--text-1-rgb), 0.05), rgba(var(--text-1-rgb), 0.05));
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: var(--caret);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+textarea:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--ground-5);
 }
 
 .app {
@@ -1085,7 +1109,7 @@ select:focus-visible,
 }
 
 .file-tree-filter .filter-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .file-tree-filter .filter-clear {
@@ -2442,7 +2466,7 @@ select:focus-visible,
 
 .config-input:focus {
   outline: none;
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .config-input.disabled {
@@ -2593,7 +2617,7 @@ select:focus-visible,
 }
 
 .config-raw-editor:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 /* Error message */
@@ -3131,7 +3155,7 @@ select:focus-visible,
 }
 
 .browser-url-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .browser-url-input::placeholder {
@@ -3219,12 +3243,14 @@ select:focus-visible,
 }
 
 .markdown-preview a {
-  color: var(--lit);
-  text-decoration: none;
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 2px;
 }
 
 .markdown-preview a:hover {
-  text-decoration: underline;
+  text-decoration-color: var(--text-2);
 }
 
 .markdown-preview .external-link-icon {
@@ -3756,7 +3782,7 @@ select:focus-visible,
 }
 
 .library-tree-new-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .library-tree-new-input::placeholder {
@@ -4633,7 +4659,7 @@ select:focus-visible,
 }
 
 .library-input-field:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .library-input-field::placeholder {
@@ -4994,7 +5020,7 @@ select:focus-visible,
 }
 
 .ws-add-task-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-add-task-input::placeholder {
@@ -5268,7 +5294,7 @@ select:focus-visible,
 }
 
 .ws-picker-filter:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-picker-filter::placeholder {
@@ -5381,7 +5407,7 @@ select:focus-visible,
 }
 
 .ws-picker-create-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-picker-create-input::placeholder {
@@ -6381,7 +6407,7 @@ select:focus-visible,
 
 .config-raw-file.active {
   border-color: var(--phosphor);
-  color: var(--lit);
+  color: var(--text-1);
   background: rgba(var(--phosphor-rgb), 0.12);
 }
 
