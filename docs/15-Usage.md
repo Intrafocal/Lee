@@ -159,9 +159,9 @@ The one proactive signal: the **Launcher** notes when the 5-hour window is at 85
 
 Numbers are tokens for subscription usage and dollars only for billed or estimated spend (§2). They never show in Deep.
 
-### 6.3 Usage view (History)
+### 6.3 Usage view (Ops)
 
-*Decided 2026-09-27:* a **Usage** tab inside History ("what happened" and "what it cost" together), not a rail entry. Pull-only. *Revised 2026-09-27:* **today only** (the week / month ranges are gone from the view; the endpoint still takes them), and every metric is compared with the **average of the 7 full days before today** (`baseline` in the `range=today` response: per-day averages of totals, by source and Hester by trigger, plus `token_days` / `call_days`: tokens and spend are averaged only over the days since tokens were first recorded, and call counts likewise, so a history younger than a week reads "vs 2-day avg" and none at all reads "no average yet" instead of comparing with zeros). Usage from a model on this machine (`provider: ollama`, e.g. Pi on Gemma) is always `local`, whatever basis its report carried.
+*Decided 2026-09-27:* a **Usage** tab inside History ("what happened" and "what it cost" together), not a rail entry. Pull-only. *Moved 2026-09-27 (Desk D2, [16-Desk.md](16-Desk.md) §6):* History folded into Home, so Usage now lives at the end of **Ops**, still not a rail entry, and still pulled when Ops opens, never on a timer. *Revised 2026-09-27:* **today only** (the week / month ranges are gone from the view; the endpoint still takes them), and every metric is compared with the **average of the 7 full days before today** (`baseline` in the `range=today` response: per-day averages of totals, by source and Hester by trigger, plus `token_days` / `call_days`: tokens and spend are averaged only over the days since tokens were first recorded, and call counts likewise, so a history younger than a week reads "vs 2-day avg" and none at all reads "no average yet" instead of comparing with zeros). Usage from a model on this machine (`provider: ollama`, e.g. Pi on Gemma) is always `local`, whatever basis its report carried.
 
 - The Claude subscription windows (5-hour, weekly) as segmented dials, like a Mini's fuel gauge: ten segments, lit for what's left so the dial empties as you use it (ember from 85% used, with "Near the limit" in words), a tick where it would be at even pace through the window, and the reset time;
 - Spend vs subscription tokens, per source, each as today's value, a bullet bar (today's fill, a tick at the average) and the change ("↑ 30%", "↑ 2.4×", "about the same", "new today");
@@ -184,7 +184,7 @@ Needed for Gemini (Hester) and as a fallback for Claude sessions without a statu
 1. **Subscription display:** tokens only. Dollars only for billed or estimated spend.
 2. **Admin API (U3):** not now. Revisit if API-key spend grows.
 3. **Price table source:** Lee's own `prices.yaml` (as planned). It's only needed for Gemini and the no-status-line fallback.
-4. **Usage view placement:** a tab in History, plus usage next to each agent in Work (§6.2).
+4. **Usage view placement:** in Ops (it was a tab in History until the Desk D2 restructure folded History into Home), plus usage next to each agent in Work (§6.2).
 5. **Claude sessions not launched by Lee:** not counted. Usage stays tied to Lee's work items.
 
 ## 10. Phases
