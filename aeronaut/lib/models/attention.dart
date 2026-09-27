@@ -720,6 +720,20 @@ class AgentSummary extends Equatable {
   final String? lastSummary;
   final int filesTouchedCount;
 
+  /// What it's doing now (cockpit design §7.1): the open tool, else the last
+  /// entry within 60s. Null when idle or from an older Lee.
+  final AgentNow? now;
+
+  /// The last 8 activity entries, newest last (§7.1), for "Along the way".
+  final List<AgentActivity> recent;
+
+  /// The last 10 finished turns, newest last, for "Updates".
+  final List<AgentUpdate> updates;
+
+  /// This session's usage so far (docs/15-Usage.md §6.2); null until its
+  /// first turn ends, or from an older Lee.
+  final AgentUsage? usage;
+
   const AgentSummary({
     required this.ptyId,
     this.windowId,
@@ -733,6 +747,10 @@ class AgentSummary extends Equatable {
     this.lastTool,
     this.lastSummary,
     this.filesTouchedCount = 0,
+    this.now,
+    this.recent = const [],
+    this.updates = const [],
+    this.usage,
   });
 
   factory AgentSummary.fromJson(Map<String, dynamic> json) {
@@ -750,6 +768,20 @@ class AgentSummary extends Equatable {
       lastTool: json['last_tool'] as String?,
       lastSummary: json['last_summary'] as String?,
       filesTouchedCount: (json['files_touched_count'] as num?)?.toInt() ?? 0,
+      now: json['now'] is Map<String, dynamic> ? AgentNow.fromJson(json['now'] as Map<String, dynamic>) : null,
+      recent: (json['recent'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(AgentActivity.fromJson)
+              .toList() ??
+          const [],
+      updates: (json['updates'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(AgentUpdate.fromJson)
+              .toList() ??
+          const [],
+      usage: json['usage'] is Map<String, dynamic>
+          ? AgentUsage.fromJson(json['usage'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -773,7 +805,198 @@ class AgentSummary extends Equatable {
         lastTool,
         lastSummary,
         filesTouchedCount,
+        now,
+        recent,
+        updates,
+        usage,
       ];
+}
+
+/// What an agent is doing now (shared `AgentNow`, cockpit design §7.1).
+class AgentNow extends Equatable {
+  final String tool;
+  final String preview;
+  final List<String> files;
+  final DateTime? since;
+
+  const AgentNow({required this.tool, this.preview = '', this.files = const [], this.since});
+
+  factory AgentNow.fromJson(Map<String, dynamic> json) {
+    return AgentNow(
+      tool: json['tool'] as String? ?? '',
+      preview: json['preview'] as String? ?? '',
+      files: _strings(json['files']),
+      since: _parseDate(json['since']),
+    );
+  }
+
+  @override
+  List<Object?> get props => [tool, preview, files, since];
+}
+
+/// One entry of an agent's activity ring (shared `AgentActivity`, §7.1).
+class AgentActivity extends Equatable {
+  final DateTime? at;
+  final String tool;
+  final String preview;
+  final List<String> files;
+  final bool writes;
+  final bool failed;
+
+  /// 'pre' (the tool started) or 'post' (it finished).
+  final String phase;
+
+  const AgentActivity({
+    this.at,
+    required this.tool,
+    this.preview = '',
+    this.files = const [],
+    this.writes = false,
+    this.failed = false,
+    this.phase = 'post',
+  });
+
+  factory AgentActivity.fromJson(Map<String, dynamic> json) {
+    return AgentActivity(
+      at: _parseDate(json['at']),
+      tool: json['tool'] as String? ?? '',
+      preview: json['preview'] as String? ?? '',
+      files: _strings(json['files']),
+      writes: json['writes'] as bool? ?? false,
+      failed: json['failed'] as bool? ?? false,
+      phase: json['phase'] as String? ?? 'post',
+    );
+  }
+
+  @override
+  List<Object?> get props => [at, tool, preview, files, writes, failed, phase];
+}
+
+/// One finished turn, for the one-agent screen's Updates (shared `AgentUpdate`).
+class AgentUpdate extends Equatable {
+  final DateTime? at;
+  final String? summary;
+  final LeeStatusBlock? leeStatus;
+
+  const AgentUpdate({this.at, this.summary, this.leeStatus});
+
+  factory AgentUpdate.fromJson(Map<String, dynamic> json) {
+    return AgentUpdate(
+      at: _parseDate(json['at']),
+      summary: json['summary'] as String?,
+      leeStatus: json['lee_status'] is Map<String, dynamic>
+          ? LeeStatusBlock.fromJson(json['lee_status'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
+  @override
+  List<Object?> get props => [at, summary, leeStatus];
+}
+
+/// What a cost figure means (docs/15-Usage.md §2). Subscription usage is
+/// shown as tokens only (§9).
+enum CostBasis {
+  billed,
+  subscription,
+  estimate,
+  local;
+
+  static CostBasis fromWire(String? value) => switch (value) {
+        'billed' => CostBasis.billed,
+        'estimate' => CostBasis.estimate,
+        'local' => CostBasis.local,
+        _ => CostBasis.subscription,
+      };
+}
+
+/// An agent session's running usage (shared `AgentUsage`, docs/15-Usage.md
+/// §6.2). [shownTokens] = input + output + cache_write, computed by Lee.
+class AgentUsage extends Equatable {
+  final int shownTokens;
+  final CostBasis costBasis;
+
+  /// Present only for billed and estimated spend; never shown for a subscription.
+  final double? costUsd;
+
+  const AgentUsage({required this.shownTokens, this.costBasis = CostBasis.subscription, this.costUsd});
+
+  factory AgentUsage.fromJson(Map<String, dynamic> json) {
+    return AgentUsage(
+      shownTokens: (json['shown_tokens'] as num?)?.toInt() ?? 0,
+      costBasis: CostBasis.fromWire(json['cost_basis'] as String?),
+      costUsd: (json['cost_usd'] as num?)?.toDouble(),
+    );
+  }
+
+  /// Dollars are shown only for billed or estimated spend (§2, §9).
+  bool get showsDollars =>
+      costUsd != null && (costBasis == CostBasis.billed || costBasis == CostBasis.estimate);
+
+  @override
+  List<Object?> get props => [shownTokens, costBasis, costUsd];
+}
+
+/// One Claude subscription window (docs/15-Usage.md §6.1).
+class UsageWindow extends Equatable {
+  final double usedPct;
+  final DateTime? resetsAt;
+
+  const UsageWindow({required this.usedPct, this.resetsAt});
+
+  factory UsageWindow.fromJson(Map<String, dynamic> json) {
+    return UsageWindow(
+      usedPct: (json['used_pct'] as num?)?.toDouble() ?? 0,
+      resetsAt: _parseDate(json['resets_at']),
+    );
+  }
+
+  @override
+  List<Object?> get props => [usedPct, resetsAt];
+}
+
+/// The latest Claude subscription limits (shared `UsageLimits`). Parsed so
+/// the snapshot carries it; Aeronaut shows nothing from it in v1
+/// (docs/15-Usage.md §6.3: devices get a limit strip only on request).
+class UsageLimits extends Equatable {
+  final UsageWindow? fiveHour;
+  final UsageWindow? sevenDay;
+  final DateTime? asOf;
+
+  const UsageLimits({this.fiveHour, this.sevenDay, this.asOf});
+
+  factory UsageLimits.fromJson(Map<String, dynamic> json) {
+    return UsageLimits(
+      fiveHour: json['five_hour'] is Map<String, dynamic>
+          ? UsageWindow.fromJson(json['five_hour'] as Map<String, dynamic>)
+          : null,
+      sevenDay: json['seven_day'] is Map<String, dynamic>
+          ? UsageWindow.fromJson(json['seven_day'] as Map<String, dynamic>)
+          : null,
+      asOf: _parseDate(json['as_of']),
+    );
+  }
+
+  @override
+  List<Object?> get props => [fiveHour, sevenDay, asOf];
+}
+
+/// The running Deep session (Deep D1 §2.5): devices show "In deep work".
+class DeepSession extends Equatable {
+  final String? explorationId;
+  final String title;
+
+  const DeepSession({this.explorationId, this.title = ''});
+
+  factory DeepSession.fromJson(Map<String, dynamic> json) {
+    return DeepSession(
+      explorationId: json['exploration_id'] as String?,
+      title: json['title'] as String? ?? '',
+    );
+  }
+
+  @override
+  List<Object?> get props => [explorationId, title];
 }
 
 class AttentionSnapshot extends Equatable {
@@ -786,6 +1009,15 @@ class AttentionSnapshot extends Equatable {
   final List<AgentSummary> agents;
   final DateTime? generatedAt;
 
+  /// The focused window's mode ('cockpit' | 'deep' | 'manual'); null from an older Lee.
+  final String? mode;
+
+  /// The running Deep session, if any: the Work header says "In deep work".
+  final DeepSession? deep;
+
+  /// The latest Claude subscription limits, or null.
+  final UsageLimits? limits;
+
   const AttentionSnapshot({
     this.items = const [],
     this.counts = AttentionCounts.empty,
@@ -793,6 +1025,9 @@ class AttentionSnapshot extends Equatable {
     this.away = AwayState.empty,
     this.agents = const [],
     this.generatedAt,
+    this.mode,
+    this.deep,
+    this.limits,
   });
 
   static const empty = AttentionSnapshot();
@@ -818,6 +1053,13 @@ class AttentionSnapshot extends Equatable {
               .toList() ??
           const [],
       generatedAt: _parseDate(json['generated_at']),
+      mode: json['mode'] as String?,
+      deep: json['deep'] is Map<String, dynamic>
+          ? DeepSession.fromJson(json['deep'] as Map<String, dynamic>)
+          : null,
+      limits: json['limits'] is Map<String, dynamic>
+          ? UsageLimits.fromJson(json['limits'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -836,11 +1078,14 @@ class AttentionSnapshot extends Equatable {
       away: away ?? this.away,
       agents: agents ?? this.agents,
       generatedAt: generatedAt ?? this.generatedAt,
+      mode: mode,
+      deep: deep,
+      limits: limits,
     );
   }
 
   @override
-  List<Object?> get props => [items, counts, focus, away, agents, generatedAt];
+  List<Object?> get props => [items, counts, focus, away, agents, generatedAt, mode, deep, limits];
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,3 +1380,6 @@ DateTime? _parseDate(dynamic value) {
   if (value is String && value.isNotEmpty) return DateTime.tryParse(value);
   return null;
 }
+
+List<String> _strings(dynamic value) =>
+    (value as List<dynamic>?)?.whereType<String>().toList() ?? const [];

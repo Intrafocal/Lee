@@ -4,6 +4,7 @@ import 'package:equatable/equatable.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/attention.dart';
+import '../models/carry.dart';
 import '../models/machine.dart';
 import 'api_auth.dart';
 
@@ -276,6 +277,90 @@ class CopilotApi {
       // Connection failed
     }
     return null;
+  }
+
+  /// The body's `data` map (Lee's envelope), or the body itself when a route
+  /// answers without the envelope.
+  Map<String, dynamic>? _dataOrBody(http.Response response) {
+    try {
+      final json = jsonDecode(response.body);
+      if (json is! Map<String, dynamic>) return null;
+      final data = json['data'];
+      return data is Map<String, dynamic> ? data : json;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `GET /carry?workspace=` — Library's Carry (docs/14-Deep-Work.md §8.1):
+  /// the exploration to pick up, its open questions and what the Mac opens
+  /// next. Without [workspace] Lee uses the focused window's. A 503 means
+  /// Hester is offline.
+  Future<CarryResult> getCarry({String? workspace}) async {
+    try {
+      final uri = Uri.parse('${machine.hostUrl}/carry').replace(
+        queryParameters: workspace != null ? {'workspace': workspace} : null,
+      );
+      final response = await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 8));
+      if (_isUnauthorized(response)) {
+        return const CarryResult(error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) return const CarryResult(error: _reAuthMessage);
+      if (response.statusCode == 503) return const CarryResult(error: 'hester_offline');
+      final data = _dataOrBody(response);
+      if (response.statusCode == 200 && data != null) {
+        return CarryResult(carry: CarrySnapshot.fromJson(data));
+      }
+      if (response.statusCode == 404) {
+        return const CarryResult(error: 'This Lee is too old for Carry. Update Lee on the Mac.');
+      }
+      return CarryResult(error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
+    } catch (_) {
+      return const CarryResult(error: 'Could not reach Lee.');
+    }
+  }
+
+  /// `POST /carry/capture` — a thought captured away from the Mac, into
+  /// [explorationId] when given. Lands in the opener's "Captured away".
+  Future<CaptureResult> carryCapture(String text, {String? workspace, String? explorationId}) async {
+    return _postCarry('/carry/capture', {
+      'text': text,
+      if (workspace != null) 'workspace': workspace,
+      if (explorationId != null) 'exploration_id': explorationId,
+    }, (data) => CaptureResult.fromJson({'success': true, ...data}));
+  }
+
+  /// `POST /carry/open-next` — what the Mac's next Deep session opens first
+  /// (an exploration or a captured thought).
+  Future<CaptureResult> carryOpenNext({String? workspace, String? explorationId, String? somedayId}) async {
+    return _postCarry('/carry/open-next', {
+      if (workspace != null) 'workspace': workspace,
+      if (explorationId != null) 'exploration_id': explorationId,
+      if (somedayId != null) 'someday_id': somedayId,
+    }, (_) => const CaptureResult(success: true));
+  }
+
+  Future<CaptureResult> _postCarry(
+    String path,
+    Map<String, dynamic> body,
+    CaptureResult Function(Map<String, dynamic> data) onOk,
+  ) async {
+    try {
+      final response = await _client
+          .post(Uri.parse('${machine.hostUrl}$path'), headers: _headers, body: jsonEncode(body))
+          .timeout(const Duration(seconds: 10));
+      if (_isUnauthorized(response)) {
+        return const CaptureResult(success: false, error: 'Token rejected. Re-pair this machine.');
+      }
+      if (_isForbidden(response)) return const CaptureResult(success: false, error: _reAuthMessage);
+      if (response.statusCode == 503) return const CaptureResult(success: false, error: 'Hester is offline.');
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return onOk(_dataOrBody(response) ?? const {});
+      }
+      return CaptureResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
+    } catch (e) {
+      return CaptureResult(success: false, error: e.toString());
+    }
   }
 
   Future<ActionResult> _postAction(String path, Map<String, dynamic> body) async {
