@@ -1276,7 +1276,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
       section: sectionAt(doc, from),
       context: contextAround(doc, from, to, 300),
     });
-    if (r.ok) say('Captured to Someday');
+    if (r.ok) say('Captured to Ideas');
     else say(r.error, 'warn');
     logDeep({ type: 'deep.action', data: { action: 'capture', ...eventIds(eid), chars: t.length } });
   };

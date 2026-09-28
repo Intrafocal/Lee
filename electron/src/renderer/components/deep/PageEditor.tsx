@@ -1049,14 +1049,10 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         : { action: 'ask', label: 'Ask about this…', mnemonic: 'a', title: 'Ask Hester about this; the answer arrives quietly in the margin (⌘⏎)' },
     );
     if (props.onHandOff) rowButtons.push({ action: 'handoff', label: 'Hand off', mnemonic: 'h', title: 'Hand this to an agent: Spike, Docs or Research' });
-    rowButtons.push(
-      { action: 'keep', label: 'Keep', mnemonic: 'k', title: 'Add to this exploration’s references' },
-      { action: 'capture', label: 'Capture', mnemonic: 'c', title: 'Save to Someday with where it came from' },
-      { action: 'explore', label: 'Explore', mnemonic: 'e', title: 'Start a linked exploration (doesn’t switch)' },
-    );
+    // Ask and Hand off only (2026-09-28): references come from [[ quotes, ideas are
+    // captured from the Drawer, and a table is on the formatting toolbar.
   } else if (cursorRow) {
     if (props.onHandOff) rowButtons.push({ action: 'handoff', label: 'Hand off', mnemonic: 'h', title: 'Hand this section to an agent: Spike, Docs or Research' });
-    rowButtons.push({ action: 'table', label: 'Insert table', mnemonic: 't', title: 'A 3×2 table' });
   }
 
   // The toolbar's state: the cursor line's kind and whether it's in a table

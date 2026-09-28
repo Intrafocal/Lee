@@ -419,6 +419,10 @@
   background: var(--ground-3);
 }
 
+.desk-drawer-capture .desk-drawer-text {
+  color: var(--text-2);
+}
+
 .desk-drawer-chevron {
   color: var(--text-3);
 }

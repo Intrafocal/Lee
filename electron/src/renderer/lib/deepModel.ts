@@ -39,8 +39,9 @@ export interface DeepRowKeyContext {
 
 /**
  * The row's keys once ⌘. moved focus into it (the letters show, underlined,
- * only then: R1): a h k c e pick (Ask Hester, Hand off, Keep, Capture,
- * Explore), t inserts a table when nothing is selected; Esc returns, arrows move.
+ * only then: R1): a and h pick Ask and Hand off, the row's only buttons
+ * since 2026-09-28 (a letter only acts when its button is in the row; k c e t
+ * are older actions, kept for their handlers); Esc returns, arrows move.
  */
 export function deepRowKey(key: string, ctx: DeepRowKeyContext = {}): DeepRowKey | null {
   if (key === 'Escape') return { kind: 'escape' };

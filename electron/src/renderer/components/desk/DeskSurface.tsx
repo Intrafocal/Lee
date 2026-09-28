@@ -54,7 +54,7 @@ import {
   putAwayArea,
   takeOutArea,
 } from '../../lib/hesterDesk';
-import { newDraft } from '../../lib/hesterDeep';
+import { captureSomeday, newDraft } from '../../lib/hesterDeep';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
 import {
   AREA_HEAD,
@@ -518,11 +518,26 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   // ---- the Drawer as a start menu: folders, a fly-out by date, search ----
   const [drawerQuery, setDrawerQuery] = useState('');
   const [flyout, setFlyout] = useState<string | null>(null);
+  /** The bottom field captures an idea instead of searching (＋ Capture an idea). */
+  const [capturing, setCapturing] = useState(false);
   useEffect(() => {
     if (drawer) return;
     setDrawerQuery('');
     setFlyout(null);
+    setCapturing(false);
   }, [drawer]);
+  const captureIdea = async (raw: string) => {
+    const text = raw.trim();
+    if (!text) return;
+    const r = await captureSomeday(workspace, text, { surface: 'lee' });
+    if (!r.ok) return say(r.error);
+    setDrawerQuery('');
+    setCapturing(false);
+    await loadIdeas();
+    void ctx?.refresh();
+    setFlyout(IDEAS_DRAWER);
+    say('Captured to Ideas');
+  };
   const folders = useMemo(() => (desk ? drawerFolders(desk, ideas ?? []) : []), [desk, ideas]);
   const found = useMemo(() => searchDrawer(folders, drawerQuery), [folders, drawerQuery]);
   const openFolder = folders.find((f) => f.id === flyout) ?? null;
@@ -1002,7 +1017,24 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               <div className="desk-drawer-pop" onKeyDown={onDrawerKey}>
                 <div className="deep-popover desk-drawer-menu" role="menu" aria-label="Drawer">
                   <div className="desk-drawer-body">
-                    {drawerQuery.trim() ? (
+                    {!capturing && !drawerQuery.trim() && (
+                      <button
+                        className="deep-pop-row desk-drawer-row desk-drawer-capture"
+                        role="menuitem"
+                        data-drawer-row=""
+                        onMouseEnter={() => setFlyout(null)}
+                        onClick={() => {
+                          setCapturing(true);
+                          setFlyout(null);
+                          requestAnimationFrame(() => (document.querySelector('.desk-drawer-search') as HTMLInputElement | null)?.focus());
+                        }}
+                      >
+                        <span className="desk-drawer-text">＋ Capture an idea</span>
+                      </button>
+                    )}
+                    {capturing ? (
+                      <div className="desk-drawer-empty deep-muted">Type the idea below; Enter keeps it in Ideas, Esc goes back.</div>
+                    ) : drawerQuery.trim() ? (
                       found.length === 0 ? (
                         <div className="desk-drawer-empty deep-muted">Nothing in the Drawer matches “{drawerQuery.trim()}”.</div>
                       ) : (
@@ -1013,7 +1045,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           </React.Fragment>
                         ))
                       )
-                    ) : (
+                    ) : null}
+                    {!capturing && drawerQuery.trim() && (
+                      <button className="deep-pop-row desk-drawer-row desk-drawer-capture" role="menuitem" data-drawer-row="" onClick={() => void captureIdea(drawerQuery)}>
+                        <span className="desk-drawer-text">＋ Capture “{drawerQuery.trim()}” as an idea</span>
+                      </button>
+                    )}
+                    {!capturing &&
+                      !drawerQuery.trim() &&
                       folders.map((f) => (
                         <button
                           key={f.id}
@@ -1031,25 +1070,33 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           <span className="deep-muted">{f.id === IDEAS_DRAWER && ideas == null ? '…' : f.entries.length}</span>
                           <span className="desk-drawer-chevron" aria-hidden="true">›</span>
                         </button>
-                      ))
-                    )}
+                      ))}
                   </div>
                   <input
                     className="desk-drawer-search"
                     autoFocus
                     value={drawerQuery}
-                    placeholder="Search the Drawer"
-                    aria-label="Search the Drawer"
+                    placeholder={capturing ? 'Capture an idea…' : 'Search the Drawer'}
+                    aria-label={capturing ? 'Capture an idea' : 'Search the Drawer'}
                     onChange={(e) => {
                       setDrawerQuery(e.target.value);
                       setFlyout(null);
                     }}
                     onKeyDown={(e) => {
+                      if (capturing && e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void captureIdea(drawerQuery);
+                        return;
+                      }
                       if (e.key !== 'Escape') return;
-                      // One Esc closes the Drawer (clearing a query first, if there is one).
+                      // One Esc steps back: out of capturing, else clears the query, else closes the Drawer.
                       e.preventDefault();
                       e.stopPropagation();
-                      if (drawerQuery) setDrawerQuery('');
+                      if (capturing) {
+                        setCapturing(false);
+                        setDrawerQuery('');
+                      } else if (drawerQuery) setDrawerQuery('');
                       else setDrawer(false);
                     }}
                   />

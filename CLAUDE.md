@@ -517,7 +517,7 @@ lee --workspace ./myproject
 | `Cmd+0` | **Mode switcher** - Tap for the last mode, hold for Cockpit / Deep / Manual |
 | `Cmd+Shift+0` | Cockpit ↔ Deep |
 | `Cmd+Option+0` | Cockpit ↔ Manual |
-| `Cmd+.` | Deep: selection actions (Capture, Keep, Ask, Explore) |
+| `Cmd+.` | Deep: the Page's action row (Ask, Hand off); then the underlined letter |
 | `Cmd+1-9` | Pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (1 Home, 2 Work, 3 Goals, 4 Ops) |
 | `Esc` | Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first) |
 | `Cmd+W` | **Watch** - Toggle idle detection on current tab |
