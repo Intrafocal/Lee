@@ -32,6 +32,15 @@ export interface TetherPage {
   open_questions: Array<{ id: string; text: string }>;
   references: Array<{ title: string; where: string | null; quote: string | null }>;
 }
+/** GET /tether/boards/:id (B5): a Board, read-only, for Review; its picture is GET /tether/boards/:id/preview (PNG, 404 when none). */
+export interface TetherBoard {
+  card: TetherCard;
+  has_preview: boolean;
+  notes: string[];                                 // annotation text, top to bottom
+  links: Array<{ card_id: string; title: string }>;
+  asks: Array<{ id: string; question: string; answer: string | null; status: string }>;
+  handoffs: Array<{ id: string; kind: string; status: string; result: string | null }>;
+}
 export interface TetherDrawer {
   stashed: Array<{ id: string; name: string; stashed_at: string | null; cards: TetherCard[] }>;
   ideas: Array<{ id: string; text: string; created_at: string; surface: string | null }>;
@@ -45,7 +54,7 @@ export type SendTarget =
   | { kind: 'page'; card_id: string; title: string }
   | { kind: 'hester' }
   | { kind: 'tab'; pty_id: number; label: string; tab_kind: 'agent' | 'terminal' | 'tui'; provider: string | null }
-  | { kind: 'board'; card_id: string; title: string }; // reserved: not built this round (no Board cards yet)
+  | { kind: 'board'; card_id: string; title: string }; // B5: images land as image items mid-view, text as a note
 export interface SendTargets {
   /** What Lee's focused window has in front of it now, when it's a target: the zoomed Page, the palette, or the focused agent tab. */
   focus: SendTarget | null;

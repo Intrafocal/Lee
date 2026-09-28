@@ -8,7 +8,7 @@
 
 import type { DeskCard } from './desk';
 
-export const BOARD_ITEM_KINDS = ['image', 'note', 'highlight', 'stroke', 'ask', 'handoff', 'link'] as const;
+export const BOARD_ITEM_KINDS = ['image', 'note', 'highlight', 'stroke', 'ask', 'handoff', 'link', 'visual'] as const;
 export type BoardItemKind = (typeof BOARD_ITEM_KINDS)[number];
 
 /** The whole board.json is capped (like page.md); images live in assets/, not here. */
@@ -45,8 +45,27 @@ export interface BoardAsk extends ItemBase { kind: 'ask'; answer_id: string; tar
 export interface BoardHandoff extends ItemBase { kind: 'handoff'; answer_id: string; target: BoardTarget; open?: boolean }
 /** A link to another Desk card (a Page or a Board). */
 export interface BoardLink extends ItemBase { kind: 'link'; card_id: string }
+/**
+ * A Visualize (B6): Hester's diagram agent making a diagram, image or table
+ * from the selection. The card shows progress; when the answer is done Lee
+ * adds the result beside it (an image item, or a note for markdown) and sets
+ * `result_item_id`, so it's placed once.
+ */
+export interface BoardVisual extends ItemBase { kind: 'visual'; answer_id: string; target: BoardTarget; result_item_id?: string | null; open?: boolean }
 
-export type BoardItem = BoardImage | BoardNote | BoardHighlight | BoardStroke | BoardAsk | BoardHandoff | BoardLink;
+export type BoardItem = BoardImage | BoardNote | BoardHighlight | BoardStroke | BoardAsk | BoardHandoff | BoardLink | BoardVisual;
+
+/**
+ * What a Visualize answer made (answers.jsonl row `visual`, null until done).
+ * An image is saved by Hester as an asset whose source is the answer; Lee
+ * renders a Mermaid diagram to PNG itself and uploads it the same way.
+ */
+export type VisualResult =
+  | { type: 'image'; asset: string; title: string }
+  | { type: 'mermaid'; dsl: string; title: string }
+  | { type: 'markdown'; text: string; title: string };
+/** POST /desk/boards/{id}/visualize: the brief (what to make) and the selection. */
+export interface VisualizeCreate { brief: string; anchor: BoardAnchor }
 
 /** board.json as the routes carry it. `version` is opaque (like page.md's); PUT with a stale one is 409. */
 export interface BoardDoc { version: string; items: BoardItem[] }
