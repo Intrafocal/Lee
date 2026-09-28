@@ -15,10 +15,11 @@ import 'someday_screen.dart';
 
 typedef CopilotApiBuilder = CopilotApi Function(Machine machine);
 
-/// Library (cockpit design §8.1; Desk D2 §9.4): Carry first, then Ideas.
-/// Carry is the other half of the Deep loop (14 §8.1): your last Desk
-/// card, where you stopped in it, what's still open, a thought captured
-/// into it, and what the Mac opens next. Devices have no Desk; they carry.
+/// Library (cockpit design §8.1; Desk D2 §9.4): Tether first, then Ideas.
+/// Tether (Carry in the code and routes) is the Cockpit reaching the phone
+/// while you're away from the Mac (14 §8.1): your last Desk card, where you
+/// stopped in it, what's still open, a thought captured into it, and what
+/// the Mac opens next. Devices have no Desk; they stay tethered.
 /// (The Explorations tab went with the Desk: explorations were copied into
 /// cards, so that list would go stale.)
 class LibraryScreen extends ConsumerWidget {
@@ -41,7 +42,7 @@ class LibraryScreen extends ConsumerWidget {
             labelColor: Phosphor.text1,
             unselectedLabelColor: Phosphor.text3,
             dividerColor: Phosphor.ground4,
-            tabs: [Tab(text: 'Carry'), Tab(text: 'Ideas')],
+            tabs: [Tab(text: 'Tether'), Tab(text: 'Ideas')],
           ),
         ),
         body: TabBarView(
@@ -213,7 +214,7 @@ class _CarryCaptureSheetState extends State<_CarryCaptureSheet> {
   }
 }
 
-/// Carry (14 §8.1, Desk D2 §9.4): your last Desk card's title and Area,
+/// Tether (14 §8.1, Desk D2 §9.4): your last Desk card's title and Area,
 /// "You stopped at" in Newsreader italic, the open questions in
 /// Newsreader, "Capture a thought into this" (the view's one phosphor
 /// step), "Open this first on the Mac", and the reading count.
@@ -282,12 +283,12 @@ class _CarryViewState extends ConsumerState<CarryView> {
     return [
       const SizedBox(height: AeronautTheme.spacingXl),
       Text(
-        result?.hesterOffline ?? false ? 'Hester is offline.' : 'Carry could not load.',
+        result?.hesterOffline ?? false ? 'Hester is offline.' : 'Tether could not load.',
         style: writingStyle(size: 20),
       ),
       const SizedBox(height: AeronautTheme.spacingSm),
       QuietText(result?.hesterOffline ?? false
-          ? 'Carry comes from Hester on the Mac. Pull to try again once Lee is running.'
+          ? 'Tether comes from Hester on the Mac. Pull to try again once Lee is running.'
           : (result?.error ?? 'Pull to try again.')),
     ];
   }

@@ -428,20 +428,22 @@ This works because the thinking already happened during the session, when you as
 - **Lee can be closed, and closing it stops everything.** *Decided 2026-09-27:* the daemon stays a child of Lee main. In-flight Asks and spin-offs (D2; their agent processes are Lee's PTYs) stop with it, are recorded as interrupted, and are offered as **Retry** in the opener. A spin-off retried this way resumes from its worktree rather than starting over. Nothing is lost silently.
 - **Devices feed the loop.** An idea captured on Dirigible during a walk (13 §5.1) lands in "Captured away", which is exactly the unconscious-to-conscious handoff the origin notes describe.
 
-### 8.1 Devices: carry, not Deep
+### 8.1 Devices: Tether, not Deep
 
-*Designed 2026-09-27:* the phone and T-Deck screens for Work, one agent and Library (Carry) are in the Cockpit design contract, §8 ([`plans/2026-09-27-cockpit-design-contracts.md`](plans/2026-09-27-cockpit-design-contracts.md)).
+*Renamed from Carry, 2026-09-28; the routes keep `/carry`.* Tether is the Cockpit extended to Dirigible and Aeronaut: you can step away from the Machine during long-running work and still see updates and steer. It includes the stopped-at line, open questions, captures and Open next.
 
-*Decided 2026-09-26.* Neither device gets a Deep mode. A phone screen and a T-Deck aren't places for hard thinking at length, and Deep work happens at the machine. But the devices are what you have with you during the other half of the loop, the walk, the shower, dinner (§0), so they carry the exploration out of a session and bring thoughts back into the next one.
+*Designed 2026-09-27:* the phone and T-Deck screens for Work, one agent and Library (Tether) are in the Cockpit design contract, §8 ([`plans/2026-09-27-cockpit-design-contracts.md`](plans/2026-09-27-cockpit-design-contracts.md)).
+
+*Decided 2026-09-26.* Neither device gets a Deep mode. A phone screen and a T-Deck aren't places for hard thinking at length, and Deep work happens at the machine. But the devices are what you have with you during the other half of the loop, the walk, the shower, dinner (§0), so they keep you tethered to the exploration after a session and bring thoughts back into the next one.
 
 | | **Aeronaut** (phone) | **Dirigible** (T-Deck) |
 |---|---|---|
 | **Cockpit** (first screen; 13 §5.1, §5.2) | Needs-you queue with quick-reply chips; **review wins** visually (diffs, and renders once D3 exists); launch from Someday or a template | One item per page; read an agent's full reply with the trackball and write a considered reply; capture a sentence |
-| **Carry** | The last session's stopped-at note and open questions, read-only; the **reading list** (kept references not yet opened, §4.3), because reading is research | The stopped-at note and open questions; capture a longer thought **into an exploration** (a paragraph suits the keyboard) |
+| **Tether** | The last session's stopped-at note and open questions, read-only; the **reading list** (kept references not yet opened, §4.3), because reading is research | The stopped-at note and open questions; capture a longer thought **into an exploration** (a paragraph suits the keyboard) |
 | **Manual** | Terminals and files, one level down (exists) | Terminal and tabs screens (exists) |
 | **Deep** | A state, not a mode: "In deep work" | Same |
 
-- **Carry flows into the opener.** Anything captured on a device lands in **Captured away** (§6), and a capture made into an exploration shows under **Pick up where you left off** with that exploration.
+- **Tether flows into the opener.** Anything captured on a device lands in **Captured away** (§6), and a capture made into an exploration shows under **Pick up where you left off** with that exploration.
 - **Open next.** A device can pick what the next session opens first: an exploration or a captured thought. The opener puts it at the top of "Pick up where you left off". This replaces the device Focus toggle (Dirigible's `f` key, `screen_waiting.cpp` `focus_toggle`), since Deep can't start remotely.
 - **No bypass while you're deep.** While a Deep session is running at the machine, devices get no pushes either; agents park (§3.3) and the device header says "In deep work". Pulling the phone out and replying is a hop: agency, never scored (§3.1). `turn_churn` counts prompts from every surface, so poking agents from the phone shows up where it should.
 - **After the ending ritual** the away policy applies as 13 §5.1 says: at most one summary, and wake-me items only. The ritual's handoff step (§7) is where you set it.
@@ -565,7 +567,7 @@ Deep work builds on 13's Explore (v3) and uses its Someday, tasks and hooks. It 
 2. **D2: Research and code.** **Browse** in Deep mode with bookmark and screenshot (§4.3); the **Board** with screenshots, reference and answer cards and text boxes (§4.2); **Spin off** with results as answer cards (§5.1, §5.3); **Workbench** with tabs, working set, Quick Open, terminals, multi-diff review, batched review comments and `human`-lead tasks (§4.4).
    - **Status (2026-09-27):** D2 is now **the Desk**, per [`16-Desk.md`](16-Desk.md). Its first round, D2 foundations, is contracted in [`plans/2026-09-27-desk-foundation-contract.md`](plans/2026-09-27-desk-foundation-contract.md). It covers the Desk store and the migration from explorations, sessions on the Desk, and the Desk surface with Page cards, the pinned Goals card and the Ideas Drawer. It also restructures the Cockpit into Home, Work, Goals and Ops. Board, Browse, Workbench and Workbook become card kinds in later rounds.
 3. **D3: Renders.** Render target detection and recipes, starting with Web/Storybook and Flutter, then iOS and Lee's own viewers (§9); markup-to-task; stale renders in the opener (§9.4).
-4. **Devices (13 v6, after D1):** the device Cockpit, Carry and Open next (§8.1); the reading list after D2.
+4. **Devices (13 v6, after D1):** the device Cockpit, Tether and Open next (§8.1); the reading list after D2.
 5. **Later:**
    - **Studio:** deep work not tied to one workspace (strategy, reading, thinking about the world). Likely a v2 of Explore rather than a separate feature.
    - **Voice:** capturing a thought on a walk by voice (`hester/docs/VoicePlan.md`), into "Captured away".

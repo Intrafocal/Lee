@@ -31,7 +31,8 @@ Machine.
   the four quick replies as a 2×2 grid, Updates, Along the way, and a pinned
   reply bar that sends through the item's Reply (disabled, "Reply from the
   Mac for now", when the agent has no open item).
-- **Library** (`screens/library_screen.dart`): Carry (Lee `GET /carry`,
+- **Library** (`screens/library_screen.dart`): Tether (renamed from Carry,
+  2026-09-28; the code and routes keep `carry`; Lee `GET /carry`,
   `POST /carry/capture`, `POST /carry/open-next`: your last Desk card, by
   `card_id`), Ideas (the Someday list). The Explorations tab went with the
   Desk (docs/plans/2026-09-27-desk-foundation-contract.md decision 6).

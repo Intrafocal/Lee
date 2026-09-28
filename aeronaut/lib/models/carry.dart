@@ -1,7 +1,8 @@
 import 'package:equatable/equatable.dart';
 
-/// Library's Carry (docs/14-Deep-Work.md §8.1; Desk D2 §9.3): where you
-/// stopped, what's still open, and what the next session opens first.
+/// Library's Tether (Carry in the code and routes; docs/14-Deep-Work.md
+/// §8.1; Desk D2 §9.3): where you stopped, what's still open, and what the
+/// next session opens first.
 /// Mirrors Lee main's `GET /carry` (built from Hester's opener and
 /// open-next). The pick-up is your last Desk card; against a Lee from
 /// before the Desk the `exploration_id` fields stand in for `card_id`.
@@ -136,7 +137,7 @@ class CarrySnapshot extends Equatable {
   List<Object?> get props => [workspace, pickUp, openQuestions, capturedCount, readingCount, openNext, spooled];
 }
 
-/// Result of a Carry read: the snapshot, or why there isn't one.
+/// Result of a Tether read: the snapshot, or why there isn't one.
 class CarryResult extends Equatable {
   final CarrySnapshot? carry;
 

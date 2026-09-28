@@ -1,8 +1,9 @@
 /*
- * screen_carry.cpp — Library, which on the T-Deck is Carry (Cockpit design
- * §8.2; docs/14-Deep-Work.md §8.1; Desk D2 §9.4): the devices carry your
- * last Desk card out of a Deep session and bring thoughts back into the next
- * one.  No Desk here.
+ * screen_carry.cpp — Library, which on the T-Deck is Tether (Carry in the
+ * code and routes; Cockpit design §8.2; docs/14-Deep-Work.md §8.1; Desk D2
+ * §9.4): the Cockpit, away from the Machine.  It shows your last Desk card
+ * from a Deep session and brings thoughts back into the next one.  No Desk
+ * here.
  *
  * Data: Lee's GET /carry for the followed window's workspace (fetched when
  * the view opens, after a write, and on r):
@@ -16,7 +17,7 @@
  * one.  Against a Lee from before the Desk the "cards" are explorations:
  *
  *   +------------------------------------------------------------+
- *   | Carry on the T-Deck                                   1/2  |  title
+ *   | Tether the T-Deck                                     1/2  |  title
  *   | YOU STOPPED AT                                             |
  *   | The pager should hold one thought, not three.  (italic)    |  your words,
  *   | OPEN QUESTION                                              |  italic; the
@@ -31,7 +32,7 @@
  *
  *   Add a thought (C)  a text box; Enter sends POST /carry/capture with the
  *                      page's card, so it lands under Pick up with it.  With
- *                      nothing to carry it is a plain Someday capture (POST
+ *                      nothing tethered it is a plain Someday capture (POST
  *                      /capture).  Lee spools either while Hester is down.
  *   Open next (O)      POST /carry/open-next: the next Deep session opens
  *                      this card first.  Replaces the old f (Focus) key:
@@ -101,7 +102,7 @@ struct State {
     lv_obj_t* next_btn = nullptr;
     lv_obj_t* next_lbl = nullptr;
 
-    // ---- nothing to carry / offline
+    // ---- nothing tethered / offline
     lv_obj_t* empty   = nullptr;
     lv_obj_t* e_title = nullptr;
     lv_obj_t* e_sub   = nullptr;
@@ -168,8 +169,8 @@ void footer()
     auto& s = st();
     if (app().view != View::Library) return;
     if (s.composing) { chrome_set_footer("Enter sends  hold: cancel", "thought"); return; }
-    if (s.ids.size() > 1) chrome_set_footer("j/k cards  r reload  w i", "carry");
-    else                  chrome_set_footer("r reload  w Work  i In flight", "carry");
+    if (s.ids.size() > 1) chrome_set_footer("j/k cards  r reload  w i", "tether");
+    else                  chrome_set_footer("r reload  w Work  i In flight", "tether");
 }
 
 // ---------------------------------------------------------------------------
@@ -214,15 +215,15 @@ void render()
     }
 
     if (!cockpit_linked()) {
-        show_empty("Not connected", "Carry needs Lee.\nw Work   i In flight   t Tabs");
+        show_empty("Not connected", "Connect to Lee.\nw Work   i In flight   t Tabs");
     } else if (s.load == Load::Loading && s.ids.empty()) {
         show_empty("Loading...", "");
     } else if (s.load == Load::Offline) {
-        show_empty("Hester is offline", "Carry comes back when it is.\nc still captures a thought: Lee keeps it.");
+        show_empty("Hester is offline", "Back when it is.\nc still captures a thought: Lee keeps it.");
     } else if (s.load == Load::Missing) {
-        show_empty("No Carry on this Lee", "Update Lee for Carry.\nc captures a thought to Someday.");
+        show_empty("This Lee is too old", "Update Lee first.\nc captures a thought to Someday.");
     } else if (s.load == Load::Failed && s.ids.empty()) {
-        show_empty("Couldn't load Carry", "r tries again.");
+        show_empty("Couldn't load", "r tries again.");
     } else if (s.ids.empty()) {
         char sub[128];
         if (s.carry.captured_count > 0) {
@@ -231,7 +232,7 @@ void render()
         } else {
             snprintf(sub, sizeof(sub), "No Desk card to pick up yet.\nc captures a thought for next time.");
         }
-        show_empty("Nothing to carry", sub);
+        show_empty("All caught up", sub);
     } else {
         lv_obj_add_flag(s.empty, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s.page, LV_OBJ_FLAG_HIDDEN);
@@ -309,11 +310,11 @@ void demo_fill(CarryState& c)
     c.workspace = "/ws/lee";
     c.has_pick_up = true;
     c.pick_up_id = "pg-0000ca77";
-    c.pick_up_title = "Carry on the T-Deck";
+    c.pick_up_title = "Tether the T-Deck";
     c.area_name = "Devices";
     c.stopped_line = 12;
     c.stopped_at = "The pager should hold one thought, not three. Next: what the "
-                   "Library page says when there's nothing to carry.";
+                   "Library page says when there's nothing tethered.";
     c.questions.push_back({ "pg-0000ca77", "q1", "Does Open next replace the f key, or should f just go?" });
     c.questions.push_back({ "pg-00000b0e", "q2", "Would a voice capture on the walk be better than typing?" });
     c.captured_count = 2;
@@ -438,7 +439,7 @@ void open_compose()
 {
     auto& s = st();
     if (s.composing) return;
-    // Into the page's card; with nothing to carry, into Someday.
+    // Into the page's card; with nothing tethered, into Someday.
     const bool page = !lv_obj_has_flag(s.page, LV_OBJ_FLAG_HIDDEN);
     s.compose_for = page ? cur() : std::string();
     std::string head;

@@ -292,7 +292,7 @@ class CopilotApi {
     }
   }
 
-  /// `GET /carry?workspace=` — Library's Carry (docs/14-Deep-Work.md §8.1):
+  /// `GET /carry?workspace=` — Library's Tether (docs/14-Deep-Work.md §8.1):
   /// your last Desk card, its open questions and what the Mac opens
   /// next. Without [workspace] Lee uses the focused window's. A 503 means
   /// Hester is offline.
@@ -312,7 +312,7 @@ class CopilotApi {
         return CarryResult(carry: CarrySnapshot.fromJson(data));
       }
       if (response.statusCode == 404) {
-        return const CarryResult(error: 'This Lee is too old for Carry. Update Lee on the Mac.');
+        return const CarryResult(error: 'This Lee is too old for Tether. Update Lee on the Mac.');
       }
       return CarryResult(error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
     } catch (_) {

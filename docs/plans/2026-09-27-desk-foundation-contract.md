@@ -12,7 +12,7 @@
 - **Sessions belong to the Desk.** The ending ritual lists the cards you touched; "pick up" is your last card and its stopped-at line.
 - **The Desk surface:** Deep mode becomes the Desk. Areas, Page cards with a hover preview and a zoom to full screen (the existing Page editor), the pinned Goals card in every Area, the Ideas Drawer and the Put away Drawer. Entering Deep lands you zoomed into your last card at the stopped-at line; one key goes to the Desk overview.
 - **The Cockpit becomes Home, Work, Goals and Ops** (`⌘1`–`⌘4`). History folds into Home, Usage moves to Ops, and Library goes. Home gets the **Back to your Desk** door.
-- **Devices (13 v6, second pass):** the idle-end push, "Show me the diff" on Dirigible, In flight folding, Aeronaut's one-agent actions, "Snoozed · Undo", Carry as your last Desk card, and `/carry/capture` spooling offline.
+- **Devices (13 v6, second pass):** the idle-end push, "Show me the diff" on Dirigible, In flight folding, Aeronaut's one-agent actions, "Snoozed · Undo", Tether as your last Desk card, and `/carry/capture` spooling offline.
 
 **Not this round:** Board, Browser, Workbench and Workbook cards; hand-off results as cards (they stay in the Page's margin and in Work); a Desk view on devices; lines or arrangement that mean anything; Hester placing cards. The v3 node tree and the "Dive in" chat are retired from the renderer. Their Hester code may stay, but nothing new depends on it.
 
@@ -170,7 +170,7 @@ export interface DeskSessionRecord {
 }
 export type DeskSessionCreate = Omit<DeskSessionRecord, 'id'>;
 
-/** GET /desk/last: where "Back to your Desk", landing, Carry and the opener's pick-up start. */
+/** GET /desk/last: where "Back to your Desk", landing, Tether and the opener's pick-up start. */
 export interface DeskLast {
   card: DeskCardBrief | null;
   /** Why this card: a device's Open next, the last card zoomed into, the last session's, or the most recently written. */
@@ -449,7 +449,7 @@ H ingests `deep.answer` with `{ workspace, card_id, exploration_id: <same card i
 - **The steward's `about`** accepts `{ kind: 'page', id }` and reads the Page like an exploration.
 - **Recovery** (`ensure_recovered`, `interrupt_pending`) covers pages.
 
-### 6.4 The opener, pick-up, Open next and Carry's source
+### 6.4 The opener, pick-up, Open next and Tether's source
 
 - **`GET /desk/last`** picks the card in this order:
   1. a live Open next `card_id`, which gives `source: 'open_next'`;
@@ -466,7 +466,7 @@ H ingests `deep.answer` with `{ workspace, card_id, exploration_id: <same card i
 - **`GET /copilot/opener`** keeps its shape, and its `pick_up` is built from `/desk/last`:
   - `pick_up: { card: DeskCardBrief, exploration: { id: card.id, title, last_touched_at }, open_next, stopped_at, stopped_line, arrived: { answers, open_questions } }`;
   - surfaces read the Desk. `open_questions` items gain `card_id` and `card_title`, `reading_list` and `quiet` items gain `card_id`, and every `exploration_id` / `exploration_title` stays as a legacy alias holding the card id and title;
-  - Carry (V) reads this.
+  - Tether (V) reads this.
 - **Open next** (`open_next.py`, `GET/POST/DELETE /copilot/open-next`):
   - the record holds `card_id`;
   - `POST` accepts `card_id`, or `exploration_id` (a legacy alias, mapped through the migration or `pg-<hex>`), or `someday_id`;
@@ -626,7 +626,9 @@ H ingests `deep.answer` with `{ workspace, card_id, exploration_id: <same card i
 - **Resolution:** the item resolves when you're back at the machine, on either action, or at the session's end. Ignoring it ends the session unrated at the deadline, as today.
 - **In the Cockpit:** the item isn't shown (C filters it). It exists only while Lee is open.
 
-### 9.3 Carry and capture (Lee main)
+### 9.3 Tether and capture (Lee main)
+
+*Renamed from Carry, 2026-09-28; the routes keep `/carry`.*
 
 `GET /carry` `data`:
 
@@ -647,7 +649,7 @@ export interface Carry {
 }
 ```
 
-- **Where it comes from:** built from the opener (§6.4). An old daemon's opener (no `card`) still gives a Carry, using `exploration.id` as the card id.
+- **Where it comes from:** built from the opener (§6.4). An old daemon's opener (no `card`) still gives a Tether view, using `exploration.id` as the card id.
 - **`POST /carry/capture`** takes `{ workspace?, text, card_id?, exploration_id? }`, and sends `source.card_id` to Hester.
   - **Hester offline → spooled** through the existing capture spool (`~/.lee/spool/someday.jsonl`), with the source kept, and `200 { success: true, someday_id: null, spooled: true }`. No more 503; this was the 15 leftover.
 - **`POST /carry/open-next`** takes exactly one of `card_id`, `exploration_id` (legacy) or `someday_id`.
@@ -655,15 +657,15 @@ export interface Carry {
 ### 9.4 Devices
 
 - **Aeronaut:**
-  - **Library:** Carry first; your last Desk card's title, area and "You stopped at" (Newsreader italic); open questions; `Btn next` "Capture a thought into this"; "Open this first on the Mac". The Explorations tab goes (a Desk view on the phone is still open, 16 §7). Ideas stays.
+  - **Library:** Tether first; your last Desk card's title, area and "You stopped at" (Newsreader italic); open questions; `Btn next` "Capture a thought into this"; "Open this first on the Mac". The Explorations tab goes (a Desk view on the phone is still open, 16 §7). Ideas stays.
   - **The idle-end push:** a notification and a card with Extend, End and rate (deep / mixed / shallow) and Capture.
   - **The one-agent screen** gains **Check in**, **Rename**, **Accept** (a task in review) and **Assign** (an agent with no task: to an open task or a new one), through existing Lee main routes (the `/command` `tab` domain, Hester task routes proxied by main). A new main route is added only where none exists, and listed in `docs/Dirigible.md`'s wire protocol section.
   - **Swipe to snooze** leaves a collapsed "Snoozed · Undo" row for 5 s.
 - **Dirigible:**
   - **Work pager:** the fourth quick reply **Show me the diff** on `F` (`d` is already Dismiss in `screen_waiting.cpp`).
   - **In flight:** agents idle for more than 2 h fold into an "Earlier (n)" row, the same rule as `workModel` on the Mac.
-  - **Library (Carry):** the last Desk card, as on the phone; `C` Add a thought (into the card); `O` Open next.
-  - **The idle-end push:** a Carry-style page, with `e` extend, `d` / `m` / `s` rate (then an optional stopped-at line), and `c` capture. It's its own page, so `d` there doesn't clash with the pager's Dismiss.
+  - **Library (Tether):** the last Desk card, as on the phone; `C` Add a thought (into the card); `O` Open next.
+  - **The idle-end push:** a Tether-style page, with `e` extend, `d` / `m` / `s` rate (then an optional stopped-at line), and `c` capture. It's its own page, so `d` there doesn't clash with the pager's Dismiss.
 - **`docs/Dirigible.md`:**
   - the keys and screens above and the new endpoints;
   - rename the "Desk mode" idea there, since Desk is now taken.
@@ -690,7 +692,7 @@ The Desk **needs the new Hester**. The packaged app's `~/.lee/venv` is updated b
 
 - **D:** `GET /desk` returning 404 shows the Desk's one quiet line: "Hester is older than this Lee. Reinstall it to use the Desk." Deep has nothing else, and the Cockpit and Manual are unaffected. No fallback to exploration routes.
 - **C:** the door reads "Go to your Desk", with no card, when `/desk/last` 404s. Everything else in the Cockpit uses routes an old daemon has.
-- **V:** Carry reads the old opener (`exploration.id` as the card id). Captures and Open next with `exploration_id` still work. `card_id` is sent only when the daemon's opener included `card`.
+- **V:** Tether reads the old opener (`exploration.id` as the card id). Captures and Open next with `exploration_id` still work. `card_id` is sent only when the daemon's opener included `card`.
 - **H:** keeps every existing `/cockpit/explorations/*` route working. Nothing new calls them.
 
 ## 11. Checks and merging

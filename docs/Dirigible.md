@@ -210,7 +210,7 @@ provisioned device stays paired.
 |--------|--------------|
 | **Work** | The attention queue as a pager (`screen_waiting.cpp`): one item that needs you per page, with lettered buttons. Approvals take **Y** / **N**; items that take text take the quick replies **G** Go, **W** Wait, **E** Why and **F** Show me the diff (Desk D2: a key, not a button, since the bar holds four; `d` is already Dismiss here), and **R** opens the reply box. **D** dismisses, **S** snoozes, **C** captures. The header says Work's line, "In deep work" during a Deep session at the Mac, or "Still thinking?  x" while the idle-end push is open. |
 | **In flight** | The running agents (`screen_inflight.cpp`), waiting first, then busy, then idle. Agents idle for more than two hours fold into one **Earlier (n)** row, the Mac's rule; pressing it shows them while the view stays open. A press opens an agent's words; **C** checks in. |
-| **Library** | Carry (`screen_carry.cpp`): your last Desk card first (its title, its Area on the eyebrow, "You stopped at" in italic), then each other card an open question names (**J** / **K**). **C** adds a thought into the card, **O** makes it the Mac's Open next. Against a Lee from before the Desk the cards are explorations. |
+| **Library** | Tether (`screen_carry.cpp`): your last Desk card first (its title, its Area on the eyebrow, "You stopped at" in italic), then each other card an open question names (**J** / **K**). **C** adds a thought into the card, **O** makes it the Mac's Open next. Against a Lee from before the Desk the cards are explorations. |
 | **Still thinking?** | The Desk's idle-end push (`screen_deep_idle.cpp`, Desk D2 §9.2): a Deep session at the Mac has been idle for 40 of its 45 minutes. **X** opens it from Work, In flight or Library while it's open. **E** extends by 45 minutes from now; **D** / **M** / **S** end the session rated deep / mixed / shallow, after an optional "where did you stop?" line; **C** captures a thought into the card and leaves the push open. Its own page, so `d` here is a rating, not Dismiss. |
 | **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; a tab that owns a PTY also opens the terminal on it, a `files` tab opens **Files**, and an editor-like tab (`editor`, `editor-panel`, `file`) opens the **Viewer** on its file. The right-hand hint says which: `pty`, `tree`, `file`. |
 | **Files** | The workspace tree over `GET /fs/list` — also on the menu, so it works with no `files` tab open. |
@@ -405,7 +405,9 @@ actions `extend`, `end_rate`, `capture` and `dismiss`. It is answered with
 `POST /deep/idle-end` (the only new route, 409 when the push was answered or
 the session moved on) or captured into with `/carry/capture`.
 
-Carry (`GET /carry`) is your last Desk card: `pick_up: {card_id, card_kind,
+*Renamed from Carry, 2026-09-28; the routes keep `/carry`.*
+
+Tether (`GET /carry`) is your last Desk card: `pick_up: {card_id, card_kind,
 title, area_name, stopped_at, stopped_line, last_touched_at, exploration_id}`,
 `open_questions[]` with `card_id`, `open_next: {card_id?, someday_id?,
 set_at}` and `spooled`, the count of captures Lee holds while Hester is

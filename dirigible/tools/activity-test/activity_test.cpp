@@ -152,7 +152,7 @@ static void test_snapshot()
       "items":[],"counts":{"blocking":0,"needs_you":0,"ambient":0,"parked":0},
       "focus":{"active":true},"away":{"active":false},
       "generated_at":"2026-09-27T12:00:00.000Z",
-      "mode":"deep","deep":{"exploration_id":"exp-1","title":"Carry on the T-Deck"},
+      "mode":"deep","deep":{"exploration_id":"exp-1","title":"Tether the T-Deck"},
       "limits":{"five_hour":{"used_pct":41.6,"resets_at":null},"as_of":"2026-09-27T11:59:00Z"},
       "agents":[
         {"pty_id":7,"window_id":1,"tab_id":3,"label":"lee copilot","provider":"claude","workspace":"/ws",
@@ -173,7 +173,7 @@ static void test_snapshot()
     expect_int("agents without pty_id are dropped", (long long)s.agents.size(), 2);
     expect_int("working", s.working(), 1);
     expect_int("deep", s.deep_active, 1);
-    expect("deep title", s.deep_title, "Carry on the T-Deck");
+    expect("deep title", s.deep_title, "Tether the T-Deck");
     expect("mode", s.mode, "deep");
     expect_int("limits", s.has_limits, 1);
     expect_int("five hour rounds", s.limits.five_hour_pct, 42);
@@ -215,7 +215,7 @@ static void test_snapshot()
 static void test_carry()
 {
     cJSON* root = cJSON_Parse(R"({"workspace":"/ws",
-      "pick_up":{"exploration_id":"exp-1","title":"Carry","stopped_at":"The pager should hold one thought.","last_touched_at":"2026-09-27T10:00:00Z"},
+      "pick_up":{"exploration_id":"exp-1","title":"Tether","stopped_at":"The pager should hold one thought.","last_touched_at":"2026-09-27T10:00:00Z"},
       "open_questions":[{"exploration_id":"exp-1","question_id":"q1","text":"Does Open next replace f?"},
                         {"exploration_id":"exp-2","question_id":"q2","text":"Voice on the walk?"},
                         {"exploration_id":"exp-1","question_id":"q3","text":"Second question"},
@@ -253,7 +253,7 @@ static void test_carry()
     cJSON_Delete(root);
 }
 
-// Desk D2 §9.3, §9.4: Carry's last Desk card, the idle-end push, In flight's fold.
+// Desk D2 §9.3, §9.4: Tether's last Desk card, the idle-end push, In flight's fold.
 static void test_desk()
 {
     cJSON* root = cJSON_Parse(R"({"success":true,"data":{"workspace":"/ws",
