@@ -43,9 +43,10 @@
  * this session. `explorationId` is unused (the store's DeepNav says which
  * card); App.tsx still passes it until the merge step.
  *
- * Boards (docs/16-Desk.md §3.1): a `bd-` card zooms into BoardSurface in
- * the same layer instead of the Page editor; its own Esc runs first
- * (capture) and zooms out when there's nothing left to close.
+ * Boards (docs/16-Desk.md §3.1): a `bd-` card zooms into BoardView (the
+ * canvas with its Asks and hand-offs) in the same layer instead of the Page
+ * editor; its own Esc runs first (capture) and zooms out when there's
+ * nothing left to close.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -55,7 +56,7 @@ import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { cockpitModeStore, useCockpitModeState } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
-import { listTasks, workspacePath } from '../../lib/hesterCockpit';
+import { workspacePath } from '../../lib/hesterCockpit';
 import {
   GOALS_PROMPTS,
   HANDOFF_PROVIDERS,
@@ -116,10 +117,10 @@ import {
   type AffordanceOption,
   type DeepRowAction,
 } from '../../lib/deepModel';
-import { canTextReply, tabSendError } from '../../lib/workModel';
 import { PageEditor, type PageEditorHandle, type PageMarker, type PageSelection } from './PageEditor';
 import { EndSessionSheet, type RitualQuestion } from './EndSessionSheet';
 import { HandoffSheet } from './HandoffSheet';
+import { replyToHandoff } from './handoffReply';
 import { GoalsDraftSheet } from './GoalsDraftSheet';
 import { countLabel } from './deepView';
 import {
@@ -137,7 +138,7 @@ import type { DeskCardKind } from '../../../shared/desk';
 import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from '../cockpit/cockpitMode';
 import { DeskSurface } from '../desk/DeskSurface';
 import { DeskContext, useDesk, useDeskContext } from '../desk/useDesk';
-import { BoardSurface } from '../board/BoardSurface';
+import { BoardView } from '../board/BoardView';
 import { linkableCards, MISSING_CARD_MESSAGE, type LinkableCard } from '../../lib/cardLinks';
 import { registerPageSink } from '../../lib/tetherDelivery';
 import { pageAssetUrl } from '../../lib/pageAssets';
@@ -318,7 +319,7 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
         {cardId && surfaceKey && (
           <div className={`desk-card-layer${zoomed ? ' is-zoomed' : ''}`} aria-hidden={!zoomed}>
             {isBoardId(cardId) ? (
-              <BoardSurface key={cardId} workspace={workspace} boardId={cardId} title={nav.title} visible={visible && zoomed} />
+              <BoardView key={cardId} workspace={workspace} boardId={cardId} title={nav.title} visible={visible && zoomed} copilot={copilot} onHop={props.onHop} />
             ) : (
               <DeepSurface
                 key={surfaceKey}
@@ -1061,52 +1062,12 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     cockpitModeStore.select({ kind: 'row', id: `task:${taskId}` });
   };
 
-  /**
-   * R11 / R5 Reply: through the hand-off's agent, Work's way: its open
-   * attention item that takes text, else typed into its idle terminal.
-   */
+  /** R11 / R5 Reply: through the hand-off's agent (handoffReply). */
   const replyHandoff = async (aid: string, body: string): Promise<boolean> => {
-    const typed = body.trim();
     const a = answersRef.current.find((x) => x.id === aid);
-    const taskId = a?.handoff?.task_id ?? null;
-    if (!typed) return false;
-    if (!taskId) {
-      say('That hand-off has no agent yet', 'warn');
-      return false;
-    }
-    const tasks = await listTasks(workspace, 'open');
-    const task = tasks.ok ? tasks.data.find((t) => t.id === taskId) ?? null : null;
-    const pty = task?.agent?.pty_id ?? null;
-    const item =
-      pty != null ? (copilot.snapshot?.items ?? []).find((i) => i.state === 'open' && i.source.pty_id === pty && canTextReply(i)) ?? null : null;
-    if (item && copilot.api) {
-      try {
-        const r = await copilot.api.reply(item.id, { action: 'text', text: typed, version: item.version });
-        if (!r.success) {
-          say(r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'Reply failed', 'warn');
-          return false;
-        }
-      } catch {
-        say('Reply failed', 'warn');
-        return false;
-      }
-      say('Replied');
-      return true;
-    }
-    if (pty == null) {
-      say('That agent isn’t running. Open it in Work to resume it.', 'warn');
-      return false;
-    }
-    const api = window.lee?.cockpit;
-    if (!api) return false;
-    try {
-      const r = await api.tabs.send(pty, { text: typed, submit: true, purpose: 'reply' });
-      if (!r.success) {
-        say(tabSendError(r.error), 'warn');
-        return false;
-      }
-    } catch {
-      say('Reply failed', 'warn');
+    const r = await replyToHandoff(workspace, copilot, a?.handoff?.task_id ?? null, body);
+    if (!r.ok) {
+      if (r.error) say(r.error, 'warn');
       return false;
     }
     say('Replied');

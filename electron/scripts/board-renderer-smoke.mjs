@@ -17,7 +17,8 @@
  *   and renderBoardPng against a stub 2D context.
  * - lib/hesterBoard.ts: every route's method, path, workspace (query and
  *   percent-encoded header), token and envelope with a stub fetch; the 409
- *   on PUT /board; raw uploads with `?source=`.
+ *   on PUT /board; raw uploads with `?source=` and `?kind=selection`.
+ * - Links on a Board: a link box, a pasted lone `[[card]]`, the `[[` query.
  *
  * Bundles the real sources with esbuild; no Hester, React or DOM needed.
  *
@@ -489,6 +490,10 @@ await test('client: assets upload raw with ?source=, list, fetch; the preview pu
   assert.ok(u.body instanceof ArrayBuffer);
   await client.uploadBoardAsset(WS, BD, new Uint8Array([1]), 'image/jpeg');
   assert.equal(calls[1].url, `${H}/desk/boards/${BD}/assets?${Q}`, 'no source, no ?source=');
+  await client.uploadBoardAsset(WS, BD, new Uint8Array([1]), 'image/png', null, true);
+  assert.equal(calls[2].url, `${H}/desk/boards/${BD}/assets?kind=selection&${Q}`, 'a flattened selection: ?kind=selection');
+  await client.uploadBoardAsset(WS, BD, new Uint8Array([1]), 'image/png', src, true);
+  assert.equal(calls[3].url, `${H}/desk/boards/${BD}/assets?kind=selection&source=${encodeURIComponent(JSON.stringify(src))}&${Q}`);
   reply = { status: 404, body: { error: 'nope' } };
   const old = await client.uploadBoardAsset(WS, BD, new Uint8Array([1]), 'image/png');
   assert.deepEqual(old, { ok: false, error: 'nope', status: 404 });
@@ -512,6 +517,19 @@ await test('client: assets upload raw with ?source=, list, fetch; the preview pu
   assert.equal(calls[2].headers['Content-Type'], 'image/png');
   reply = { status: 404, body: null };
   assert.equal(await client.fetchBoardPreview(WS, BD), null);
+});
+
+await test('links on a Board: a link box, a pasted lone link, the [[ being typed in a note', () => {
+  const link = model.makeLink([{ id: 'it-00000001', kind: 'note', text: '', x: 0, y: 0, w: 10, h: 10, z: 4 }], 'pg-0000abcd', { x: 100, y: 50 }, 'it-0000000a');
+  assert.deepEqual(link, { id: 'it-0000000a', kind: 'link', card_id: 'pg-0000abcd', x: 100 - model.LINK_W / 2, y: 50 - model.LINK_H / 2, w: model.LINK_W, h: model.LINK_H, z: 5 });
+  assert.equal(model.loneCardLink('  [[bd-0000beef|Sketches]] '), 'bd-0000beef');
+  assert.equal(model.loneCardLink('[[pg-0000abcd]]'), 'pg-0000abcd');
+  assert.equal(model.loneCardLink('see [[pg-0000abcd]]'), null, 'text around it: a note');
+  assert.equal(model.loneCardLink('[[notes/today.md]]'), null, 'a file link is not a card');
+  assert.deepEqual(model.linkQueryAt('See [[Tax', 9), { from: 4, query: 'Tax' });
+  assert.deepEqual(model.linkQueryAt('[[', 2), { from: 0, query: '' });
+  assert.equal(model.linkQueryAt('[[pg-0000abcd|T]] and', 21), null, 'a closed link');
+  assert.equal(model.linkQueryAt('[[a\nb', 5), null, 'not across lines');
 });
 
 await test('client: Hester offline is one line, not a throw', async () => {

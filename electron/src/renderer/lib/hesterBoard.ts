@@ -101,15 +101,21 @@ async function rawGet(workspace: string, path: string): Promise<Blob | null> {
   }
 }
 
-/** Upload an image to a Board's assets (raw body, ≤ 10 MB), with where it came from: `{name, path: 'assets/<name>'}`. */
+/**
+ * Upload an image to a Board's assets (raw body, ≤ 10 MB), with where it came
+ * from: `{name, path: 'assets/<name>'}`. `selection`: a flattened selection
+ * for an Ask or hand-off (`sel-<hex>.png`, `?kind=selection`).
+ */
 export async function uploadBoardAsset(
   workspace: string,
   id: string,
   bytes: Blob | Uint8Array,
   mime: 'image/png' | 'image/jpeg',
   source?: AssetSource | null,
+  selection = false,
 ): Promise<DeepResult<{ name: string; path: string }>> {
-  const q = source ? `?source=${encodeURIComponent(JSON.stringify(source))}` : '';
+  const params = [selection ? 'kind=selection' : '', source ? `source=${encodeURIComponent(JSON.stringify(source))}` : ''].filter(Boolean);
+  const q = params.length ? `?${params.join('&')}` : '';
   const r = await rawSend<{ name?: unknown; path?: unknown }>(workspace, 'POST', boardRoute(id, `/assets${q}`), bytes, mime);
   if (!r.ok) return r;
   if (!r.data || typeof r.data.name !== 'string') return { ok: false, error: 'Hester sent no asset name' };

@@ -192,6 +192,65 @@
   text-overflow: ellipsis;
 }
 
+/* An Ask or hand-off card (AskCard, HandoffCard) places itself in Board px from the world's origin. */
+.board-answer-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.board-link {
+  gap: 6px;
+}
+
+.board-link.is-missing,
+.board-note-link.is-missing {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+/* A note's card links, under its text: each opens its card. */
+.board-note-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.board-note-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--ground-3);
+  border: 1px solid var(--ground-4);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-note-link:hover {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+}
+
+/* The action row under a selection: the Page's row (deep.css), and its Ask field. */
+.board-slot {
+  flex-direction: column;
+  align-items: flex-start;
+  width: 420px;
+}
+
+.board-slot .deep-ask-input {
+  width: 100%;
+}
+
 /* ---- selection ---- */
 
 .board-note.is-selected,

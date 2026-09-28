@@ -21,7 +21,7 @@
  * Undo and redo are lib/canvas/history.ts over whole item lists.
  */
 
-import { MAX_BOARD_ITEMS, type BoardHighlight, type BoardImage, type BoardItem, type BoardNote, type BoardPin, type BoardStroke, type BoardTarget } from '../../shared/board';
+import { MAX_BOARD_ITEMS, type BoardHighlight, type BoardImage, type BoardItem, type BoardLink, type BoardNote, type BoardPin, type BoardStroke, type BoardTarget } from '../../shared/board';
 import { boundsOf, clamp, inside, overlaps, rectBetween, round, type Point, type Rect, type Size } from './canvas/camera';
 import { STROKE_WIDTH, isLine, polylineDistance, simplifyStroke } from './canvas/stroke';
 import type { IconName } from '../icons/iconData.generated';
@@ -117,6 +117,25 @@ export function makeNote(items: readonly BoardItem[], at: Point, pin: BoardPin |
   const x = pin ? at.x + PIN_OFFSET : at.x;
   const y = pin ? at.y - NOTE_H - PIN_OFFSET : at.y;
   return { id, kind: 'note', text, x: Math.round(x), y: Math.round(y), w: NOTE_W, h: NOTE_H, z: nextZ(items), ...(pin ? { pin } : {}) };
+}
+
+/** A link box to another card, centred on `centre`. */
+export const LINK_W = 240;
+export const LINK_H = 40;
+export function makeLink(items: readonly BoardItem[], cardId: string, centre: Point, id = newItemId()): BoardLink {
+  return { id, kind: 'link', card_id: cardId, x: Math.round(centre.x - LINK_W / 2), y: Math.round(centre.y - LINK_H / 2), w: LINK_W, h: LINK_H, z: nextZ(items) };
+}
+
+/** Pasted text that is one card link and nothing else: its card id. */
+export function loneCardLink(text: string): string | null {
+  const m = /^\[\[((?:pg|bd)-[0-9a-f]{8})(?:\|[^\]]*)?\]\]$/.exec(text.trim());
+  return m ? m[1] : null;
+}
+
+/** A `[[` being typed in a note, up to the caret: where it starts and what's typed after it; null when there's none. */
+export function linkQueryAt(text: string, caret: number): { from: number; query: string } | null {
+  const m = /\[\[([^\]\n|[]{0,60})$/.exec(text.slice(0, caret));
+  return m ? { from: caret - m[0].length, query: m[1] } : null;
 }
 
 /** A highlight dragged from `a` to `b`: kept inside the image it's on. Null for a click. */

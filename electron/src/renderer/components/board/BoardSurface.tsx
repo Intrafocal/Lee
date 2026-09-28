@@ -21,10 +21,13 @@
  * - board.json is PUT debounced with its version; a 409 reloads Hester's
  *   copy and says so. After a save the Board is drawn to preview.png (the
  *   Desk card's picture) at most every few seconds, and when you leave.
- * - The seam for Ask and Hand off (B3): `onSelectionAction` runs on ⌘.
- *   with something selected; `selectionSlot` draws beside the selection;
- *   `renderAnswerItem` draws ask and handoff items (placeholders until
- *   then); the ref is a BoardApi (add items, flatten a rect to PNG, upload).
+ * - Ask and Hand off (B3) come from BoardView: `onSelectionAction` runs on
+ *   ⌘. with something selected; `selectionSlot` draws the action row under
+ *   the selection; `renderAnswerItem` draws the sticky and the clipboard;
+ *   the ref is a BoardApi (add items, flatten a rect to PNG, upload).
+ * - Links (B4): `[[` in a note picks a Page or Board (lib/cardLinks); a
+ *   note's links show under its text and open the card. Pasting a lone
+ *   `[[pg-…|Title]]` adds a link box.
  */
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
@@ -33,6 +36,9 @@ import { cockpitModeStore, zoomIntoCard, zoomOut } from '../cockpit/cockpitMode'
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
 import { useDeskContext } from '../desk/useDesk';
+import { cardLinkDisplay, cardLinkSub, cardLinkTitle, findCard, formatCardLink, linkableCards, parseCardLinks, rankCards, MISSING_CARD_MESSAGE, type LinkableCard } from '../../lib/cardLinks';
+import { Icon } from '../Icon';
+import { PagePicker } from '../deep/page/PagePicker';
 import { getBoardDoc, patchBoard, putBoardDoc, putBoardPreview, uploadBoardAsset } from '../../lib/hesterBoard';
 import { addImageAsset, boardAssetBitmap, boardAssetUrl, imagesIn, primeBoardAsset, setLocalPreview } from '../../lib/boardAssets';
 import { renderBoardPng, type BoardColors } from '../../lib/boardRender';
@@ -55,8 +61,11 @@ import {
   itemAt,
   itemsInRect,
   leaderLine,
+  linkQueryAt,
+  loneCardLink,
   makeHighlight,
   makeImage,
+  makeLink,
   makeNote,
   makeStroke,
   moveItems,
@@ -107,8 +116,8 @@ export interface BoardApi {
   removeItems(ids: readonly string[]): void;
   /** `rect` drawn to a PNG with only `ids` (default: everything it touches), for a flattened selection. */
   flatten(rect: Rect, ids?: readonly string[]): Promise<Blob | null>;
-  /** A PNG or JPEG into the Board's assets: its name, or one line saying why not. */
-  uploadAsset(blob: Blob, mime: 'image/png' | 'image/jpeg', source?: AssetSource | null): Promise<{ name: string } | { error: string }>;
+  /** A PNG or JPEG into the Board's assets: its name, or one line saying why not. `selection`: a flattened selection (`sel-…`). */
+  uploadAsset(blob: Blob, mime: 'image/png' | 'image/jpeg', source?: AssetSource | null, selection?: boolean): Promise<{ name: string } | { error: string }>;
   /** Images as image items at `at` (default: the middle of the view), each with `source`. */
   addImages(files: readonly Blob[], at?: Point, source?: AssetSource | null): Promise<void>;
   /** The middle of the view, Board px. */
@@ -127,8 +136,8 @@ export interface BoardSurfaceProps {
   onSelectionAction?: (sel: BoardSelection, api: BoardApi) => void;
   /** Drawn just below the selection, in screen space. */
   selectionSlot?: (sel: BoardSelection, api: BoardApi) => React.ReactNode;
-  /** An ask or handoff item's card; a placeholder when absent. */
-  renderAnswerItem?: (item: BoardAsk | BoardHandoff, api: BoardApi) => React.ReactNode;
+  /** An ask or handoff item's card, placed by its own box in Board px; a placeholder when absent. */
+  renderAnswerItem?: (item: BoardAsk | BoardHandoff, api: BoardApi, selected: boolean) => React.ReactNode;
   /** The words an ask or handoff shows in preview.png. */
   answerLabel?: (item: BoardItem) => string;
 }
@@ -154,6 +163,8 @@ type Live =
   | null;
 
 const LOAD_RETRY_MS = 3000;
+/** A flattened selection (an Ask's or hand-off's picture), longest side. */
+const SNAPSHOT_MAX_PX = 2048;
 const FLASH_MS = 6000;
 /** Offset between images added together, Board px. */
 const CASCADE = 24;
@@ -194,12 +205,33 @@ function themeColors(el: Element | null): Partial<BoardColors> {
   return out;
 }
 
+/** A note's card links, under its text: each opens its card (a gone one says so). */
+function NoteLinks({ text, cards, onOpen }: { text: string; cards: readonly LinkableCard[]; onOpen: (cardId: string) => void }): JSX.Element | null {
+  const links = parseCardLinks(text).filter((l, i, all) => all.findIndex((x) => x.card_id === l.card_id) === i);
+  if (!links.length) return null;
+  return (
+    <div className="board-note-links">
+      {links.map((l) => {
+        const card = findCard(l.card_id, cards);
+        return (
+          <button key={l.card_id} type="button" className={`board-note-link${card ? '' : ' is-missing'}`} title={cardLinkTitle(l, card)} onClick={() => onOpen(l.card_id)}>
+            <Icon name={l.card_id.startsWith('bd-') ? 'image' : 'document'} size={12} />
+            {cardLinkDisplay(l, card)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function BoardSurface(
   { workspace, boardId, title, visible, onSelectionAction, selectionSlot, renderAnswerItem, answerLabel },
   ref,
 ) {
   const deskCtx = useDeskContext();
   const titleOf = useCallback((id: string) => deskCtx?.titleOf(id) ?? '', [deskCtx]);
+  /** The Pages and Boards a note can link to (not this Board). */
+  const linkCards = useMemo(() => linkableCards(deskCtx?.desk, boardId), [deskCtx?.desk, boardId]);
   const alive = useRef(true);
   useEffect(
     () => () => {
@@ -443,6 +475,7 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
     const id = editingRef.current;
     if (!id) return;
     setEditing(null);
+    if (linkPickRef.current) setLinkPick(null);
     const note = itemsRef.current.find((it) => it.id === id) as BoardNote | undefined;
     if (!note) return;
     if (!note.text.trim()) {
@@ -464,6 +497,55 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
     cancelGesture();
     finishEdit();
     setTool(t);
+  };
+
+  // ---- links: open a card; `[[` in a note picks one ----
+  const openCard = (cardId: string) => {
+    const card = findCard(cardId, linkCards);
+    if (!card) return say(MISSING_CARD_MESSAGE);
+    void zoomIntoCard({ card_id: card.id, title: card.title, area_id: card.area_id }, 'link');
+  };
+  const [linkPick, setLinkPickState] = useState<{ note: string; from: number; query: string; index: number } | null>(null);
+  const linkPickRef = useRef(linkPick);
+  const setLinkPick = (p: typeof linkPick) => {
+    linkPickRef.current = p;
+    setLinkPickState(p);
+  };
+  const noteEl = useRef<HTMLTextAreaElement | null>(null);
+  const linkMatches: LinkableCard[] = linkPick ? rankCards(linkPick.query, linkCards, 6) : [];
+  const watchLinkQuery = (id: string, el: HTMLTextAreaElement) => {
+    const q = linkCards.length ? linkQueryAt(el.value, el.selectionStart ?? el.value.length) : null;
+    const was = linkPickRef.current;
+    setLinkPick(q ? { note: id, from: q.from, query: q.query, index: was && was.note === id && was.query === q.query ? was.index : 0 } : null);
+  };
+  const pickLink = (card: LinkableCard) => {
+    const p = linkPickRef.current;
+    const el = noteEl.current;
+    setLinkPick(null);
+    if (!p || !el) return;
+    const note = itemsRef.current.find((it) => it.id === p.note);
+    if (!note || note.kind !== 'note') return;
+    const caret = el.selectionStart ?? note.text.length;
+    const link = formatCardLink(card.id, card.title);
+    const text = note.text.slice(0, p.from) + link + note.text.slice(caret);
+    commit(updateItem(itemsRef.current, note.id, { text }), false);
+    const at = p.from + link.length;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(at, at);
+    });
+  };
+  /** The picker's keys in the note: arrows move, Enter or Tab picks. True when it took the key. */
+  const linkPickKey = (e: React.KeyboardEvent): boolean => {
+    const p = linkPickRef.current;
+    if (!p || !linkMatches.length) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const n = linkMatches.length;
+      setLinkPick({ ...p, index: (p.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n });
+    } else if (e.key === 'Enter' || e.key === 'Tab') pickLink(linkMatches[Math.min(p.index, linkMatches.length - 1)]);
+    else return false;
+    e.preventDefault();
+    return true;
   };
 
   // ---- gestures ----
@@ -645,7 +727,7 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
     if ((e.target as Element).closest('[data-board-ui], textarea')) return;
     const hit = itemAt(itemsRef.current, worldAt(e.clientX, e.clientY), STROKE_HIT_PX / cam.scale);
     if (hit?.kind === 'note') beginEdit(hit.id);
-    else if (hit?.kind === 'link') void zoomIntoCard({ card_id: hit.card_id, title: titleOf(hit.card_id) }, 'link');
+    else if (hit?.kind === 'link') openCard(hit.card_id);
   };
 
   // ---- images: paste, drop, a file ----
@@ -703,10 +785,12 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
         const list = itemsRef.current;
         const only = ids ?? itemsInRect(list, rect);
         const images = await current.current.bitmapsFor(list.filter((it) => only.includes(it.id)));
-        return renderBoardPng(list, rect, images, { ...current.current.renderOpts(), only });
+        // At the screen's density (a pasted screenshot keeps its pixels), the longest side at most SNAPSHOT_MAX_PX.
+        const scale = Math.min(window.devicePixelRatio || 1, 2, SNAPSHOT_MAX_PX / Math.max(rect.w, rect.h, 1));
+        return renderBoardPng(list, rect, images, { ...current.current.renderOpts(), only, scale });
       },
-      uploadAsset: async (blob, mime, source = null) => {
-        const r = await uploadBoardAsset(workspace, boardId, blob, mime, source);
+      uploadAsset: async (blob, mime, source = null, selection = false) => {
+        const r = await uploadBoardAsset(workspace, boardId, blob, mime, source, selection);
         if (!r.ok) return { error: r.error };
         primeBoardAsset(workspace, boardId, r.data.name, blob);
         return { name: r.data.name };
@@ -730,15 +814,18 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
     const root = rootRef.current;
     const t = e.target instanceof HTMLElement ? e.target : null;
     if (!root || !(e.target === document.body || (e.target instanceof Node && root.contains(e.target)))) return;
+    // The action row and its field (BoardView) take their own keys, Esc included.
+    if (t?.closest('[data-board-ui]')) return;
     const inNote = !!t && t.classList.contains('board-note-edit');
     const typing = isTyping(t);
     if (e.key === 'Escape') {
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       // The title field has its own Esc.
       if (typing && !inNote) return;
-      const step = boardEscapeStep({ dragging: !!drag.current, editing: !!editingRef.current, selected: selectedRef.current.length, tool });
       e.preventDefault();
       e.stopPropagation();
+      if (linkPickRef.current) return setLinkPick(null);
+      const step = boardEscapeStep({ dragging: !!drag.current, editing: !!editingRef.current, selected: selectedRef.current.length, tool });
       if (step === 'cancel') cancelGesture();
       else if (step === 'stop-editing') {
         finishEdit();
@@ -817,6 +904,13 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
     if (!text) return;
     e.preventDefault();
     if (!canAdd(itemsRef.current)) return say('This Board is full');
+    const linked = loneCardLink(text);
+    if (linked) {
+      const link = makeLink(itemsRef.current, linked, at);
+      commit([...itemsRef.current, link]);
+      setSelected([link.id]);
+      return;
+    }
     const note = makeNote(itemsRef.current, at, null, text);
     commit([...itemsRef.current, note]);
     setSelected([note.id]);
@@ -992,15 +1086,25 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
                             value={it.text}
                             aria-label="Note"
                             placeholder="Write a note…"
-                            onChange={(e) => typeNote(it.id, e.target.value, e.currentTarget)}
+                            onChange={(e) => {
+                              typeNote(it.id, e.target.value, e.currentTarget);
+                              watchLinkQuery(it.id, e.currentTarget);
+                            }}
+                            onKeyDown={(e) => {
+                              if (linkPickKey(e)) e.stopPropagation();
+                            }}
                             onBlur={() => finishEdit()}
                             onFocus={(e) => {
                               const el = e.currentTarget;
+                              noteEl.current = el;
                               el.setSelectionRange(el.value.length, el.value.length);
                             }}
                           />
                         ) : it.text.trim() ? (
-                          <AgentMarkdown text={linkTitles(it.text)} className="board-note-text" />
+                          <>
+                            <AgentMarkdown text={linkTitles(it.text)} className="board-note-text" />
+                            <NoteLinks text={it.text} cards={linkCards} onOpen={openCard} />
+                          </>
                         ) : (
                           <span className="deep-muted">Empty note</span>
                         )}
@@ -1010,15 +1114,21 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
                 }
                 case 'ask':
                 case 'handoff':
-                  return (
+                  // The card places itself (Board px) in a layer at the world's origin, stacked like the rest.
+                  return renderAnswerItem ? (
+                    <div key={it.id} className="board-answer-layer" style={{ zIndex: z }}>
+                      {renderAnswerItem(it, api, isSel)}
+                    </div>
+                  ) : (
                     <div key={it.id} className={`board-answer is-${it.kind}${isSel ? ' is-selected' : ''}`} style={box}>
-                      {renderAnswerItem ? renderAnswerItem(it, api) : <span className="board-answer-label">{it.kind === 'ask' ? 'Ask' : 'Hand-off'}</span>}
+                      <span className="board-answer-label">{it.kind === 'ask' ? 'Ask' : 'Hand-off'}</span>
                     </div>
                   );
                 case 'link':
                   return (
-                    <div key={it.id} className={`board-link${isSel ? ' is-selected' : ''}`} style={box} title="Double-click to open">
-                      → {titleOf(it.card_id) || it.card_id}
+                    <div key={it.id} className={`board-link${isSel ? ' is-selected' : ''}${findCard(it.card_id, linkCards) ? '' : ' is-missing'}`} style={box} title="Double-click to open">
+                      <Icon name={it.card_id.startsWith('bd-') ? 'image' : 'document'} size={14} />
+                      {cardLinkDisplay({ card_id: it.card_id, label: null }, findCard(it.card_id, linkCards))}
                     </div>
                   );
               }
@@ -1042,6 +1152,26 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
           {items.length === 0 && !live && (
             <div className="board-empty deep-muted">Paste or drop an image, or pick one below. A (Annotate) adds a note.</div>
           )}
+
+          {linkPick && editing === linkPick.note && linkMatches.length > 0 && (() => {
+            const note = shown.find((x) => x.id === linkPick.note);
+            if (!note) return null;
+            const at = worldToScreen(cam, { x: note.x, y: note.y + note.h });
+            return (
+              <div data-board-ui="">
+                <PagePicker
+                  items={linkMatches.map((c) => ({ key: c.id, label: c.title || 'Untitled', sub: cardLinkSub(c), icon: c.kind === 'board' ? 'image' : 'document' }))}
+                  index={Math.min(linkPick.index, linkMatches.length - 1)}
+                  top={Math.min(size.h - 40, at.y + 6)}
+                  left={Math.max(8, at.x)}
+                  label="Pages and Boards"
+                  empty="No matching cards"
+                  onPick={(i) => pickLink(linkMatches[i])}
+                  onHover={(i) => setLinkPick({ ...linkPick, index: i })}
+                />
+              </div>
+            );
+          })()}
 
           {sel && slotAt && selectionSlot && (
             <div className="board-slot" data-board-ui="" style={{ left: Math.max(8, slotAt.x), top: Math.min(size.h - 40, slotAt.y + 8) }}>
