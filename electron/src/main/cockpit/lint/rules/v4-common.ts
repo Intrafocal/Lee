@@ -46,7 +46,7 @@ export const FIX_OPEN_GIT: LintFix = { id: 'open-git', label: 'Open Git' };
 export const FIX_SUPPRESS_BRANCH: LintFix = { id: 'suppress-branch', label: 'Ignore on this branch' };
 export const FIX_SUPPRESS_ITEM: LintFix = { id: 'suppress-item', label: 'Ignore this' };
 export const FIX_WRAP_UP: LintFix = { id: 'wrap-up', label: 'Ask it to wrap up', confirm_text: WRAP_UP_TEXT };
-export const FIX_PARK: LintFix = { id: 'park', label: 'Park in Someday' };
+export const FIX_PARK: LintFix = { id: 'park', label: 'Park in Ideas' };
 export const FIX_PROMOTE: LintFix = { id: 'promote-workstream', label: 'Promote to a workstream' };
 export const FIX_CHECKIN: LintFix = { id: 'checkin', label: 'Check in' };
 export const FIX_LINK_GOAL: LintFix = { id: 'link-goal', label: 'Link a goal' };
@@ -70,12 +70,12 @@ export async function fixWrapUp(task: CockpitTask | null, ctx: LintFixContext): 
   return r.success ? { success: true, message: `Asked ${taskLabel(task!)} to wrap up` } : { success: false, error: r.error ?? 'send_failed' };
 }
 
-/** `park`: captures the task title to Someday and changes nothing else. */
+/** `park`: captures the task title to Ideas and changes nothing else. */
 export async function fixPark(task: CockpitTask | null, ctx: LintFixContext): Promise<LintFixResult> {
   if (!task) return { success: false, error: 'not_found' };
   if (!ctx.effects.capture) return UNAVAILABLE;
   const r = await ctx.effects.capture(task.workspace, task.title || taskLabel(task));
-  return r.success ? { success: true, message: 'Parked in Someday' } : { success: false, error: r.error ?? 'capture_failed' };
+  return r.success ? { success: true, message: 'Parked in Ideas' } : { success: false, error: r.error ?? 'capture_failed' };
 }
 
 export async function fixPromote(task: CockpitTask | null, ctx: LintFixContext): Promise<LintFixResult> {
