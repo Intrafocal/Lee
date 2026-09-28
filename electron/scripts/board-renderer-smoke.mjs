@@ -19,6 +19,8 @@
  *   percent-encoded header), token and envelope with a stub fetch; the 409
  *   on PUT /board; raw uploads with `?source=` and `?kind=selection`.
  * - Links on a Board: a link box, a pasted lone `[[card]]`, the `[[` query.
+ * - B5: a Board on the session's touched list; lib/boardRitual.ts (where you
+ *   stopped, the Board's Asks and hand-offs, its notes' open lines).
  *
  * Bundles the real sources with esbuild; no Hester, React or DOM needed.
  *
@@ -64,6 +66,7 @@ const model = await bundle('../src/renderer/lib/boardModel.ts', 'boardModel');
 const render = await bundle('../src/renderer/lib/boardRender.ts', 'boardRender');
 const client = await bundle('../src/renderer/lib/hesterBoard.ts', 'hesterBoard');
 const desk = await bundle('../src/renderer/lib/deskModel.ts', 'deskModel');
+const ritual = await bundle('../src/renderer/lib/boardRitual.ts', 'boardRitual');
 
 let passed = 0;
 async function test(name, fn) {
@@ -544,6 +547,47 @@ await test('client: Hester offline is one line, not a throw', async () => {
   } finally {
     globalThis.fetch = real;
   }
+});
+
+// ---------------------------------------------------------------------------
+// B5: a Board in the session and its ending ritual
+// ---------------------------------------------------------------------------
+
+await test('B5: a Board is a card a session can be on and touch', async () => {
+  assert.ok(desk.isDeskCardId(BD) && desk.isDeskCardId('pg-1a2b3c4d') && !desk.isDeskCardId('draft-1') && !desk.isDeskCardId(null));
+  let t = desk.touchCard(desk.NO_TOUCHED, 's1', 'pg-00000001');
+  t = desk.touchCard(t, 's1', BD);
+  t = desk.touchCard(t, 's1', 'draft-1');
+  assert.deepEqual(t.cards, ['pg-00000001', BD], 'Pages and Boards, nothing else');
+  assert.deepEqual(desk.parseTouched({ session_id: 's1', cards: [BD, 'x', BD, 'pg-00000001'] }).cards, [BD, 'pg-00000001']);
+});
+
+await test('B5 ritual: where you stopped, the Board’s Asks and hand-offs, and its open lines', async () => {
+  const note = (id, text, x, y, z) => ({ id, kind: 'note', text, x, y, w: 220, h: 72, z });
+  const items = [
+    note('n1', 'Which **palette**?\nkeep the grid', 0, 100, 2),
+    note('n2', '- why is [[pg-00000001|Mesh]] slow?\nWhat about dark mode?', 0, 0, 5),
+    note('n3', '   ', 0, 300, 9),
+    { id: 'i1', kind: 'image', asset: 'a.png', x: 0, y: 0, w: 10, h: 10, z: 7 },
+  ];
+  assert.equal(ritual.boardStoppedAt(items), 'why is Mesh slow?', 'the topmost note with text, its first line, plain');
+  assert.equal(ritual.boardStoppedAt([]), '');
+  const since = '2026-09-28T10:00:00Z';
+  const answers = [
+    { id: 'ans-1', question: 'What about dark mode?', status: 'done', asked_at: '2026-09-28T11:00:00Z', read_at: null, dismissed_at: null, kind: 'ask' },
+    { id: 'ans-2', question: 'older, unread', status: 'done', asked_at: '2026-09-27T11:00:00Z', read_at: null, dismissed_at: null, kind: 'ask' },
+    { id: 'ans-3', question: 'older, read', status: 'done', asked_at: '2026-09-27T11:00:00Z', read_at: 't', dismissed_at: null, kind: 'ask' },
+    { id: 'ans-4', question: 'older, running', status: 'running', asked_at: '2026-09-27T11:00:00Z', read_at: null, dismissed_at: null, kind: 'ask' },
+    { id: 'ans-5', question: 'spike', status: 'done', asked_at: '2026-09-28T12:00:00Z', read_at: null, dismissed_at: null, kind: 'handoff', handoff: { kind: 'spike', state: 'running' } },
+    { id: 'ans-6', question: 'gone', status: 'done', asked_at: '2026-09-28T12:00:00Z', read_at: null, dismissed_at: 't', kind: 'ask' },
+  ];
+  const r = ritual.boardRitual(items, answers, since);
+  assert.equal(r.prefill, 'why is Mesh slow?');
+  assert.deepEqual(r.asked.map((a) => [a.id, a.state]), [['ans-1', 'unread'], ['ans-2', 'unread'], ['ans-4', 'pending']], "this session's, then older ones still open");
+  assert.deepEqual(r.handedOff.map((h) => h.id), ['ans-5']);
+  assert.deepEqual(r.stillOpen.map((o) => [o.text, o.note_id]), [['why is Mesh slow?', 'n2'], ['Which palette?', 'n1']], 'top to bottom; asked lines left out');
+  assert.equal(r.stillOpen[1].sectionText, 'Which **palette**?\nkeep the grid', 'the whole note as the section');
+  assert.equal(ritual.boardRitual(items, [], null, 1).stillOpen.length, 1, 'at most max');
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

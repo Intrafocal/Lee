@@ -42,6 +42,7 @@ import { DeepHost } from './components/deep/DeepHost';
 import { requestDeepActions } from './components/deep/deepBridge';
 import { registerPaletteSink, startTetherDelivery, type PaletteImage } from './lib/tetherDelivery';
 import { buildSendTargets } from './lib/tetherModel';
+import { cardKindOf } from '../shared/desk';
 import { publishSendTargets } from './lib/tetherIpc';
 
 // Get the Lee API from preload
@@ -2601,21 +2602,21 @@ const App: React.FC = () => {
       }),
     [],
   );
-  // What this window can take (GET /tether/targets): the zoomed Page, the palette, the focused PTY tab, the rest.
-  const touchedPageTitles = useRef(new Map<string, string>());
+  // What this window can take (GET /tether/targets): the zoomed Page or Board, the palette, the focused PTY tab, the rest.
+  const touchedCardTitles = useRef(new Map<string, string>());
   const deepNav = cockpitMode.state.deep;
-  if (deepNav.card_id && /^pg-/.test(deepNav.card_id) && deepNav.title) touchedPageTitles.current.set(deepNav.card_id, deepNav.title);
+  if (cardKindOf(deepNav.card_id) && deepNav.card_id && deepNav.title) touchedCardTitles.current.set(deepNav.card_id, deepNav.title);
   const focusedTabId = focusedPanel === 'left' ? activeLeftTabId : focusedPanel === 'right' ? activeRightTabId : focusedPanel === 'bottom' ? activeBottomTabId : activeTabId;
   const focusedPtyId = tabs.find((t) => t.id === focusedTabId)?.ptyId ?? null;
-  const zoomedPage = cockpitMode.state.mode === 'deep' && deepNav.zoom === 'card' && deepNav.card_id && /^pg-/.test(deepNav.card_id) ? { card_id: deepNav.card_id, title: deepNav.title } : null;
-  const sendTargetsKey = JSON.stringify([zoomedPage, showCommandPalette, focusedPtyId, [...touchedPageTitles.current], tabs.map((t) => [t.ptyId, t.label, t.type, t.provider ?? t.runProvider ?? null])]);
+  const zoomedCard = cockpitMode.state.mode === 'deep' && deepNav.zoom === 'card' && deepNav.card_id && cardKindOf(deepNav.card_id) ? { card_id: deepNav.card_id, title: deepNav.title } : null;
+  const sendTargetsKey = JSON.stringify([zoomedCard, showCommandPalette, focusedPtyId, [...touchedCardTitles.current], tabs.map((t) => [t.ptyId, t.label, t.type, t.provider ?? t.runProvider ?? null])]);
   useEffect(() => {
     publishSendTargets(
       buildSendTargets({
-        zoomedPage,
+        zoomedCard,
         paletteOpen: showCommandPalette,
         focusedPtyId: cockpitMode.state.mode === 'manual' ? focusedPtyId : null,
-        touchedPages: [...touchedPageTitles.current].map(([card_id, title]) => ({ card_id, title })),
+        touchedCards: [...touchedCardTitles.current].map(([card_id, title]) => ({ card_id, title })),
         tabs: tabs.map((t) => ({ ptyId: t.ptyId, label: t.label, type: t.type, provider: t.provider ?? t.runProvider ?? null })),
       }),
     );

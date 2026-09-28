@@ -43,7 +43,7 @@ import type {
   ReturnInfo,
   SnoozeRequest,
 } from '../../shared/copilot';
-import type { DeskSessionCreate } from '../../shared/desk';
+import { cardKindOf, type DeskSessionCreate } from '../../shared/desk';
 import { copilotBus, logEvent } from './bus';
 import { getCopilotConfig, inQuietHours, type CopilotConfig } from './config';
 import {
@@ -1472,8 +1472,11 @@ export class CopilotQueue {
     const hasCard = req.card_id !== undefined && req.card_id !== null;
     const cardId = hasCard ? parseCardId(req.card_id) : parseCardId(explorationId) ?? null;
     if (cardId === undefined) return { status: 400, body: this.focusState(), error: 'invalid card_id' };
-    if (req.card_kind !== undefined && req.card_kind !== null && req.card_kind !== 'page') {
-      return { status: 400, body: this.focusState(), error: "card_kind must be 'page'" };
+    if (req.card_kind !== undefined && req.card_kind !== null && req.card_kind !== 'page' && req.card_kind !== 'board') {
+      return { status: 400, body: this.focusState(), error: "card_kind must be 'page' or 'board'" };
+    }
+    if (cardId && req.card_kind != null && req.card_kind !== cardKindOf(cardId)) {
+      return { status: 400, body: this.focusState(), error: 'card_kind does not match card_id' };
     }
     if (req.title !== undefined && req.title !== null && typeof req.title !== 'string') {
       return { status: 400, body: this.focusState(), error: 'title must be a string' };
@@ -1496,10 +1499,10 @@ export class CopilotQueue {
     let item: FocusItem;
     if (cur && cardId === null && curCard !== null) {
       // Go deep while already on a card: keep it.
-      item = { kind: 'card', workspace: cur.workspace, card_id: curCard, card_kind: cur.card_kind ?? 'page', title: given || cur.title };
+      item = { kind: 'card', workspace: cur.workspace, card_id: curCard, card_kind: cur.card_kind ?? cardKindOf(curCard), title: given || cur.title };
     } else {
       const same = cur !== null && curCard === cardId;
-      item = { kind: 'card', workspace, card_id: cardId, card_kind: cardId ? 'page' : null, title: given || (same && cur ? cur.title : 'Deep') };
+      item = { kind: 'card', workspace, card_id: cardId, card_kind: cardKindOf(cardId), title: given || (same && cur ? cur.title : 'Deep') };
     }
     if (surface === 'lee' && this.away.active) this.endHandoff('return');
     this.focus.start(item, 'deep', surface, actor, now);

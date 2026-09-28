@@ -56,9 +56,9 @@ export type SendTarget =
   | { kind: 'tab'; pty_id: number; label: string; tab_kind: 'agent' | 'terminal' | 'tui'; provider: string | null }
   | { kind: 'board'; card_id: string; title: string }; // B5: images land as image items mid-view, text as a note
 export interface SendTargets {
-  /** What Lee's focused window has in front of it now, when it's a target: the zoomed Page, the palette, or the focused agent tab. */
+  /** What Lee's focused window has in front of it now, when it's a target: the zoomed Page or Board, the palette, or the focused agent tab. */
   focus: SendTarget | null;
-  /** Every other target: the open Pages this window has touched this session, Hester, each PTY tab (agents, terminals, TUIs). */
+  /** Every other target: the Pages and Boards this window has touched this session, Hester, each PTY tab (agents, terminals, TUIs). */
   targets: SendTarget[];
 }
 export type SendItem =
@@ -68,7 +68,7 @@ export interface SendRequest {
   workspace?: string;
   target: SendTarget | 'focus';
   items: SendItem[];
-  /** Send (true) or Deliver (false, the default). Tabs: Enter after the text; Hester: ask the question. Refused for Pages. Only from an explicit Send tap, never from voice. */
+  /** Send (true) or Deliver (false, the default). Tabs: Enter after the text; Hester: ask the question. Refused for Pages and Boards. Only from an explicit Send tap, never from voice. */
   submit?: boolean;
   /** A compose send from a device's view of that same tab: Lee shows no chip (you're watching it). */
   compose?: boolean;

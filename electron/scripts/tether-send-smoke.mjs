@@ -3,14 +3,16 @@
  * Smoke test for Send to Lee's delivery logic in the renderer
  * (docs/plans/2026-09-28-tether-review-voice.md §4.3, §4.4), lib/tetherModel.ts:
  *
- * - checkSend: submit only for tabs and Hester, and only with text; Board
- *   isn't built.
- * - Target resolution (buildSendTargets): the zoomed Page, else the open
+ * - checkSend: submit only for tabs and Hester, and only with text; a Page
+ *   and a Board take Deliver only.
+ * - Target resolution (buildSendTargets): the zoomed Page or Board, else the open
  *   palette, else the focused PTY tab; the rest without repeats; tab kinds.
  * - Insertion text (pageInsertion): its own paragraph after the cursor's
  *   line, blank lines only where needed, the end when the Page isn't open;
  *   Undo finds it while unchanged (findInsertion / removeInsertion).
  * - Images: `![caption](assets/…)` in (imageMarkdown) and out (parsePageImages).
+ * - A send on a Board (boardSendItems, B5): image items mid-view, a caption
+ *   pinned, the text as a note; to the right of everything when not open.
  * - Inbox paths and what's pasted into a tab (tabPasteText), the palette's
  *   question, and the chip's line.
  *
@@ -56,7 +58,7 @@ const m = await bundle('../src/renderer/lib/tetherModel.ts', 'model');
 const PAGE = { kind: 'page', card_id: 'pg-0000abcd', title: 'Taxonomy' };
 const HESTER = { kind: 'hester' };
 const TAB = { kind: 'tab', pty_id: 7, label: 'Claude', tab_kind: 'agent', provider: 'claude' };
-const BOARD = { kind: 'board', card_id: 'pg-0000beef', title: 'Board' };
+const BOARD = { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' };
 const text = (t, extra = {}) => ({ kind: 'text', text: t, ...extra });
 const photo = (extra = {}) => ({ kind: 'image', mime: 'image/png', data_b64: 'iVBORw0KGgo=', source: 'photo', ...extra });
 
@@ -69,7 +71,9 @@ test('checkSend: submit only for tabs and Hester; Hester needs text, a tab takes
   assert.deepEqual(m.checkSend(TAB, [text('   ')], true), { ok: false, error: 'submit_not_allowed' }, 'blank text is no text');
   assert.deepEqual(m.checkSend(PAGE, [text('note')], false), { ok: true });
   assert.deepEqual(m.checkSend(PAGE, [photo()], undefined), { ok: true });
-  assert.deepEqual(m.checkSend(BOARD, [text('x')], false), { ok: false, error: 'board_not_built' });
+  assert.deepEqual(m.checkSend(BOARD, [text('x')], false), { ok: true }, 'a Board takes Deliver');
+  assert.deepEqual(m.checkSend(BOARD, [photo()], undefined), { ok: true });
+  assert.deepEqual(m.checkSend(BOARD, [text('x')], true), { ok: false, error: 'submit_not_allowed' }, 'a Board has only Deliver');
   assert.deepEqual(m.checkSend(TAB, [], false), { ok: false, error: 'no_items' });
 });
 
@@ -82,20 +86,54 @@ test('targets: the zoomed Page is the focus, then the palette, then the focused 
     { ptyId: 12, label: 'claude (by hand)', type: 'terminal', provider: 'claude' },
   ];
   const touched = [{ card_id: 'pg-00000001', title: 'Old' }, { card_id: PAGE.card_id, title: 'Taxonomy' }];
-  const a = m.buildSendTargets({ zoomedPage: { card_id: PAGE.card_id, title: 'Taxonomy' }, paletteOpen: true, focusedPtyId: 7, touchedPages: touched, tabs });
+  const a = m.buildSendTargets({ zoomedCard: { card_id: PAGE.card_id, title: 'Taxonomy' }, paletteOpen: true, focusedPtyId: 7, touchedCards: touched, tabs });
   assert.deepEqual(a.focus, PAGE);
   assert.deepEqual(a.targets.map((t) => t.kind + ':' + (t.card_id ?? t.pty_id ?? '')), ['page:pg-00000001', 'hester:', 'tab:7', 'tab:9', 'tab:11', 'tab:12'], 'the zoomed Page is not repeated');
   assert.deepEqual(a.targets.find((t) => t.pty_id === 11).tab_kind, 'tui');
   assert.deepEqual(a.targets.find((t) => t.pty_id === 9).tab_kind, 'terminal');
   assert.deepEqual(a.targets.find((t) => t.pty_id === 12).tab_kind, 'agent', 'a terminal running an agent is an agent');
-  const b = m.buildSendTargets({ zoomedPage: null, paletteOpen: true, focusedPtyId: 7, touchedPages: [], tabs });
+  const b = m.buildSendTargets({ zoomedCard: null, paletteOpen: true, focusedPtyId: 7, touchedCards: [], tabs });
   assert.deepEqual(b.focus, HESTER);
   assert.ok(!b.targets.some((t) => t.kind === 'hester'), 'Hester once');
-  const c = m.buildSendTargets({ zoomedPage: null, paletteOpen: false, focusedPtyId: 7, touchedPages: [], tabs });
+  const c = m.buildSendTargets({ zoomedCard: null, paletteOpen: false, focusedPtyId: 7, touchedCards: [], tabs });
   assert.deepEqual(c.focus, TAB);
   assert.ok(!c.targets.some((t) => t.kind === 'tab' && t.pty_id === 7), 'the focus tab once');
-  const d = m.buildSendTargets({ zoomedPage: null, paletteOpen: false, focusedPtyId: null, touchedPages: [], tabs: [] });
+  const d = m.buildSendTargets({ zoomedCard: null, paletteOpen: false, focusedPtyId: null, touchedCards: [], tabs: [] });
   assert.deepEqual(d, { focus: null, targets: [HESTER] });
+});
+
+test('targets (B5): a zoomed Board is the focus; touched Boards and Pages follow, most recent first', () => {
+  const touched = [{ card_id: PAGE.card_id, title: 'Taxonomy' }, { card_id: 'bd-00000001', title: 'Sketches' }, { card_id: BOARD.card_id, title: 'Renders' }, { card_id: 'draft-1', title: 'x' }];
+  const a = m.buildSendTargets({ zoomedCard: { card_id: BOARD.card_id, title: 'Renders' }, paletteOpen: true, focusedPtyId: null, touchedCards: touched, tabs: [] });
+  assert.deepEqual(a.focus, BOARD, 'the zoomed Board before the palette');
+  assert.deepEqual(a.targets, [{ kind: 'board', card_id: 'bd-00000001', title: 'Sketches' }, PAGE, HESTER], 'not repeated; a draft is no target');
+  const b = m.buildSendTargets({ zoomedCard: { card_id: 'draft-2', title: 'x' }, paletteOpen: true, focusedPtyId: null, touchedCards: [], tabs: [] });
+  assert.deepEqual(b.focus, HESTER, 'an in-memory Page is not the focus');
+});
+
+test('a send on a Board (B5): images side by side mid-view, a caption pinned, the text as one note under them', () => {
+  let n = 0;
+  const id = () => `it-${++n}`;
+  assert.equal(m.boardSendText([text('  one '), photo(), text('two'), text('   ')]), 'one\n\ntwo');
+  const imgs = [{ asset: 'a.png', natural: { w: 200, h: 100 }, caption: 'the old one' }, { asset: 'b.jpg', natural: { w: 100, h: 100 } }];
+  const out = m.boardSendItems([], imgs, 'compare', { x: 1000, y: 500 }, 1, id);
+  assert.deepEqual(out.map((it) => it.kind), ['image', 'note', 'image', 'note']);
+  const [a, cap, b, note] = out;
+  // Row: 200 + 24 + 100 = 324 wide, 100 high; block 100 + 24 + 72 = 196 high.
+  assert.deepEqual([a.x, a.y, a.w, a.h], [838, 402, 200, 100], 'centred on the middle of the view');
+  assert.deepEqual([b.x, b.y], [838 + 200 + m.BOARD_SEND_GAP, 402]);
+  assert.equal(cap.text, 'the old one');
+  assert.equal(cap.pin.item_id, a.id, 'the caption is pinned to its image');
+  assert.deepEqual([note.x, note.y, note.text], [838, 402 + 100 + m.BOARD_SEND_GAP, 'compare']);
+  assert.ok(out.every((it, i) => i === 0 || it.z > out[i - 1].z), 'each on top of the last');
+  // Retina: the image's own pixels at half size.
+  assert.equal(m.boardSendItems([], [imgs[1]], '', { x: 0, y: 0 }, 2, id)[0].w, 50);
+  // Not open: to the right of everything, tops aligned.
+  const there = [{ id: 'x', kind: 'note', text: 'n', x: -50, y: 40, w: 220, h: 72, z: 7 }];
+  const away = m.boardSendItems(there, [], 'later', null, 1, id);
+  assert.deepEqual([away[0].x, away[0].y, away[0].z > 7], [-50 + 220 + m.BOARD_SEND_GAP * 2, 40, true]);
+  assert.deepEqual(m.boardSendItems([], [], 'first', null, 1, id).map((it) => [it.x, it.y]), [[0, 0]], 'an empty Board: at the origin');
+  assert.deepEqual(m.boardSendItems([], [], '', { x: 0, y: 0 }, 1, id), [], 'nothing to place');
 });
 
 test('page insertion: its own paragraph after the cursor line, blank lines only where needed', () => {

@@ -11,7 +11,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import type { DepthRating } from '../../shared/cockpit';
 import type { Actor, FocusEndReason, FocusItem, FocusSource, FocusState, LeeEventInput } from '../../shared/copilot';
-import { PAGE_ID_RE } from '../../shared/desk';
+import { cardKindOf } from '../../shared/desk';
 import { COPILOT_DEFAULTS, type CopilotConfig } from './config';
 
 export const MAX_FOCUS_PATHS = 50;
@@ -105,10 +105,10 @@ export function focusItemKey(item: FocusItem | null): string | null {
   return null;
 }
 
-/** A Desk card id (Desk D2: only Page cards this round); null/absent is null, anything else undefined. */
+/** A Desk card id (a Page's `pg-` or a Board's `bd-`); null/absent is null, anything else undefined. */
 export function parseCardId(v: unknown): string | null | undefined {
   if (v === null || v === undefined) return null;
-  return typeof v === 'string' && PAGE_ID_RE.test(v) ? v : undefined;
+  return typeof v === 'string' && cardKindOf(v) ? v : undefined;
 }
 
 /** The card id a focus item names, or null. */
@@ -164,12 +164,12 @@ export function parseFocusItem(v: unknown): FocusItem | null {
   if (o.kind === 'card' && typeof o.workspace === 'string' && o.workspace) {
     const id = parseCardId(o.card_id);
     if (id === undefined) return null;
-    if (o.card_kind !== undefined && o.card_kind !== null && o.card_kind !== 'page') return null;
+    if (o.card_kind !== undefined && o.card_kind !== null && o.card_kind !== 'page' && o.card_kind !== 'board') return null;
     return {
       kind: 'card',
       workspace: o.workspace,
       card_id: id,
-      card_kind: id ? 'page' : o.card_kind === 'page' ? 'page' : null,
+      card_kind: id ? cardKindOf(id) : o.card_kind === 'page' || o.card_kind === 'board' ? o.card_kind : null,
       title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 200) : 'Deep',
     };
   }

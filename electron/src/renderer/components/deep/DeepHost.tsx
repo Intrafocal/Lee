@@ -75,7 +75,9 @@ import {
   handoffKindLabel,
   handoffStateLabel,
   isDraftId,
-  getPage as getPageText,
+  gatherOthers,
+  NO_OTHERS,
+  type OtherCards,
   isCardId,
   isHandoff,
   isUntitled,
@@ -93,8 +95,6 @@ import {
   type DraftPage,
   type PageDoc,
   type ReferenceCreate,
-  type SessionAsk,
-  type SessionHandoff,
   type StillOpen,
 } from '../../lib/hesterDeep';
 import {
@@ -184,8 +184,8 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
   useEffect(
     () =>
       cockpitModeStore.onEndSessionRequest(() => {
-        // A Board has no ritual of its own (yet): the bare sheet, with the cards touched.
-        if (cardId && !isBoardId(cardId)) setEndNonce((n) => n + 1);
+        // On a card (a Page or a Board), its own ritual; at the overview, the bare sheet with the cards touched.
+        if (cardId) setEndNonce((n) => n + 1);
         else setBareSheet(true);
       }),
     [cardId],
@@ -319,7 +319,16 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
         {cardId && surfaceKey && (
           <div className={`desk-card-layer${zoomed ? ' is-zoomed' : ''}`} aria-hidden={!zoomed}>
             {isBoardId(cardId) ? (
-              <BoardView key={cardId} workspace={workspace} boardId={cardId} title={nav.title} visible={visible && zoomed} copilot={copilot} onHop={props.onHop} />
+              <BoardView
+                key={cardId}
+                workspace={workspace}
+                boardId={cardId}
+                title={nav.title}
+                visible={visible && zoomed}
+                copilot={copilot}
+                onHop={props.onHop}
+                endNonce={endNonce}
+              />
             ) : (
               <DeepSurface
                 key={surfaceKey}
@@ -367,35 +376,6 @@ interface DeepSurfaceProps extends DeepHostProps {
   areaInView: string | null;
   /** An in-memory Page just became a card. */
   onPromoted: (realId: string, title: string, areaId: string | null) => void;
-}
-
-type OnCard = { card_id: string; card_title: string };
-interface OtherCards {
-  asked: Array<SessionAsk & OnCard>;
-  handedOff: Array<SessionHandoff & OnCard>;
-  stillOpen: Array<StillOpen & OnCard>;
-  /** Each card's Page text, for anchors. */
-  texts: Record<string, string>;
-}
-const NO_OTHERS: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
-
-/** The ritual's lists from the other cards touched this session (each item names its card). */
-async function gatherOthers(workspace: string, ids: string[], since: string | null, titleOf: (id: string) => string): Promise<OtherCards> {
-  const out: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
-  await Promise.all(
-    ids.map(async (cid) => {
-      const [ans, pg] = await Promise.all([listAnswers(workspace, cid), getPageText(workspace, cid)]);
-      const answers = ans.ok && Array.isArray(ans.data) ? ans.data : [];
-      const text = pg.ok ? pg.data.text : '';
-      const on = { card_id: cid, card_title: titleOf(cid) || 'Untitled' };
-      out.texts[cid] = text;
-      const lists = sessionLists(answers, since);
-      out.asked.push(...lists.asked.map((a) => ({ ...a, ...on })));
-      out.handedOff.push(...lists.handedOff.map((h) => ({ ...h, ...on })));
-      if (text) out.stillOpen.push(...stillOpenOnPage(text, answers, 4).map((o) => ({ ...o, ...on })));
-    }),
-  );
-  return out;
 }
 
 /** The id fields of a Deep event for this card (legacy explorations keep exploration_id). */

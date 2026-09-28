@@ -28,6 +28,10 @@
  * card). The record goes to POST /desk/sessions with cards_touched,
  * stopped_card_id and questions_kept as card-and-question pairs.
  *
+ * Boards (B5): on a zoomed Board, BoardView fills the sheet from the Board
+ * (lib/boardRitual): the topmost note as where you stopped, its Asks (this
+ * session's and any still open), its hand-offs, and the notes' open lines.
+ *
  * Look (cockpit-design §6.1): the Cockpit primitives. "Where did you stop?"
  * and the questions are your words, in Newsreader; the default action is the
  * sheet's one `Btn next`, the other `plain`.
@@ -91,6 +95,8 @@ interface EndSessionSheetProps {
   onAsk?: (item: StillOpen & OnCard) => void;
   /** Hand off a still-open item (opens the Hand off sheet over this one). */
   onHandOff?: (item: StillOpen & OnCard) => void;
+  /** The sheet is for a Board (B5): "Still open on the Board". */
+  onBoard?: boolean;
   /** At the Desk: the touched cards; the record goes to /desk/sessions. */
   desk?: RitualDesk;
   /** Another sheet is open over this one: its keys aren't ours. */
@@ -124,6 +130,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
   onEnded,
   onClose,
   desk,
+  onBoard = false,
 }) => {
   const closeByDefault = running + runningHandoffs === 0;
   const asked = session?.asked ?? [];
@@ -334,7 +341,7 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
 
         <div className="deep-sheet-label">This session</div>
         {asked.length === 0 && handedOff.length === 0 && stillOpen.length === 0 && (
-          <div className="deep-muted">Nothing asked or handed off, and nothing left open on the Page.</div>
+          <div className="deep-muted">Nothing asked or handed off, and nothing left open on the {onBoard ? 'Board' : 'Page'}.</div>
         )}
         {asked.length > 0 && (
           <div className="session-group" role="group" aria-label="Asked">
@@ -384,8 +391,8 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
           </div>
         )}
         {stillOpen.length > 0 && (
-          <div className="session-group" role="group" aria-label="Still open on the Page">
-            <div className="session-group-label">{desk && desk.touched.length > 1 ? 'Still open on these Pages' : 'Still open on the Page'}</div>
+          <div className="session-group" role="group" aria-label={onBoard ? 'Still open on the Board' : 'Still open on the Page'}>
+            <div className="session-group-label">{onBoard ? 'Still open on the Board' : desk && desk.touched.length > 1 ? 'Still open on these Pages' : 'Still open on the Page'}</div>
             {stillOpen.map((o) => (
               <div key={`${o.card_id ?? ''}:${o.kind}:${o.text}`} className="session-row">
                 <span className={`session-row-text${o.kind === 'requirements' ? ' is-block' : ''}`}>{o.text}</span>

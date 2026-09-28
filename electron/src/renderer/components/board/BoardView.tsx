@@ -13,18 +13,30 @@
  *   goes beside the selection once the record exists.
  * - The rows are kept fresh like the Page's: deep:answer events, and a poll
  *   while anything is pending (hesterBoardAsks.watchBoardAnswers).
+ * - Send to Lee (B5): a device's images land as image items in the middle
+ *   of the view and its text as a note, one undo step (tetherDelivery's
+ *   Board sink).
+ * - End session (B5): the ritual filled from the Board (lib/boardRitual),
+ *   with the other touched cards' Asks and hand-offs; a still-open line is
+ *   asked about with its note drawn, as a selection would be.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { BoardAnchor, BoardAsk, BoardHandoff, BoardItem, BoardTarget } from '../../../shared/board';
-import type { DeepAnswer, LeeMode } from '../../../shared/cockpit';
+import type { Anchor, DeepAnswer, LeeMode } from '../../../shared/cockpit';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
-import { cockpitModeStore } from '../cockpit/cockpitMode';
-import { onDeepAnswer } from '../deep/deepBridge';
+import { cockpitModeStore, touchedCards, zoomIntoCard } from '../cockpit/cockpitMode';
+import { logDeep, onDeepAnswer } from '../deep/deepBridge';
+import { EndSessionSheet } from '../deep/EndSessionSheet';
 import { HandoffSheet } from '../deep/HandoffSheet';
 import { replyToHandoff } from '../deep/handoffReply';
-import { deepRowKey } from '../../lib/deepModel';
-import { itemsInRect } from '../../lib/boardModel';
+import { useDeskContext } from '../desk/useDesk';
+import { anchorFor, deepRowKey, isPending } from '../../lib/deepModel';
+import { canAdd, itemsInRect } from '../../lib/boardModel';
+import { boardRitual, boardStoppedAt, type BoardStillOpen } from '../../lib/boardRitual';
+import { askDeep, gatherOthers, handoffInFlight, isHandoff, NO_OTHERS, type OtherCards, type StillOpen } from '../../lib/hesterDeep';
+import { registerBoardSink } from '../../lib/tetherDelivery';
+import { boardSendItems } from '../../lib/tetherModel';
 import {
   boardAnchor,
   boardHandoffSection,
@@ -50,6 +62,8 @@ export interface BoardViewProps {
   visible: boolean;
   copilot: UseCopilotResult;
   onHop: (to: LeeMode) => void;
+  /** Bumped by the mode chip's "End session": opens the ritual on this Board. */
+  endNonce?: number;
 }
 
 /** A selection drawn and uploaded: what an Ask or hand-off carries. */
@@ -74,7 +88,7 @@ function mnemonicLabel(label: string, letter: string): React.ReactNode {
   );
 }
 
-export function BoardView({ workspace, boardId, title, visible, copilot, onHop }: BoardViewProps): JSX.Element {
+export function BoardView({ workspace, boardId, title, visible, copilot, onHop, endNonce = 0 }: BoardViewProps): JSX.Element {
   const board = useRef<BoardApi | null>(null);
   const say = (t: string) => board.current?.say(t);
 
@@ -102,12 +116,12 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
   const askRef = useRef<HTMLInputElement | null>(null);
   const selKey = () => board.current?.selection().item_ids.join(',') ?? '';
 
-  /** The selection drawn to a PNG and uploaded as `sel-…`: the anchor an Ask or hand-off carries. */
-  const snapshot = async (): Promise<Snapshot | null> => {
+  /** The selection (or `only`, e.g. one note) drawn to a PNG and uploaded as `sel-…`: the anchor an Ask or hand-off carries. */
+  const snapshot = async (only?: readonly string[]): Promise<Snapshot | null> => {
     const api = board.current;
     if (!api) return null;
     const items = api.items();
-    const sel = api.selection();
+    const sel = only ? { item_ids: [...only] } : api.selection();
     const target = selectionTarget(items, sel.item_ids);
     if (!target) {
       say('Select something on the Board first');
@@ -131,10 +145,10 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     return { target, anchor: boardAnchor(target, up.name, selectionNotes(items, sel.item_ids)) };
   };
 
-  const ask = async (question: string) => {
+  const ask = async (question: string, only?: readonly string[]) => {
     const q = question.trim() || 'Explain this.';
     setBusy(true);
-    const snap = await snapshot();
+    const snap = await snapshot(only);
     if (!snap) return setBusy(false);
     const r = await askBoard(workspace, boardId, { question: q, anchor: snap.anchor });
     setBusy(false);
@@ -147,15 +161,16 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
   };
 
   // ---- hand-offs: the Page's sheet, with the picture ----
-  const [handoff, setHandoff] = useState<{ sectionText: string; anchor: BoardAnchor; target: BoardTarget } | null>(null);
-  const handOff = async () => {
+  // `eid`: the card it's on (this Board, or a Page from the ritual); `target`: where this Board's clipboard goes.
+  const [handoff, setHandoff] = useState<{ eid: string; title: string; sectionText: string; anchor: Anchor; target: BoardTarget | null } | null>(null);
+  const handOff = async (only?: readonly string[]) => {
     setBusy(true);
-    const snap = await snapshot();
+    const snap = await snapshot(only);
     setBusy(false);
     if (!snap) return;
     setAskingFor(null);
     const file = snapshotFile(workspace, boardId, snap.anchor.snapshot);
-    setHandoff({ sectionText: boardHandoffSection(snap.anchor, file), anchor: snap.anchor, target: snap.target });
+    setHandoff({ eid: boardId, title, sectionText: boardHandoffSection(snap.anchor, file), anchor: snap.anchor, target: snap.target });
   };
 
   const run = (a: RowAction) => {
@@ -314,6 +329,92 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     );
   };
 
+  // ---- Send to Lee (B5): a device's images and text, in the middle of the view ----
+  useEffect(
+    () =>
+      registerBoardSink({
+        cardId: boardId,
+        place: (images, text) => {
+          const api = board.current;
+          if (!api || !api.ready()) return null;
+          const add = boardSendItems(api.items(), images, text, api.viewCentre(), window.devicePixelRatio || 1);
+          if (!add.length || !canAdd(api.items(), add.length)) return null;
+          api.addItems(add, true);
+          return add;
+        },
+        remove: (ids) => {
+          const api = board.current;
+          const here = api ? ids.filter((id) => api.items().some((it) => it.id === id)) : [];
+          if (!api || !here.length) return false;
+          api.removeItems(here);
+          return true;
+        },
+      }),
+    [boardId],
+  );
+
+  // ---- the ending ritual (B5): from the Board, plus the other touched cards ----
+  const desk = useDeskContext();
+  const startedAt = (copilot.focus ?? copilot.snapshot?.focus)?.started_at ?? null;
+  const [sheet, setSheet] = useState<{ prefill: string } | null>(null);
+  const [others, setOthers] = useState<OtherCards>(NO_OTHERS);
+  const endSeen = useRef(endNonce);
+  useEffect(() => {
+    if (endNonce === endSeen.current) return;
+    endSeen.current = endNonce;
+    setAskingFor(null);
+    setOthers(NO_OTHERS);
+    setSheet({ prefill: boardStoppedAt(board.current?.items() ?? []) });
+    const rest = touchedCards().filter((c) => c !== boardId);
+    if (rest.length) {
+      void gatherOthers(workspace, rest, startedAt, (cid) => desk?.titleOf(cid) ?? '').then((o) => setOthers(o));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endNonce]);
+
+  const here = sheet ? boardRitual(board.current?.items() ?? [], rows, startedAt) : null;
+  const session = here
+    ? { asked: [...here.asked, ...others.asked], handedOff: [...here.handedOff, ...others.handedOff], stillOpen: [...here.stillOpen, ...others.stillOpen] }
+    : undefined;
+  const titleOf = (cid: string) => (cid === boardId ? title : desk?.titleOf(cid) ?? '');
+  const ritualDesk = sheet
+    ? (() => {
+        const ids = touchedCards();
+        const list = ids.includes(boardId) ? ids : [...ids, boardId];
+        return {
+          touched: list.map((cid) => ({ id: cid, title: titleOf(cid) })),
+          stoppedCardId: boardId,
+          onZoom: (cid: string) => {
+            if (cid === boardId) backToBoard();
+            else void zoomIntoCard({ card_id: cid, title: titleOf(cid) }, 'click');
+          },
+        };
+      })()
+    : undefined;
+  const stillOpenQuestion = (o: StillOpen) => (o.kind === 'question' ? o.text : 'What is still open here, and what would settle it?');
+  /** A still-open line here is asked with its note drawn; one on another touched Page is asked there. */
+  const askStillOpen = (o: StillOpen & { card_id?: string; note_id?: string }) => {
+    const note = (o as BoardStillOpen).note_id;
+    if (!o.card_id || o.card_id === boardId) {
+      if (note) void ask(stillOpenQuestion(o), [note]);
+      return;
+    }
+    const t = others.texts[o.card_id] ?? '';
+    void askDeep(workspace, o.card_id, { question: stillOpenQuestion(o), anchor: anchorFor(t, o.from, o.to), section_text: o.sectionText }).then((r) => {
+      if (!r.ok) say(r.error);
+    });
+    logDeep({ type: 'deep.action', data: { action: 'ask', card_id: o.card_id, card_kind: 'page', chars: stillOpenQuestion(o).length } });
+  };
+  const handOffStillOpen = (o: StillOpen & { card_id?: string }) => {
+    const note = (o as BoardStillOpen).note_id;
+    if (!o.card_id || o.card_id === boardId) {
+      if (note) void handOff([note]);
+      return;
+    }
+    const t = others.texts[o.card_id] ?? '';
+    setHandoff({ eid: o.card_id, title: titleOf(o.card_id) || 'Untitled', sectionText: o.sectionText, anchor: anchorFor(t, o.from, o.to), target: null });
+  };
+
   /** What a sticky or clipboard says in preview.png. */
   const answerLabel = (item: BoardItem) => {
     if (item.kind !== 'ask' && item.kind !== 'handoff') return '';
@@ -334,14 +435,33 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
         renderAnswerItem={renderAnswerItem}
         answerLabel={answerLabel}
       />
+      {sheet && (
+        <EndSessionSheet
+          workspace={workspace}
+          explorationId={boardId}
+          prefill={sheet.prefill}
+          questions={[]}
+          focus={copilot.focus ?? copilot.snapshot?.focus ?? null}
+          running={rows.filter((a) => !isHandoff(a) && !a.dismissed_at && isPending(a)).length}
+          runningHandoffs={rows.filter(handoffInFlight).length}
+          session={session}
+          onAsk={askStillOpen}
+          onHandOff={handOffStillOpen}
+          onBoard
+          desk={ritualDesk}
+          suspended={!!handoff}
+          onClose={() => setSheet(null)}
+        />
+      )}
       {handoff && (
         <HandoffSheet
           workspace={workspace}
-          explorationId={boardId}
-          explorationTitle={title}
+          explorationId={handoff.eid}
+          explorationTitle={handoff.title}
           sectionText={handoff.sectionText}
           anchor={handoff.anchor}
           onRecord={(a) => {
+            if (handoff.eid !== boardId || !handoff.target) return;
             upsert(a);
             // The clipboard goes on the Board the first time its record arrives.
             const api = board.current;
@@ -356,7 +476,7 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
           }}
           onClose={() => {
             setHandoff(null);
-            backToBoard();
+            if (!sheet) backToBoard();
           }}
         />
       )}

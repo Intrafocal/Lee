@@ -18,7 +18,7 @@
  * - Local memory: the one-time exp-<hex> → pg-<hex> key migration.
  */
 
-import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS, STASHED_DRAWER } from '../../shared/desk';
+import { cardIdForOrigin, cardKindOf, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS, STASHED_DRAWER } from '../../shared/desk';
 import type { Desk, DeskArea, DeskCard, DeskCardSummary, DeskLast, DeskRect, DeskStroke, DeskStrokeCreate } from '../../shared/desk';
 import type { IconName } from '../icons/iconData.generated';
 import type { TaskOrigin, TaskStatus } from '../../shared/cockpit';
@@ -448,7 +448,7 @@ export const NO_TOUCHED: Touched = { session_id: null, cards: [] };
 export function touchCard(t: Touched, sessionId: string | null, cardId: string | null): Touched {
   const fresh = t.session_id !== sessionId;
   const cards = fresh ? [] : t.cards;
-  if (!cardId || !isPageId(cardId)) return fresh ? { session_id: sessionId, cards } : t;
+  if (!cardId || !isDeskCardId(cardId)) return fresh ? { session_id: sessionId, cards } : t;
   if (!fresh && cards.includes(cardId)) return t;
   return { session_id: sessionId, cards: [...cards, cardId] };
 }
@@ -464,7 +464,7 @@ export function renameTouched(t: Touched, from: string, to: string): Touched {
 export function parseTouched(raw: unknown): Touched {
   if (!raw || typeof raw !== 'object') return NO_TOUCHED;
   const v = raw as { session_id?: unknown; cards?: unknown };
-  const cards = Array.isArray(v.cards) ? v.cards.filter((c): c is string => typeof c === 'string' && isPageId(c)) : [];
+  const cards = Array.isArray(v.cards) ? v.cards.filter((c): c is string => typeof c === 'string' && isDeskCardId(c)) : [];
   return { session_id: typeof v.session_id === 'string' ? v.session_id : null, cards: cards.filter((c, i) => cards.indexOf(c) === i) };
 }
 
@@ -524,6 +524,11 @@ export function isPageId(id: string | null | undefined): id is string {
 /** A Board card's id (docs/16-Desk.md §3.1): `bd-` and 8 hex. */
 export function isBoardId(id: string | null | undefined): id is string {
   return !!id && /^bd-[0-9a-f]{8}$/.test(id);
+}
+
+/** A card a Deep session can be on (B5): a Page or a Board. */
+export function isDeskCardId(id: string | null | undefined): id is string {
+  return !!cardKindOf(id);
 }
 
 // ---------------------------------------------------------------------------
