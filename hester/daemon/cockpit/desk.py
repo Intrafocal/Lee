@@ -1206,12 +1206,14 @@ class DeskStore:
             raise DeskError("questions_kept must be a list of {card_id, question_id}")
         kept: List[Dict[str, str]] = []
         for k in kept_raw:
+            # A Page's open question, or an Ask kept open (a Page's or a Board's).
+            qid = str(k.get("question_id") or "") if isinstance(k, dict) else ""
             if (
-                not isinstance(k, dict) or not is_page_id(k.get("card_id"))
-                or not deep.QUESTION_ID_RE.match(str(k.get("question_id") or ""))
+                not isinstance(k, dict) or not is_card_id(k.get("card_id"))
+                or not (deep.QUESTION_ID_RE.match(qid) or deep.ANSWER_ID_RE.match(qid))
             ):
                 raise DeskError("questions_kept must be a list of {card_id, question_id}")
-            if self.pages.exists(k["card_id"]):
+            if self.card_exists(k["card_id"]):
                 kept.append({"card_id": k["card_id"], "question_id": k["question_id"]})
         return {
             "id": record["id"], "focus_session_id": record["focus_session_id"],

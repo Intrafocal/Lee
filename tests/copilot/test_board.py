@@ -97,6 +97,18 @@ def test_a_board_is_a_card_on_the_desk(cockpit_env):
         "reason": "ritual", "cards_touched": [card["id"]], "stopped_card_id": card["id"],
     })
     assert r.status_code == 201 and r.json()["data"]["cards_touched"] == [card["id"]]
+    # B5: the ritual keeps a Board's open Asks (answer ids on a Board card), as it does a Page's
+    r = c.post("/desk/sessions", headers=h, json={
+        "focus_session_id": "f2", "started_at": "2026-09-28T12:00:00Z", "ended_at": "2026-09-28T13:00:00Z",
+        "reason": "ritual", "cards_touched": [card["id"]], "stopped_card_id": card["id"],
+        "questions_kept": [{"card_id": card["id"], "question_id": "ans-0000abcd"}, {"card_id": "bd-00000000", "question_id": "ans-0000abcd"}],
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["questions_kept"] == [{"card_id": card["id"], "question_id": "ans-0000abcd"}]
+    assert c.post("/desk/sessions", headers=h, json={
+        "focus_session_id": "f3", "started_at": "2026-09-28T12:00:00Z", "ended_at": "2026-09-28T13:00:00Z",
+        "reason": "ritual", "questions_kept": [{"card_id": card["id"], "question_id": "it-0000abcd"}],
+    }).status_code == 400
 
 
 def test_board_json_is_versioned_and_checked(cockpit_env):
