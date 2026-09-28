@@ -382,6 +382,9 @@
 
 .desk-drawer-menu {
   position: absolute;
+  /* Upward, like a start menu: undo .deep-popover's top/right (below and right-aligned). */
+  top: auto;
+  right: auto;
   bottom: calc(100% + var(--space-2));
   left: 0;
   width: 340px;
@@ -515,6 +518,8 @@
 
 .desk-card-menu {
   position: absolute;
+  /* Placed at the click (inline left/top); .deep-popover's right: 0 would stretch it to the edge. */
+  right: auto;
   z-index: 4;
   min-width: 160px;
 }
