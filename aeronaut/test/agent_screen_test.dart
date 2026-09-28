@@ -40,7 +40,7 @@ class _FakeAttentionNotifier extends AttentionNotifier {
   }
 
   @override
-  Future<ActionResult> reply(String itemId, {required String action, String? text, int? choice, required int version}) async {
+  Future<ActionResult> reply(String itemId, {required String action, String? text, int? choice, required int version, bool voice = false}) async {
     replies.add(_Reply(itemId, action, text, version));
     return const ActionResult(success: true);
   }

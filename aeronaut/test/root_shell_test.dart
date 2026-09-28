@@ -14,7 +14,7 @@ class _EmptyMachinesNotifier extends MachinesNotifier {
 }
 
 void main() {
-  testWidgets('four tabs, Work first; Machine holds the machine list until one is chosen', (tester) async {
+  testWidgets('Work · Review · Hester, then Machine; Machine holds the machine list until one is chosen', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [machinesProvider.overrideWith((ref) => _EmptyMachinesNotifier())],
@@ -23,8 +23,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(RootTab.values, [RootTab.work, RootTab.library, RootTab.hester, RootTab.machine]);
-    final labels = ['Work', 'Library', 'Hester', 'Machine'];
+    expect(RootTab.values, [RootTab.work, RootTab.review, RootTab.hester, RootTab.machine]);
+    final labels = ['Work', 'Review', 'Hester', 'Machine'];
     for (final l in labels) {
       expect(find.text(l), findsWidgets);
     }

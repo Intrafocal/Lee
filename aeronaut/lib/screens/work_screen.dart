@@ -7,6 +7,7 @@ import '../models/attention.dart';
 import '../models/hester_models.dart';
 import '../providers/attention_provider.dart';
 import '../providers/machines_provider.dart';
+import '../providers/tether_provider.dart';
 import '../providers/windows_provider.dart';
 import '../services/hester_api.dart';
 import '../theme/aeronaut_colors.dart';
@@ -18,6 +19,9 @@ import '../widgets/in_flight_section.dart';
 import '../widgets/machine_switcher.dart';
 import '../widgets/now_header_actions.dart';
 import '../widgets/phosphor_icon.dart';
+import '../widgets/pick_up_block.dart';
+import '../widgets/send_to_lee_sheet.dart';
+import '../widgets/speaker_toggle.dart';
 import '../widgets/work_ui.dart';
 import '../widgets/workspace_switcher.dart';
 import 'agent_screen.dart';
@@ -33,11 +37,13 @@ List<AttentionItem> waitingOnYou(AttentionSnapshot snapshot) => snapshot.items
         i.kind != AttentionKind.deepIdle)
     .toList();
 
-/// Work (cockpit design §4, §8.1): the Now screen, renamed. One serif line
-/// says what needs you, then the waiting cards (blocking first, oldest
-/// first), then In flight, then recent Progress. Capture (+), Focus and
-/// hand-off sit in the app bar; during a Deep session the header says "In
-/// deep work" instead of offering Focus (14 §8.1).
+/// Work (cockpit design §4, §8.1): Pick up first (your last card, where
+/// you stopped, its open questions: docs/plans/2026-09-28-tether-review-voice.md
+/// §3.1), then one serif line that says what needs you, the waiting cards
+/// (blocking first, oldest first), In flight and recent Progress. Focus,
+/// hand-off, Send to Lee, Speak replies and Capture (+) sit in the app bar;
+/// during a Deep session the header says "In deep work" instead of
+/// offering Focus (14 §8.1).
 class WorkScreen extends ConsumerWidget {
   const WorkScreen({super.key});
 
@@ -67,16 +73,22 @@ class WorkScreen extends ConsumerWidget {
             tooltip: 'Hand off…',
             onPressed: () => showHandoffSheet(context),
           ),
+          const SendToLeeButton(),
+          const SpeakerToggle(),
           const CaptureButton(),
         ],
       ),
       body: RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
-        onRefresh: () => ref.read(attentionProvider.notifier).refresh(),
+        onRefresh: () {
+          ref.invalidate(tetherProvider);
+          return ref.read(attentionProvider.notifier).refresh();
+        },
         child: ListView(
           padding: const EdgeInsets.only(bottom: AeronautTheme.spacingXl),
           children: const [
+            PickUpBlock(),
             _AwayBanner(),
             _DeepIdleSection(),
             _Headline(),

@@ -46,6 +46,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
     String? text,
     int? choice,
     required int version,
+    bool voice = false,
   }) async {
     calls.add(_Call('reply', itemId, action: action, text: text, choice: choice, version: version));
     return const ActionResult(success: true);

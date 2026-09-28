@@ -3,19 +3,46 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 
 import '../models/lee_context.dart';
+import '../models/send_to_lee.dart';
+import '../providers/keys_mode_provider.dart';
+import '../providers/machines_provider.dart';
 import '../providers/pty_provider.dart';
-import 'root_shell.dart' show MachineView, RootTab, machineViewProvider, rootTabProvider;
+import 'root_shell.dart' show RootTab, rootTabProvider;
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
+import '../widgets/composer.dart';
 import '../widgets/phosphor_icon.dart';
+
+/// How Lee's Send to Lee names a tab's kind (`tab_kind` on the wire).
+String sendTabKind(TabType type) => switch (type) {
+      TabType.agent || TabType.claude || TabType.hester || TabType.hesterQa => 'agent',
+      TabType.terminal => 'terminal',
+      _ => 'tui',
+    };
+
+/// The tab itself as a Send to Lee target.
+SendTarget tabTarget(TabContext tab) => SendTarget.tab(
+      ptyId: tab.ptyId!,
+      label: tab.label,
+      tabKind: sendTabKind(tab.type),
+      provider: tab.provider ?? (tab.type == TabType.claude ? 'claude' : null),
+    );
 
 /// Terminal screen with real terminal emulation via xterm.dart.
 ///
 /// Renders full TUI apps (lazygit, Claude Code, htop) correctly
 /// with proper escape sequence handling, cursor positioning,
 /// alternate screen buffer, and colors.
+///
+/// It opens in **Compose** (docs/plans/2026-09-28-tether-review-voice.md
+/// §4.6): the terminal is for reading, and a native field below it writes
+/// into the tab through `POST /tether/send` — Deliver (typed, no Enter) or
+/// Send (typed, then Enter), as one bracketed paste, with autocorrect,
+/// dictation and the mic. **Keys** switches to keystroke mode (the
+/// terminal takes the keyboard, with Esc, Tab and arrows) for driving
+/// TUIs, and is remembered per tab.
 class TerminalScreen extends ConsumerStatefulWidget {
   final TabContext tab;
 
@@ -120,14 +147,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     }
 
     // The shell keeps every root tab mounted (IndexedStack). Only connect
-    // while the Machine tab's Tabs view is actually showing, so a terminal
-    // left behind it doesn't keep the Lee tab cast to this phone.
-    if (ref.watch(rootTabProvider) != RootTab.machine ||
-        ref.watch(machineViewProvider) != MachineView.tabs) {
+    // while the Machine tab is actually showing, so a terminal left behind
+    // it doesn't keep the Lee tab cast to this phone.
+    if (ref.watch(rootTabProvider) != RootTab.machine) {
       return const SizedBox.shrink();
     }
 
     final ptyState = ref.watch(ptyProvider(ptyId));
+    final machineId = ref.watch(machinesProvider.select((s) => s.activeMachineId)) ?? '';
+    final modeKey = keysModeKey(machineId, ptyId);
+    final keys = ref.watch(keysModeProvider).contains(modeKey);
 
     // When the terminal instance changes, attach a persistent listener for
     // auto-scroll anchoring and do an initial scroll-to-bottom.
@@ -153,13 +182,44 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             scrollController: _scrollController,
             deleteDetection: true,
             keyboardType: TextInputType.text,
+            // In Compose the terminal is for reading: a tap doesn't raise
+            // its keyboard.
+            readOnly: !keys,
           ),
         ),
-        _ExtraKeysBar(
-          terminal: ptyState.terminal,
+        _ModeBar(
+          keys: keys,
           anchored: _anchored,
           onScrollToBottom: _reanchor,
+          onKeys: (v) => ref.read(keysModeProvider.notifier).setKeys(modeKey, v),
         ),
+        if (keys)
+          _ExtraKeysBar(
+            terminal: ptyState.terminal,
+            anchored: _anchored,
+            onScrollToBottom: _reanchor,
+          )
+        else if (!ptyState.exited)
+          Container(
+            color: AeronautColors.bgElevated,
+            padding: const EdgeInsets.fromLTRB(
+              AeronautTheme.spacingXs,
+              AeronautTheme.spacingXs,
+              AeronautTheme.spacingSm,
+              AeronautTheme.spacingSm,
+            ),
+            child: SafeArea(
+              top: false,
+              child: Composer(
+                key: ValueKey('composer-$ptyId'),
+                target: tabTarget(widget.tab),
+                fieldKey: 'tab-$ptyId',
+                compact: true,
+                // You're watching the tab: the terminal shows it landed.
+                onSent: (_, _) {},
+              ),
+            ),
+          ),
         if (ptyState.exited)
           Container(
             width: double.infinity,
@@ -178,6 +238,50 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Compose | Keys, and the jump back to the bottom when you've scrolled up.
+/// The toggle is a mode, not a next step: never phosphor.
+class _ModeBar extends StatelessWidget {
+  final bool keys;
+  final bool anchored;
+  final VoidCallback onScrollToBottom;
+  final ValueChanged<bool> onKeys;
+
+  const _ModeBar({required this.keys, required this.anchored, required this.onScrollToBottom, required this.onKeys});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget seg(String label, bool selected, VoidCallback onTap) => GestureDetector(
+          key: ValueKey('mode-${label.toLowerCase()}'),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: selected ? Phosphor.ground4 : Colors.transparent,
+              borderRadius: BorderRadius.circular(Phosphor.radiusControl),
+            ),
+            child: Text(
+              label,
+              style: AeronautTheme.caption1.copyWith(color: selected ? Phosphor.text1 : Phosphor.text3),
+            ),
+          ),
+        );
+    return Container(
+      color: AeronautColors.bgElevated,
+      padding: const EdgeInsets.fromLTRB(AeronautTheme.spacingSm, 4, AeronautTheme.spacingSm, 0),
+      child: Row(
+        children: [
+          seg('Compose', !keys, () => onKeys(false)),
+          const SizedBox(width: 4),
+          seg('Keys', keys, () => onKeys(true)),
+          const Spacer(),
+          if (!keys && !anchored)
+            _KeyButton(label: '\u2913', onTap: onScrollToBottom, highlighted: true),
+        ],
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/attention.dart';
 import '../models/machine.dart';
 import '../services/copilot_api.dart';
+import '../services/tether_api.dart';
 import 'connection_provider.dart';
 import 'machines_provider.dart';
 
@@ -200,6 +201,7 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
     String? text,
     int? choice,
     required int version,
+    bool voice = false,
   }) async {
     final machine = _ref.read(machinesProvider).activeMachine;
     if (machine == null) {
@@ -207,7 +209,7 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
     }
     final api = _apiFactory(machine);
     try {
-      return await api.reply(itemId, action: action, text: text, choice: choice, version: version);
+      return await api.reply(itemId, action: action, text: text, choice: choice, version: version, voice: voice);
     } finally {
       api.dispose();
     }
@@ -279,32 +281,17 @@ class AttentionNotifier extends StateNotifier<AttentionUiState> {
     }
   }
 
-  /// Desk D2 §9.2: a thought captured into the card the idle push is about.
-  Future<CaptureResult> captureIntoCard(String text, {String? workspace, String? cardId}) async {
+  /// A thought for Ideas through Lee's `POST /tether/capture`: Work's +,
+  /// or into the card [cardId] (the "Still thinking?" push). [voice] tags
+  /// a transcript.
+  Future<CaptureResult> capture(String text, {String? workspace, String? cardId, bool voice = false}) async {
     final machine = _ref.read(machinesProvider).activeMachine;
     if (machine == null) {
       return const CaptureResult(success: false, error: 'No active machine');
     }
-    final api = _apiFactory(machine);
+    final api = TetherApi(machine: machine);
     try {
-      return await api.carryCapture(text, workspace: workspace, cardId: cardId);
-    } finally {
-      api.dispose();
-    }
-  }
-
-  Future<CaptureResult> capture(
-    String text, {
-    String? workspace,
-    bool asExploration = false,
-  }) async {
-    final machine = _ref.read(machinesProvider).activeMachine;
-    if (machine == null) {
-      return const CaptureResult(success: false, error: 'No active machine');
-    }
-    final api = _apiFactory(machine);
-    try {
-      return await api.capture(text, workspace: workspace, asExploration: asExploration);
+      return await api.capture(text, workspace: workspace, cardId: cardId, voice: voice);
     } finally {
       api.dispose();
     }

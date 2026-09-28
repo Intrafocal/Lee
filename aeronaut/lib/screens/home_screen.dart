@@ -28,12 +28,12 @@ import 'files_screen.dart';
 import 'hester_screen.dart';
 import 'machine_detail_screen.dart';
 import 'machines_screen.dart';
-import 'root_shell.dart' show MachineView, machineViewProvider;
 import 'terminal_screen.dart';
 
 /// The Machine tab once a machine is selected (cockpit design §8.1): the
-/// machine switcher in the app bar, then that machine's Tabs (the tab strip
-/// from LeeContext and the active tab's content) or its Files.
+/// machine switcher in the app bar, then that machine's tabs (the tab strip
+/// from LeeContext and the active tab's content). Files moved to Review
+/// (docs/plans/2026-09-28-tether-review-voice.md §3.1).
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -49,7 +49,6 @@ class HomeScreen extends ConsumerWidget {
     if (activeMachine == null) return const SizedBox.shrink();
 
     final windowsState = ref.watch(windowsProvider);
-    final view = ref.watch(machineViewProvider);
     ref.watch(authGuardProvider);
 
     return Scaffold(
@@ -81,53 +80,19 @@ class HomeScreen extends ConsumerWidget {
             ),
           ),
           // New tab button
-          if (view == MachineView.tabs)
-            IconButton(
-              icon: const PhosphorIcon(PhosphorIcons.plus),
-              tooltip: 'New tab',
-              onPressed: () => _showNewTabSheet(context, ref, activeMachine),
-            ),
+          IconButton(
+            icon: const PhosphorIcon(PhosphorIcons.plus),
+            tooltip: 'New tab',
+            onPressed: () => _showNewTabSheet(context, ref, activeMachine),
+          ),
           // Connection status indicator
           Padding(
             padding: const EdgeInsets.only(right: AeronautTheme.spacingMd),
             child: _ConnectionDot(status: connectionState.status),
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(44),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AeronautTheme.spacingMd,
-              0,
-              AeronautTheme.spacingMd,
-              AeronautTheme.spacingSm,
-            ),
-            child: SizedBox(
-              width: double.infinity,
-              child: CupertinoSlidingSegmentedControl<MachineView>(
-                groupValue: view,
-                backgroundColor: AeronautColors.bgSurface,
-                thumbColor: AeronautColors.bgElevated,
-                children: const {
-                  MachineView.tabs: Text('Tabs', style: AeronautTheme.footnote),
-                  MachineView.files: Text('Files', style: AeronautTheme.footnote),
-                },
-                onValueChanged: (v) {
-                  if (v != null) ref.read(machineViewProvider.notifier).state = v;
-                },
-              ),
-            ),
-          ),
-        ),
       ),
-      body: view == MachineView.files
-          ? const Column(
-              children: [
-                AuthBanner(),
-                Expanded(child: FilesBrowserBody()),
-              ],
-            )
-          : RefreshIndicator.adaptive(
+      body: RefreshIndicator.adaptive(
         color: AeronautColors.accent,
         backgroundColor: AeronautColors.bgSurface,
         onRefresh: () => _refreshContext(ref, activeMachine),

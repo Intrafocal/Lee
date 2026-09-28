@@ -286,11 +286,11 @@ void main() {
       final result = CaptureResult.fromJson({
         'success': true,
         'spooled': true,
-        'someday_id': null,
       });
       expect(result.success, isTrue);
       expect(result.spooled, isTrue);
-      expect(result.somedayId, isNull);
+      expect(result.ideaId, isNull);
+      expect(CaptureResult.fromJson({'success': true, 'id': 'idea_1'}).ideaId, 'idea_1');
     });
   });
 

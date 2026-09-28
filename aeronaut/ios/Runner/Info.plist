@@ -27,7 +27,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Aeronaut needs camera access to scan QR codes for pairing with Lee.</string>
+	<string>Aeronaut uses the camera to scan Lee's pairing code and to take photos you send to Lee.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aeronaut records voice notes and replies, which Hester on your Mac turns into text for you to review before sending. The audio is never kept.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Aeronaut lets you pick a screenshot or photo to send to Lee.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>

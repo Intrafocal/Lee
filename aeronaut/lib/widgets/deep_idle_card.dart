@@ -4,8 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/attention.dart';
 import '../providers/attention_provider.dart';
 import '../providers/windows_provider.dart';
-import '../screens/library_screen.dart' show showCarryCaptureSheet;
 import '../theme/aeronaut_theme.dart';
+import 'tether_capture_sheet.dart';
 import 'work_ui.dart';
 
 /// The open "Still thinking?" push in [snapshot], if any (Desk D2 §9.2).
@@ -26,7 +26,8 @@ String endsAtLabel(DateTime? at) {
 /// "Still thinking?" (Desk D2 §9.2): a Deep session on the Mac has been
 /// idle for 40 minutes and ends at 45. Extend is the one next step; End and
 /// rate takes deep / mixed / shallow; Capture puts a thought into the card
-/// and leaves the push open. Work shows it above everything else.
+/// and leaves the push open. Work shows it right after Pick up, above
+/// what's waiting.
 class DeepIdleCard extends ConsumerStatefulWidget {
   final AttentionItem item;
 
@@ -63,14 +64,14 @@ class _DeepIdleCardState extends ConsumerState<DeepIdleCard> {
     final info = widget.item.deepIdle;
     final title = info?.cardTitle ?? widget.item.text;
     final workspace = ref.read(windowsProvider).activeWindow?.workspace ?? widget.item.source.workspace;
-    showCarryCaptureSheet(
+    showTetherCaptureSheet(
       context,
       title: title.isEmpty ? 'Captured away' : 'Into $title',
-      onCapture: (text) async {
+      onCapture: (text, voice) async {
         final messenger = ScaffoldMessenger.of(context);
         final result = await ref
             .read(attentionProvider.notifier)
-            .captureIntoCard(text, workspace: workspace, cardId: info?.cardId);
+            .capture(text, workspace: workspace, cardId: info?.cardId, voice: voice);
         messenger.showSnackBar(SnackBar(
           content: Text(result.success
               ? (result.spooled ? 'Saved; will sync when Hester is back' : 'Captured')
