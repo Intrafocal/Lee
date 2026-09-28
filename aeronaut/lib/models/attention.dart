@@ -1168,15 +1168,17 @@ class ActionResult extends Equatable {
   List<Object?> get props => [success, error, item];
 }
 
+/// `POST /tether/capture`: `{id}` once Hester has the idea, `{spooled: true}`
+/// when Lee kept it for later.
 class CaptureResult extends Equatable {
   final bool success;
-  final String? somedayId;
+  final String? ideaId;
   final bool spooled;
   final String? error;
 
   const CaptureResult({
     required this.success,
-    this.somedayId,
+    this.ideaId,
     this.spooled = false,
     this.error,
   });
@@ -1184,14 +1186,14 @@ class CaptureResult extends Equatable {
   factory CaptureResult.fromJson(Map<String, dynamic> json) {
     return CaptureResult(
       success: json['success'] as bool? ?? false,
-      somedayId: json['someday_id'] as String?,
+      ideaId: json['id'] as String? ?? json['idea_id'] as String?,
       spooled: json['spooled'] as bool? ?? false,
       error: json['error'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [success, somedayId, spooled, error];
+  List<Object?> get props => [success, ideaId, spooled, error];
 }
 
 // ---------------------------------------------------------------------------

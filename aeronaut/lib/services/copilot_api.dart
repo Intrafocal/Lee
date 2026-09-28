@@ -4,12 +4,12 @@ import 'package:equatable/equatable.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/attention.dart';
-import '../models/carry.dart';
 import '../models/machine.dart';
 import 'api_auth.dart';
 
 /// HTTP client for Lee's Copilot v0/v1 endpoints on the Host API (:9001,
-/// contracts §5.6, §9.2): the attention queue, focus, hand-off and capture.
+/// contracts §5.6, §9.2): the attention queue, focus and hand-off. Capture and
+/// the rest of the phone's Desk reading go through `TetherApi` (`/tether/*`).
 ///
 /// Same auth model as `LeeApi`/`FsApi`: bearer token, 401 reported through
 /// [ApiAuth] so the UI can say "Token rejected. Re-pair this machine."
@@ -97,12 +97,15 @@ class CopilotApi {
     String? text,
     int? choice,
     required int version,
+    bool voice = false,
   }) {
     return _postAction('/attention/${Uri.encodeComponent(itemId)}/reply', {
       'action': action,
       if (text != null) 'text': text,
       if (choice != null) 'choice': choice,
       'version': version,
+      // A reply whose text came from the mic (docs/plans/2026-09-28 §5.2).
+      if (voice) 'input': 'voice',
     });
   }
 
@@ -142,36 +145,6 @@ class CopilotApi {
 
   Future<ActionResult> open(String itemId) =>
       _postAction('/attention/${Uri.encodeComponent(itemId)}/open', const {});
-
-  Future<CaptureResult> capture(
-    String text, {
-    String? workspace,
-    bool asExploration = false,
-  }) async {
-    try {
-      final body = jsonEncode({
-        'text': text,
-        if (workspace != null) 'workspace': workspace,
-        'as': asExploration ? 'explore' : 'someday',
-      });
-      final response = await _client
-          .post(Uri.parse('${machine.hostUrl}/capture'), headers: _headers, body: body)
-          .timeout(const Duration(seconds: 10));
-      if (_isUnauthorized(response)) {
-        return const CaptureResult(success: false, error: 'Token rejected. Re-pair this machine.');
-      }
-      if (_isForbidden(response)) {
-        return const CaptureResult(success: false, error: _reAuthMessage);
-      }
-      final data = _data(response);
-      if (response.statusCode == 200 && data != null) {
-        return CaptureResult.fromJson(data);
-      }
-      return CaptureResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
-    } catch (e) {
-      return CaptureResult(success: false, error: e.toString());
-    }
-  }
 
   Future<FocusState?> getFocus() async {
     try {
@@ -279,68 +252,6 @@ class CopilotApi {
     return null;
   }
 
-  /// The body's `data` map (Lee's envelope), or the body itself when a route
-  /// answers without the envelope.
-  Map<String, dynamic>? _dataOrBody(http.Response response) {
-    try {
-      final json = jsonDecode(response.body);
-      if (json is! Map<String, dynamic>) return null;
-      final data = json['data'];
-      return data is Map<String, dynamic> ? data : json;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// `GET /carry?workspace=` — Library's Tether (docs/14-Deep-Work.md §8.1):
-  /// your last Desk card, its open questions and what the Mac opens
-  /// next. Without [workspace] Lee uses the focused window's. A 503 means
-  /// Hester is offline.
-  Future<CarryResult> getCarry({String? workspace}) async {
-    try {
-      final uri = Uri.parse('${machine.hostUrl}/carry').replace(
-        queryParameters: workspace != null ? {'workspace': workspace} : null,
-      );
-      final response = await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 8));
-      if (_isUnauthorized(response)) {
-        return const CarryResult(error: 'Token rejected. Re-pair this machine.');
-      }
-      if (_isForbidden(response)) return const CarryResult(error: _reAuthMessage);
-      if (response.statusCode == 503) return const CarryResult(error: 'hester_offline');
-      final data = _dataOrBody(response);
-      if (response.statusCode == 200 && data != null) {
-        return CarryResult(carry: CarrySnapshot.fromJson(data));
-      }
-      if (response.statusCode == 404) {
-        return const CarryResult(error: 'This Lee is too old for Tether. Update Lee on the Mac.');
-      }
-      return CarryResult(error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
-    } catch (_) {
-      return const CarryResult(error: 'Could not reach Lee.');
-    }
-  }
-
-  /// `POST /carry/capture` — a thought captured away from the Mac, into
-  /// the card [cardId] when given. Lands in the opener's "Captured away".
-  /// With Hester offline, Lee spools it and answers `spooled: true`.
-  Future<CaptureResult> carryCapture(String text, {String? workspace, String? cardId}) async {
-    return _postCarry('/carry/capture', {
-      'text': text,
-      if (workspace != null) 'workspace': workspace,
-      if (cardId != null) 'card_id': cardId,
-    }, (data) => CaptureResult.fromJson({'success': true, ...data}));
-  }
-
-  /// `POST /carry/open-next` — what the Mac's next Deep session opens first
-  /// (a card or a captured thought).
-  Future<CaptureResult> carryOpenNext({String? workspace, String? cardId, String? somedayId}) async {
-    return _postCarry('/carry/open-next', {
-      if (workspace != null) 'workspace': workspace,
-      if (cardId != null) 'card_id': cardId,
-      if (somedayId != null) 'someday_id': somedayId,
-    }, (_) => const CaptureResult(success: true));
-  }
-
   /// `POST /command {domain: tab, action: checkin, params: {pty_id}}`: ask a
   /// running agent where it is; its answer arrives as its words. 202 means
   /// this token may only propose it and Lee asks at the desk.
@@ -400,29 +311,6 @@ class CopilotApi {
       return ActionResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
     } catch (e) {
       return ActionResult(success: false, error: e.toString());
-    }
-  }
-
-  Future<CaptureResult> _postCarry(
-    String path,
-    Map<String, dynamic> body,
-    CaptureResult Function(Map<String, dynamic> data) onOk,
-  ) async {
-    try {
-      final response = await _client
-          .post(Uri.parse('${machine.hostUrl}$path'), headers: _headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 10));
-      if (_isUnauthorized(response)) {
-        return const CaptureResult(success: false, error: 'Token rejected. Re-pair this machine.');
-      }
-      if (_isForbidden(response)) return const CaptureResult(success: false, error: _reAuthMessage);
-      if (response.statusCode == 503) return const CaptureResult(success: false, error: 'Hester is offline.');
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return onOk(_dataOrBody(response) ?? const {});
-      }
-      return CaptureResult(success: false, error: _errorMessage(response) ?? 'HTTP ${response.statusCode}');
-    } catch (e) {
-      return CaptureResult(success: false, error: e.toString());
     }
   }
 

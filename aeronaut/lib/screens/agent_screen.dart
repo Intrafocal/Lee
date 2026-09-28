@@ -7,7 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/activity.dart';
 import '../models/attention.dart';
+import '../models/voice.dart';
 import '../providers/attention_provider.dart';
+import '../providers/speech_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
@@ -16,6 +18,7 @@ import '../widgets/agent_actions_row.dart';
 import '../widgets/attention_tile.dart';
 import '../widgets/in_flight_section.dart';
 import '../widgets/phosphor_icon.dart';
+import '../widgets/voice_button.dart';
 import '../widgets/work_ui.dart';
 
 /// The item [AgentScreen] answers: [itemId] if it's still live, else the
@@ -62,6 +65,9 @@ class AgentScreen extends ConsumerStatefulWidget {
 
 class _AgentScreenState extends ConsumerState<AgentScreen> {
   final _replyController = TextEditingController();
+
+  /// The reply holds a transcript: tag it `input: 'voice'`.
+  bool _replyVoice = false;
   final _replyFocus = FocusNode();
   bool _busy = false;
 
@@ -140,8 +146,17 @@ class _AgentScreenState extends ConsumerState<AgentScreen> {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
     _replyController.clear();
+    final voice = _replyVoice;
+    _replyVoice = false;
+    if (voice) {
+      final speech = ref.read(speechProvider.notifier);
+      speech.autoEnableFromVoice();
+      speech.noteVoiceReply(item.source.ptyId);
+    }
     unawaited(_run(
-      () => ref.read(attentionProvider.notifier).reply(item.id, action: 'text', text: trimmed, version: item.version),
+      () => ref
+          .read(attentionProvider.notifier)
+          .reply(item.id, action: 'text', text: trimmed, version: item.version, voice: voice),
       done: 'Sent',
     ));
   }
@@ -360,6 +375,9 @@ class _AgentScreenState extends ConsumerState<AgentScreen> {
             // Allow is the one next step while an approval is pending (§0 rule 1).
             primary: !approval,
             onSend: canReply ? (text) => _sendText(item, text) : null,
+            itemId: item?.id,
+            workspace: item?.source.workspace,
+            onTranscript: () => _replyVoice = true,
           ),
         ],
       ),
@@ -461,6 +479,11 @@ class _ReplyBar extends StatelessWidget {
   final bool busy;
   final bool primary;
   final ValueChanged<String>? onSend;
+  final String? itemId;
+  final String? workspace;
+  final VoidCallback onTranscript;
+
+  static const _field = 'agent-reply';
 
   const _ReplyBar({
     required this.controller,
@@ -469,6 +492,9 @@ class _ReplyBar extends StatelessWidget {
     required this.busy,
     required this.primary,
     required this.onSend,
+    required this.itemId,
+    required this.workspace,
+    required this.onTranscript,
   });
 
   @override
@@ -482,7 +508,11 @@ class _ReplyBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(AeronautTheme.spacingMd, AeronautTheme.spacingSm, AeronautTheme.spacingSm, AeronautTheme.spacingSm),
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+        Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Expanded(
@@ -500,7 +530,19 @@ class _ReplyBar extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: AeronautTheme.spacingSm),
+            // The mic sits between the field and Send (§5.5).
+            if (enabled)
+              VoiceButton(
+                fieldKey: _field,
+                purpose: VoicePurpose.reply,
+                controller: controller,
+                focusNode: focusNode,
+                itemId: itemId,
+                workspace: workspace,
+                onTranscript: onTranscript,
+              )
+            else
+              const SizedBox(width: AeronautTheme.spacingSm),
             SizedBox(
               width: 44,
               height: 44,
@@ -527,6 +569,9 @@ class _ReplyBar extends StatelessWidget {
                 ),
               ),
             ),
+          ],
+        ),
+            const VoiceStatusLine(fieldKey: _field),
           ],
         ),
       ),

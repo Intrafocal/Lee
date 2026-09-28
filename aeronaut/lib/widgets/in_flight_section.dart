@@ -115,7 +115,7 @@ String agentMeta(AgentSummary a, DateTime now) {
 }
 
 /// Opens [agent]'s tab: selects its window, focuses the tab in Lee and
-/// switches to the Machine tab's Tabs view, which shows the active tab.
+/// switches to the Machine tab, which shows the active tab (in Compose).
 Future<void> openAgentTab(WidgetRef ref, AgentSummary agent) async {
   final machine = ref.read(machinesProvider).activeMachine;
   if (machine == null || agent.tabId == null) return;
@@ -123,7 +123,6 @@ Future<void> openAgentTab(WidgetRef ref, AgentSummary agent) async {
   if (agent.windowId != null) {
     ref.read(windowsProvider.notifier).setActiveWindow(agent.windowId!);
   }
-  ref.read(machineViewProvider.notifier).state = MachineView.tabs;
   ref.read(rootTabProvider.notifier).state = RootTab.machine;
   final api = LeeApi(machine: machine);
   try {

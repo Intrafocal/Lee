@@ -5,12 +5,15 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/hester_models.dart';
 import '../models/lee_context.dart';
+import '../models/voice.dart';
 import '../providers/hester_provider.dart';
+import '../providers/speech_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../widgets/phosphor_icon.dart';
 import '../widgets/react_phase_indicator.dart';
+import '../widgets/voice_button.dart';
 import 'bundles_screen.dart';
 import 'sessions_screen.dart';
 
@@ -29,6 +32,9 @@ class _HesterScreenState extends ConsumerState<HesterScreen> {
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
 
+  /// The question holds a transcript: sending it turns readback on.
+  bool _voice = false;
+
   @override
   void dispose() {
     _inputController.dispose();
@@ -41,6 +47,8 @@ class _HesterScreenState extends ConsumerState<HesterScreen> {
     final text = _inputController.text;
     if (text.trim().isEmpty) return;
     _inputController.clear();
+    if (_voice) ref.read(speechProvider.notifier).autoEnableFromVoice();
+    _voice = false;
     ref.read(hesterChatProvider.notifier).sendMessage(text);
     // Scroll to bottom after message is added
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -116,6 +124,7 @@ class _HesterScreenState extends ConsumerState<HesterScreen> {
           focusNode: _focusNode,
           isStreaming: chatState.isStreaming,
           onSend: _send,
+          onTranscript: () => _voice = true,
         ),
       ],
     );
@@ -357,12 +366,16 @@ class _InputBar extends StatelessWidget {
   final FocusNode focusNode;
   final bool isStreaming;
   final VoidCallback onSend;
+  final VoidCallback onTranscript;
+
+  static const _field = 'hester-ask';
 
   const _InputBar({
     required this.controller,
     required this.focusNode,
     required this.isStreaming,
     required this.onSend,
+    required this.onTranscript,
   });
 
   @override
@@ -377,7 +390,10 @@ class _InputBar extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+        Row(
           children: [
             Expanded(
               child: TextField(
@@ -402,6 +418,14 @@ class _InputBar extends StatelessWidget {
                 ),
               ),
             ),
+            if (!isStreaming)
+              VoiceButton(
+                fieldKey: _field,
+                purpose: VoicePurpose.ask,
+                controller: controller,
+                focusNode: focusNode,
+                onTranscript: onTranscript,
+              ),
             if (isStreaming)
               const Padding(
                 padding: EdgeInsets.all(8.0),
@@ -416,6 +440,9 @@ class _InputBar extends StatelessWidget {
                 icon: const PhosphorIcon(PhosphorIcons.send, color: AeronautColors.accent),
                 onPressed: onSend,
               ),
+          ],
+        ),
+            const VoiceStatusLine(fieldKey: _field),
           ],
         ),
       ),

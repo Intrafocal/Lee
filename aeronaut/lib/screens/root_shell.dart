@@ -6,33 +6,34 @@ import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/attention.dart';
+import '../models/hester_models.dart';
 import '../providers/attention_provider.dart';
+import '../providers/hester_provider.dart';
 import '../providers/machines_provider.dart';
+import '../providers/speech_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../widgets/phosphor_icon.dart';
+import '../widgets/send_to_lee_sheet.dart';
+import '../widgets/speaker_toggle.dart';
 import 'hester_screen.dart';
 import 'home_screen.dart';
-import 'library_screen.dart';
 import 'machines_screen.dart';
+import 'review_screen.dart';
 import 'work_screen.dart';
 
-/// The four top-level destinations, in tab-bar order (cockpit design
-/// §8.1). [work] leads: it's where replies, capture and hand-off live, and
-/// it's the default once a machine is selected — see [_RootShellState].
-/// [machine] holds the machine switcher plus that machine's Tabs and Files.
-enum RootTab { work, library, hester, machine }
+/// The top-level destinations, in tab-bar order: Work · Review · Hester
+/// (docs/plans/2026-09-28-tether-review-voice.md §3.1), then Machine.
+/// [work] leads: it's where Pick up, replies, capture and Send to Lee live,
+/// and it's the default once a machine is selected — see [_RootShellState].
+/// [review] reads the Desk, the Drawer and Files. [machine] holds the
+/// machine switcher and that machine's tabs (each opens in Compose).
+enum RootTab { work, review, hester, machine }
 
 /// Which root tab is showing. Screens switch tabs by writing to this, e.g.
 /// connecting to a machine jumps to [RootTab.work].
 final rootTabProvider = StateProvider<RootTab>((ref) => RootTab.machine);
-
-/// The Machine tab's two views of the active machine.
-enum MachineView { tabs, files }
-
-/// Which view the Machine tab shows; opening an agent's tab sets [MachineView.tabs].
-final machineViewProvider = StateProvider<MachineView>((ref) => MachineView.tabs);
 
 /// App shell: a Cupertino tab bar over four independent navigation stacks,
 /// so pushing a file in Machine doesn't disturb Work and each tab keeps its
@@ -49,10 +50,12 @@ class _RootShellState extends ConsumerState<RootShell> {
     for (final tab in RootTab.values) tab: GlobalKey<NavigatorState>(),
   };
   StreamSubscription<AttentionItem>? _notifyRoseSub;
+  bool _readbackBaseline = false;
+  Set<String> _readbackSeen = {};
 
   static Widget _rootFor(RootTab tab) => switch (tab) {
         RootTab.work => const RequireMachine(child: WorkScreen()),
-        RootTab.library => const RequireMachine(child: LibraryScreen()),
+        RootTab.review => const RequireMachine(child: ReviewScreen()),
         RootTab.hester => const RequireMachine(child: _HesterRoot()),
         RootTab.machine => const _MachineRoot(),
       };
@@ -73,6 +76,34 @@ class _RootShellState extends ConsumerState<RootShell> {
     // true, wherever the user currently is in the app — not just when
     // they're already looking at Work.
     _notifyRoseSub = ref.read(attentionProvider.notifier).notifyRoseStream.listen(_onNotifyRose);
+    _listenForReadback();
+  }
+
+  /// Readback (§5.5): Hester's final answers, and new items from agents
+  /// you replied to by voice. [SpeechNotifier] checks the toggle and that
+  /// the app is in front.
+  void _listenForReadback() {
+    ref.listenManual<HesterChatState>(hesterChatProvider, (prev, next) {
+      if (prev == null || !prev.isStreaming || next.isStreaming) return;
+      // A stream that ended on an error leaves your question last: nothing to read.
+      if (next.messages.isEmpty || !next.messages.last.isAssistant) return;
+      ref.read(speechProvider.notifier).readHesterAnswer(next.messages.last.content);
+    });
+    ref.listenManual<AttentionUiState>(attentionProvider, (prev, next) {
+      final ids = {for (final i in next.snapshot.items) i.id};
+      // The first loaded snapshot is a baseline, not news.
+      if (!_readbackBaseline) {
+        if (!next.loading) _readbackBaseline = true;
+        _readbackSeen = ids;
+        return;
+      }
+      for (final item in next.snapshot.items) {
+        if (!_readbackSeen.contains(item.id) && item.state == AttentionItemState.open) {
+          ref.read(speechProvider.notifier).readAttentionItem(item);
+        }
+      }
+      _readbackSeen = ids;
+    });
   }
 
   @override
@@ -157,7 +188,7 @@ class _RootShellState extends ConsumerState<RootShell> {
           ),
           items: [
             _item(PhosphorIcons.bell, 'Work', current == RootTab.work),
-            _item(PhosphorIcons.book, 'Library', current == RootTab.library),
+            _item(PhosphorIcons.book, 'Review', current == RootTab.review),
             _item(PhosphorIcons.hester, 'Hester', current == RootTab.hester),
             _item(PhosphorIcons.machine, 'Machine', current == RootTab.machine),
           ],
@@ -179,7 +210,7 @@ class _RootShellState extends ConsumerState<RootShell> {
 }
 
 /// The Machine tab: the saved machines until one is chosen, then that
-/// machine's Tabs and Files (with the switcher in the app bar).
+/// machine's tabs (with the switcher in the app bar).
 class _MachineRoot extends ConsumerWidget {
   const _MachineRoot();
 
@@ -191,7 +222,9 @@ class _MachineRoot extends ConsumerWidget {
     return hasMachine ? const HomeScreen() : const MachinesScreen();
   }
 }
-/// Hester as a root tab: HesterScreen is a body, so it gets its own bar.
+
+/// Hester as a root tab: HesterScreen is a body, so it gets its own bar,
+/// with Send to Lee and Speak replies.
 class _HesterRoot extends StatelessWidget {
   const _HesterRoot();
 
@@ -207,6 +240,7 @@ class _HesterRoot extends StatelessWidget {
             Text('Hester'),
           ],
         ),
+        actions: const [SendToLeeButton(), SpeakerToggle()],
       ),
       body: const HesterScreen(),
     );
@@ -248,7 +282,7 @@ class RequireMachine extends ConsumerWidget {
               ),
               const SizedBox(height: AeronautTheme.spacingSm),
               Text(
-                'Pick a Lee instance in Machine to see its work, library and Hester.',
+                'Pick a Lee instance in Machine to see its work, the Desk and Hester.',
                 textAlign: TextAlign.center,
                 style: AeronautTheme.subheadline.copyWith(
                   color: AeronautColors.textTertiary,

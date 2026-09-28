@@ -281,63 +281,9 @@ class HesterApi {
     return null;
   }
 
-  /// `GET /someday?workspace=&status=` — open Someday items for a
-  /// workspace, newest first (the daemon already sorts; contracts' Someday
-  /// store). Null on any failure, including a plain unreachable daemon
-  /// ("Hester offline"), same convention as [getDigest].
-  Future<List<SomedayItem>?> getSomeday({required String workspace, String status = 'open'}) async {
-    if (_baseUrl == null) return null;
-    try {
-      final uri = Uri.parse('$_baseUrl/someday')
-          .replace(queryParameters: {'workspace': workspace, 'status': status});
-      final response =
-          await _client.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
-      _isUnauthorized(response);
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final data = json['data'];
-        if (data is List) {
-          return data
-              .whereType<Map<String, dynamic>>()
-              .map(SomedayItem.fromJson)
-              .toList();
-        }
-      }
-    } catch (_) {
-      // Connection failed
-    }
-    return null;
-  }
-
-  /// `POST /someday/{id}/triage` — explore, promote, drop or keep. Returns
-  /// the updated item on success, null on any failure (including a 403 from
-  /// a device that isn't allowed to act — [_isUnauthorized] treats 401 and
-  /// 403 the same way here, same as every other route on this client).
-  Future<SomedayItem?> triageSomeday(String id, {required String workspace, required String action}) async {
-    if (_baseUrl == null) return null;
-    try {
-      final response = await _client
-          .post(
-            Uri.parse('$_baseUrl/someday/${Uri.encodeComponent(id)}/triage'),
-            headers: _headers,
-            body: jsonEncode({'workspace': workspace, 'action': action}),
-          )
-          .timeout(const Duration(seconds: 10));
-      _isUnauthorized(response);
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final data = json['data'];
-        if (data is Map<String, dynamic>) return SomedayItem.fromJson(data);
-      }
-    } catch (_) {
-      // Connection failed
-    }
-    return null;
-  }
-
   // -------------------------------------------------------------------------
   // Tasks, for the one-agent screen's Rename / Accept / Assign (Desk D2 §9.4).
-  // Straight to Hester, as Someday is: Lee main has no task routes of its own.
+  // Straight to Hester: Lee main has no task routes of its own.
   // -------------------------------------------------------------------------
 
   /// `GET /cockpit/tasks?workspace=&status=open`. Null on any failure.

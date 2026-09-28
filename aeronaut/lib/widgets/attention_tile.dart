@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/attention.dart';
+import '../models/voice.dart';
 import '../providers/attention_provider.dart';
+import '../providers/speech_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import 'phosphor_icon.dart';
+import 'voice_button.dart';
 import 'work_ui.dart';
 
 /// The quick replies (cockpit design §4.4): Work's waiting cards show the
@@ -88,6 +91,9 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
   Timer? _snoozeTimer;
   AttentionNotifier? _snoozeNotifier;
   final _replyController = TextEditingController();
+
+  /// The reply holds a transcript: tag it `input: 'voice'`.
+  bool _replyVoice = false;
 
   /// Expand state for [AttentionItem.text]: while collapsed the card shows
   /// the (possibly clipped) `item.text` at 4 lines; expanding shows the full
@@ -383,6 +389,9 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
           _ReplyField(
             controller: _replyController,
             busy: _busy,
+            itemId: item.id,
+            workspace: item.source.workspace,
+            onTranscript: () => _replyVoice = true,
             onCancel: () => setState(() => _replying = false),
             onSend: (text) {
               final trimmed = text.trim();
@@ -478,7 +487,17 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
 
   void _sendText(String text) {
     final item = widget.item;
-    _run(() => ref.read(attentionProvider.notifier).reply(item.id, action: 'text', text: text, version: item.version));
+    final voice = _replyVoice;
+    _replyVoice = false;
+    if (voice) {
+      // Readback comes on, and this agent's next items are read to you.
+      final speech = ref.read(speechProvider.notifier);
+      speech.autoEnableFromVoice();
+      speech.noteVoiceReply(item.source.ptyId);
+    }
+    _run(() => ref
+        .read(attentionProvider.notifier)
+        .reply(item.id, action: 'text', text: text, version: item.version, voice: voice));
   }
   Future<void> _showSnoozeMenu(BuildContext context, AttentionNotifier notifier, AttentionItem item) {
     return showModalBottomSheet<void>(
@@ -846,45 +865,83 @@ class _SwipeIndicator extends StatelessWidget {
 }
 
 /// The card's inline reply field (for items without a one-agent screen).
-class _ReplyField extends StatelessWidget {
+/// The inline Reply field: the mic sits between the field and Send (§5.5).
+class _ReplyField extends StatefulWidget {
   final TextEditingController controller;
   final bool busy;
+  final String itemId;
+  final String? workspace;
+  final VoidCallback onTranscript;
   final VoidCallback onCancel;
   final ValueChanged<String> onSend;
 
   const _ReplyField({
     required this.controller,
     required this.busy,
+    required this.itemId,
+    required this.workspace,
+    required this.onTranscript,
     required this.onCancel,
     required this.onSend,
   });
 
   @override
+  State<_ReplyField> createState() => _ReplyFieldState();
+}
+
+class _ReplyFieldState extends State<_ReplyField> {
+  final _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Row(
+    final fieldKey = 'reply-${widget.itemId}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
           child: TextField(
-            controller: controller,
+            controller: widget.controller,
+            focusNode: _focus,
             autofocus: true,
             minLines: 1,
             maxLines: 4,
             textInputAction: TextInputAction.send,
-            onSubmitted: onSend,
+            onSubmitted: widget.onSend,
             decoration: const InputDecoration(hintText: 'Reply…', isDense: true),
           ),
+        ),
+        VoiceButton(
+          fieldKey: fieldKey,
+          purpose: VoicePurpose.reply,
+          controller: widget.controller,
+          focusNode: _focus,
+          itemId: widget.itemId,
+          workspace: widget.workspace,
+          onTranscript: widget.onTranscript,
+          size: 18,
         ),
         IconButton(
           tooltip: 'Send',
           icon: const PhosphorIcon(PhosphorIcons.send, size: 18),
-          onPressed: busy ? null : () => onSend(controller.text),
+          onPressed: widget.busy ? null : () => widget.onSend(widget.controller.text),
         ),
         IconButton(
           tooltip: 'Cancel',
           icon: const PhosphorIcon(PhosphorIcons.close, size: 18),
-          onPressed: onCancel,
+          onPressed: widget.onCancel,
         ),
+      ],
+        ),
+        VoiceStatusLine(fieldKey: fieldKey),
       ],
     );
   }

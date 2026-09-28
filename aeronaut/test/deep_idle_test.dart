@@ -55,7 +55,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   }
 
   @override
-  Future<CaptureResult> captureIntoCard(String text, {String? workspace, String? cardId}) async {
+  Future<CaptureResult> capture(String text, {String? workspace, String? cardId, bool voice = false}) async {
     calls.add('capture:$text');
     capturedCardId = cardId;
     return const CaptureResult(success: true, spooled: true);
@@ -174,8 +174,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('deep-idle-capture')));
       await tester.pumpAndSettle();
       expect(find.text('Into Mesh sync'), findsOneWidget);
-      await tester.enterText(find.byKey(const ValueKey('carry-capture-field')), 'clocks drift');
-      await tester.tap(find.byKey(const ValueKey('carry-capture-send')));
+      await tester.enterText(find.byKey(const ValueKey('tether-capture-field')), 'clocks drift');
+      await tester.tap(find.byKey(const ValueKey('tether-capture-send')));
       await tester.pumpAndSettle();
       expect(notifier.calls, ['capture:clocks drift']);
       expect(notifier.capturedCardId, 'pg-0000abcd');

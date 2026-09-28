@@ -31,7 +31,7 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
 
   final calls = <String>[];
   String? capturedText;
-  bool? capturedAsExploration;
+  bool? capturedVoice;
 
   /// What the next `capture()` call returns — tests override this to
   /// exercise the spooled/error feedback paths, not just success.
@@ -42,10 +42,10 @@ class _RecordingAttentionNotifier extends AttentionNotifier {
   }
 
   @override
-  Future<CaptureResult> capture(String text, {String? workspace, bool asExploration = false}) async {
+  Future<CaptureResult> capture(String text, {String? workspace, String? cardId, bool voice = false}) async {
     calls.add('capture');
     capturedText = text;
-    capturedAsExploration = asExploration;
+    capturedVoice = voice;
     return captureResult;
   }
 
@@ -313,14 +313,12 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(find.byKey(const ValueKey('capture-field')), '  try sqlite for the cache ');
-      await tester.tap(find.byKey(const ValueKey('capture-exploration')));
-      await tester.pump();
       await tester.tap(find.byKey(const ValueKey('capture-send')));
       await tester.pumpAndSettle();
 
       expect(notifier.calls, ['capture']);
       expect(notifier.capturedText, 'try sqlite for the cache');
-      expect(notifier.capturedAsExploration, isTrue);
+      expect(notifier.capturedVoice, isFalse, reason: 'typed, not a transcript');
       expect(find.byKey(const ValueKey('capture-field')), findsNothing, reason: 'sheet closes');
       expect(find.text('Captured'), findsOneWidget);
     });

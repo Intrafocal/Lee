@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/voice.dart';
 import '../providers/attention_provider.dart';
+import '../providers/speech_provider.dart';
 import '../providers/windows_provider.dart';
-import '../screens/someday_screen.dart';
+import '../screens/review_screen.dart' show ReviewSection, reviewSectionProvider;
+import '../screens/root_shell.dart' show RootTab, rootTabProvider;
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 import '../theme/phosphor_icons.generated.dart';
 import 'handoff_sheet.dart';
 import 'phosphor_icon.dart';
+import 'voice_button.dart';
 
 enum _FocusAction { start, stop, stopAndHandoff }
 
@@ -159,8 +163,9 @@ class CaptureButton extends StatelessWidget {
   }
 }
 
-/// Compact capture: one field, an "as exploration" toggle, one button. Sends
-/// the same capture call the old in-body card did, then closes.
+/// Compact capture: one field, the mic, one button. Lands in Ideas through
+/// Lee's `POST /tether/capture` (spooled when Hester is away), then closes.
+/// "Ideas" opens Review › Drawer, where they're listed.
 class CaptureSheet extends ConsumerStatefulWidget {
   const CaptureSheet({super.key});
 
@@ -169,13 +174,16 @@ class CaptureSheet extends ConsumerStatefulWidget {
 }
 
 class _CaptureSheetState extends ConsumerState<CaptureSheet> {
+  static const _field = 'capture';
   final _controller = TextEditingController();
-  bool _asExploration = false;
+  final _focus = FocusNode();
   bool _busy = false;
+  bool _voice = false;
 
   @override
   void dispose() {
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -186,11 +194,12 @@ class _CaptureSheetState extends ConsumerState<CaptureSheet> {
     final workspace = ref.read(windowsProvider).activeWindow?.workspace;
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
-    final result =
-        await ref.read(attentionProvider.notifier).capture(text, workspace: workspace, asExploration: _asExploration);
+    final voice = _voice;
+    final result = await ref.read(attentionProvider.notifier).capture(text, workspace: workspace, voice: voice);
     if (!mounted) return;
     setState(() => _busy = false);
     if (result.success) {
+      if (voice) ref.read(speechProvider.notifier).autoEnableFromVoice();
       navigator.pop();
       messenger.showSnackBar(
         SnackBar(content: Text(result.spooled ? 'Saved; will sync when Hester is back' : 'Captured')),
@@ -233,45 +242,55 @@ class _CaptureSheetState extends ConsumerState<CaptureSheet> {
                   Text('Capture', style: AeronautTheme.footnote.copyWith(fontWeight: FontWeight.w600)),
                   const Spacer(),
                   TextButton.icon(
-                    key: const ValueKey('capture-view-someday'),
+                    key: const ValueKey('capture-view-ideas'),
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       visualDensity: VisualDensity.compact,
                     ),
                     onPressed: () {
-                      final workspace = ref.read(windowsProvider).activeWindow?.workspace;
-                      final navigator = Navigator.of(context);
-                      navigator.pop();
-                      navigator.push(
-                        MaterialPageRoute<void>(builder: (_) => SomedayScreen(workspace: workspace)),
-                      );
+                      Navigator.of(context).pop();
+                      ref.read(reviewSectionProvider.notifier).state = ReviewSection.drawer;
+                      ref.read(rootTabProvider.notifier).state = RootTab.review;
                     },
                     icon: const PhosphorIcon(PhosphorIcons.list, size: 14),
-                    label: const Text('Someday'),
+                    label: const Text('Ideas'),
                   ),
                 ],
               ),
               const SizedBox(height: AeronautTheme.spacingSm),
-              TextField(
-                key: const ValueKey('capture-field'),
-                controller: _controller,
-                autofocus: true,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _capture(),
-                decoration: const InputDecoration(hintText: 'Jot an idea for later…', isDense: true),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('capture-field'),
+                      controller: _controller,
+                      focusNode: _focus,
+                      autofocus: true,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _capture(),
+                      onChanged: (t) {
+                        if (t.trim().isEmpty) _voice = false;
+                      },
+                      decoration: const InputDecoration(hintText: 'Jot an idea for later…', isDense: true),
+                    ),
+                  ),
+                  VoiceButton(
+                    fieldKey: _field,
+                    purpose: VoicePurpose.capture,
+                    controller: _controller,
+                    focusNode: _focus,
+                    workspace: ref.watch(windowsProvider.select((s) => s.activeWindow?.workspace)),
+                    onTranscript: () => _voice = true,
+                  ),
+                ],
               ),
+              const VoiceStatusLine(fieldKey: _field),
               const SizedBox(height: AeronautTheme.spacingXs),
               Row(
                 children: [
-                  Switch.adaptive(
-                    key: const ValueKey('capture-exploration'),
-                    value: _asExploration,
-                    activeThumbColor: AeronautColors.accent,
-                    onChanged: (v) => setState(() => _asExploration = v),
-                  ),
-                  const Text('As exploration', style: AeronautTheme.caption1),
                   const Spacer(),
                   ElevatedButton(
                     key: const ValueKey('capture-send'),
