@@ -369,10 +369,10 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
     'hester-view': { label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view", disabled: view.phase === 'loading', onClick: hesterView },
     assign: { label: 'Assign…', onClick: () => togglePanel('assign') },
   };
-  // A hand-off's task came from a Page: open that card at the Desk (Desk D2 §8; either origin form).
+  // A hand-off's task came from a Page or a Board: open that card at the Desk (Desk D2 §8; either origin form).
   const originCard = task ? cardIdForOrigin(task.origin) : null;
   const moreItems: MoreItem[] = [
-    ...(originCard ? [{ label: 'Open its Page', onClick: () => void openDesk(ctx.copilotApi, ctx.workspace, { kind: 'card', card_id: originCard }) }] : []),
+    ...(originCard ? [{ label: originCard.startsWith('bd-') ? 'Open its Board' : 'Open its Page', onClick: () => void openDesk(ctx.copilotApi, ctx.workspace, { kind: 'card', card_id: originCard }) }] : []),
     ...more.map((id) => moreSpec[id]).filter((x): x is MoreItem => !!x),
   ];
   const iconItems = icons.map((id) => ({ id, spec: spec(id) })).filter((x): x is { id: DetailActionId; spec: ActionSpec } => !!x.spec);

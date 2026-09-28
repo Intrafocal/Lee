@@ -138,6 +138,7 @@ import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from 
 import { DeskSurface } from '../desk/DeskSurface';
 import { DeskContext, useDesk, useDeskContext } from '../desk/useDesk';
 import { BoardSurface } from '../board/BoardSurface';
+import { linkableCards, MISSING_CARD_MESSAGE, type LinkableCard } from '../../lib/cardLinks';
 import { registerPageSink } from '../../lib/tetherDelivery';
 import { pageAssetUrl } from '../../lib/pageAssets';
 import { findInsertion, pageInsertion } from '../../lib/tetherModel';
@@ -1400,6 +1401,12 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     else say('That hand-off has no task yet', 'warn');
   };
   const mentionTargets = useMemo(() => mentionTargetsFor(answers), [answers]);
+  // Boards B4: the Desk's Pages and Boards for [[ and card links (this card left out).
+  const linkCards = useMemo(() => linkableCards(deskCtx?.desk, realId), [deskCtx?.desk, realId]);
+  const onOpenCard = (_cardId: string, card: LinkableCard | null) => {
+    if (!card) return say(MISSING_CARD_MESSAGE, 'warn');
+    void zoomIntoCard({ card_id: card.id, title: card.title, area_id: card.area_id }, 'link');
+  };
   const files = useMemo(
     () => ({
       list: async (): Promise<string[]> => {
@@ -1779,6 +1786,8 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           onReplyHandoff={onReplyHandoff}
           mentionTargets={mentionTargets}
           files={files}
+          cards={deskCtx ? linkCards : undefined}
+          onOpenCard={onOpenCard}
           onQuote={(q) => void onQuote(q)}
           assetUrl={assetUrl}
           voiceWorkspace={workspace}

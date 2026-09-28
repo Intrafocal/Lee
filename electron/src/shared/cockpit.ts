@@ -250,7 +250,7 @@ export type TaskStatus = 'queued' | 'running' | 'waiting' | 'idle' | 'review' | 
  * (Deep next R3) refs a hand-off record ('<exp>#<answer id>'), which Hester's follower keeps in step.
  * 'page' (Desk D2) refs a hand-off record ('<page id>#<answer id>'); 'exploration' is the pre-Desk form.
  */
-export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval' | 'exploration' | 'page';
+export type TaskOriginKind = 'launcher' | 'agent' | 'checkin' | 'someday' | 'operation' | 'lint' | 'hester' | 'explore' | 'goal-eval' | 'exploration' | 'page' | 'board';
 
 // ---------------------------------------------------------------------------
 // Copilot v4: goals and steward (contract 2026-09-26 v4 §9)

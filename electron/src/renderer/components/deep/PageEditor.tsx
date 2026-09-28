@@ -23,7 +23,10 @@
  * - Ask (R2): a selection's question lines are asked as written, one Ask
  *   each with its section (`onAskMany`); a selection with no question shows
  *   "Ask about this…" and the D1 field. ⌘⏎ with a selection = Ask Hester.
- * - `[[` (R10): a fuzzy picker over `files.list()`; picking opens the file in
+ * - `[[` (R10): a fuzzy picker over `files.list()`, with the Desk's `cards`
+ *   (Boards B4) above the files: picking a card inserts `[[pg-…|Title]]` or
+ *   `[[bd-…|Title]]`, shown as its label and opening that card when clicked
+ *   (`onOpenCard`, with null for a card that's gone). Picking a file opens it in
  *   a read-only source panel (≤ half width) where Quote it inserts the quote
  *   and calls `onQuote`, and Enter with no highlight inserts `[[path]]`.
  *   Clicking a `[[…]]` link opens the panel at its lines.
@@ -87,7 +90,8 @@ import {
 } from '../../lib/deepModel';
 import { onDeepActions } from './deepBridge';
 import { marginNoteLabel } from './deepView';
-import { pageMarkdown, liveFormatting, tableField, type AssetUrl } from './page/liveMarkdown';
+import { cardLinksChanged, pageMarkdown, liveFormatting, tableField, type AssetUrl, type CardLinkHooks } from './page/liveMarkdown';
+import { cardLinkSub, findCard, formatCardLink, rankCards, type LinkableCard } from '../../lib/cardLinks';
 import { MicButton } from '../voice/MicButton';
 import { formatCommand, formatKeymap, inTable, insertTable, type FormatId } from './page/format';
 import { PageToolbar, type ToolbarState } from './page/PageToolbar';
@@ -241,6 +245,10 @@ interface PageEditorProps {
   mentionTargets?: ReadonlyArray<{ id: string; label: string; kind: 'hester' | 'provider' | 'handoff' }>;
   /** R10: the workspace file list for [[ and a reader for the source panel. */
   files?: { list: () => Promise<string[]>; read: (path: string) => Promise<string | null> };
+  /** Boards B4: the Desk's Pages and Boards for `[[` (listed above files) and for resolving card links. */
+  cards?: readonly LinkableCard[];
+  /** Boards B4: a card link was clicked; `card` null when it isn't on the Desk (say so). */
+  onOpenCard?: (cardId: string, card: LinkableCard | null) => void;
   /** R10: a quote was inserted from a file (record it as a reference). */
   onQuote?: (q: { file: string; lines: [number, number]; text: string; label: string }) => void;
   /** R12: quiet prompts in the margin (the Goals Page), faded once answered. */
@@ -467,7 +475,7 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
     if (s.empty) {
       const line = state.doc.lineAt(s.head);
       const before = line.text.slice(0, s.head - line.from);
-      const wq = cb.current.files ? wikiQuery(before) : null;
+      const wq = cb.current.files || cb.current.cards ? wikiQuery(before) : null;
       const mq = !wq && usableTargets().length ? mentionQuery(before) : null;
       const q = wq ?? mq;
       if (q) {
@@ -483,7 +491,7 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
     if (!cur || cur.kind !== next.kind || cur.from !== next.from) setPickIndex(0);
     else if (cur.query !== next.query) setPickIndex(0);
     setPicker(next);
-    if (next.kind === 'wiki' && (!cur || cur.kind !== 'wiki') && Date.now() - filesLoadedAt.current > 30000) {
+    if (next.kind === 'wiki' && cb.current.files && (!cur || cur.kind !== 'wiki') && Date.now() - filesLoadedAt.current > 30000) {
       filesLoadedAt.current = Date.now();
       cb.current.files
         ?.list()
@@ -496,10 +504,21 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
   const pickerItems: Array<PickerItem & { value: string }> = useMemo(() => {
     if (!picker) return [];
     if (picker.kind === 'wiki') {
-      return rankFiles(picker.query, fileList ?? [], 30).map((p) => {
-        const i = p.lastIndexOf('/');
-        return { key: p, value: p, label: i >= 0 ? p.slice(i + 1) : p, sub: i >= 0 ? p.slice(0, i) : undefined };
-      });
+      // Desk cards first (a few), then files.
+      const cards = rankCards(picker.query, props.cards ?? [], 6).map((c) => ({
+        key: `card:${c.id}`,
+        value: `card:${c.id}`,
+        label: c.title || 'Untitled',
+        sub: cardLinkSub(c),
+        icon: c.kind === 'board' ? ('image' as const) : ('document' as const),
+      }));
+      const files = props.files
+        ? rankFiles(picker.query, fileList ?? [], 30).map((p) => {
+            const i = p.lastIndexOf('/');
+            return { key: p, value: p, label: i >= 0 ? p.slice(i + 1) : p, sub: i >= 0 ? p.slice(0, i) : undefined };
+          })
+        : [];
+      return [...cards, ...files];
     }
     return mentionMatches(picker.query, usableTargets()).map((t) => ({
       key: t.id,
@@ -508,7 +527,7 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
       sub: t.kind === 'hester' ? 'Ask' : t.kind === 'provider' ? 'Hand off' : 'Reply',
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picker, fileList, props.mentionTargets]);
+  }, [picker, fileList, props.mentionTargets, props.cards, props.files]);
   const pickerItemsRef = useRef(pickerItems);
   pickerItemsRef.current = pickerItems;
 
@@ -532,6 +551,14 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         const target = usableTargets().find((t) => t.id === item.value);
         if (!target) return;
         const insert = `@${mentionSlug(target.label) || target.id} `;
+        view.dispatch({ changes: { from: p.from, to: p.to, insert }, selection: { anchor: p.from + insert.length }, userEvent: 'input.complete' });
+        setPicker(null);
+        return;
+      }
+      if (item.value.startsWith('card:')) {
+        const card = findCard(item.value.slice(5), cb.current.cards ?? []);
+        if (!card) return;
+        const insert = formatCardLink(card.id, card.title || 'Untitled');
         view.dispatch({ changes: { from: p.from, to: p.to, insert }, selection: { anchor: p.from + insert.length }, userEvent: 'input.complete' });
         setPicker(null);
         return;
@@ -643,6 +670,18 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
     if (!cb.current.files) return;
     openSource(link.path, link.lines, null);
   };
+  // Card links (B4): resolved against the latest cards, through cb so the extension is made once.
+  const cardHooks = useMemo<CardLinkHooks>(
+    () => ({
+      resolve: (id) => findCard(id, cb.current.cards ?? []),
+      open: (id, card) => cb.current.onOpenCard?.(id, card),
+    }),
+    [],
+  );
+  // The Desk's cards changed: card links redraw (a card found, renamed or gone).
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: cardLinksChanged.of(null) });
+  }, [props.cards]);
 
   // ---- the row's actions (R1, R2, R3, R9) ----
   const currentSel = (): PageSelection | null => {
@@ -746,7 +785,7 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         drawSelection(),
         highlightSpecialChars(),
         // Through a ref: an in-memory Page gets its resolver once it becomes a card.
-        liveFormatting((link) => openWikiRef.current(link), (name) => assetUrlRef.current?.(name) ?? Promise.resolve(null)),
+        liveFormatting((link) => openWikiRef.current(link), (name) => assetUrlRef.current?.(name) ?? Promise.resolve(null), cardHooks),
         tableField,
         affordanceField((opt) => pickAffordance(opt)),
         mentionField(() => void sendMention()),
@@ -1211,8 +1250,16 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
               index={Math.min(pickIndex, Math.max(0, pickerItems.length - 1))}
               top={geo.picker.top}
               left={geo.picker.left}
-              label={picker.kind === 'wiki' ? 'Workspace files' : 'Mention'}
-              empty={picker.kind === 'wiki' ? (fileList == null ? 'Loading files…' : 'No matching files') : 'No one by that name'}
+              label={picker.kind === 'wiki' ? (props.cards ? 'Desk cards and workspace files' : 'Workspace files') : 'Mention'}
+              empty={
+                picker.kind === 'wiki'
+                  ? props.files && fileList == null
+                    ? 'Loading files…'
+                    : props.files
+                      ? 'No matching cards or files'
+                      : 'No matching cards'
+                  : 'No one by that name'
+              }
               onPick={pick}
               onHover={setPickIndex}
             />

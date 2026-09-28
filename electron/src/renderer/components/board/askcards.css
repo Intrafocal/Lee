@@ -1,0 +1,283 @@
+/*
+ * Asks and hand-offs on a Board (Boards B3): the sticky note (AskCard) and
+ * the clipboard (HandoffCard), and the thin leader to what they're about.
+ *
+ * They sit in the Board's transformed layer, so boxes are Board px. Text is
+ * counter-scaled with --board-scale (set on the layer, like the Desk's
+ * --desk-scale) only while zoomed out, and never past 1.25x, so a note stays
+ * readable without outgrowing its box. Quiet: a faint warm tint for the
+ * sticky, a clip for the clipboard; phosphor only for the new-answer dot,
+ * ember only for a hand-off waiting on you.
+ */
+
+.bd-card {
+  --bd-text: calc(13px / max(min(var(--board-scale, 1), 1), 0.8));
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--bd-text);
+  line-height: 1.45;
+  color: var(--text-1);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 2px 8px rgba(var(--ground-0-rgb), 0.35);
+  overflow: hidden;
+  cursor: default;
+}
+
+.bd-card:hover {
+  border-color: var(--ground-5);
+}
+
+.bd-card.is-selected {
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+/* ---- the sticky note ---- */
+
+.bd-ask {
+  background: linear-gradient(rgba(var(--ember-rgb), 0.07), rgba(var(--ember-rgb), 0.07)), var(--ground-2);
+  border-color: rgba(var(--ember-rgb), 0.18);
+  border-radius: 2px 2px 2px var(--radius-card);
+}
+
+/* The folded corner. */
+.bd-ask::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, rgba(var(--ember-rgb), 0.14) 50%, var(--ground-1) 50%);
+  pointer-events: none;
+}
+
+.bd-ask-q {
+  font-family: var(--font-write);
+  font-size: calc(var(--bd-text) * 1.15);
+  line-height: 1.35;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.bd-ask-q.is-clamped {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.bd-ask-q.is-follow {
+  font-size: var(--bd-text);
+  color: var(--text-2);
+}
+
+.bd-ask-followup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--ground-4);
+}
+
+/* ---- the clipboard ---- */
+
+.bd-handoff {
+  padding-top: var(--space-4);
+  overflow: visible;
+}
+
+/* The clip at the top edge. */
+.bd-clip {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 44px;
+  height: 12px;
+  transform: translateX(-50%);
+  background: var(--ground-4);
+  border: 1px solid var(--ground-5);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.bd-handoff-line {
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.bd-handoff-line.is-clamped {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.bd-handoff .bd-card-body {
+  overflow: auto;
+}
+
+/* ---- shared parts ---- */
+
+.bd-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-size: calc(var(--bd-text) * 0.85);
+  color: var(--text-3);
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.bd-card-head:hover .bd-card-status {
+  color: var(--text-2);
+}
+
+.bd-card-status {
+  font-size: calc(var(--bd-text) * 0.85);
+  color: var(--text-3);
+}
+
+.bd-card-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.bd-card-dot.is-asking,
+.bd-card-dot.is-starting,
+.bd-card-dot.is-running {
+  background: none;
+  border: 1px solid var(--text-3);
+  animation: bd-pulse 1.6s ease-in-out infinite;
+}
+
+/* The new-answer dot (and a result in you haven't opened). */
+.bd-card-dot.is-new {
+  background: var(--phosphor);
+}
+
+.bd-card-dot.is-waiting {
+  background: var(--needs-you);
+}
+
+.bd-card-dot.is-error,
+.bd-card-dot.is-missing {
+  background: var(--error);
+}
+
+.bd-card-dot.is-done,
+.bd-card-dot.is-read {
+  background: none;
+  border: 1px solid var(--text-3);
+}
+
+.bd-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: auto;
+  cursor: auto;
+}
+
+.bd-card-md {
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.bd-card-md p {
+  margin: 0 0 var(--space-1);
+}
+
+.bd-card-err {
+  color: var(--error);
+}
+
+.bd-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.bd-card-actions:empty {
+  display: none;
+}
+
+.bd-card-btn {
+  font: inherit;
+  font-size: calc(var(--bd-text) * 0.9);
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+}
+
+.bd-card-btn:hover {
+  color: var(--text-1);
+  background: var(--ground-3);
+}
+
+.bd-card-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: auto;
+  font: inherit;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  outline: none;
+}
+
+.bd-card-input:focus {
+  border-color: var(--ground-5);
+}
+
+/* ---- the leader ---- */
+
+.bd-leader {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.bd-leader line {
+  stroke: var(--text-3);
+  stroke-width: calc(1px / max(var(--board-scale, 1), 0.25));
+  stroke-dasharray: 3 3;
+}
+
+.bd-leader circle {
+  fill: var(--text-3);
+}
+
+@keyframes bd-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bd-card-dot {
+    animation: none !important;
+  }
+}

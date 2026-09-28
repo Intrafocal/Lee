@@ -648,6 +648,25 @@
   color: var(--text-2);
 }
 
+/* A link to a Desk card (Boards B4): its glyph, then its label. */
+.deep-card-link {
+  white-space: nowrap;
+}
+
+.deep-card-link-glyph {
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.25em;
+  vertical-align: -0.05em;
+  color: var(--text-2);
+}
+
+/* A card that isn't on the Desk any more: muted, still clickable (it says so). */
+.deep-card-link.is-missing {
+  color: var(--text-3);
+  text-decoration-style: dotted;
+}
+
 /* A task's checkbox off the cursor's line; a done task reads quieter. */
 .deep-task-box {
   display: inline-block;
@@ -1114,6 +1133,12 @@
 
 .deep-picker-label {
   white-space: nowrap;
+}
+
+.deep-picker-icon {
+  flex: none;
+  align-self: center;
+  color: var(--text-2);
 }
 
 .deep-picker-sub {

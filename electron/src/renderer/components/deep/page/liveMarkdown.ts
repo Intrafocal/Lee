@@ -11,7 +11,10 @@
  *   the cursor's line, the
  *   markdown marks hidden off the cursor's lines (deepModel.liveHidden), and
  *   `[[…]]` links shown as their label off the cursor's line, opening the
- *   source panel when clicked (R10). With `assetUrl`, the Page's own images
+ *   source panel when clicked (R10). With `cardLinks` (Boards B4), a card
+ *   link (`[[pg-…|Title]]`, `[[bd-…|Title]]`) shows as its label with a Page
+ *   or Board glyph and opens that card; one to a card that's gone shows
+ *   muted. With `assetUrl`, the Page's own images
  *   (`![…](assets/<file>)`, Tether §4.4) show as images off the cursor's
  *   line, fetched with auth into blob URLs; on the cursor's line the
  *   markdown shows, like every other mark.
@@ -20,13 +23,15 @@
  * - languageForPath: the same languages, by file extension, for the source panel.
  */
 
-import { type Extension, type EditorState, RangeSetBuilder, StateField, type Range } from '@codemirror/state';
+import { type Extension, type EditorState, RangeSetBuilder, StateEffect, StateField, type Range } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from '@codemirror/view';
 import { HighlightStyle, LanguageDescription, syntaxHighlighting, syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { tags as t } from '@lezer/highlight';
 import { liveHidden, parseTable, parseWikiLinks, touchesActive, wikiDisplay, type WikiLink } from '../../../lib/deepModel';
 import { parsePageImages } from '../../../lib/tetherModel';
+import { cardLinkDisplay, cardLinkTitle, isCardLinkId, type LinkableCard } from '../../../lib/cardLinks';
+import { strokeIcons } from '../../../icons/iconData.generated';
 
 // ---------------------------------------------------------------------------
 // Languages
@@ -118,6 +123,74 @@ class WikiWidget extends WidgetType {
       e.preventDefault();
       e.stopPropagation();
       this.open(this.link);
+    });
+    return el;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Card links (Boards B4)
+// ---------------------------------------------------------------------------
+
+/** How card links resolve and open. `resolve` null: not on the Desk (the link shows muted). */
+export interface CardLinkHooks {
+  resolve: (cardId: string) => LinkableCard | null;
+  open: (cardId: string, card: LinkableCard | null) => void;
+}
+
+/** Dispatch after the Desk's cards change, so card links redraw (found, renamed or gone). */
+export const cardLinksChanged = StateEffect.define<null>();
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** The Page or Board glyph, from the Phosphor set (Icon.tsx's drawing, as DOM). */
+function glyph(kind: 'page' | 'board'): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'deep-card-link-glyph');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', strokeIcons[kind === 'board' ? 'image' : 'document']);
+  svg.appendChild(path);
+  return svg;
+}
+
+class CardLinkWidget extends WidgetType {
+  constructor(
+    readonly link: WikiLink,
+    readonly card: LinkableCard | null,
+    readonly hooks: CardLinkHooks,
+  ) {
+    super();
+  }
+  eq(other: CardLinkWidget): boolean {
+    return (
+      other.link.path === this.link.path &&
+      other.link.label === this.link.label &&
+      (other.card?.title ?? null) === (this.card?.title ?? null) &&
+      (other.card?.area_name ?? null) === (this.card?.area_name ?? null)
+    );
+  }
+  toDOM(): HTMLElement {
+    const id = this.link.path;
+    const card = this.card;
+    const el = document.createElement('span');
+    el.className = `deep-wiki deep-card-link${card ? '' : ' is-missing'}`;
+    el.appendChild(glyph(card?.kind ?? (id.startsWith('bd-') ? 'board' : 'page')));
+    el.appendChild(document.createTextNode(cardLinkDisplay({ card_id: id, label: this.link.label }, card)));
+    el.title = cardLinkTitle({ card_id: id }, card);
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.hooks.open(id, card);
     });
     return el;
   }
@@ -223,7 +296,7 @@ const ruleWidget = new RuleWidget();
 
 const hide = Decoration.replace({});
 
-function buildLive(view: EditorView, openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl): DecorationSet {
+function buildLive(view: EditorView, openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl, cardLinks?: CardLinkHooks): DecorationSet {
   const { state } = view;
   const active = activeLines(state);
   const decos: Range<Decoration>[] = [];
@@ -254,7 +327,9 @@ function buildLive(view: EditorView, openWiki: (link: WikiLink) => void, assetUr
           const b = line.from + link.to;
           wikiRanges.push([a, b]);
           if (touchesActive(a, b, active)) decos.push(Decoration.mark({ class: 'deep-wiki-src' }).range(a, b));
-          else decos.push(Decoration.replace({ widget: new WikiWidget(link, openWiki) }).range(a, b));
+          else if (cardLinks && isCardLinkId(link.path)) {
+            decos.push(Decoration.replace({ widget: new CardLinkWidget(link, cardLinks.resolve(link.path), cardLinks) }).range(a, b));
+          } else decos.push(Decoration.replace({ widget: new WikiWidget(link, openWiki) }).range(a, b));
         }
       }
       pos = line.to + 1;
@@ -322,17 +397,22 @@ function buildLive(view: EditorView, openWiki: (link: WikiLink) => void, assetUr
   return Decoration.set(decos, true);
 }
 
-/** Line classes, hidden marks and `[[…]]` labels; `openWiki` opens the source panel; `assetUrl` shows the Page's images. */
-export function liveFormatting(openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl): Extension {
+/**
+ * Line classes, hidden marks and `[[…]]` labels; `openWiki` opens the source
+ * panel; `assetUrl` shows the Page's images; `cardLinks` resolves and opens
+ * card links (without it they show as file links did).
+ */
+export function liveFormatting(openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl, cardLinks?: CardLinkHooks): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       constructor(view: EditorView) {
-        this.decorations = buildLive(view, openWiki, assetUrl);
+        this.decorations = buildLive(view, openWiki, assetUrl, cardLinks);
       }
       update(u: ViewUpdate) {
-        if (u.docChanged || u.viewportChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) {
-          this.decorations = buildLive(u.view, openWiki, assetUrl);
+        const cardsChanged = u.transactions.some((tr) => tr.effects.some((e) => e.is(cardLinksChanged)));
+        if (cardsChanged || u.docChanged || u.viewportChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) {
+          this.decorations = buildLive(u.view, openWiki, assetUrl, cardLinks);
         }
       }
     },

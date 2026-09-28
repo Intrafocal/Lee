@@ -188,10 +188,11 @@ export function pageIdForExploration(expId: string): string | null {
   return m ? `pg-${m[1]}` : null;
 }
 
-/** The Page card a task came from: origin {kind:'page', ref:'pg-…#ans-…'}, or the old {kind:'exploration', ref:'exp-…#ans-…'}. */
+/** The card a task came from: origin {kind:'page', ref:'pg-…#ans-…'}, a Board's {kind:'board', ref:'bd-…#ans-…'}, or the old {kind:'exploration', ref:'exp-…#ans-…'}. */
 export function cardIdForOrigin(origin: { kind: string; ref?: string | null } | null | undefined): string | null {
   const head = (origin?.ref ?? '').split('#')[0];
   if (origin?.kind === 'page') return PAGE_ID_RE.test(head) ? head : null;
+  if (origin?.kind === 'board') return BOARD_ID_RE.test(head) ? head : null;
   if (origin?.kind === 'exploration') return pageIdForExploration(head);
   return null;
 }

@@ -1,18 +1,22 @@
 /**
- * PagePicker - the inline list under the caret for `[[` (workspace files,
- * markdown first) and `@` (Hester, the providers, this exploration's
- * hand-offs). Deep next R10, R11.
+ * PagePicker - the inline list under the caret for `[[` (the Desk's Pages
+ * and Boards with their glyph, then workspace files, markdown first) and `@`
+ * (Hester, the providers, this exploration's hand-offs). Deep next R10, R11;
+ * Boards B4.
  *
  * The Page keeps focus: arrows, Enter/Tab and Esc are handled by the Page's
  * keymap while the list shows; a click picks (mousedown, so the caret stays).
  */
 
 import { useEffect, useRef } from 'react';
+import { Icon, type IconName } from '../../Icon';
 
 export interface PickerItem {
   key: string;
   label: string;
   sub?: string;
+  /** A glyph before the label (a Page or a Board). */
+  icon?: IconName;
 }
 
 interface PagePickerProps {
@@ -48,6 +52,7 @@ export function PagePicker({ items, index, top, left, empty, label, onPick, onHo
           }}
           onMouseEnter={() => onHover(i)}
         >
+          {it.icon && <Icon name={it.icon} size={14} className="deep-picker-icon" />}
           <span className="deep-picker-label">{it.label}</span>
           {it.sub && <span className="deep-picker-sub">{it.sub}</span>}
         </div>
