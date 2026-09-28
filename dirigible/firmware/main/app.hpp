@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Waiting, InFlight, Library, Tabs, Terminal, Hester, Pairing, Files, Viewer, DeepIdle };
+enum class View { Waiting, InFlight, Review, Tabs, Terminal, Hester, Pairing, Files, Viewer, DeepIdle };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -88,11 +88,12 @@ struct App {
     lv_obj_t* view_files    = nullptr;
     lv_obj_t* view_viewer   = nullptr;
     lv_obj_t* view_inflight = nullptr;
-    lv_obj_t* view_library  = nullptr;
+    lv_obj_t* view_review   = nullptr;
     lv_obj_t* view_deep_idle = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
     View view = View::Waiting;
+    View files_from = View::Tabs;   // where back from Files goes (Tabs or Review)
 
     // --- tab list -------------------------------------------------------
     lv_obj_t*        tab_list = nullptr;
@@ -212,12 +213,14 @@ bool ball_list(lv_obj_t* list, int dy, bool click);
 
 // Views ---------------------------------------------------------------------
 
-// The device Cockpit (Cockpit design §8.2): three views a plain letter apart,
-// from each other and from Tabs.
-//   w  Work       the waiting pager (screen_waiting.cpp, View::Waiting)
+// The device Cockpit (Cockpit design §8.2; plan 2026-09-28 §3.2): Work ·
+// Review · Hester, the views a plain letter apart, from each other and from
+// Tabs.
+//   w  Work       the waiting pager with Pick up on top (screen_waiting.cpp,
+//                 View::Waiting; the Pick up block is screen_tether.cpp)
 //   i  In flight  the running agents (screen_inflight.cpp)
-//   l  Library    Tether: where the last Deep session stopped, away from it
-//                 (screen_carry.cpp)
+//   v  Review     Pages, newest first, then Files: read-only
+//                 (screen_review.cpp)
 //   x  Still thinking?  the idle-end push, while one is open
 //                 (screen_deep_idle.cpp)
 // On Work, a question page takes w as Wait (you are already on Work).
@@ -231,7 +234,7 @@ bool cockpit_linked();
 /// runs at the machine, else Work's line ("One thing needs you.", "Working
 /// on it.", "All clear."), with the away / link states ahead of it.
 std::string cockpit_status();
-/// w / i / l from any of the three views (and i / l from Tabs), and x for
+/// w / i / v from any of the three views (and i / v from Tabs), and x for
 /// the idle-end push while one is open.  True when the key moved somewhere.
 bool cockpit_nav_key(uint8_t ascii);
 
@@ -259,14 +262,28 @@ bool inflight_back();                      // close an opened agent; false at th
 bool inflight_key(uint8_t ascii);
 void inflight_ball(int dx, int dy, bool click);
 
-// Library (Tether): GET /carry, your last Desk card first, one card per page
-// (j/k): "You stopped at" in italic, one open question, Add a thought (C),
-// Open next (O).  State lives in screen_carry.cpp.
-void library_build(lv_obj_t* parent);
-void library_open();                       // show it and refetch
-bool library_back();                       // close the thought box; false otherwise
-bool library_key(uint8_t ascii);
-void library_ball(int dx, int dy, bool click);
+// Tether (docs/14-Deep-Work.md §8.1): GET /tether, where you stopped, drawn
+// as the Pick up block at the top of Work when nothing needs you: the card's
+// title, the stopped-at line (two lines, italic: your words) and "n open
+// questions".  Enter (or p, or a tap) opens the Page in the viewer, and back
+// lands in Review.  State lives in screen_tether.cpp.
+void tether_fetch();                       // refetch; Work redraws when it lands
+/// Build the (hidden) block into `parent` at `y`, full width.
+void pick_up_build(lv_obj_t* parent, int y);
+/// Show or hide the block for the last GET /tether; its height, 0 when hidden.
+int  pick_up_render(bool show);
+lv_obj_t* pick_up_obj();                   // the block's touch row, or null
+bool pick_up_open();                       // open the Page; false when nothing to pick up
+
+// Review (plan 2026-09-28 §3.2): GET /tether/pages, every Page newest first
+// (50, stashed ones too), j/k or the ball to move, Enter opens the Page's
+// markdown in the viewer; then Files, today's tree (f).  Read-only.  State
+// lives in screen_review.cpp.
+void review_build(lv_obj_t* parent);
+void review_open();                        // show it and refetch
+void review_show();                        // show it as it was (back from a Page)
+bool review_key(uint8_t ascii);
+void review_ball(int dx, int dy, bool click);
 
 // Still thinking? (Desk D2 §9.2): the idle-end push as its own page: e
 // extend, d / m / s end and rate (then an optional stopped-at line), c
@@ -289,8 +306,15 @@ void tabs_chrome();
 /// Dirigible follows (tabs, files, commands).  'w' on the tab list, or Menu.
 void windows_open();
 
+// Terminal: the tab view.  It opens in compose (plan 2026-09-28 §4.6): a
+// line you type into locally and send as one piece over POST /tether/send,
+// Enter = Send (typed, then Enter), Deliver = typed without Enter.  The
+// trackball click toggles keystroke mode, where every key goes straight to
+// the PTY (TUIs).  State lives in screen_terminal.cpp.
 void terminal_build(lv_obj_t* parent);
-void terminal_open(int pty_id, const char* label);
+/// `type` is the Lee tab type (claude, terminal, git, ...), for the send's
+/// tab_kind and whether the view opens in compose or keys.
+void terminal_open(int pty_id, const char* label, const char* type = nullptr);
 void terminal_close();
 void terminal_repaint();
 bool terminal_key(uint8_t ascii);          // true = consumed
@@ -310,7 +334,8 @@ void pairing_ball(int dx, int dy, bool click);  // list steps: highlight + pick
 // Files: the workspace tree over GET /fs/list (Aeronaut's FilesBrowserBody).
 // Its own state lives in screen_files.cpp.
 void files_build(lv_obj_t* parent);
-void files_open();                         // show the tree for the workspace
+/// Show the tree for the workspace; back returns to `from` (Tabs or Review).
+void files_open(View from = View::Tabs);
 bool files_key(uint8_t ascii);
 void files_ball(int dx, int dy, bool click);
 
@@ -321,6 +346,10 @@ void files_ball(int dx, int dy, bool click);
 void viewer_build(lv_obj_t* parent);
 /// Open `path`; back returns to `from` (Files or Tabs).
 void viewer_open_path(const std::string& path, View from);
+/// Open a Desk Page's markdown (GET /tether/pages/:id?text_only=1),
+/// scrolled to `line` (1-based, 0 = the top); back returns to `from`.
+void viewer_open_page(const std::string& card_id, const std::string& title,
+                      View from, int line = 0);
 /// Follow an editor-like tab: shows `editors[tab_id].file`, reloads when the
 /// tab switches file, and tracks its modified flag and cursor line.
 void viewer_open_tab(int tab_id);

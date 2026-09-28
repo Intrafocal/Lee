@@ -30,8 +30,10 @@
  * Pager order: blocking first, then needs-you, oldest first; parked items
  * last.  Only the kinds that want an answer page (approval, waiting, blocker,
  * decision, plus anything Lee marks blocking).  With none of those the body
- * says "Nothing needs you" over a few recently finished turns (tap one to read
- * it as a page) and the c / i / l hints.
+ * shows Pick up on top (screen_tether.cpp: your last Desk card and where you
+ * stopped; Enter or p opens it), then "Nothing needs you" over the recently
+ * finished turns that still fit (tap one to read it as a page) and the
+ * c / i / v hints.
  *
  * This is the device Cockpit's Work (Cockpit design §8.2).  An item that takes
  * text gets the quick replies as letter buttons, sent at once through the
@@ -48,7 +50,7 @@
  * Approve (Y) / Deny (N); d dismisses and s snoozes any item from the keys.
  * The header says Work's line (cockpit_status) and "In deep work" while a
  * Deep session runs at the machine.  The old f (Focus) key is retired: Deep
- * can't start remotely, and Library's Open next (O) replaces it (14 §8.1).
+ * can't start remotely.
  *
  * Every write echoes the version the page showed; a 409 means the item moved
  * on, so the queue is refetched, nothing is resent and the human looks again
@@ -108,6 +110,7 @@ constexpr int RECENT     = 3;
 constexpr int ROW_H      = 34;
 constexpr int HINT_H     = 28;
 constexpr int HINT_Y     = BODY_H - HINT_H - 2;
+constexpr int PICKUP_Y   = 4;
 constexpr int REPLY_MAX   = 1000;   // Lee takes up to 4000; the keyboard won't
 constexpr int CAPTURE_MAX = 500;
 constexpr int COMPOSE_BTN_H = 30;
@@ -496,12 +499,16 @@ void footer()
         const bool diff = takes_text(*it);
         chrome_set_footer(s.pinned_id.empty() ? (diff ? "f diff  j/k items" : "j/k or swipe: items")
                                               : (diff ? "f diff  " LV_SYMBOL_LEFT " back" : LV_SYMBOL_LEFT " or hold: back"),
-                          "c i l t");
+                          "c i v t");
         return;
     }
     const std::string& id = device_id();
+    const lv_obj_t* pick = pick_up_obj();
     if (s.reply_forbidden) {
         chrome_set_footer("shared token: re-pair", "queue");
+    } else if (pick && !lv_obj_has_flag(pick, LV_OBJ_FLAG_HIDDEN) &&
+               !lv_obj_has_flag(s.empty, LV_OBJ_FLAG_HIDDEN)) {
+        chrome_set_footer("Enter or p: pick up", "queue");
     } else if (!id.empty()) {
         const std::string legend = "device " + id;
         chrome_set_footer(legend.c_str(), "queue");
@@ -745,7 +752,7 @@ void open_compose(Compose mode)
         lv_textarea_set_max_length(s.c_ta, REPLY_MAX);
         lv_textarea_set_text(s.c_ta, s.reply_draft_id == it->id ? s.reply_draft.c_str() : "");
     } else {
-        head = "Capture to Someday";
+        head = "Capture to Ideas";
         lv_textarea_set_placeholder_text(s.c_ta, "An idea, a todo, a link to read later");
         lv_textarea_set_max_length(s.c_ta, CAPTURE_MAX);
         lv_textarea_set_text(s.c_ta, s.capture_draft.c_str());
@@ -788,8 +795,8 @@ void capture_submit()
         s.capture_draft.clear();
         if (s.mode != Compose::Capture) return;
         lv_textarea_set_text(s.c_ta, "");
-        set_status(r.spooled ? "Saved - reaches Someday when Hester is back"
-                             : "Captured to Someday",
+        set_status(r.spooled ? "Saved - reaches Ideas when Hester is back"
+                             : "Captured to Ideas",
                    r.spooled ? dg::ember() : dg::phosphor());
         if (!s.compose_close) s.compose_close = lv_timer_create(compose_close_cb, 1400, nullptr);
     };
@@ -1155,17 +1162,26 @@ void render_empty(const char* title, const char* sub, bool with_recent)
     s.shown_id.clear();
     s.shown_version = -1;
 
+    // Pick up sits on top when there is one (only with nothing to answer:
+    // an item that needs you is the next step).  The recent turns get what
+    // is left above the hint buttons, so fewer show under a pick-up.
+    const int pick_h = pick_up_render(with_recent);
+    const int top = pick_h ? PICKUP_Y + pick_h + 6 : 10;
     const auto* snap = snapshot();
-    const int n = with_recent && snap ? s.recent_count : 0;
+    int n = with_recent && snap ? s.recent_count : 0;
+    const int rows_y = top + 42;
+    const int fit = std::max(0, (HINT_Y - 4 - rows_y + 4) / (ROW_H + 4));
+    n = std::min(n, fit);
     lv_label_set_text(s.e_title, title);
     lv_label_set_text(s.e_sub, sub);
-    lv_obj_set_y(s.e_title, n ? 10 : 58);
-    lv_obj_set_y(s.e_sub, n ? 33 : 86);
+    lv_obj_set_y(s.e_title, n || pick_h ? top : 58);
+    lv_obj_set_y(s.e_sub, n || pick_h ? top + 23 : 86);
 
     for (int i = 0; i < RECENT; i++) {
         Row& row = s.rows[i];
         if (i >= n) { lv_obj_add_flag(row.obj, LV_OBJ_FLAG_HIDDEN); continue; }
         const auto& it = snap->items[s.recent[i]];
+        lv_obj_set_y(row.obj, rows_y + i * (ROW_H + 4));
         lv_obj_clear_flag(row.obj, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(row.title, ui_fold(it.title, false).c_str());
         std::string m = kind_chip(it.kind);
@@ -1303,7 +1319,7 @@ void hint_cb(lv_event_t* e)
     switch ((char)(intptr_t)lv_event_get_user_data(e)) {
     case 'c': waiting_open_capture(); break;
     case 'i': inflight_open(); break;
-    case 'l': library_open(); break;
+    case 'v': review_open(); break;
     default: break;
     }
 }
@@ -1507,7 +1523,7 @@ void build_empty(lv_obj_t* parent)
 
     // Three bordered buttons along the bottom, each naming its key.
     static const struct { char key; const char* text; } hints[] = {
-        { 'c', "Capture (C)" }, { 'i', "In flight (I)" }, { 'l', "Library (L)" },
+        { 'c', "Capture (C)" }, { 'i', "In flight (I)" }, { 'v', "Review (V)" },
     };
     const int gap = 4;
     const int w = (SCREEN_W - 2 * PAD - 2 * gap) / 3;
@@ -1750,7 +1766,7 @@ bool cockpit_nav_key(uint8_t k)
     switch (k) {
     case 'w': if (app().view != View::Waiting)  waiting_open();  return true;
     case 'i': if (app().view != View::InFlight) inflight_open(); return true;
-    case 'l': if (app().view != View::Library)  library_open();  return true;
+    case 'v': if (app().view != View::Review)   review_open();   return true;
     case 'x':
         if (!deep_idle_pending()) return false;
         if (app().view != View::DeepIdle) deep_idle_open();
@@ -1764,6 +1780,8 @@ void waiting_build(lv_obj_t* parent)
     auto& a = app();
     a.view_waiting = panel(parent);
     build_empty(a.view_waiting);
+    pick_up_build(st().empty, PICKUP_Y);
+    lv_obj_move_to_index(pick_up_obj(), 0);   // first row the ball reaches
     build_page(a.view_waiting);
     build_compose(a.view_waiting);
     lv_obj_add_flag(st().page, LV_OBJ_FLAG_HIDDEN);
@@ -1783,6 +1801,7 @@ void waiting_open()
     s.reply_forbidden = false;   // give a fresh token the benefit of the doubt
     app_show(View::Waiting);
     if (auto* c = conn(); c && c->isConnected()) c->fetchAttention();
+    tether_fetch();
 }
 
 void waiting_open_capture()
@@ -1846,8 +1865,11 @@ bool waiting_key(uint8_t k)
     case 'k': go(-1); return true;
     case 'c': waiting_open_capture(); return true;
     case 't': app_show(View::Tabs); return true;
-    case 'i': case 'l':
+    case 'i': case 'v':
         cockpit_nav_key(k);
+        return true;
+    case 'p':
+        if (!pick_up_open()) flash("nothing to pick up");
         return true;
     case 'g': case 'w': case 'e': case 'f':
         // Go / Wait / Why / Diff.  On Work already, so w is Wait, not "go to Work".
@@ -1861,6 +1883,16 @@ bool waiting_key(uint8_t k)
             else               flash("roll or tap an option");
         } else if (it && it->kind != AttentionKind::Question && it->can(dirigible::ActReply)) {
             open_compose(Compose::Reply);
+        } else if (!it) {
+            // Nothing to answer: Enter opens the pick-up, unless the ball
+            // has highlighted another row (a recent turn, a hint button).
+            lv_obj_t* f = app().group ? lv_group_get_focused(app().group) : nullptr;
+            if (f && f != pick_up_obj() && lv_obj_get_parent(f) == s.empty &&
+                !lv_obj_has_flag(f, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(s.empty, LV_OBJ_FLAG_HIDDEN)) {
+                lv_event_send(f, LV_EVENT_CLICKED, nullptr);
+            } else {
+                pick_up_open();
+            }
         }
         return true;
     case 'y': case 'n':

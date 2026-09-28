@@ -473,9 +473,10 @@ void files_build(lv_obj_t* parent)
     lv_obj_add_flag(a.view_files, LV_OBJ_FLAG_HIDDEN);
 }
 
-void files_open()
+void files_open(View from)
 {
     auto& s = st();
+    app().files_from = from;
     auto* conn = app().machines ? app().machines->activeConnection() : nullptr;
     const dirigible::LeeContext* ctx = conn ? conn->currentContext() : nullptr;
     const std::string ws = ctx && ctx->workspace ? ctx->workspace : "";

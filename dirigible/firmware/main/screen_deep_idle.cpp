@@ -8,7 +8,7 @@
  * the card you were in and how long until the session ends.  The device stays
  * pull-first: the item's notify blinks the header like any other, Work's
  * header centre says "Still thinking? x", and x opens this page from Work,
- * In flight or Library.
+ * In flight or Review.
  *
  *   +------------------------------------------------------------+
  *   | Still thinking?                                  ends 4m   |  title
@@ -24,7 +24,7 @@
  *   e      POST /deep/idle-end {action: extend}: 45 more minutes from now.
  *   d m s  End and rate: a box asks where you stopped (optional); Enter
  *          sends POST /deep/idle-end {action: end_rate, rating, stopped_at?}.
- *   c      a thought into the card (POST /carry/capture with its card_id);
+ *   c      a thought into the card (POST /tether/capture with its card_id);
  *          the push stays open.
  *
  * Every answer echoes the item's version; a 409 means the push was answered
@@ -124,7 +124,7 @@ void footer()
     case Box::Capture:   chrome_set_footer("Enter sends  hold: cancel", "thought");  return;
     default: break;
     }
-    chrome_set_footer(item() ? "e extend  d/m/s end + rate  c capture" : "w Work", "deep");
+    chrome_set_footer(item() ? "e extend  d/m/s end + rate  c capture" : "w Work", "desk");
 }
 
 /// "4m", "under a minute"; "" when unknown.
@@ -312,7 +312,7 @@ void submit()
 #else
     auto* c = conn();
     if (!c) { s.busy = false; set_status("Not connected", dg::error()); return; }
-    c->carryCapture(text, it->deep_card_id, done);
+    c->tetherCapture(text, it->deep_card_id, done);
 #endif
 }
 
@@ -521,7 +521,7 @@ bool deep_idle_key(uint8_t k)
     case 'm': open_box(Box::StoppedAt, "mixed");   return true;
     case 's': open_box(Box::StoppedAt, "shallow"); return true;
     case 'c': open_box(Box::Capture, nullptr);     return true;
-    case 'w': case 'i': case 'l': cockpit_nav_key(k); return true;
+    case 'w': case 'i': case 'v': cockpit_nav_key(k); return true;
     case '\t': return false;
     default:  return true;   // nothing strays into a hidden widget
     }
