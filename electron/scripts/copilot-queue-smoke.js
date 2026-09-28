@@ -612,6 +612,29 @@ test('withClaudeHooks prepends --settings before a -- prompt', () => {
   assert.deepStrictEqual(args.slice(-2), ['--', '--settings']);
 });
 
+test("Lee's Claude plugin: the Desk and Drawer skills, --plugin-dir added once, gone when hooks are off", () => {
+  const { installClaudePlugin, pluginPaths, DESK_SKILL, DRAWER_SKILL } = require(path.join(dist, 'copilot', 'claude-plugin.js'));
+  const home = fs.mkdtempSync(path.join(tmpHome, 'plugin-'));
+  const p = installClaudePlugin(true, home);
+  assert.strictEqual(JSON.parse(fs.readFileSync(p.manifest, 'utf8')).name, 'lee');
+  assert.strictEqual(fs.readFileSync(p.skills.desk, 'utf8'), DESK_SKILL);
+  assert.strictEqual(fs.readFileSync(p.skills.drawer, 'utf8'), DRAWER_SKILL);
+  for (const skill of [DESK_SKILL, DRAWER_SKILL]) {
+    assert.ok(/^---\nname: \w+\ndescription: .+\n---\n/.test(skill), 'frontmatter: name and description');
+    assert.ok(skill.includes('hester desk'), 'reads through hester desk');
+    assert.ok(/Don't write to/.test(skill), 'read-only');
+  }
+  const args = withClaudeHooks('claude', ['--resume', 'sess-1']);
+  const i = args.indexOf('--plugin-dir');
+  assert.ok(i >= 0 && args[i + 1] === p.dir, 'the plugin rides along');
+  assert.deepStrictEqual(args.slice(-2), ['--resume', 'sess-1']);
+  assert.strictEqual(withClaudeHooks('claude', ['--plugin-dir', p.dir]).filter((a) => a === '--plugin-dir').length, 1, 'never twice');
+  assert.ok(!withClaudeHooks('bash', ['-l']).includes('--plugin-dir'), 'only Claude');
+  installClaudePlugin(false, home);
+  assert.ok(!fs.existsSync(pluginPaths(home).dir));
+  assert.ok(!withClaudeHooks('claude', []).includes('--plugin-dir'), 'off: no flag');
+});
+
 test('hook script: loopback-only URL, and no error body on SessionStart', () => {
   const bin = fs.mkdtempSync(path.join(tmpHome, 'bin-'));
   const log = path.join(bin, 'args');

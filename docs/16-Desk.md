@@ -38,6 +38,7 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 - **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
 - **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Stashed** (Areas). An Area's cards go with it.
 - **The Drawer is a start menu** (*2026-09-28*): the taskbar's Drawer button opens it upward. It lists folders (Ideas, Stashed, then your own Drawers); hovering or → flies a folder out to the right, its entries grouped **Today / This week / Older** (by when they were stashed or captured). Search sits at the bottom by the button, focused on open: every word, any order, results grouped by folder. ↑↓ move, → and ← go in and out of a folder, Enter acts, Esc closes.
+- **Claude Code can read the Desk** (*2026-09-28*): every Claude that Lee launches gets Lee's plugin (`--plugin-dir ~/.lee/claude-plugin`, written at startup next to the hooks) with two read-only skills, `lee:desk` (Areas, Pages and their margins, the last card) and `lee:drawer` (Stashed Areas, Ideas, search). Both call `hester desk …`, which reads the files directly, so they work with Hester off; neither writes.
 
 **D2 foundations scope** (*decided 2026-09-27*):
 - Hester's `.hester/desk/` store (§5) and the migration from explorations;

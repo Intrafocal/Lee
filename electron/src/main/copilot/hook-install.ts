@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { getCopilotConfig } from './config';
 import { HOOK_EVENTS } from './hook-payload';
+import { claudePluginDir, installClaudePlugin } from './claude-plugin';
 
 export const HOOK_SCRIPT = `#!/bin/sh
 # Lee relay for Claude Code hooks. Written by Lee at startup; edits are overwritten.
@@ -227,6 +228,12 @@ export function installClaudeHooks(opts: InstallOptions = {}): HookPaths {
   } else {
     fs.rmSync(paths.settings, { force: true });
   }
+  // Lee's skills (the Desk and the Drawer) ride along with the hooks.
+  try {
+    installClaudePlugin(enabled, opts.home);
+  } catch {
+    // Never block the hooks on the skills.
+  }
   return paths;
 }
 
@@ -240,17 +247,21 @@ export function isClaude(cmd: string): boolean {
 
 /**
  * Prepend `--settings <abs path>` when launching Claude Code, unless the argv
- * already passes --settings or the settings file is absent. Never throws.
+ * already passes --settings or the settings file is absent; and
+ * `--plugin-dir <Lee's plugin>` (the Desk and Drawer skills) unless it's
+ * already there or not installed. Never throws.
  */
 export function withClaudeHooks(cmd: string, args: string[]): string[] {
   try {
     if (!cmd || !isClaude(cmd)) return args;
     const end = args.indexOf('--');
     const opts = end >= 0 ? args.slice(0, end) : args;
-    if (opts.some((a) => a === '--settings' || a.startsWith('--settings='))) return args;
+    const pre: string[] = [];
     const settings = activePaths.settings;
-    if (!fs.existsSync(settings)) return args;
-    return ['--settings', settings, ...args];
+    if (!opts.some((a) => a === '--settings' || a.startsWith('--settings=')) && fs.existsSync(settings)) pre.push('--settings', settings);
+    const plugin = claudePluginDir();
+    if (plugin && !opts.some((a, i) => (a === '--plugin-dir' && opts[i + 1] === plugin) || a === `--plugin-dir=${plugin}`)) pre.push('--plugin-dir', plugin);
+    return pre.length ? [...pre, ...args] : args;
   } catch {
     return args;
   }

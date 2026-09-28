@@ -367,6 +367,15 @@ hester someday list [--dir PATH] [--all]
 
 # GOALS.md metrics from Lee's event log (~/.lee/events/), deterministic
 hester goals metrics [--since 14d] [--until now] [--workspace PATH] [--write] [--json]
+
+# The Desk and the Drawer, read-only from .hester/desk/ and .hester/someday/ (no daemon; never writes).
+# --dir is any directory inside the workspace (it looks upward); --json for machines.
+# Claude Code sessions Lee launches get these as the lee:desk and lee:drawer skills
+# (electron/src/main/copilot/claude-plugin.ts, passed with --plugin-dir).
+hester desk overview              # Areas and their Page cards, the Goals card, the Drawer's counts, the last card
+hester desk page <id or title>    # a Page's text, answers, hand-offs, open questions, references [--text-only]
+hester desk last                  # the last card and where you stopped
+hester desk drawer [words...]     # Stashed Areas and Ideas, newest first; words filter
 ```
 
 ### Ask Commands
