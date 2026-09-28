@@ -804,3 +804,51 @@
 .desk-stroke.is-selected .desk-stroke-line {
   stroke: var(--text-1);
 }
+
+/* ---- a Board card: its picture above the title ---- */
+
+.desk-card.is-board {
+  padding: var(--space-2);
+}
+
+.board-picture {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  object-fit: contain;
+  border-radius: calc(var(--radius-card) - 2px);
+  background: var(--ground-1);
+}
+
+.board-picture.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-3);
+  border: 1px dashed var(--ground-4);
+}
+
+.desk-card-picture {
+  flex: 1;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.desk-card.is-board .desk-card-title {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  -webkit-line-clamp: 1;
+}
+
+.desk-card.is-board .desk-card-count {
+  padding: 0 var(--space-2);
+}
+
+.desk-preview-picture {
+  max-height: 320px;
+}
+
+.desk-preview-picture.is-empty {
+  height: 120px;
+}

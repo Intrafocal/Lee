@@ -15,7 +15,10 @@
  * - The Goals card is pinned once to the Desk's top-right corner, the same
  *   at every zoom: GOALS.md's goals, else the Goals Page's first line, else
  *   "What is this project for?", where typing creates it.
- * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Stash.
+ * - An Area's ⋯ (or a right-click on it): Rename, New Page here, New Board
+ *   here, Stash. Pasting an image in Cursor with the pointer on an empty
+ *   spot in an Area starts a Board with it there (§3.1). A Board card shows
+ *   its picture (preview.png, components/board/BoardPicture).
  * - The Drawer is a button in the strip along the bottom of the overview: a
  *   menu of stashed Areas (click to unstash one) and Ideas (click
  *   to start a Page, or drag one onto an Area).
@@ -25,7 +28,7 @@
  *   Area where they start, else on the Desk; they mean nothing to Hester)
  *   and Rectangle (R; drag out a new Area, or drag an Area's right edge,
  *   bottom edge or corner to size it). New, after the tools, is a menu of
- *   what to start (a Page; a Board once it's built) in the current Area.
+ *   what to start (a Page, a Board) in the current Area.
  *   In Cursor a click selects a line; Delete, or its right-click menu,
  *   deletes it, and ⌘Z undoes the last draw or delete. Moves and lines show
  *   at once and settle when Hester has them (deskModel's DeskEdits).
@@ -110,6 +113,10 @@ import {
 } from '../../lib/deskModel';
 import { pushCapped } from '../../lib/canvas/history';
 import { useViewportSize } from '../../lib/canvas/useViewportSize';
+import { createBoard, deleteBoard, putBoardDoc } from '../../lib/hesterBoard';
+import { addImageAsset, imagesIn } from '../../lib/boardAssets';
+import { makeImage } from '../../lib/boardModel';
+import { BoardPicture } from '../board/BoardPicture';
 import { useDeskContext } from './useDesk';
 import './desk.css';
 
@@ -127,7 +134,7 @@ const IDEA_MIME = 'application/x-lee-idea';
 /** Screen px either side of a line that still picks it. */
 const STROKE_HIT_PX = 6;
 const TOOL_HINT: Record<DeskTool, string> = {
-  cursor: 'Click an empty spot in an Area to start a Page',
+  cursor: 'Click an empty spot in an Area to start a Page, or paste an image there for a Board',
   move: 'Drag a Page, or an Area from anywhere inside it',
   draw: 'Draw anywhere. Lines are yours; Hester doesn’t read them',
   area: 'Drag out a new Area and name it, or drag an Area’s edge or corner to size it',
@@ -265,6 +272,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     capture();
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    lastPointer.current = localPoint(e.clientX, e.clientY);
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
     const now = { x: e.clientX, y: e.clientY };
@@ -443,6 +451,50 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     void zoomIntoCard({ card_id: id, title, area_id: area.id }, 'click');
   };
 
+  /**
+   * A Board in the Area at `rel`, made now (a Board has no in-memory draft),
+   * with `image` on it when you pasted one; then zoomed into.
+   */
+  const startBoard = async (area: DeskArea, rel: Point, image?: File) => {
+    if (!desk) return;
+    const r = placeNewCard(area, cardsIn(desk, area.id), rel);
+    const made = await createBoard(workspace, { area_id: area.id, x: r.x, y: r.y });
+    if (!made.ok) return say(oldHester(made.status) ?? made.error);
+    const card = made.data.card;
+    if (image) {
+      const a = await addImageAsset(workspace, card.id, image);
+      if ('error' in a) say(a.error);
+      else {
+        const item = makeImage([], a.name, { w: a.w, h: a.h }, { x: 0, y: 0 }, window.devicePixelRatio || 1);
+        const put = await putBoardDoc(workspace, card.id, made.data.board?.version ?? null, [item]);
+        if (!put.ok) say('conflict' in put && put.conflict !== undefined ? 'The image didn’t stay on the Board' : put.error);
+      }
+    }
+    await ctx?.refresh();
+    void zoomIntoCard({ card_id: card.id, title: card.title, area_id: area.id }, 'click');
+  };
+
+  // Paste an image in Cursor with the pointer on an empty spot in an Area: a Board starts with it.
+  const lastPointer = useRef<Point | null>(null);
+  const paste = useRef<(e: ClipboardEvent) => void>(() => undefined);
+  paste.current = (e: ClipboardEvent) => {
+    if (tool !== 'cursor' || !desk || status !== 'ok' || confirm || isTyping(e.target)) return;
+    const image = imagesIn(e.clipboardData)[0];
+    if (!image) return;
+    const at = lastPointer.current ? screenToDesk(cam, lastPointer.current) : null;
+    const area = at ? areaAt(onDesk, at) : null;
+    const rel = area && at ? { x: at.x - area.x, y: at.y - area.y } : null;
+    e.preventDefault();
+    if (!area || !rel || !isEmptySpot(area, cardsIn(desk, area.id), rel)) return say('Point at an empty spot in an Area, then paste, to start a Board with it');
+    void startBoard(area, rel, image);
+  };
+  useEffect(() => {
+    if (!visible) return;
+    const onPaste = (e: ClipboardEvent) => paste.current(e);
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [visible]);
+
   const zoomCard = (c: DeskCard, area: DeskArea | null, via: 'click' | 'key') => {
     setPreview(null);
     void zoomIntoCard({ card_id: c.id, title: c.title, area_id: c.pinned ? area?.id ?? nav.area_id : c.area_id }, via);
@@ -484,11 +536,12 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const [newMenu, setNewMenu] = useState(false);
   const startNew = (kind: string) => {
     setNewMenu(false);
-    if (kind !== 'page' || !desk) return;
+    if ((kind !== 'page' && kind !== 'board') || !desk) return;
     const centre = screenToDesk(cam, { x: size.w / 2, y: size.h / 2 });
     const area = newCardArea(onDesk, zoom !== 'overview' ? nav.area_id : null, centre);
     if (!area) return say('Draw an Area first: Rectangle (R)');
-    startPage(area, { x: 0, y: AREA_HEAD });
+    if (kind === 'board') void startBoard(area, { x: 0, y: AREA_HEAD });
+    else startPage(area, { x: 0, y: AREA_HEAD });
   };
 
   // ---- Areas: rename, stash ----
@@ -663,8 +716,8 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       if (nav.area_id === c.area.id) zoomOut('overview', 'click');
       say(`Deleted: ${c.area.name}`);
     } else {
-      const r = await deleteDeskPage(workspace, c.card.id, true);
-      if (!r.ok) return say(r.error);
+      const r = c.card.kind === 'board' ? await deleteBoard(workspace, c.card.id, true) : await deleteDeskPage(workspace, c.card.id, true);
+      if (!r.ok) return say(oldHester(r.status) ?? r.error);
       say(`Deleted: ${c.card.title || 'Untitled'}`);
     }
     void ctx?.refresh();
@@ -823,6 +876,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={cancelGesture}
+          onPointerLeave={() => {
+            lastPointer.current = null;
+          }}
         >
           <div
             className={`desk-world${own ? '' : ' is-fitting'}`}
@@ -902,6 +958,16 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           >
                             New Page here
                           </button>
+                          <button
+                            className="deep-pop-row"
+                            role="menuitem"
+                            onClick={() => {
+                              setMenuFor(null);
+                              void startBoard(area, { x: 0, y: AREA_HEAD });
+                            }}
+                          >
+                            New Board here
+                          </button>
                           <button className="deep-pop-row" role="menuitem" onClick={() => void stash(area)} title="Into the Drawer’s Stashed; unstash it from there">
                             Stash
                           </button>
@@ -923,6 +989,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                   {cardsIn(desk, area.id).map((c) => (
                     <DeskCardView
                       key={c.id}
+                      workspace={workspace}
                       card={c}
                       style={{
                         left: c.x,
@@ -1030,7 +1097,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                   setConfirm({ kind: 'page', card: c });
                 }}
               >
-                Delete Page…
+                {cardMenu.card.kind === 'board' ? 'Delete Board…' : 'Delete Page…'}
               </button>
             </div>
           )}
@@ -1038,7 +1105,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
           {preview && (
             <div className="desk-preview" style={{ left: preview.x, top: preview.y }} role="tooltip">
               <div className="desk-preview-title">{preview.card.title || 'Untitled'}</div>
-              {preview.card.summary.excerpt.trim() ? (
+              {preview.card.kind === 'board' ? (
+                <BoardPicture workspace={workspace} card={preview.card} className="desk-preview-picture" />
+              ) : preview.card.summary?.excerpt?.trim() ? (
                 <div className="desk-preview-body">
                   <AgentMarkdown text={preview.card.summary.excerpt} />
                 </div>
@@ -1246,6 +1315,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
 // ---------------------------------------------------------------------------
 
 function DeskCardView({
+  workspace,
   card,
   style,
   lifted,
@@ -1255,6 +1325,7 @@ function DeskCardView({
   onLeave,
   onMenu,
 }: {
+  workspace: string;
   card: DeskCard;
   style: React.CSSProperties;
   /** Being dragged in Move. */
@@ -1268,7 +1339,7 @@ function DeskCardView({
   const line = cardCountLine(card.summary);
   return (
     <div
-      className={`desk-card${lifted ? ' is-lifted' : ''}`}
+      className={`desk-card${card.kind === 'board' ? ' is-board' : ''}${lifted ? ' is-lifted' : ''}`}
       data-card-id={card.id}
       style={style}
       tabIndex={0}
@@ -1289,6 +1360,7 @@ function DeskCardView({
         onMenu(e);
       }}
     >
+      {card.kind === 'board' && <BoardPicture workspace={workspace} card={card} className="desk-card-picture" />}
       <div className="desk-card-title">{card.title || 'Untitled'}</div>
       {line && <div className="desk-card-count">{line}</div>}
       {waiting && <span className="desk-card-dot" aria-hidden="true" />}
