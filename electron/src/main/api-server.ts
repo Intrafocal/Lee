@@ -15,7 +15,8 @@ import { Socket } from 'net';
 import { ipcMain } from 'electron';
 import { copilotAuthMiddleware, authenticateWsToken, noteDeviceWsInput, noteDeviceView, issueDeviceToken } from './copilot/auth';
 import { registerCoreRoutes } from './copilot/core-routes';
-import { registerCarryRoutes } from './copilot/carry';
+import { registerTetherRoutes, TETHER_SEND_MAX_BYTES } from './copilot/tether';
+import { getCopilotQueue } from './copilot/queue';
 import { copilotBus } from './copilot/bus';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
@@ -246,7 +247,10 @@ export class APIServer {
       if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') hookJson(req, res, next);
       else next();
     });
-    this.app.use(express.json());
+    // POST /tether/send gets its bigger parser after auth (below), so only a
+    // paired device or Lee itself can make main read 15 MB.
+    const json = express.json();
+    this.app.use((req, res, next) => (req.path === '/tether/send' ? next() : json(req, res, next)));
 
     // CORS - only allow localhost origins (Aeronaut, Flutter web, etc.)
     //
@@ -283,6 +287,17 @@ export class APIServer {
     // attributes device traffic into the event log. GET /context used to be
     // exempt too, which leaked the full workspace config to the LAN.
     this.app.use(copilotAuthMiddleware(() => this.authToken));
+
+    // Send to Lee (§4.2) carries photos: up to 15 MB of JSON. Anything the
+    // parser refuses answers 400 like the route's own checks.
+    const sendJson = express.json({ limit: TETHER_SEND_MAX_BYTES });
+    this.app.use('/tether/send', (req, res, next) => {
+      sendJson(req, res, (err?: unknown) => {
+        if (!err) return next();
+        const tooLarge = (err as { type?: string }).type === 'entity.too.large';
+        res.status(400).json({ success: false, error: tooLarge ? 'body is larger than 15 MB' : 'body must be JSON' });
+      });
+    });
 
     // Track Lee state
     this.ptyManager.on('state', (_id: number, state: LeeState) => {
@@ -981,8 +996,16 @@ export class APIServer {
 
   private setupRoutes(): void {
     registerCoreRoutes(this.app, { getHesterPort: () => this.pairingHesterPort, getPairingName: () => this.pairingName, isPairingEnabled: () => this.pairingEnabled, log: (level, message, details) => this.ptyManager.log(level, message, details) });
-    // Carry for devices (docs/14-Deep-Work.md §8.1): Lee main forwards to Hester.
-    registerCarryRoutes(this.app, { log: (level, message, details) => this.ptyManager.log(level, message, details) });
+    // Tether for devices (docs/plans/2026-09-28-tether-review-voice.md §3.3, §4.2): Lee main reads Hester and delivers Send to Lee.
+    registerTetherRoutes(this.app, {
+      log: (level, message, details) => this.ptyManager.log(level, message, details),
+      deep: () => {
+        const focus = getCopilotQueue(this.ptyManager).focus;
+        const d = focus.deep;
+        if (!d) return null;
+        return { workspace: d.workspace, card: d.card_id ? { card_id: d.card_id, title: d.title } : null, touched: focus.deepCards.touched };
+      },
+    });
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
       res.json({

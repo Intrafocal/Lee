@@ -1323,6 +1323,8 @@ export class CopilotQueue {
         kind: item.kind,
         action: check.action,
         text_chars: check.text?.length ?? 0,
+        // §5.2: a transcript sent as the reply, for voice acceptance.
+        ...(check.action === 'text' && req?.input === 'voice' ? { input: 'voice' } : {}),
         // A choice is logged as its index only, never the option's words.
         ...(check.choice !== null ? { choice: check.choice, option_count: optionCount } : {}),
         ...(item.tool ? { tool_signature: item.tool.signature } : {}),

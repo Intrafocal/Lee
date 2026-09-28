@@ -22,6 +22,8 @@ import type {
   StatusMessagePayload,
 } from '../shared/lee-api';
 import { COPILOT_IPC } from '../shared/copilot';
+import { TETHER_IPC, VOICE_IPC } from '../shared/lee-api';
+import type { TetherSendDelivery } from '../shared/lee-api';
 import { copilotApi, deepApi } from './preload-copilot';
 import { cockpitApi } from './preload-cockpit';
 
@@ -526,6 +528,21 @@ const api: LeeAPI = {
   copilot: copilotApi,
   cockpit: cockpitApi,
   deep: deepApi,
+
+  tether: {
+    onSend: (callback) => {
+      const listener = (_event: unknown, delivery: TetherSendDelivery) => callback(delivery);
+      ipcRenderer.on(TETHER_IPC.send, listener);
+      return () => ipcRenderer.removeListener(TETHER_IPC.send, listener);
+    },
+    sendResult: (outcome) => ipcRenderer.send(TETHER_IPC.sendResult, outcome),
+    setPaletteOpen: (open) => ipcRenderer.send(TETHER_IPC.palette, { open: !!open }),
+  },
+
+  voice: {
+    micStatus: () => ipcRenderer.invoke(VOICE_IPC.micStatus),
+    requestMic: () => ipcRenderer.invoke(VOICE_IPC.micRequest),
+  },
 };
 
 contextBridge.exposeInMainWorld('lee', api);

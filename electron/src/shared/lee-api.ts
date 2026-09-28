@@ -15,6 +15,7 @@
 import type { LeeContext, TUIDefinition, AgentDefinition, MachineConfig } from './context';
 import type { CopilotAPI, DeepAPI, FocusEndReason } from './copilot';
 import type { CockpitAPI } from './cockpit';
+import type { SendItem, SendTarget } from './tether';
 
 export interface OpenDialogResult {
   canceled: boolean;
@@ -107,6 +108,72 @@ export interface ConfigSources {
 
 /** Unsubscribe function returned by the `on*` listeners. */
 export type Unsubscribe = () => void;
+
+// ---------------------------------------------------------------------------
+// Send to Lee (docs/plans/2026-09-28-tether-review-voice.md §4.2, §4.3)
+// ---------------------------------------------------------------------------
+
+export const TETHER_IPC = {
+  /** main to renderer: TetherSendDelivery, to the window whose workspace the send is for. */
+  send: 'tether:send',
+  /** send, renderer to main: TetherSendOutcome, once per delivery (main waits 10 s, then answers 504). */
+  sendResult: 'tether:send-result',
+  /** send, renderer to main: { open: boolean } when the Command Palette opens or closes (the `hester` focus target). */
+  palette: 'tether:palette',
+} as const;
+
+/** Where a send came from, for the status bar chip ("From your phone", "From the T-Deck"). */
+export interface TetherSendFrom {
+  /** 'aeronaut' | 'dirigible' | 'device' (another paired device) | 'lee' (loopback: the renderer or a script). */
+  surface: string;
+  /** The paired device's name, when it is one. */
+  device_name?: string;
+}
+
+/** What main hands the renderer: already validated (§4.2), the target resolved (never 'focus'). */
+export interface TetherSendDelivery {
+  send_id: string;
+  target: SendTarget;
+  items: SendItem[];
+  /** Send (true: Enter in a tab, ask in Hester) or Deliver (false). Never true for a page. */
+  submit: boolean;
+  from: TetherSendFrom;
+}
+
+/** The renderer's answer on TETHER_IPC.sendResult. `error` is a short code, e.g. 'no_target', 'tab_gone', 'upload_failed'. */
+export interface TetherSendOutcome {
+  send_id: string;
+  ok: boolean;
+  error?: string;
+}
+
+/** window.lee.tether */
+export interface TetherAPI {
+  onSend: (cb: (delivery: TetherSendDelivery) => void) => Unsubscribe;
+  sendResult: (outcome: TetherSendOutcome) => void;
+  /** Tell main whether the Command Palette is open, so it counts as the focus target. */
+  setPaletteOpen: (open: boolean) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Voice: the mic permission (§5.3). Transcription is Hester's HTTP API.
+// ---------------------------------------------------------------------------
+
+export const VOICE_IPC = {
+  /** invoke: resolves to MicStatus. */
+  micStatus: 'voice:mic-status',
+  /** invoke: asks macOS for the mic (the TCC prompt, once); resolves to whether it's granted. */
+  micRequest: 'voice:mic-request',
+} as const;
+
+/** systemPreferences.getMediaAccessStatus('microphone'); 'granted' where the OS has no such gate. */
+export type MicStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
+
+/** window.lee.voice */
+export interface VoiceAPI {
+  micStatus: () => Promise<MicStatus>;
+  requestMic: () => Promise<boolean>;
+}
 
 export interface LeeAPI {
   pty: {
@@ -305,6 +372,10 @@ export interface LeeAPI {
   cockpit: CockpitAPI;
   /** Deep D1 (docs/plans/2026-09-26-deep-d1-contracts.md §6). */
   deep: DeepAPI;
+  /** Send to Lee (docs/plans/2026-09-28-tether-review-voice.md §4.2). */
+  tether: TetherAPI;
+  /** Voice: the mic permission (§5.3). */
+  voice: VoiceAPI;
 }
 
 /** Re-exported so components can annotate TUI lists without a deep import. */

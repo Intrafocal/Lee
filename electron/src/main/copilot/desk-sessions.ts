@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { DeskSessionCreate } from '../../shared/desk';
-import { hesterCall, type HesterCall } from './carry';
+import { hesterCall, type HesterCall } from './tether';
 
 const RETRY_MS = 60_000;
 /** Hester keeps 1000 characters of stopped_at. */

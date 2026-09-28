@@ -71,6 +71,8 @@ export type LeeEventType =
   | 'handoff.end'
   | 'model.call'
   | 'someday.triage'
+  // Tether, Review and voice §2.2 (Hester -> Lee via POST /events/ingest): someday.triage's new name
+  | 'idea.triage'
   | 'digest.shown'
   | 'retro.shown'
   | 'retro.answered'
