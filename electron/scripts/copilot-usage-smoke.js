@@ -632,6 +632,9 @@ test('POST /tether/capture forwards to Hester /ideas with the device surface, th
           assert.strictEqual((await post(base, '/tether/capture', { text: '' })).status, 400);
           assert.strictEqual((await post(base, '/tether/capture', { text: 'x', card_id: '../etc' })).status, 400);
           assert.strictEqual((await post(base, '/tether/capture', { text: 'x', card_id: 'exp-2' })).status, 400, 'a card id only');
+          // B5: Pick up can be a Board, so a capture can be about one.
+          assert.strictEqual((await post(base, '/tether/capture', { text: 'x', card_id: 'bd-0000abcd' })).status, 200);
+          assert.strictEqual(calls.pop().body.source.card_id, 'bd-0000abcd');
           assert.strictEqual((await post(base, '/tether/capture', { text: 'x', input: 'typing' })).status, 400);
         });
         // The renderer (shared loopback) is 'lee'.
@@ -786,6 +789,95 @@ test('Review: a long Page is cut at a line with …; Page images are proxied wit
   }
 });
 
+test('Review a Board (B5): /tether/desk cards carry kind; /tether/boards/:id and its preview', async () => {
+  const BOARD = card('bd-0000beef', 'area-0000abcd', 'Renders', '2026-09-28T00:00:00Z', {
+    kind: 'board',
+    summary: { ...summary(0, '2026-09-28T00:00:00Z'), board: { items: 4, preview_at: '2026-09-28T00:00:01Z' } },
+  });
+  const desk = { ...DESK, cards: [...DESK.cards, BOARD] };
+  const items = [
+    { id: 'it-1', kind: 'note', text: 'lower right', x: 300, y: 200, w: 220, h: 72, z: 3 },
+    { id: 'it-2', kind: 'image', asset: 'a.png', x: 0, y: 0, w: 100, h: 100, z: 1 },
+    { id: 'it-3', kind: 'note', text: 'top, see [[pg-0000abcd|Old title]]', x: 50, y: 10, w: 220, h: 72, z: 2 },
+    { id: 'it-4', kind: 'note', text: 'lower left', x: 10, y: 200, w: 220, h: 72, z: 4 },
+    { id: 'it-5', kind: 'link', card_id: 'pg-00000002', x: 0, y: 400, w: 200, h: 40, z: 5 },
+    { id: 'it-6', kind: 'note', text: '   ', x: 0, y: 0, w: 220, h: 72, z: 6 },
+  ];
+  const extra = {
+    '/desk': () => [200, { success: true, data: desk }],
+    '/desk/boards/bd-0000beef': () => [200, { success: true, data: BOARD }],
+    '/desk/boards/bd-0000beef/board': () => [200, { success: true, data: { version: 'v1', items } }],
+    '/desk/boards/bd-0000beef/answers': () => [200, { success: true, data: ANSWERS }],
+  };
+  const unregister = withWindow([], 14, '/work/api');
+  try {
+    await withFakeHester((c) => deskHester(c, extra), async (calls) => {
+      await withTetherApp(device, async (base) => {
+        const d = (await (await fetch(`${base}/tether/desk`)).json()).data;
+        assert.deepStrictEqual(d.areas[0].cards.map((c) => [c.id, c.kind]), [['bd-0000beef', 'board'], ['pg-0000abcd', 'page'], ['pg-00000002', 'page']]);
+
+        const b = (await (await fetch(`${base}/tether/boards/bd-0000beef`)).json()).data;
+        assert.strictEqual(b.card.id, 'bd-0000beef');
+        assert.strictEqual(b.card.kind, 'board');
+        assert.strictEqual(b.card.area_name, 'Mesh');
+        assert.strictEqual(b.has_preview, true);
+        assert.deepStrictEqual(b.notes, ['top, see [[pg-0000abcd|Old title]]', 'lower left', 'lower right'], 'top to bottom, then left to right; blank notes left out');
+        assert.deepStrictEqual(b.links, [{ card_id: 'pg-00000002', title: 'Older page' }, { card_id: 'pg-0000abcd', title: 'Mesh sync' }], 'link boxes, then links in notes, titled from the Desk');
+        assert.deepStrictEqual(b.asks, [{ id: 'ans-1', question: 'why?', answer: 'because', status: 'done' }]);
+        assert.deepStrictEqual(b.handoffs, [{ id: 'ans-3', kind: 'spike', status: 'review', result: 'result' }]);
+        const own = calls.find((c) => c.url.startsWith('/desk/boards/bd-0000beef/board'));
+        assert.ok(own.url.includes('workspace=%2Fwork%2Fapi') && own.headers['x-lee-workspace'], 'the workspace goes to Hester');
+
+        assert.strictEqual((await fetch(`${base}/tether/boards/bd-00000009`)).status, 404, 'Hester has no such Board');
+        assert.strictEqual((await fetch(`${base}/tether/boards/pg-0000abcd`)).status, 400, 'a Page is not a Board');
+      });
+    });
+    await withFakeHester((c) => deskHester(c, { ...extra, '/desk/boards/bd-0000beef': () => [200, { success: true, data: { ...BOARD, summary: summary(0, 't') } }] }), async () => {
+      await withTetherApp(device, async (base) => {
+        const b = (await (await fetch(`${base}/tether/boards/bd-0000beef`)).json()).data;
+        assert.strictEqual(b.has_preview, true, 'the Desk card has one');
+      });
+    });
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+    const seen = [];
+    const hesterRaw = async (route, ws) => {
+      seen.push([route, ws]);
+      if (route.startsWith('/desk/boards/bd-0000beef/preview')) return { offline: false, status: 200, contentType: 'image/png', body: png };
+      return { offline: false, status: 404, contentType: 'application/json', body: Buffer.from('{}') };
+    };
+    await withTetherApp(device, async (base) => {
+      const res = await fetch(`${base}/tether/boards/bd-0000beef/preview`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('content-type'), 'image/png');
+      assert.deepStrictEqual(Buffer.from(await res.arrayBuffer()), png);
+      assert.deepStrictEqual(seen[0], ['/desk/boards/bd-0000beef/preview?workspace=%2Fwork%2Fapi', '/work/api']);
+      assert.strictEqual((await fetch(`${base}/tether/boards/bd-00000009/preview`)).status, 404, 'no picture yet');
+      assert.strictEqual((await fetch(`${base}/tether/boards/nope/preview`)).status, 400);
+    }, { hesterRaw });
+    await withTetherApp(device, async (base) => {
+      const res = await fetch(`${base}/tether/boards/bd-0000beef/preview`);
+      assert.strictEqual(res.status, 503);
+      assert.strictEqual((await res.json()).error, 'hester_offline');
+    }, { hesterRaw: async () => ({ offline: true }) });
+  } finally {
+    unregister();
+  }
+  // Hester down: the Board's JSON read is 503 hester_offline, like the other reads.
+  const unregister2 = withWindow([], 15, '/work/api');
+  try {
+    const port = await deadPort();
+    setHesterPortProvider(() => port);
+    await withTetherApp(device, async (base) => {
+      const res = await fetch(`${base}/tether/boards/bd-0000beef`);
+      assert.strictEqual(res.status, 503);
+      assert.strictEqual((await res.json()).error, 'hester_offline');
+    });
+  } finally {
+    unregister2();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Send to Lee (§4.2): targets, validation, the IPC round trip with a fake window
 // ---------------------------------------------------------------------------
@@ -835,6 +927,15 @@ test('buildTargets: the palette, else the zoomed Page, else the focused agent ta
   assert.strictEqual(t.focus.pty_id, 11);
   t = buildTargets({ tabs: TABS, activeTabId: 2, paletteOpen: false, deep: null, titles: new Map() });
   assert.strictEqual(t.focus, null, 'a terminal in front is not the focus');
+  // B5: a zoomed Board is the focus; touched Boards are targets beside the Pages.
+  const onBoard = { workspace: '/w', card: { card_id: 'bd-0000beef', title: 'Renders' }, touched: ['pg-00000001', 'bd-00000002', 'bd-0000beef', 'exp-1'] };
+  t = buildTargets({ tabs: TABS, activeTabId: 1, paletteOpen: false, deep: onBoard, titles: new Map([['pg-00000001', 'A'], ['bd-00000002', 'Sketches'], ['exp-1', 'x']]) });
+  assert.deepStrictEqual(t.focus, { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' });
+  assert.deepStrictEqual(t.targets.slice(0, 3), [
+    { kind: 'board', card_id: 'bd-00000002', title: 'Sketches' },
+    { kind: 'page', card_id: 'pg-00000001', title: 'A' },
+    { kind: 'hester' },
+  ], 'the zoomed Board once; anything that isn\'t a card left out');
 });
 
 test('checkSendRequest: §4.2 limits, submit only with text and never for a Page', () => {
@@ -863,6 +964,10 @@ test('checkSendRequest: §4.2 limits, submit only with text and never for a Page
   no({ target: { kind: 'hester' }, items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'photo' }], submit: true }, /text/);
   no({ target: { kind: 'hester' }, items: [{ kind: 'text', text: 'x' }], submit: 'yes' });
   no({ target: { kind: 'board', card_id: 'pg-0000abcd', title: 'B' }, items: [{ kind: 'text', text: 'x' }] }, /Board/);
+  // B5: a Board takes Deliver like a Page, never submit.
+  r = ok({ target: { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' }, items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'photo' }, { kind: 'text', text: 'the new one' }] });
+  assert.deepStrictEqual(r.target, { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' });
+  no({ target: { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' }, items: [{ kind: 'text', text: 'x' }], submit: true }, /Board/);
   no({ target: { kind: 'page', card_id: '../x' }, items: [{ kind: 'text', text: 'x' }] });
   no({ target: { kind: 'tab', pty_id: 1.5 }, items: [{ kind: 'text', text: 'x' }] });
   no({ target: 'there', items: [{ kind: 'text', text: 'x' }] });
@@ -961,6 +1066,15 @@ test('POST /tether/send: 409 no_target, a renderer error (502), and 504 when the
         const refused = await post(base, '/tether/send', { workspace: '/work/quiet', target: 'focus', items: [{ kind: 'text', text: 'x' }], submit: true });
         assert.strictEqual(refused.status, 400, 'submit to a Page, via focus');
       }, { deep: () => ({ workspace: '/work/quiet', card: { card_id: 'pg-0000abcd', title: 'Mesh sync' }, touched: ['pg-00000002', 'pg-0000abcd'] }) });
+      // B5: a zoomed Board is the focus the same way; submit is refused for it too.
+      await withTetherApp(device, async (base) => {
+        const res = await post(base, '/tether/send', { workspace: '/work/quiet', target: 'focus', items: [{ kind: 'text', text: 'x' }] });
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual((await res.json()).data.delivered_to, { kind: 'board', card_id: 'bd-0000beef', title: 'Renders' });
+        const refused = await post(base, '/tether/send', { workspace: '/work/quiet', target: 'focus', items: [{ kind: 'text', text: 'x' }], submit: true });
+        assert.strictEqual(refused.status, 400);
+        assert.match((await refused.json()).error, /Board/);
+      }, { deep: () => ({ workspace: '/work/quiet', card: { card_id: 'bd-0000beef', title: 'Renders' }, touched: ['bd-0000beef'] }) });
     });
   } finally {
     copilotBus.off('event', onEv);

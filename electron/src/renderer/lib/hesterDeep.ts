@@ -563,6 +563,40 @@ export function stillOpenOnPage(page: string, answers: ReadonlyArray<Pick<DeepAn
   return out;
 }
 
+/** A ritual item from another card touched this session: the card it's on. */
+export type OnOtherCard = { card_id: string; card_title: string };
+export interface OtherCards {
+  asked: Array<SessionAsk & OnOtherCard>;
+  handedOff: Array<SessionHandoff & OnOtherCard>;
+  stillOpen: Array<StillOpen & OnOtherCard>;
+  /** Each card's Page text, for anchors. */
+  texts: Record<string, string>;
+}
+export const NO_OTHERS: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
+
+/**
+ * The ritual's lists from the other cards touched this session (each item
+ * names its card). A Board gives its Asks and hand-offs; its open lines are
+ * offered on its own sheet, where its notes can be drawn for an Ask.
+ */
+export async function gatherOthers(workspace: string, ids: string[], since: string | null, titleOf: (id: string) => string): Promise<OtherCards> {
+  const out: OtherCards = { asked: [], handedOff: [], stillOpen: [], texts: {} };
+  await Promise.all(
+    ids.map(async (cid) => {
+      const [ans, pg] = await Promise.all([listAnswers(workspace, cid), isBoardId(cid) ? null : getPage(workspace, cid)]);
+      const answers = ans.ok && Array.isArray(ans.data) ? ans.data : [];
+      const text = pg?.ok ? pg.data.text : '';
+      const on = { card_id: cid, card_title: titleOf(cid) || 'Untitled' };
+      out.texts[cid] = text;
+      const lists = sessionLists(answers, since);
+      out.asked.push(...lists.asked.map((a) => ({ ...a, ...on })));
+      out.handedOff.push(...lists.handedOff.map((h) => ({ ...h, ...on })));
+      if (text) out.stillOpen.push(...stillOpenOnPage(text, answers, 4).map((o) => ({ ...o, ...on })));
+    }),
+  );
+  return out;
+}
+
 // ---- the Goals Page (R12), pure ----
 
 /** The four prompts in the Goals Page's margin. */

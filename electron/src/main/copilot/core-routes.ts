@@ -12,7 +12,7 @@
 import type { Application, Request, Response } from 'express';
 import type { AnswerStatus, DeepAnswerEvent } from '../../shared/cockpit';
 import { COPILOT_IPC } from '../../shared/copilot';
-import { PAGE_ID_RE } from '../../shared/desk';
+import { cardKindOf } from '../../shared/desk';
 import type { Actor, CaptureRequest, LeeEventType, Principal } from '../../shared/copilot';
 import { windowRegistry } from '../window-registry';
 import { copilotBus, logEvent } from './bus';
@@ -60,7 +60,7 @@ export function deepAnswerEvent(data: unknown, eventWorkspace?: unknown): DeepAn
   if (!isPlainObject(data)) return null;
   const { answer_id, status } = data;
   const explorationId = isStr(data.exploration_id, DEEP_ID_MAX) ? data.exploration_id : isStr(data.card_id, DEEP_ID_MAX) ? data.card_id : null;
-  const cardId = isStr(data.card_id, DEEP_ID_MAX) ? data.card_id : explorationId && PAGE_ID_RE.test(explorationId) ? explorationId : null;
+  const cardId = isStr(data.card_id, DEEP_ID_MAX) ? data.card_id : explorationId && cardKindOf(explorationId) ? explorationId : null;
   const workspace = data.workspace ?? eventWorkspace;
   if (!isStr(workspace, DEEP_WORKSPACE_MAX) || !explorationId || !isStr(answer_id, DEEP_ID_MAX)) return null;
   if (!ANSWER_STATUSES.has(status as AnswerStatus)) return null;

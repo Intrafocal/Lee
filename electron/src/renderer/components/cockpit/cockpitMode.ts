@@ -40,7 +40,8 @@ import {
 import { untitledTitle } from '../../lib/deepModel';
 import { isDraftId, newDraft, setPendingFirstLine } from '../../lib/hesterDeep';
 import { createDeskPage, getDesk, getDeskLast, putDeskLast } from '../../lib/hesterDesk';
-import { asCardId, isPageId, landingFor, migrateDeepMemory, mirrorKeyMoves, parseTouched, renameTouched, touchCard, NO_TOUCHED, type DeskZoom, type Touched } from '../../lib/deskModel';
+import { asCardId, isDeskCardId, landingFor, migrateDeepMemory, mirrorKeyMoves, parseTouched, renameTouched, touchCard, NO_TOUCHED, type DeskZoom, type Touched } from '../../lib/deskModel';
+import { cardKindOf } from '../../../shared/desk';
 
 export type { SectionId };
 
@@ -364,9 +365,9 @@ export function touchedCards(sessionId: string | null = state.deepSessionId): st
 }
 
 function logZoom(cardId: string | null, via: 'land' | 'key' | 'click' | 'link'): void {
-  const card = cardId && isPageId(cardId) ? cardId : null;
+  const card = cardId && isDeskCardId(cardId) ? cardId : null;
   try {
-    window.lee?.cockpit?.logEvent({ type: 'desk.zoom', data: { card_id: card, card_kind: card ? 'page' : null, via } });
+    window.lee?.cockpit?.logEvent({ type: 'desk.zoom', data: { card_id: card, card_kind: cardKindOf(card), via } });
   } catch {
     /* cockpit IPC not available */
   }
@@ -374,7 +375,7 @@ function logZoom(cardId: string | null, via: 'land' | 'key' | 'click' | 'link'):
 
 /** PUT /desk/last, debounced 2 s (§7.2). */
 function rememberLast(cardId: string): void {
-  if (!isPageId(cardId)) return;
+  if (!isDeskCardId(cardId)) return;
   if (lastPutTimer) clearTimeout(lastPutTimer);
   const ws = workspaceKey;
   lastPutTimer = setTimeout(() => {
@@ -399,12 +400,12 @@ async function readGoalsMd(workspace: string): Promise<string> {
  * starts it with no card yet. Resolves to the focus session id when known.
  */
 async function startOnCard(cardId: string | null, title: string): Promise<string | null> {
-  const card = cardId && isPageId(cardId) ? cardId : null;
+  const card = cardId && isDeskCardId(cardId) ? cardId : null;
   if (card && state.deepActive && state.deepSessionExploration === card) return state.deepSessionId;
   const api = copilotApi();
   if (!api) return state.deepSessionId;
   try {
-    const f = await api.deepStart({ workspace: workspaceKey, exploration_id: null, card_id: card, card_kind: card ? 'page' : null, title, surface: 'lee' });
+    const f = await api.deepStart({ workspace: workspaceKey, exploration_id: null, card_id: card, card_kind: cardKindOf(card), title, surface: 'lee' });
     if (f?.session_id) {
       emit({ deepSessionId: f.session_id, deepActive: !!f.active, deepSessionExploration: card });
       return f.session_id;
@@ -430,7 +431,7 @@ export async function zoomIntoCard(
   if (line != null || via === 'land') emit({ deskLand: { card_id: card.card_id, line, nonce: ++landSeq } });
   logZoom(card.card_id, via);
   const sid = await startOnCard(card.card_id, card.title);
-  if (isPageId(card.card_id)) {
+  if (isDeskCardId(card.card_id)) {
     saveTouched(touchCard(touched, sid, card.card_id));
     rememberLast(card.card_id);
   }
@@ -897,7 +898,7 @@ export function useCockpitMode(opts: UseCockpitModeOptions): CockpitModeHandle {
   const focusItem = focus?.item && focus.item.kind === 'card' ? focus.item : null;
   // The card the session is on: Lee main's card_id, else the item's, else the legacy exploration id mapped.
   const rawCard = session ? focus?.deep?.card_id ?? focusItem?.card_id ?? (session.exploration_id ? asCardId(session.exploration_id) : null) : null;
-  const sessionCard = rawCard && isPageId(rawCard) ? rawCard : null;
+  const sessionCard = rawCard && isDeskCardId(rawCard) ? rawCard : null;
   const sessionTitle = session?.title ?? '';
   const focusSessionId = session ? focus?.session_id ?? null : null;
   const prevDeep = useRef<boolean | null>(null);

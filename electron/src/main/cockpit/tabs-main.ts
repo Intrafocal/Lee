@@ -38,6 +38,7 @@ import { getCopilotQueue } from '../copilot/queue';
 import { quadrantRank } from '../copilot/attention-queue';
 import { parseCardId, parseExplorationId } from '../copilot/focus';
 import type { LeeEvent } from '../../shared/copilot';
+import { cardKindOf, type DeskCardKind } from '../../shared/desk';
 import { getHesterCache } from './hester-cache';
 import { registerLintEffects } from './lint-main';
 import * as path from 'path';
@@ -83,13 +84,14 @@ function count(v: unknown): v is number {
  * `exploration_id` (a page id becomes the card; a pre-Desk exploration id
  * stays an exploration_id). Null when neither is valid.
  */
-function deepRef(d: Record<string, unknown>): { card_id: string; card_kind: 'page' } | { exploration_id: string } | null {
+function deepRef(d: Record<string, unknown>): { card_id: string; card_kind: DeskCardKind } | { exploration_id: string } | null {
   const card = parseCardId(d.card_id);
-  if (card) return { card_id: card, card_kind: 'page' };
+  if (card) return { card_id: card, card_kind: cardKindOf(card) as DeskCardKind };
   if (card === undefined) return null;
   const exp = parseExplorationId(d.exploration_id) ?? null;
   if (!exp) return null;
-  return parseCardId(exp) ? { card_id: exp, card_kind: 'page' } : { exploration_id: exp };
+  const kind = cardKindOf(exp);
+  return kind ? { card_id: exp, card_kind: kind } : { exploration_id: exp };
 }
 
 /** Validate a deep.* (or desk.zoom) renderer event; null drops it. Only whitelisted fields are kept. */
@@ -120,8 +122,8 @@ function validDeepEvent(type: string, d: Record<string, unknown>): CockpitRender
   if (type === 'desk.zoom') {
     const card = parseCardId(d.card_id);
     if (card === undefined || !ZOOM_VIA.has(d.via as string)) return null;
-    if (d.card_kind !== undefined && d.card_kind !== null && d.card_kind !== 'page') return null;
-    return { type, data: { card_id: card, card_kind: card ? 'page' : null, via: d.via } } as CockpitRendererEvent;
+    if (d.card_kind !== undefined && d.card_kind !== null && (card ? d.card_kind !== cardKindOf(card) : d.card_kind !== 'page' && d.card_kind !== 'board')) return null;
+    return { type, data: { card_id: card, card_kind: cardKindOf(card), via: d.via } } as CockpitRendererEvent;
   }
   if (type === 'deep.affordance') {
     if (!AFFORDANCE_PATTERNS.has(d.pattern as string) || !AFFORDANCE_OUTCOMES.has(d.outcome as string)) return null;

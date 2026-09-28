@@ -1401,6 +1401,28 @@ test('Desk: the deep.* validator takes card_id or the legacy exploration_id; des
   assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: PG_A, via: 'teleport' } }), null);
   assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: 'area-00000001', via: 'click' } }), null);
   assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: PG_A, card_kind: 'board', via: 'click' } }), null);
+  // B5: a Board is a card too; its kind comes from its id.
+  assert.deepStrictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: 'bd-0000beef', card_kind: 'board', via: 'click' } }).data,
+    { card_id: 'bd-0000beef', card_kind: 'board', via: 'click' });
+  assert.strictEqual(validRendererEvent({ type: 'desk.zoom', data: { card_id: 'bd-0000beef', card_kind: 'page', via: 'click' } }), null);
+  assert.deepStrictEqual(validRendererEvent({ type: 'deep.action', data: { action: 'ask', card_id: 'bd-0000beef', card_kind: 'board', chars: 3 } }).data,
+    { action: 'ask', card_id: 'bd-0000beef', card_kind: 'board', chars: 3 });
+});
+
+test('Desk (B5): a zoomed Board is the session\'s card, on the touched list, and its kind is checked', () => {
+  const { q } = deskSetup();
+  const BD = 'bd-0000beef';
+  q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: PG_A, card_kind: 'page', title: 'A' }, LEE, 'lee');
+  const ev = logged(() => q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: BD, card_kind: 'board', title: 'Renders' }, LEE, 'lee'));
+  assert.deepStrictEqual(ev.find((e) => e.type === 'focus.item').data.item, { kind: 'card', workspace: '/work/api', card_id: BD, card_kind: 'board', title: 'Renders' });
+  assert.deepStrictEqual(q.focus.deepCards, { touched: [PG_A, BD], last: BD });
+  assert.deepStrictEqual(q.snapshot({ compact: true }).deep, { exploration_id: BD, title: 'Renders', card_id: BD, card_kind: 'board' });
+  // Go deep with no card keeps the Board, and its kind.
+  q.deepStart({ workspace: '/work/api', exploration_id: null }, DEV_ACTOR, 'device');
+  assert.strictEqual(q.focusState().item.card_kind, 'board');
+  assert.strictEqual(q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: BD, card_kind: 'page' }, LEE, 'lee').status, 400, 'the kind must match the id');
+  assert.strictEqual(q.deepStart({ workspace: '/work/api', exploration_id: null, card_id: 'bd-xyz' }, LEE, 'lee').status, 400);
+  q.deepEnd({ reason: 'esc' }, LEE);
 });
 
 test('Desk: the launcher accepts the page origin', () => {

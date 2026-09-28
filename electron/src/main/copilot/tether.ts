@@ -6,10 +6,12 @@
  *
  *   GET  /tether                      Tether: Pick up (your last card), open questions, counts
  *   POST /tether/capture              { workspace?, text, card_id?, input? } -> Hester POST /ideas
- *   GET  /tether/desk                 TetherDesk: the Areas on the Desk and their Pages
+ *   GET  /tether/desk                 TetherDesk: the Areas on the Desk and their cards (Pages and Boards)
  *   GET  /tether/pages?limit=50       TetherCard[]: every Page, stashed too, newest first
  *   GET  /tether/pages/:id            TetherPage (?text_only=1: { card, text })
  *   GET  /tether/pages/:id/assets/:name  a Page's image, proxied from Hester
+ *   GET  /tether/boards/:id           TetherBoard: a Board's notes, links, asks and hand-offs
+ *   GET  /tether/boards/:id/preview   the Board's picture (PNG), proxied from Hester; 404 when none
  *   GET  /tether/drawer               TetherDrawer: Stashed Areas and open Ideas
  *   GET  /tether/targets              SendTargets for the window with the workspace
  *   POST /tether/send                 SendRequest -> IPC tether:send, answered by tether:send-result
@@ -30,7 +32,8 @@ import { encodeWorkspaceHeader } from '../../shared/cockpit';
 import type { DeepAnswer, DeepQuestion, DeepReference, Opener } from '../../shared/cockpit';
 import type { Principal } from '../../shared/copilot';
 import type { LeeContext, PanelContext, TabContext } from '../../shared/context';
-import { PAGE_ID_RE, type Desk, type DeskArea, type DeskCard } from '../../shared/desk';
+import { CARD_LINK_RE, type BoardItem } from '../../shared/board';
+import { BOARD_ID_RE, PAGE_ID_RE, cardKindOf, type Desk, type DeskArea, type DeskCard } from '../../shared/desk';
 import { TETHER_IPC, type TetherSendDelivery, type TetherSendFrom, type TetherSendOutcome } from '../../shared/lee-api';
 import type {
   SendItem,
@@ -38,6 +41,7 @@ import type {
   SendTarget,
   SendTargets,
   Tether,
+  TetherBoard,
   TetherCard,
   TetherDesk,
   TetherDrawer,
@@ -157,6 +161,10 @@ function validCardId(v: unknown): string | null {
   return typeof v === 'string' && PAGE_ID_RE.test(v) ? v : null;
 }
 
+function validBoardId(v: unknown): string | null {
+  return typeof v === 'string' && BOARD_ID_RE.test(v) ? v : null;
+}
+
 function lineNumber(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null;
 }
@@ -176,7 +184,7 @@ export function buildTether(opener: Opener, fallbackWorkspace: string | null, sp
   const pick_up: Tether['pick_up'] = p && card
     ? {
         card_id: card.id,
-        card_kind: 'page',
+        card_kind: cardKindOf(card.id) ?? 'page',
         title: card.title ?? '',
         area_name: card.area_name ?? null,
         stopped_at: p.stopped_at ?? null,
@@ -311,6 +319,45 @@ export function buildTetherPage(
   };
 }
 
+/** A Board card's picture time (its summary's `board.preview_at`), or null when it has none. */
+function previewAt(card: DeskCard): string | null {
+  const s = card.summary as unknown;
+  const b = isRecord(s) && isRecord(s.board) ? s.board : null;
+  return b ? str(b.preview_at) : null;
+}
+
+/**
+ * GET /tether/boards/:id: a Board for Review. Its notes top to bottom (by y,
+ * then x); its links (link boxes, then `[[card]]` links in the notes, each
+ * once, titled from the Desk); its asks and hand-offs as a Page's.
+ */
+export function buildTetherBoard(card: TetherCard, hasPreview: boolean, items: BoardItem[], answers: DeepAnswer[], titles: Map<string, string>): TetherBoard {
+  const notes = items
+    .filter((it): it is Extract<BoardItem, { kind: 'note' }> => !!it && it.kind === 'note' && typeof it.text === 'string' && !!it.text.trim())
+    .sort((a, b) => num(a.y) - num(b.y) || num(a.x) - num(b.x))
+    .map((n) => n.text);
+  const links: TetherBoard['links'] = [];
+  const addLink = (id: string, title: string | null) => {
+    if (!cardKindOf(id) || links.some((l) => l.card_id === id)) return;
+    links.push({ card_id: id, title: titles.get(id) ?? title ?? '' });
+  };
+  for (const it of items) if (it && it.kind === 'link' && typeof it.card_id === 'string') addLink(it.card_id, null);
+  for (const text of notes) for (const m of text.matchAll(CARD_LINK_RE)) addLink(m[1], m[2] ?? null);
+  const live = answers.filter((a) => a && typeof a.id === 'string' && !a.dismissed_at);
+  return {
+    card,
+    has_preview: hasPreview,
+    notes,
+    links,
+    asks: live
+      .filter((a) => (a.kind ?? 'ask') === 'ask')
+      .map((a) => ({ id: a.id, question: a.question ?? '', answer: a.answer ?? null, status: a.status ?? '' })),
+    handoffs: live
+      .filter((a) => a.kind === 'handoff')
+      .map((a) => ({ id: a.id, kind: a.handoff?.kind ?? '', status: a.handoff?.state ?? a.status ?? '', result: a.answer ?? null })),
+  };
+}
+
 /** GET /tether/drawer: the Stashed Areas (most recently stashed first) with their Pages, and open Ideas, newest first. */
 export function buildTetherDrawer(desk: Desk, ideas: unknown[]): TetherDrawer {
   const areas = areaMap(desk);
@@ -337,7 +384,7 @@ export function buildTetherDrawer(desk: Desk, ideas: unknown[]): TetherDrawer {
 // Send to Lee: targets (§4.2)
 // ---------------------------------------------------------------------------
 
-/** The Deep session's Page and the cards it touched (the queue's focus tracker). */
+/** The Deep session's card (a Page or a Board) and the cards it touched (the queue's focus tracker). */
 export interface TetherDeepInfo {
   workspace: string;
   card: { card_id: string; title: string } | null;
@@ -371,32 +418,38 @@ export interface TargetInputs {
   paletteOpen: boolean;
   /** The Deep session, when it's in this window's workspace. */
   deep: TetherDeepInfo | null;
-  /** Page titles by card id (from Hester's Desk); a touched Page without one is left out. */
+  /** Card titles by id (from Hester's Desk); a touched card without one is left out. */
   titles: Map<string, string>;
 }
 
 /**
  * What's in front of you, then everything else: the palette when it's open,
- * else the zoomed Page, else the focused tab when it's an agent. The rest are
- * the Pages this Deep session touched, Hester and every PTY tab.
+ * else the zoomed card (a Page or a Board), else the focused tab when it's an agent. The rest are
+ * the cards this Deep session touched, Hester and every PTY tab.
  */
 export function buildTargets(inp: TargetInputs): SendTargets {
   const tabs = inp.tabs.map(tabTarget).filter((t): t is Extract<SendTarget, { kind: 'tab' }> => t !== null);
   const active = inp.activeTabId != null ? inp.tabs.find((t) => t.id === inp.activeTabId) : undefined;
   const activeTarget = active ? tabTarget(active) : null;
+  // A card as a target: a Page or a Board by its id; anything else isn't one.
+  const cardTarget = (card_id: string, title: string): SendTarget | null => {
+    const kind = cardKindOf(card_id);
+    return kind ? { kind, card_id, title } : null;
+  };
+  const zoomed = inp.deep?.card ? cardTarget(inp.deep.card.card_id, inp.deep.card.title) : null;
   let focus: SendTarget | null = null;
   if (inp.paletteOpen) focus = { kind: 'hester' };
-  else if (inp.deep?.card) focus = { kind: 'page', card_id: inp.deep.card.card_id, title: inp.deep.card.title };
+  else if (zoomed) focus = zoomed;
   else if (activeTarget?.tab_kind === 'agent') focus = activeTarget;
-  // The zoomed Page first, then the others this session touched, most recent first.
+  // The zoomed card first, then the others this session touched (Pages and Boards), most recent first.
   const pages: SendTarget[] = [];
-  const addPage = (card_id: string, title: string) => {
-    if (!pages.some((p) => p.kind === 'page' && p.card_id === card_id)) pages.push({ kind: 'page', card_id, title });
+  const addCard = (t: SendTarget | null) => {
+    if (t && !pages.some((p) => sameTarget(p, t))) pages.push(t);
   };
-  if (inp.deep?.card) addPage(inp.deep.card.card_id, inp.deep.card.title);
+  addCard(zoomed);
   for (const id of [...(inp.deep?.touched ?? [])].reverse()) {
     const title = inp.titles.get(id);
-    if (title !== undefined) addPage(id, title);
+    if (title !== undefined) addCard(cardTarget(id, title));
   }
   const all: SendTarget[] = [...pages, { kind: 'hester' }, ...tabs];
   return { focus, targets: focus ? all.filter((t) => !sameTarget(t, focus!)) : all };
@@ -436,8 +489,11 @@ export function checkSendRequest(body: unknown): SendCheck {
   } else if (t.kind === 'tab') {
     if (typeof t.pty_id !== 'number' || !Number.isInteger(t.pty_id) || t.pty_id < 0) return bad('target.pty_id must be an integer');
     target = { kind: 'tab', pty_id: t.pty_id, label: '', tab_kind: 'terminal', provider: null };
-  } else if (t.kind === 'board') return bad('Board targets are not built yet');
-  else return bad('target.kind must be page, hester or tab');
+  } else if (t.kind === 'board') {
+    const card_id = validBoardId(t.card_id);
+    if (!card_id) return bad('target.card_id must be a Board id');
+    target = { kind: 'board', card_id, title: typeof t.title === 'string' ? t.title.slice(0, 200) : '' };
+  } else return bad('target.kind must be page, board, hester or tab');
 
   const raw = body.items;
   if (!Array.isArray(raw) || raw.length === 0) return bad('items must be a non-empty array');
@@ -481,6 +537,7 @@ export function checkSendRequest(body: unknown): SendCheck {
   const submit = body.submit === true;
   if (submit) {
     if (target !== 'focus' && target.kind === 'page') return bad('submit is not allowed for a Page');
+    if (target !== 'focus' && target.kind === 'board') return bad('submit is not allowed for a Board');
     // A tab takes Send with only an image (its path typed, then Enter); Hester needs a question.
     const tabLike = target === 'focus' || target.kind === 'tab';
     if (!items.some((i) => i.kind === 'text') && !(tabLike && items.some((i) => i.kind === 'image'))) return bad('submit needs a text item');
@@ -718,9 +775,10 @@ export function registerTetherRoutes(app: Application, deps: TetherRoutesDeps = 
     }
     let cardId: string | null = null;
     if (body.card_id !== undefined && body.card_id !== null) {
-      cardId = validCardId(body.card_id);
+      // A Page or a Board (Pick up can be either since B5).
+      cardId = cardKindOf(body.card_id) ? (body.card_id as string) : null;
       if (!cardId) {
-        res.status(400).json({ success: false, error: 'card_id must be a Page id' });
+        res.status(400).json({ success: false, error: 'card_id must be a Page or Board id' });
         return;
       }
     }
@@ -878,6 +936,72 @@ export function registerTetherRoutes(app: Application, deps: TetherRoutesDeps = 
     }
   });
 
+  app.get('/tether/boards/:id', async (req: Request, res: Response) => {
+    const id = validBoardId(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'not a Board id' });
+      return;
+    }
+    const ws = workspaceOf(req, res);
+    if (!ws) return;
+    const board = (rest: string) => `/desk/boards/${id}${rest}${wsQuery(ws.workspace)}`;
+    try {
+      // The Desk for the card's Area and the links' titles; the card itself for its preview time.
+      const [desk, own, doc, answers] = await Promise.all([
+        getDesk(res, ws.workspace),
+        get<DeskCard>(res, board(''), ws.workspace),
+        get<{ items?: unknown }>(res, board('/board'), ws.workspace),
+        get<DeepAnswer[]>(res, board('/answers'), ws.workspace),
+      ]);
+      if (!desk || !own.ok || !doc.ok || !answers.ok) return;
+      const raw = desk.cards.find((c) => c.id === id) ?? (isRecord(own.data) ? own.data : null);
+      if (!raw) {
+        res.status(404).json({ success: false, error: 'not found' });
+        return;
+      }
+      const titles = new Map<string, string>();
+      for (const c of desk.cards) if (c && typeof c.id === 'string') titles.set(c.id, c.title ?? '');
+      const items = isRecord(doc.data) && Array.isArray(doc.data.items) ? (doc.data.items as BoardItem[]) : [];
+      const card = tetherCard(raw, areaMap(desk));
+      const hasPreview = !!(previewAt(raw) ?? (isRecord(own.data) ? previewAt(own.data) : null));
+      res.json({ success: true, data: buildTetherBoard(card, hasPreview, items, Array.isArray(answers.data) ? answers.data : [], titles) });
+    } catch (err) {
+      failed(res, 'board', err);
+    }
+  });
+
+  app.get('/tether/boards/:id/preview', async (req: Request, res: Response) => {
+    const id = validBoardId(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'not a Board id' });
+      return;
+    }
+    const ws = workspaceOf(req, res);
+    if (!ws) return;
+    try {
+      const r = await raw(`/desk/boards/${id}/preview${wsQuery(ws.workspace)}`, ws.workspace);
+      if (r.offline) {
+        offline(res);
+        return;
+      }
+      if (r.status === 404) {
+        res.status(404).json({ success: false, error: 'no preview' });
+        return;
+      }
+      if (r.status < 200 || r.status >= 300 || r.contentType !== 'image/png') {
+        res.status(502).json({ success: false, error: `Hester returned ${r.status}` });
+        return;
+      }
+      res.set('Content-Type', 'image/png');
+      // Lee redraws it after a save: devices ask again rather than keep an old one.
+      res.set('Cache-Control', 'no-cache');
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.send(r.body);
+    } catch (err) {
+      failed(res, 'preview', err);
+    }
+  });
+
   app.get('/tether/drawer', async (req: Request, res: Response) => {
     const ws = workspaceOf(req, res);
     if (!ws) return;
@@ -982,7 +1106,7 @@ export function registerTetherRoutes(app: Application, deps: TetherRoutesDeps = 
         target = check.target;
       }
       if (check.submit && (target.kind === 'page' || target.kind === 'board')) {
-        res.status(400).json({ success: false, error: 'submit is not allowed for a Page' });
+        res.status(400).json({ success: false, error: `submit is not allowed for a ${target.kind === 'board' ? 'Board' : 'Page'}` });
         return;
       }
       const send_id = `snd_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;

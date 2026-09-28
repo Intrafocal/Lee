@@ -4,7 +4,7 @@
  * fetch, so scripts/tether-send-smoke.mjs checks it directly:
  *
  * - checkSend: what a send may do here (submit only for tabs and Hester, and
- *   only with text; nothing for Board, which isn't built).
+ *   only with text; never for a Page or a Board).
  * - pageInsertion / findInsertion: a send as its own paragraph at the Page's
  *   cursor (the end when the Page isn't open), and finding it again for Undo
  *   while it's unchanged.
@@ -12,10 +12,17 @@
  * - inboxFileName / tabPasteText: an image for a tab goes to
  *   ~/.lee/inbox/<send_id>-<n>.<ext> and its path is pasted with the text.
  * - chipLine: the status bar's "From your phone: photo → Taxonomy".
+ * - boardSendItems: a send on a Board (B5): images side by side mid-view (to
+ *   the right of everything when the Board isn't open), a caption pinned to
+ *   its image, the text as one note under them.
  * - buildSendTargets: what this window can take, for GET /tether/targets.
  */
 
+import type { BoardItem, BoardNote } from '../../shared/board';
+import { cardKindOf } from '../../shared/desk';
 import type { SendItem, SendTarget, SendTargets } from '../../shared/tether';
+import { boardBounds, imageSize, makeNote, newItemId, nextZ, pinFor, NOTE_H, NOTE_W } from './boardModel';
+import type { Point, Size } from './canvas/camera';
 
 // ---------------------------------------------------------------------------
 // What a send may do
@@ -31,13 +38,13 @@ export function hasText(items: readonly SendItem[]): boolean {
  * Main validated the request; this is the renderer's own guard, so a send it
  * can't honour fails plainly instead of doing half of it. Submit (Send) is for
  * tabs and Hester only; Hester needs text, a tab takes an image alone (§4.2).
+ * A Page and a Board only take Deliver.
  */
 export function checkSend(target: SendTarget, items: readonly SendItem[], submit: boolean | undefined): SendCheck {
   if (!items.length) return { ok: false, error: 'no_items' };
-  if (target.kind === 'board') return { ok: false, error: 'board_not_built' };
   // A tab takes Send with only an image (its path, then Enter); Hester needs text.
   const imageForTab = target.kind === 'tab' && items.some((i) => i.kind === 'image');
-  if (submit && (target.kind === 'page' || (!hasText(items) && !imageForTab))) return { ok: false, error: 'submit_not_allowed' };
+  if (submit && (target.kind === 'page' || target.kind === 'board' || (!hasText(items) && !imageForTab))) return { ok: false, error: 'submit_not_allowed' };
   return { ok: true };
 }
 
@@ -139,6 +146,80 @@ export function extForMime(mime: string): 'png' | 'jpg' {
 }
 
 // ---------------------------------------------------------------------------
+// A Board (B5): image items and a note
+// ---------------------------------------------------------------------------
+
+/** Between the images of one send, and between them and the Board's content. */
+export const BOARD_SEND_GAP = 24;
+
+/** A sent image once uploaded: its asset, its own pixels, and its caption. */
+export interface BoardSendImage {
+  asset: string;
+  natural: Size;
+  caption?: string;
+}
+
+/** The texts of a send as one note: each as written, a blank line between. */
+export function boardSendText(items: readonly SendItem[]): string {
+  return items
+    .filter((i): i is Extract<SendItem, { kind: 'text' }> => i.kind === 'text')
+    .map((i) => i.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/**
+ * A send's items on a Board: the images side by side in order, the text as
+ * one note under them, the whole block centred on `at` (the middle of the
+ * view). With `at` null (the Board isn't open) the block goes to the right
+ * of everything on the Board, tops aligned. A caption is a note pinned to
+ * its image's top-right corner. Each item on top of the last.
+ */
+export function boardSendItems(
+  items: readonly BoardItem[],
+  images: readonly BoardSendImage[],
+  text: string,
+  at: Point | null,
+  dpr = 1,
+  newId: () => string = newItemId,
+): BoardItem[] {
+  const sizes = images.map((im) => imageSize(im.natural, dpr));
+  const rowW = sizes.reduce((w, s) => w + s.w, 0) + BOARD_SEND_GAP * Math.max(0, sizes.length - 1);
+  const rowH = sizes.reduce((h, s) => Math.max(h, s.h), 0);
+  const body = text.trim();
+  const blockW = Math.max(rowW, body ? NOTE_W : 0);
+  const blockH = rowH + (body ? (rowH ? BOARD_SEND_GAP : 0) + NOTE_H : 0);
+  let left: number;
+  let top: number;
+  if (at) {
+    left = at.x - blockW / 2;
+    top = at.y - blockH / 2;
+  } else {
+    const b = boardBounds([...items]);
+    left = b ? b.x + b.w + BOARD_SEND_GAP * 2 : 0;
+    top = b ? b.y : 0;
+  }
+  left = Math.round(left);
+  top = Math.round(top);
+  const out: BoardItem[] = [];
+  const all = () => [...items, ...out];
+  let x = left;
+  images.forEach((im, i) => {
+    const s = sizes[i];
+    const img: BoardItem = { id: newId(), kind: 'image', asset: im.asset, x, y: top, w: s.w, h: s.h, z: nextZ(all()) };
+    out.push(img);
+    x += s.w + BOARD_SEND_GAP;
+    const caption = (im.caption ?? '').trim();
+    if (caption) out.push(makeNote(all(), { x: img.x + img.w, y: img.y }, pinFor(img, { x: img.x + img.w, y: img.y }), caption, newId()));
+  });
+  if (body) {
+    const note: BoardNote = { id: newId(), kind: 'note', text: body, x: left, y: top + (rowH ? rowH + BOARD_SEND_GAP : 0), w: NOTE_W, h: NOTE_H, z: nextZ(all()) };
+    out.push(note);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // A tab: the inbox and the paste
 // ---------------------------------------------------------------------------
 
@@ -231,13 +312,13 @@ export const CHIP_MS = 8000;
 // ---------------------------------------------------------------------------
 
 export interface TargetInputs {
-  /** The zoomed Page card, if any. */
-  zoomedPage: { card_id: string; title: string } | null;
+  /** The zoomed card (a Page or a Board, by its id), if any. */
+  zoomedCard: { card_id: string; title: string } | null;
   paletteOpen: boolean;
   /** The PTY tab in front of you (the focused agent, terminal or TUI tab). */
   focusedPtyId: number | null;
-  /** Pages this window has touched this session, most recent last. */
-  touchedPages: ReadonlyArray<{ card_id: string; title: string }>;
+  /** Pages and Boards this window has touched this session, most recent last. */
+  touchedCards: ReadonlyArray<{ card_id: string; title: string }>;
   tabs: ReadonlyArray<{ ptyId: number | null; label: string; type: string; provider?: string | null }>;
 }
 
@@ -246,10 +327,16 @@ function tabKind(type: string, provider: string | null | undefined): 'agent' | '
   return type === 'terminal' ? 'terminal' : 'tui';
 }
 
+/** A card as a target: a Page or a Board by its id; anything else isn't one. */
+function cardTarget(c: { card_id: string; title: string }): SendTarget | null {
+  const kind = cardKindOf(c.card_id);
+  return kind ? { kind, card_id: c.card_id, title: c.title } : null;
+}
+
 /**
- * The focus, in order: the zoomed Page, the open palette, the focused PTY tab.
- * The rest: touched Pages (most recent first), Hester, each PTY tab. Nothing
- * appears twice.
+ * The focus, in order: the zoomed Page or Board, the open palette, the
+ * focused PTY tab. The rest: touched cards (most recent first), Hester, each
+ * PTY tab. Nothing appears twice.
  */
 export function buildSendTargets(input: TargetInputs): SendTargets {
   // Every tab with a PTY: agents, terminals and TUIs (editors and browsers have none).
@@ -262,20 +349,26 @@ export function buildSendTargets(input: TargetInputs): SendTargets {
     provider: t.provider ?? null,
   });
   let focus: SendTarget | null = null;
-  if (input.zoomedPage) focus = { kind: 'page', card_id: input.zoomedPage.card_id, title: input.zoomedPage.title };
+  const zoomed = input.zoomedCard ? cardTarget(input.zoomedCard) : null;
+  if (zoomed) focus = zoomed;
   else if (input.paletteOpen) focus = { kind: 'hester' };
   else if (input.focusedPtyId != null) {
     const t = ptyTabs.find((x) => x.ptyId === input.focusedPtyId);
     if (t) focus = tabTarget(t);
   }
   const same = (a: SendTarget, b: SendTarget | null) =>
-    !!b && a.kind === b.kind && (a.kind === 'page' ? a.card_id === (b as typeof a).card_id : a.kind === 'tab' ? a.pty_id === (b as typeof a).pty_id : true);
+    !!b &&
+    a.kind === b.kind &&
+    (a.kind === 'page' || a.kind === 'board' ? a.card_id === (b as typeof a).card_id : a.kind === 'tab' ? a.pty_id === (b as typeof a).pty_id : true);
   const targets: SendTarget[] = [];
   const add = (t: SendTarget) => {
     if (same(t, focus) || targets.some((x) => same(t, x))) return;
     targets.push(t);
   };
-  for (const p of [...input.touchedPages].reverse()) add({ kind: 'page', card_id: p.card_id, title: p.title });
+  for (const c of [...input.touchedCards].reverse()) {
+    const t = cardTarget(c);
+    if (t) add(t);
+  }
   add({ kind: 'hester' });
   for (const t of ptyTabs) add(tabTarget(t));
   return { focus, targets };

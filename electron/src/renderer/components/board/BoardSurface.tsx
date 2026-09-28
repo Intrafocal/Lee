@@ -120,6 +120,8 @@ export interface BoardApi {
   uploadAsset(blob: Blob, mime: 'image/png' | 'image/jpeg', source?: AssetSource | null, selection?: boolean): Promise<{ name: string } | { error: string }>;
   /** Images as image items at `at` (default: the middle of the view), each with `source`. */
   addImages(files: readonly Blob[], at?: Point, source?: AssetSource | null): Promise<void>;
+  /** The Board is loaded, so edits save (not loading, offline or gone). */
+  ready(): boolean;
   /** The middle of the view, Board px. */
   viewCentre(): Point;
   /** One line in the header. */
@@ -796,6 +798,7 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
         return { name: r.data.name };
       },
       addImages: (files, at, source) => current.current.addImages(files, at, source),
+      ready: () => loadRef.current === 'ok',
       viewCentre: () => current.current.viewCentre(),
       say,
     }),

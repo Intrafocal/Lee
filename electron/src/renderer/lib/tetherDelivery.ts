@@ -8,6 +8,11 @@
  *   sink); a Page that isn't open gets it at its end through Hester's
  *   page route. Images are uploaded to the Page's assets first and go in as
  *   `![caption](assets/<file>)`.
+ * - board (B5): images uploaded to the Board's assets and placed as image
+ *   items in the middle of the view, the text as one note under them, as
+ *   one undo step (a Board open on this window registers a sink); a Board
+ *   that isn't open gets them to the right of its content through Hester
+ *   (GET board, add, PUT with its version; one retry on a conflict).
  * - hester: the palette opens with the text as its question and the images
  *   attached; Send asks it.
  * - tab: pasted as one piece through xterm's paste() (bracketed when the
@@ -15,17 +20,24 @@
  *   with Send.
  *
  * Then a quiet chip in the status bar for 8 s ("From your phone: photo →
- * Taxonomy · Undo"); Undo takes a Page insertion out while it's unchanged.
+ * Taxonomy · Undo"); Undo takes a Page insertion out while it's unchanged,
+ * and a Board's items out while they're there.
  * Compose sends from a device's tab view show no chip.
  */
 
+import type { BoardItem } from '../../shared/board';
 import type { SendItem, SendTarget } from '../../shared/tether';
 import { focusManager } from '../hooks/useFocusManager';
+import { addImageAsset } from './boardAssets';
+import { canAdd, removeItems } from './boardModel';
 import { getPage, putPage } from './hesterDeep';
+import { getBoardDoc, putBoardDoc } from './hesterBoard';
 import { uploadPageAsset } from './hesterDesk';
 import { answerTetherSend, onTetherSend, saveInboxImage, type TetherSendIpc } from './tetherIpc';
 import {
   CHIP_MS,
+  boardSendItems,
+  boardSendText,
   chipLine,
   checkSend,
   imageMarkdown,
@@ -34,6 +46,7 @@ import {
   removeInsertion,
   showsChip,
   tabPasteText,
+  type BoardSendImage,
   type Insertion,
 } from './tetherModel';
 
@@ -52,6 +65,15 @@ export interface PageSink {
   remove(ins: Insertion): boolean;
 }
 
+/** A Board open on this window: places a send through its canvas (one undo step). */
+export interface BoardSink {
+  cardId: string;
+  /** The send's items in the middle of the view: what went in, or null when the Board isn't loaded (or is full). */
+  place(images: readonly BoardSendImage[], text: string): BoardItem[] | null;
+  /** Take them out while they're there; false when they're all gone. */
+  remove(ids: readonly string[]): boolean;
+}
+
 export interface PaletteImage {
   mime: 'image/png' | 'image/jpeg';
   data_b64: string;
@@ -63,12 +85,20 @@ export interface PaletteImage {
 export type PaletteSink = (q: { text: string; images: PaletteImage[]; submit: boolean }) => void;
 
 const pageSinks = new Map<string, PageSink>();
+const boardSinks = new Map<string, BoardSink>();
 let paletteSink: PaletteSink | null = null;
 
 export function registerPageSink(sink: PageSink): () => void {
   pageSinks.set(sink.cardId, sink);
   return () => {
     if (pageSinks.get(sink.cardId) === sink) pageSinks.delete(sink.cardId);
+  };
+}
+
+export function registerBoardSink(sink: BoardSink): () => void {
+  boardSinks.set(sink.cardId, sink);
+  return () => {
+    if (boardSinks.get(sink.cardId) === sink) boardSinks.delete(sink.cardId);
   };
 }
 
@@ -168,6 +198,57 @@ async function deliverToPage(workspace: string, target: Extract<SendTarget, { ki
   return remotePageInsert(workspace, target.card_id, block.text);
 }
 
+/** The send's images on the Board's assets (no `source`: a device's photo has no file or link to keep). */
+async function boardImages(workspace: string, cardId: string, items: readonly SendItem[]): Promise<{ ok: true; images: BoardSendImage[] } | { ok: false; error: string }> {
+  const images: BoardSendImage[] = [];
+  for (const item of items) {
+    if (item.kind !== 'image') continue;
+    const up = await addImageAsset(workspace, cardId, new Blob([b64ToBytes(item.data_b64) as Uint8Array<ArrayBuffer>], { type: item.mime }));
+    if ('error' in up) return { ok: false, error: `image_upload: ${up.error}` };
+    images.push({ asset: up.name, natural: { w: up.w, h: up.h }, ...(item.caption ? { caption: item.caption } : {}) });
+  }
+  return { ok: true, images };
+}
+
+const dpr = () => (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+
+/** Append to a Board that isn't open, through Hester: to the right of its content (one retry on a version conflict). */
+async function remoteBoardAppend(workspace: string, cardId: string, images: readonly BoardSendImage[], text: string): Promise<DeliverResult> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const doc = await getBoardDoc(workspace, cardId);
+    if (!doc.ok) return { ok: false, error: doc.status === 404 ? 'board_not_found' : doc.error };
+    const add = boardSendItems(doc.data.items, images, text, null, dpr());
+    if (!canAdd(doc.data.items, add.length)) return { ok: false, error: 'board_full' };
+    const put = await putBoardDoc(workspace, cardId, doc.data.version, [...doc.data.items, ...add]);
+    if (put.ok) {
+      const ids = add.map((it) => it.id);
+      const undo = async () => {
+        const now = await getBoardDoc(workspace, cardId);
+        if (!now.ok || !now.data.items.some((it) => ids.includes(it.id))) return false;
+        const r = await putBoardDoc(workspace, cardId, now.data.version, removeItems(now.data.items, ids));
+        return r.ok;
+      };
+      return { ok: true, undo };
+    }
+    if (!('conflict' in put) || put.conflict === undefined) return { ok: false, error: 'error' in put ? put.error : 'board_conflict' };
+  }
+  return { ok: false, error: 'board_conflict' };
+}
+
+async function deliverToBoard(workspace: string, target: Extract<SendTarget, { kind: 'board' }>, items: readonly SendItem[]): Promise<DeliverResult> {
+  const text = boardSendText(items);
+  const up = await boardImages(workspace, target.card_id, items);
+  if (!up.ok) return up;
+  if (!up.images.length && !text) return { ok: false, error: 'no_items' };
+  const sink = boardSinks.get(target.card_id);
+  const placed = sink?.place(up.images, text) ?? null;
+  if (sink && placed) {
+    const ids = placed.map((it) => it.id);
+    return { ok: true, undo: async () => sink.remove(ids) };
+  }
+  return remoteBoardAppend(workspace, target.card_id, up.images, text);
+}
+
 function deliverToHester(items: readonly SendItem[], submit: boolean): DeliverResult {
   if (!paletteSink) return { ok: false, error: 'palette_unavailable' };
   const images: PaletteImage[] = items
@@ -234,8 +315,9 @@ export async function deliverSend(workspace: string, req: TetherSendIpc): Promis
       case 'tab':
         r = await deliverToTab(req.send_id, req.target, req.items, !!req.submit);
         break;
-      default:
-        r = { ok: false, error: 'board_not_built' };
+      case 'board':
+        r = await deliverToBoard(workspace, req.target, req.items);
+        break;
     }
   } catch (e) {
     r = { ok: false, error: e instanceof Error ? e.message : String(e) };
