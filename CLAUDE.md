@@ -331,6 +331,14 @@ Hester controls Lee via `POST /command`:
 - `GET /fs/list?path=<abs dir>` - one directory's entries, dirs first; defaults to the focused window's workspace
 - No separate `/fs/workspaces` - `GET /windows` already returns `{id, workspace, focused}` per open window
 
+**Tether routes for devices** (`src/main/copilot/tether.ts`; types in `src/shared/tether.ts`; plan: `docs/plans/2026-09-28-tether-review-voice.md` §3.3, §4.2). Aeronaut and Dirigible read the Desk and steer Lee through these, with their device token; `?workspace=` defaults to the focused window's. They read Hester and trim for devices, and answer 503 `hester_offline` when it's down:
+- `GET /tether` - Pick up (your last card, where you stopped, its open questions) and counts
+- `POST /tether/capture` `{text, card_id?, input?: 'voice'}` - to Hester's Ideas; spooled to `~/.lee/spool/ideas.jsonl` when Hester is offline
+- `GET /tether/desk`, `GET /tether/pages?limit=50`, `GET /tether/pages/:id[?text_only=1]`, `GET /tether/pages/:id/assets/:name`, `GET /tether/drawer` - Review, read-only
+- `GET /tether/targets`, `POST /tether/send` - **Send to Lee**: text or images into the focus (the zoomed Page, the palette, the focused agent tab) or a chosen tab. Main validates (≤ 4 items, 20 000 chars, 10 MB per image, `submit` never for a Page), sends IPC `tether:send` to the window and waits up to 10 s for `tether:send-result`
+
+**Voice** is off unless `hester.voice.enabled: true`: Hester transcribes (`GET /voice`, `POST /voice/transcribe` on :9000); Lee only records. Main allows the mic for Lee's own page only (`src/main/media-permissions.ts`), and the packaged app carries `NSMicrophoneUsageDescription` and `electron/build/entitlements.mac.plist`. In dev, macOS asks for the mic on behalf of Electron (`tccutil reset Microphone com.github.Electron` to be asked again).
+
 ## Configuration
 
 Create `~/.config/lee/config.yaml` or `.lee/config.yaml` in your workspace:
@@ -345,6 +353,9 @@ hester:
   enabled: true
   url: "http://localhost:8888/context"
   listen_port: 9000
+  voice:                # optional: the mic in Lee, Aeronaut and the T-Deck
+    enabled: false
+    provider: gemini    # or whisper (local; Lee installs the voice-local extra, then `hester voice setup`)
 
 # SQL connections for pgcli (Cmd+Shift+S)
 sql:
