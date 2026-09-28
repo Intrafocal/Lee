@@ -81,15 +81,21 @@ public:
     void post(const std::string& url, cJSON* body,
               std::function<void(int status, cJSON* resp)> cb) override;
 
+    void postBody(const std::string& url, const char* content_type,
+                  std::vector<uint8_t> bytes,
+                  std::function<void(int status, cJSON* resp)> cb) override;
+
     void postSSE(const std::string& url, cJSON* body,
                  SSEEventCallback on_event,
                  SSEDoneCallback on_done) override;
 
 private:
     struct Request;
+    struct BodyRequest;
     struct SSERequest;
 
     static void request_task(void* arg);
+    static void body_task(void* arg);
     static void sse_task(void* arg);
 
     std::string token_;

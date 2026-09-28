@@ -13,7 +13,8 @@ idf_component_register(
         ${CORE_DIR}/src/markdown.cpp
         ${CORE_DIR}/src/attention.cpp
         ${CORE_DIR}/src/activity.cpp
-        ${CORE_DIR}/src/carry.cpp
+        ${CORE_DIR}/src/tether.cpp
+        ${CORE_DIR}/src/voice.cpp
         ${CORE_DIR}/src/lee_client.cpp
         ${CORE_DIR}/src/pty_client.cpp
         ${CORE_DIR}/src/hester_client.cpp

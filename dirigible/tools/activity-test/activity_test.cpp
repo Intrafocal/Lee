@@ -4,11 +4,12 @@
 //                 cockpit-renderer-smoke.mjs (so the C++ port cannot drift);
 //   attention.cpp the compact snapshot's agents[] / limits / deep, tolerant
 //                 of absence;
-//   carry.cpp     GET /carry.
+//   tether.cpp    GET /tether, /tether/pages, /tether/pages/:id and the
+//                 POST /tether/send body.
 // Pure C++17 plus ESP-IDF's copy of cJSON, no LVGL:  make check
 #include "dirigible/activity.hpp"
 #include "dirigible/attention.hpp"
-#include "dirigible/carry.hpp"
+#include "dirigible/tether.hpp"
 #include "cJSON.h"
 
 #include <cstdio>
@@ -212,76 +213,140 @@ static void test_snapshot()
     expect_int("old: deep null", old.deep_active, 0);
 }
 
-static void test_carry()
+static void test_tether()
 {
     cJSON* root = cJSON_Parse(R"({"workspace":"/ws",
-      "pick_up":{"exploration_id":"exp-1","title":"Tether","stopped_at":"The pager should hold one thought.","last_touched_at":"2026-09-27T10:00:00Z"},
-      "open_questions":[{"exploration_id":"exp-1","question_id":"q1","text":"Does Open next replace f?"},
-                        {"exploration_id":"exp-2","question_id":"q2","text":"Voice on the walk?"},
-                        {"exploration_id":"exp-1","question_id":"q3","text":"Second question"},
-                        {"exploration_id":"exp-3","question_id":"q4","text":""}],
-      "captured_count":2,"reading_count":0,
-      "open_next":{"exploration_id":"exp-2","set_at":"2026-09-27T10:05:00Z"}})");
-    CarryState c;
-    expect_int("carry parses", carry_parse(root, c), 1);
+      "pick_up":{"card_id":"pg-1","card_kind":"page","title":"Tether","area_name":"Devices",
+                 "stopped_at":"The pager should hold one thought.","stopped_line":12,
+                 "last_touched_at":"2026-09-27T10:00:00Z"},
+      "open_questions":[{"card_id":"pg-1","question_id":"q1","text":"Is v the right key?"},
+                        {"card_id":"pg-2","question_id":"q2","text":"Voice on the walk?"},
+                        {"card_id":"pg-1","question_id":"q3","text":"Second question"},
+                        {"card_id":"pg-3","question_id":"q4","text":""}],
+      "captured_count":2,"spooled":1})");
+    TetherState t;
+    expect_int("tether parses", tether_parse(root, t), 1);
     cJSON_Delete(root);
-    expect_int("pick up", c.has_pick_up, 1);
-    expect("stopped at", c.stopped_at, "The pager should hold one thought.");
-    expect_int("empty questions dropped", (long long)c.questions.size(), 3);
-    const auto ex = c.explorations();
-    expect_int("two explorations", (long long)ex.size(), 2);
-    if (ex.size() == 2) {
-        expect("pick-up first", ex[0], "exp-1");
-        expect("then the others", ex[1], "exp-2");
-    }
-    const CarryQuestion* q = c.question_for("exp-1");
-    expect("first question for exp-1", q ? q->text : "", "Does Open next replace f?");
-    expect_int("open next", c.has_open_next, 1);
-    expect("open next id", c.open_next_exploration_id, "exp-2");
-    expect_int("captured", c.captured_count, 2);
+    expect_int("pick up", t.has_pick_up, 1);
+    expect("pick-up card", t.pick_up_id, "pg-1");
+    expect("kind", t.pick_up_kind, "page");
+    expect("area", t.area_name, "Devices");
+    expect("stopped at", t.stopped_at, "The pager should hold one thought.");
+    expect_int("stopped line", t.stopped_line, 12);
+    expect_int("empty questions dropped", (long long)t.questions.size(), 3);
+    expect_int("two open questions on the pick-up", t.questions_for("pg-1"), 2);
+    expect_int("captured", t.captured_count, 2);
+    expect_int("spooled", t.spooled, 1);
 
-    root = cJSON_Parse(R"({"workspace":"/ws","pick_up":null,"open_questions":[],"captured_count":0,"reading_count":0,"open_next":null})");
-    CarryState empty;
-    expect_int("empty carry parses", carry_parse(root, empty), 1);
+    root = cJSON_Parse(R"({"success":true,"data":{"workspace":"/ws","pick_up":null,"open_questions":[],"captured_count":0,"spooled":0}})");
+    TetherState empty;
+    expect_int("enveloped empty tether parses", tether_parse(root, empty), 1);
     cJSON_Delete(root);
-    expect_int("empty: nothing", (long long)empty.explorations().size(), 0);
-    expect_int("empty: no open next", empty.has_open_next, 0);
+    expect_int("empty: no pick up", empty.has_pick_up, 0);
+
+    // The legacy exploration_id alias is gone (plan §2.1): no card id, no pick-up.
+    root = cJSON_Parse(R"({"pick_up":{"exploration_id":"exp-1","title":"Old"},"open_questions":[]})");
+    TetherState old;
+    expect_int("a pre-Desk body still parses", tether_parse(root, old), 1);
+    cJSON_Delete(root);
+    expect_int("pre-Desk: no pick-up without card_id", old.has_pick_up, 0);
 
     root = cJSON_Parse(R"({"error":"hester_offline"})");
-    CarryState err;
-    expect_int("an error body is not carry", carry_parse(root, err), 0);
+    TetherState err;
+    expect_int("an error body is not tether", tether_parse(root, err), 0);
     cJSON_Delete(root);
 }
 
-// Desk D2 §9.3, §9.4: Tether's last Desk card, the idle-end push, In flight's fold.
+// Review: GET /tether/pages and GET /tether/pages/:id?text_only=1.
+static void test_pages()
+{
+    cJSON* root = cJSON_Parse(R"([
+      {"id":"pg-2","kind":"page","title":"Mesh sync","area_id":"ar-1","area_name":"Mesh","stashed":false,
+       "updated_at":"2026-09-28T09:00:00Z","chars":1200,"answers":1,"open_questions":2},
+      {"id":"pg-1","kind":"page","title":"Old notes","area_id":null,"area_name":null,"stashed":true,
+       "updated_at":null,"chars":10,"answers":0,"open_questions":0},
+      {"title":"no id: dropped"}])");
+    std::vector<TetherCard> pages;
+    expect_int("pages parse", tether_pages_parse(root, pages), 1);
+    cJSON_Delete(root);
+    expect_int("two pages", (long long)pages.size(), 2);
+    if (pages.size() == 2) {
+        expect("newest first, as sent", pages[0].id, "pg-2");
+        expect("area", pages[0].area_name, "Mesh");
+        expect_int("open questions", pages[0].open_questions, 2);
+        expect_int("stashed", pages[1].stashed, 1);
+        expect_int("updated unknown", pages[1].updated_ms, -1);
+        expect("no area", pages[1].area_name, "");
+    }
+
+    root = cJSON_Parse(R"({"success":true,"data":[{"id":"pg-9","kind":"page","title":"Enveloped"}]})");
+    expect_int("enveloped pages parse", tether_pages_parse(root, pages), 1);
+    cJSON_Delete(root);
+    expect_int("one page", (long long)pages.size(), 1);
+
+    root = cJSON_Parse(R"({"error":"hester_offline"})");
+    std::vector<TetherCard> none;
+    expect_int("an error body is not pages", tether_pages_parse(root, none), 0);
+    cJSON_Delete(root);
+
+    root = cJSON_Parse(R"({"card":{"id":"pg-2","kind":"page","title":"Mesh sync"},"text":"# Mesh\n\nWhere the clocks disagree."})");
+    TetherPageText page;
+    expect_int("page text parses", tether_page_text_parse(root, page), 1);
+    cJSON_Delete(root);
+    expect("page title", page.card.title, "Mesh sync");
+    expect("page text", page.text, "# Mesh\n\nWhere the clocks disagree.");
+
+    root = cJSON_Parse(R"({"card":{"id":"pg-2"}})");
+    TetherPageText bad;
+    expect_int("a page with no text is not one", tether_page_text_parse(root, bad), 0);
+    cJSON_Delete(root);
+}
+
+// Compose into a tab (§4.6): POST /tether/send.
+static void test_send()
+{
+    expect("claude is an agent", tether_tab_kind("claude"), "agent");
+    expect("terminal", tether_tab_kind("terminal"), "terminal");
+    expect("lazygit is a tui", tether_tab_kind("git"), "tui");
+
+    cJSON* body = tether_send_body(7, "Claude", "agent", "line one\nline two", true, false, "/ws");
+    char* json = cJSON_PrintUnformatted(body);
+    expect("send body", json,
+           R"({"workspace":"/ws","target":{"kind":"tab","pty_id":7,"label":"Claude","tab_kind":"agent","provider":null},)"
+           R"("items":[{"kind":"text","text":"line one\nline two"}],"submit":true})");
+    cJSON_free(json);
+    cJSON_Delete(body);
+
+    body = tether_send_body(3, "zsh", "terminal", "ls", false, true, "");
+    json = cJSON_PrintUnformatted(body);
+    expect("deliver, from voice, no workspace", json,
+           R"({"target":{"kind":"tab","pty_id":3,"label":"zsh","tab_kind":"terminal","provider":null},)"
+           R"("items":[{"kind":"text","text":"ls","input":"voice"}],"submit":false})");
+    cJSON_free(json);
+    cJSON_Delete(body);
+
+    cJSON* resp = cJSON_Parse(R"({"send_id":"snd_1","delivered_to":{"kind":"tab","pty_id":7}})");
+    SendOutcome r;
+    send_outcome_parse(200, resp, r);
+    cJSON_Delete(resp);
+    expect_int("sent", r.ok, 1);
+    expect("send id", r.send_id, "snd_1");
+
+    resp = cJSON_Parse(R"({"error":"no_window"})");
+    send_outcome_parse(503, resp, r);
+    cJSON_Delete(resp);
+    expect_int("503 fails", r.ok, 0);
+    expect("error code", r.error, "no_window");
+    expect("error line", send_error_text(r), "No Lee window has this workspace");
+
+    send_outcome_parse(0, nullptr, r);
+    expect("no answer", send_error_text(r), "Lee did not answer");
+}
+
+// Desk D2 §9.2, §9.4: the idle-end push and In flight's fold.
 static void test_desk()
 {
-    cJSON* root = cJSON_Parse(R"({"success":true,"data":{"workspace":"/ws",
-      "pick_up":{"card_id":"pg-0000abcd","card_kind":"page","title":"Mesh sync","area_name":"Mesh",
-                 "stopped_at":"Where the clocks disagree.","stopped_line":12,"last_touched_at":null,
-                 "exploration_id":"pg-0000abcd"},
-      "open_questions":[{"card_id":"pg-0000abcd","exploration_id":"pg-0000abcd","question_id":"q1","text":"Why?"}],
-      "captured_count":1,"reading_count":0,"spooled":2,
-      "open_next":{"card_id":"pg-0000abcd","exploration_id":"pg-0000abcd","set_at":"2026-09-27T10:00:00Z"}}})");
-    CarryState c;
-    expect_int("desk carry parses", carry_parse(root, c), 1);
-    cJSON_Delete(root);
-    expect("pick-up is the card", c.pick_up_id, "pg-0000abcd");
-    expect("area", c.area_name, "Mesh");
-    expect_int("stopped line", c.stopped_line, 12);
-    expect_int("spooled", c.spooled, 2);
-    expect("question's card", c.questions.empty() ? "" : c.questions[0].exploration_id, "pg-0000abcd");
-    expect("open next card", c.open_next_exploration_id, "pg-0000abcd");
-
-    root = cJSON_Parse(R"({"pick_up":{"exploration_id":"exp-1","title":"Old","stopped_line":0},"open_questions":[]})");
-    CarryState old;
-    expect_int("pre-Desk carry parses", carry_parse(root, old), 1);
-    cJSON_Delete(root);
-    expect("pre-Desk: exploration id stands in", old.pick_up_id, "exp-1");
-    expect_int("pre-Desk: no line", old.stopped_line, -1);
-    expect("pre-Desk: no area", old.area_name, "");
-
-    root = cJSON_Parse(R"({"items":[
+    cJSON* root = cJSON_Parse(R"({"items":[
         {"id":"att_idle","version":2,"kind":"deep_idle","severity":"needs-you","title":"Still thinking?","text":"Mesh sync",
          "notify":true,"actions":["extend","end_rate","capture","dismiss"],"created_at":"2026-09-27T11:55:00.000Z",
          "deep_idle":{"session_id":"fs_1","ends_at":"2026-09-27T12:04:00.000Z","card":{"card_id":"pg-0000abcd","title":"Mesh sync"}}},
@@ -319,7 +384,9 @@ int main()
     test_activity();
     test_tokens_and_line();
     test_snapshot();
-    test_carry();
+    test_tether();
+    test_pages();
+    test_send();
     test_desk();
     printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

@@ -14,10 +14,12 @@
  *   HTTP POST http://host:9001/command   Authorization: Bearer <token>
  * and Hester (hester/daemon/main.py), same bearer:
  *   HTTP POST http://host:9000/context/stream  → text/event-stream
+ *   HTTP POST http://host:9000/voice/transcribe  raw audio/wav body (postBody)
  */
 
 #include "dirigible_esp/transport_esp.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -338,6 +340,99 @@ void HttpClientEsp::post(const std::string& url, cJSON* body,
                              timeout_ms_, std::move(cb) };
     if (xTaskCreate(request_task, "dir_http", 6144, req, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate(dir_http) failed");
+        auto failed = std::move(req->cb);
+        delete req;
+        if (failed) failed(0, nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raw-body POST (a voice clip).  esp_http_client_perform() wants the whole
+// body as one post field, which for ~1 MB of WAV means a second copy; this
+// opens the request with its length and writes it 4 KB at a time straight
+// from the caller's buffer (in PSRAM), then reads the JSON answer.
+// ---------------------------------------------------------------------------
+
+struct HttpClientEsp::BodyRequest {
+    HttpClientEsp*       owner;
+    std::string          url;
+    std::string          content_type;
+    std::vector<uint8_t> bytes;
+    std::string          token;
+    std::function<void(int, cJSON*)> cb;
+};
+
+/// The whole exchange, clip upload plus Hester's own 30 s transcription budget.
+static constexpr int BODY_TIMEOUT_MS = 35000;
+static constexpr size_t BODY_CHUNK   = 4096;
+
+void HttpClientEsp::body_task(void* arg)
+{
+    auto* req = static_cast<BodyRequest*>(arg);
+
+    std::string resp_body;
+    int status = 0;
+
+    esp_http_client_config_t cfg = {};
+    cfg.url        = req->url.c_str();
+    cfg.timeout_ms = BODY_TIMEOUT_MS;
+    cfg.method     = HTTP_METHOD_POST;
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client) {
+        esp_http_client_set_header(client, "Content-Type", req->content_type.c_str());
+        if (!req->token.empty()) {
+            std::string bearer = "Bearer " + req->token;
+            esp_http_client_set_header(client, "Authorization", bearer.c_str());
+        }
+        const size_t total = req->bytes.size();
+        esp_err_t err = esp_http_client_open(client, (int)total);
+        size_t sent = 0;
+        if (err == ESP_OK) {
+            while (sent < total) {
+                const size_t n = std::min(BODY_CHUNK, total - sent);
+                const int w = esp_http_client_write(client, (const char*)req->bytes.data() + sent, (int)n);
+                if (w <= 0) break;
+                sent += (size_t)w;
+            }
+        }
+        if (err == ESP_OK && sent == total) {
+            // The clip is on the wire: give its memory back before waiting.
+            std::vector<uint8_t>().swap(req->bytes);
+            esp_http_client_fetch_headers(client);
+            status = esp_http_client_get_status_code(client);
+            char chunk[512];
+            int n;
+            while ((n = esp_http_client_read(client, chunk, sizeof(chunk))) > 0) {
+                if (resp_body.size() < 16 * 1024) resp_body.append(chunk, n);
+            }
+        } else {
+            ESP_LOGW(TAG, "POST %s failed: %s (%u/%u bytes)", req->url.c_str(),
+                     esp_err_to_name(err), (unsigned)sent, (unsigned)total);
+        }
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+    }
+
+    cJSON* parsed = resp_body.empty() ? nullptr : cJSON_Parse(resp_body.c_str());
+    auto cb = std::move(req->cb);
+    req->owner->dispatch_.post([cb = std::move(cb), status, parsed]() {
+        if (cb) cb(status, parsed);
+        if (parsed) cJSON_Delete(parsed);
+    });
+
+    delete req;
+    vTaskDelete(nullptr);
+}
+
+void HttpClientEsp::postBody(const std::string& url, const char* content_type,
+                             std::vector<uint8_t> bytes,
+                             std::function<void(int, cJSON*)> cb)
+{
+    auto* req = new BodyRequest{ this, url, content_type ? content_type : "application/octet-stream",
+                                 std::move(bytes), token_, std::move(cb) };
+    if (xTaskCreate(body_task, "dir_http_body", 6144, req, 4, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate(dir_http_body) failed");
         auto failed = std::move(req->cb);
         delete req;
         if (failed) failed(0, nullptr);

@@ -10,7 +10,8 @@ add_library(dirigible-core STATIC
     src/markdown.cpp
     src/attention.cpp
     src/activity.cpp
-    src/carry.cpp
+    src/tether.cpp
+    src/voice.cpp
     src/lee_client.cpp
     src/pty_client.cpp
     src/hester_client.cpp
