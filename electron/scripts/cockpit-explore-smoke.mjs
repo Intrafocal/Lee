@@ -1,21 +1,17 @@
 #!/usr/bin/env node
 /**
- * Smoke test for the Explore client (src/renderer/lib/hesterCockpit.ts):
- * every exploration call names its workspace as ?workspace= and as the
- * percent-encoded X-Lee-Workspace header, carries the bearer token, uses the
- * route/method of the contracts addendum, and unwraps the copilot envelope.
- * Also Someday "Promote → Explore" (triage with to: 'explore'), the v3 tree
- * routes (nodes, prune, decisions, spikes, promote, archive, escalate) and
- * the spike launch flow (spike node, delegate launch in a worktree with
- * origin explore, PATCH running). Deep D1 (§3.2, §8.1): the Deep client
- * (src/renderer/lib/hesterDeep.ts): page GET/PUT and the 409 conflict,
- * references, asks, answers, questions, sessions, explore, the opener, the
- * Someday capture and a create with `page`. Deep next (package RB): asks
- * with section_text, hand-off create / PATCH / template, DELETE, draft from
- * README, the brief builder, the hand-off launch request and state labels,
- * the auto-title rule, the ritual's "This session" lists, the goals entry
- * rule, the opener's deferred create and the Goals Page lookup. Bundles the
- * real source with esbuild; fetch and window.lee are stubs. No Hester needed.
+ * Smoke test for the Deep and Cockpit clients around a Page card
+ * (src/renderer/lib/hesterDeep.ts, hesterCockpit.ts): every call names its
+ * workspace as ?workspace= and as the percent-encoded X-Lee-Workspace header,
+ * carries the bearer token, goes to the card's /desk/pages/{id}/… route and
+ * unwraps the copilot envelope. Covers the Page GET/PUT and the 409 conflict,
+ * references, asks, answers, questions, Ideas capture and triage, the opener,
+ * escalate, hand-off create / PATCH / template and draft from README, the
+ * brief builder, the hand-off launch request and state labels, the auto-title
+ * rule, the ritual's "This session" lists, the goals entry rule and the
+ * in-memory Page. The pre-Desk exploration client and its tests went with
+ * Hester's /cockpit/explorations routes (2026-09-28). Bundles the real source
+ * with esbuild; fetch and window.lee are stubs. No Hester needed.
  *
  * Run: node scripts/cockpit-explore-smoke.mjs
  */
@@ -54,25 +50,7 @@ try {
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });
 }
-const {
-  listExplorations,
-  createExploration,
-  getExploration,
-  patchExploration,
-  openExploration,
-  triageIdea,
-  addExploreNode,
-  patchExploreNode,
-  pruneExploreNode,
-  decideExploration,
-  addSpike,
-  patchSpike,
-  promoteExploration,
-  archiveExploration,
-  escalateTask,
-  startSpike,
-  workspacePath,
-} = mod;
+const { triageIdea, escalateTask, workspacePath } = mod;
 
 let passed = 0;
 async function test(name, fn) {
@@ -90,7 +68,7 @@ async function test(name, fn) {
 }
 
 const WS = '/Users/ben/Développement/my proj';
-const exp = { id: 'exp-1a2b3c4d', title: 'Files vs Redis', status: 'active', turns: 0, session_id: 'explore-exp-1a2b3c4d' };
+const exp = { id: 'pg-1a2b3c4d', title: 'Files vs Redis' };
 
 function scoped(call) {
   const u = new URL(call.url);
@@ -101,53 +79,18 @@ function scoped(call) {
   return u;
 }
 
-await test('list: GET /cockpit/explorations?status=…, envelope unwrapped', async () => {
-  reply = { status: 200, body: { success: true, data: [exp] } };
-  const r = await listExplorations(WS);
-  assert.deepEqual(r, { ok: true, data: [exp] });
-  const u = scoped(calls[0]);
-  assert.equal(calls[0].method, 'GET');
-  assert.equal(u.pathname, '/cockpit/explorations');
-  assert.equal(u.searchParams.get('status'), 'active');
-  await listExplorations(WS, 'all');
-  assert.equal(new URL(calls[1].url).searchParams.get('status'), 'all');
-});
-
-await test('create: POST with seed, origin and the workspace in the body', async () => {
-  reply = { status: 201, body: { success: true, data: exp } };
-  const r = await createExploration(WS, { seed: 'Why not files?', origin: { kind: 'cockpit' } });
-  assert.equal(r.ok, true);
-  assert.equal(calls[0].method, 'POST');
-  assert.equal(scoped(calls[0]).pathname, '/cockpit/explorations');
-  assert.deepEqual(calls[0].body, { seed: 'Why not files?', origin: { kind: 'cockpit' }, workspace: WS });
-  assert.equal(calls[0].headers['Content-Type'], 'application/json');
-});
-
-await test('get / patch (archive) / open use the id path', async () => {
-  reply = { status: 200, body: { success: true, data: { ...exp, body: '## Seed' } } };
-  await getExploration(WS, exp.id);
-  await patchExploration(WS, exp.id, { status: 'archived' });
-  await openExploration(WS, exp.id);
-  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
-    ['GET', '/cockpit/explorations/exp-1a2b3c4d'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/open'],
-  ]);
-  assert.deepEqual(calls[1].body, { status: 'archived', workspace: WS });
-});
-
 await test('errors: Hester error text, 404 and offline', async () => {
-  reply = { status: 400, body: { success: false, error: 'title or seed is required' } };
-  assert.deepEqual(await createExploration(WS, {}), { ok: false, error: 'title or seed is required', status: 400 });
+  reply = { status: 400, body: { success: false, error: 'action must be one of explore, promote, drop, keep' } };
+  assert.deepEqual(await triageIdea(WS, 'idea_1', {}), { ok: false, error: 'action must be one of explore, promote, drop, keep', status: 400 });
   reply = { status: 404, body: { detail: 'Not Found' } };
-  const r = await listExplorations(WS);
+  const r = await escalateTask(WS, 'task-9');
   assert.equal(r.ok, false);
   assert.equal(r.status, 404);
   const saved = globalThis.fetch;
   globalThis.fetch = async () => {
     throw new Error('ECONNREFUSED');
   };
-  assert.deepEqual(await openExploration(WS, exp.id), { ok: false, error: 'Hester offline' });
+  assert.deepEqual(await deep.getPage(WS, exp.id), { ok: false, error: 'Hester offline' });
   globalThis.fetch = saved;
 });
 
@@ -160,105 +103,21 @@ await test('Ideas: triage explore with to: explore', async () => {
   assert.deepEqual(calls[0].body, { action: 'explore', to: 'explore', workspace: WS });
 });
 
-await test('v3 tree: nodes / prune / decisions / spikes use the contract routes and bodies', async () => {
-  reply = { status: 201, body: { success: true, data: { id: 'n-0000abcd', parent: 'root', label: 'x', kind: 'thought' } } };
-  await addExploreNode(WS, exp.id, { parent: 'root', label: 'Try files' });
-  await patchExploreNode(WS, exp.id, 'n-0000abcd', { label: 'Try a file-first store' });
-  await patchExploreNode(WS, exp.id, 'n-1111abcd', { reason: 'too slow' });
-  await pruneExploreNode(WS, exp.id, 'n-0000abcd');
-  await pruneExploreNode(WS, exp.id, 'n-0000abcd', 'dead end');
-  await decideExploration(WS, exp.id, { text: 'Use files' });
-  await addSpike(WS, exp.id, { parent: 'n-0000abcd', prompt: 'Try it', title: 'Try it' });
-  await patchSpike(WS, exp.id, 'n-2222abcd', { task_id: 'task-1', status: 'running' });
-  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-1111abcd'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd/prune'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/nodes/n-0000abcd/prune'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/decisions'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/spikes'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/spikes/n-2222abcd'],
-  ]);
-  assert.deepEqual(calls[0].body, { parent: 'root', label: 'Try files' });
-  assert.deepEqual(calls[2].body, { reason: 'too slow' });
-  assert.deepEqual(calls[3].body, {}, 'no reason required');
-  assert.deepEqual(calls[4].body, { reason: 'dead end' });
-  assert.deepEqual(calls[5].body, { text: 'Use files' });
-  assert.deepEqual(calls[7].body, { task_id: 'task-1', status: 'running' });
-});
-
-await test('v3 promote / archive / escalate / serves', async () => {
-  reply = { status: 200, body: { success: true, data: { exploration: exp, workstream_id: 'ws-1', title: 'T', phase: 'exploration' } } };
-  const p = await promoteExploration(WS, exp.id, { to: 'workstream' });
-  assert.equal(p.data.workstream_id, 'ws-1');
-  await promoteExploration(WS, exp.id, { to: 'goal', node_ids: ['root'] });
-  await archiveExploration(WS, exp.id);
-  await archiveExploration(WS, exp.id, true);
-  await escalateTask(WS, 'task-9');
-  await patchExploration(WS, exp.id, { serves: ['G1'] });
-  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/promote'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/promote'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/archive'],
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/archive'],
-    ['POST', '/cockpit/tasks/task-9/escalate'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d'],
-  ]);
-  assert.deepEqual(calls[0].body, { to: 'workstream' });
-  assert.deepEqual(calls[1].body, { to: 'goal', node_ids: ['root'] });
-  assert.deepEqual(calls[2].body, {});
-  assert.deepEqual(calls[3].body, { as_knowledge: true });
-  assert.deepEqual(calls[4].body, {});
-  assert.deepEqual(calls[5].body, { serves: ['G1'], workspace: WS });
-  assert.equal(workspacePath(WS, '.hester/explore/evidence/a.diff'), `${WS}/.hester/explore/evidence/a.diff`);
+await test('escalate makes a Page card; workspace paths', async () => {
+  reply = { status: 201, body: { success: true, data: { card: { id: 'pg-00000009', title: 'Fix login' }, area: { id: 'area-1', name: 'Main' } } } };
+  const r = await escalateTask(WS, 'task-9');
+  assert.equal(r.data.card.id, 'pg-00000009');
+  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [['POST', '/cockpit/tasks/task-9/escalate']]);
+  assert.deepEqual(calls[0].body, {});
+  assert.equal(workspacePath(WS, '.hester/desk/pages/pg-1/page.md'), `${WS}/.hester/desk/pages/pg-1/page.md`);
   assert.equal(workspacePath(WS, '/abs/x.md'), '/abs/x.md');
-});
-
-await test('spike launch flow: spike node, delegate worktree launch with origin explore, PATCH running', async () => {
-  reply = { status: 201, body: { success: true, data: { id: 'n-3333abcd', parent: 'root', label: 'Spike', kind: 'spike' } } };
-  const launches = [];
-  const r = await startSpike(WS, exp.id, { parent: 'n-0000abcd', prompt: 'Try a file-first store', title: 'File store' }, async (req) => {
-    launches.push(req);
-    return { success: true, task_id: 'task-abcd1234', pty_id: 3 };
-  });
-  assert.equal(r.ok, true);
-  assert.deepEqual(launches[0], {
-    workspace: WS,
-    lead: 'delegate',
-    kind: 'prototype',
-    provider: 'claude',
-    worktree: true,
-    prompt: 'Try a file-first store',
-    title: 'File store',
-    name: 'Spike: File store',
-    origin: { kind: 'explore', ref: 'exp-1a2b3c4d/n-3333abcd' },
-  });
-  assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
-    ['POST', '/cockpit/explorations/exp-1a2b3c4d/spikes'],
-    ['PATCH', '/cockpit/explorations/exp-1a2b3c4d/spikes/n-3333abcd'],
-  ]);
-  assert.deepEqual(calls[0].body, { parent: 'n-0000abcd', prompt: 'Try a file-first store', title: 'File store' });
-  assert.deepEqual(calls[1].body, { task_id: 'task-abcd1234', status: 'running' });
-
-  calls.length = 0;
-  const bad = await startSpike(WS, exp.id, { prompt: 'x', title: 'x' }, async () => ({ success: false, error: 'no_window' }));
-  assert.deepEqual(bad, { ok: false, error: 'no_window' });
-  assert.deepEqual(calls[1].body, { status: 'failed' });
-
-  calls.length = 0;
-  reply = { status: 503, body: { success: false, error: 'down' } };
-  let launched = false;
-  const off = await startSpike(WS, exp.id, { prompt: 'x', title: 'x' }, async () => ((launched = true), { success: true, task_id: 't' }));
-  assert.equal(off.ok, false);
-  assert.equal(launched, false, 'no launch without a spike node');
 });
 
 // ---------------------------------------------------------------------------
 // Deep D1: the Deep client (lib/hesterDeep.ts)
 // ---------------------------------------------------------------------------
 
-const EXP = '/cockpit/explorations/exp-1a2b3c4d';
+const EXP = '/desk/pages/pg-1a2b3c4d';
 const anchor = { kind: 'page', quote: 'the vector clock', offset: 12, section: 'Mesh' };
 
 await test('deep page: GET /page, PUT with base_version, envelope unwrapped', async () => {
@@ -332,54 +191,35 @@ await test('deep asks and answers: POST /asks (202), list, patch, retry', async 
   assert.deepEqual(calls[5].body, {});
 });
 
-await test('deep questions and sessions', async () => {
+await test('deep questions', async () => {
   reply = { status: 201, body: { success: true, data: { id: 'q-00000001', status: 'open' } } };
   await deep.listQuestions(WS, exp.id);
   await deep.addQuestion(WS, exp.id, { text: 'Does it survive a partition?', source: 'page', anchor });
   await deep.patchQuestion(WS, exp.id, 'q-00000001', 'closed');
-  const record = {
-    focus_session_id: 'fs-1',
-    started_at: '2026-09-26T09:00:00Z',
-    ended_at: '2026-09-26T10:00:00Z',
-    reason: 'ritual',
-    stopped_at: '…the vector clock only helps if every write',
-    rating: 'deep',
-    questions_kept: ['q-00000002'],
-  };
-  await deep.postSession(WS, exp.id, record);
   assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
     ['GET', `${EXP}/questions`],
     ['POST', `${EXP}/questions`],
     ['PATCH', `${EXP}/questions/q-00000001`],
-    ['POST', `${EXP}/sessions`],
   ]);
   assert.deepEqual(calls[1].body, { text: 'Does it survive a partition?', source: 'page', anchor });
   assert.deepEqual(calls[2].body, { status: 'closed' });
-  assert.deepEqual(calls[3].body, record);
 });
 
-await test('deep explore, create with page, idea capture, opener', async () => {
-  reply = { status: 201, body: { success: true, data: { ...exp, id: 'exp-99999999', title: 'Tangent' } } };
-  const child = await deep.exploreFrom(WS, exp.id, { seed: 'a tangent', anchor });
-  assert.equal(child.data.title, 'Tangent');
-  await deep.createDeepExploration(WS, { seed: 'Mesh sync', page: 'Mesh sync\n\n', origin: { kind: 'opener' } });
-  await deep.captureIdea(WS, 'try CRDTs', { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' });
+await test('idea capture and the opener', async () => {
+  reply = { status: 201, body: { success: true, data: { id: 'idea_1' } } };
+  await deep.captureIdea(WS, 'try CRDTs', { surface: 'lee', card_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' });
   reply = { status: 200, body: { success: true, data: { generated_at: 't', workspace: WS, pick_up: null, surfaces: [{ kind: 'blank' }] } } };
   const op = await deep.fetchOpener(WS);
   assert.deepEqual(op.data.surfaces, [{ kind: 'blank' }]);
   assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
-    ['POST', `${EXP}/explore`],
-    ['POST', '/cockpit/explorations'],
     ['POST', '/ideas'],
     ['GET', '/copilot/opener'],
   ]);
-  assert.deepEqual(calls[0].body, { seed: 'a tangent', anchor });
-  assert.deepEqual(calls[1].body, { seed: 'Mesh sync', page: 'Mesh sync\n\n', origin: { kind: 'opener' }, workspace: WS });
-  assert.deepEqual(calls[2].body, {
+  assert.deepEqual(calls[0].body, {
     workspace: WS,
     text: 'try CRDTs',
     as: 'someday',
-    source: { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' },
+    source: { surface: 'lee', card_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' },
   });
 });
 
@@ -398,7 +238,7 @@ await test('deep next: asks carry section_text (capped at 6 000, omitted when bl
   assert.equal(calls[2].body.section_text.length, deep.SECTION_TEXT_MAX);
 });
 
-await test('deep next: hand-off create, PATCH task_id / error, template, delete, draft-from-readme', async () => {
+await test('deep next: hand-off create, PATCH task_id / error, template, draft-from-readme', async () => {
   reply = { status: 201, body: { success: true, data: { id: 'ans-9', kind: 'handoff', status: 'queued' } } };
   const r = await deep.createHandoff(WS, exp.id, { kind: 'spike', provider: 'claude', brief: 'Spike.\n\nx', anchor });
   assert.equal(r.ok, true);
@@ -407,7 +247,6 @@ await test('deep next: hand-off create, PATCH task_id / error, template, delete,
   reply = { status: 200, body: { success: true, data: { template: 'Spike. Server text.' } } };
   const t = await deep.fetchHandoffTemplate(WS, 'research');
   assert.equal(t.data.template, 'Spike. Server text.');
-  await deep.deleteExploration(WS, exp.id);
   reply = { status: 200, body: { success: true, data: { text: '## What is this for?\nA thing.', sources: ['README.md'] } } };
   await deep.draftFromReadme(WS, exp.id);
   assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
@@ -415,24 +254,19 @@ await test('deep next: hand-off create, PATCH task_id / error, template, delete,
     ['PATCH', `${EXP}/answers/ans-9`],
     ['PATCH', `${EXP}/answers/ans-9`],
     ['GET', '/cockpit/handoff-template'],
-    ['DELETE', EXP],
     ['POST', `${EXP}/draft-from-readme`],
   ]);
   assert.deepEqual(calls[0].body, { kind: 'spike', provider: 'claude', brief: 'Spike.\n\nx', anchor });
   assert.deepEqual(calls[1].body, { task_id: 't-1' });
   assert.deepEqual(calls[2].body, { status: 'error', error: 'Launch failed' });
   assert.equal(new URL(calls[3].url).searchParams.get('kind'), 'research');
-  assert.equal(calls[4].body, undefined);
 });
 
-await test('deep next: a 404 from an older Hester and a 409 not_empty come back as plain failures', async () => {
+await test('deep next: a 404 from an older Hester and a 400 come back as plain failures', async () => {
   reply = { status: 404, body: { error: 'Not Found' } };
   const t = await deep.fetchHandoffTemplate(WS, 'spike');
   assert.equal(t.ok, false);
   assert.equal(t.status, 404);
-  reply = { status: 409, body: { success: false, error: 'not_empty' } };
-  const d = await deep.deleteExploration(WS, exp.id);
-  assert.deepEqual([d.ok, d.status, d.error], [false, 409, 'not_empty']);
   reply = { status: 400, body: { success: false, error: 'no README.md or CLAUDE.md' } };
   const rd = await deep.draftFromReadme(WS, exp.id);
   assert.deepEqual([rd.ok, rd.status], [false, 400]);
@@ -569,45 +403,19 @@ await test('deep next: goals entry points show only without goals; metric-less g
   assert.ok(deep.goalsDraftInstruction('  my page  ').endsWith('\n\nmy page'));
 });
 
-await test('deep next: the opener defers the create (in-memory Page, created on the first save with content)', async () => {
+await test('deep next: an in-memory Page calls nothing until it has content; the Goals entry line', async () => {
   const id = deep.newDraft({ workspace: WS, title: 'Mesh sync', page: 'Mesh sync\n\n', seed: 'Mesh sync', sendTitle: false, origin: { kind: 'opener' } }, 1000);
   assert.equal(deep.isDraftId(id), true);
   assert.equal(deep.isDraftId(exp.id), false);
   assert.equal(calls.length, 0, 'opening an in-memory Page calls nothing');
   assert.equal(deep.getDraft(id).page, 'Mesh sync\n\n');
-  assert.deepEqual(deep.draftCreateBody(deep.getDraft(id), 'Mesh sync\n\nmore'), { seed: 'Mesh sync', page: 'Mesh sync\n\nmore', origin: { kind: 'opener' } });
-  const blank = deep.newDraft({ workspace: WS, title: 'Untitled · Sep 27', page: '', sendTitle: true, origin: { kind: 'opener' } });
-  assert.deepEqual(deep.draftCreateBody(deep.getDraft(blank), 'x'), { title: 'Untitled · Sep 27', page: 'x', origin: { kind: 'opener' } });
   deep.dropDraft(id);
   assert.equal(deep.getDraft(id), null);
-  reply = { status: 201, body: { success: true, data: { ...exp, id: 'exp-new' } } };
-  await deep.createDeepExploration(WS, deep.draftCreateBody(deep.getDraft(blank), 'x'));
-  assert.deepEqual(calls[0].body, { title: 'Untitled · Sep 27', page: 'x', origin: { kind: 'opener' }, workspace: WS });
-});
-
-await test('deep next: the Goals Page opens the existing one, else an in-memory one with purpose goals', async () => {
-  reply = { status: 200, body: { success: true, data: [{ ...exp, id: 'exp-other' }, { ...exp, id: 'exp-goals', title: 'Goals', purpose: 'goals' }] } };
-  const found = await deep.resolveGoalsPage(WS, 'A tool for deep work');
-  assert.deepEqual(found, { id: 'exp-goals', title: 'Goals', draft: false });
-  const u = scoped(calls[0]);
-  assert.equal(u.searchParams.get('purpose'), 'goals');
-  assert.equal(deep.takePendingFirstLine('exp-goals'), 'A tool for deep work');
-  assert.equal(deep.takePendingFirstLine('exp-goals'), null, 'taken once');
+  deep.setPendingFirstLine('pg-goals', 'A tool for deep work');
+  assert.equal(deep.takePendingFirstLine('pg-goals'), 'A tool for deep work');
+  assert.equal(deep.takePendingFirstLine('pg-goals'), null, 'taken once');
   assert.deepEqual(deep.firstLineInsertion('## How will you know?\n', 'A tool'), { from: 0, insert: 'A tool\n\n' });
   assert.equal(deep.firstLineInsertion('A tool\n', 'A tool'), null, 'already there');
-
-  reply = { status: 200, body: { success: true, data: [{ ...exp, id: 'exp-other' }] } }; // an older Hester ignores ?purpose
-  const fresh = await deep.resolveGoalsPage(WS, 'A tool for deep work');
-  assert.equal(fresh.draft, true);
-  assert.equal(fresh.title, 'Goals');
-  assert.deepEqual(deep.draftCreateBody(deep.getDraft(fresh.id), deep.getDraft(fresh.id).page), {
-    title: 'Goals',
-    page: 'A tool for deep work\n\n',
-    origin: { kind: 'cockpit' },
-    purpose: 'goals',
-  });
-  reply = { status: 404, body: {} };
-  assert.equal((await deep.resolveGoalsPage(WS, '')).draft, true, 'offline or old: still a Page to write on');
 });
 
 console.log(process.exitCode ? '\nsome FAILED' : `\n${passed} passed`);

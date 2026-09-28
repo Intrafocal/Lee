@@ -13,13 +13,10 @@ import {
   type Quadrant,
   type StewardAnswer,
   type CockpitTask,
-  type LaunchRequest,
-  type LaunchResult,
   type TaskKind,
   type TaskLead,
   type TaskOrigin,
   type TaskStatus,
-  type TaskWorktree,
 } from '../../shared/cockpit';
 import type { DeskArea, DeskCard, DeskLast } from '../../shared/desk';
 import type { HesterTaskEvent } from './cockpitModel';
@@ -274,7 +271,7 @@ export function triageIdea(
   workspace: string,
   id: string,
   triage: IdeaTriage,
-): Promise<HesterResult<Idea | { item: Idea; task: CockpitTask } | { item: Idea; exploration: Exploration }>> {
+): Promise<HesterResult<Idea | { item: Idea; task: CockpitTask } | { item: Idea; card: DeskCard; area: DeskArea; exploration: { id: string; title: string } }>> {
   return call(workspace, 'POST', `/ideas/${encodeURIComponent(id)}/triage`, { ...triage, workspace });
 }
 
@@ -416,223 +413,8 @@ export function proposalOutcome(workspace: string, proposalId: string, outcome: 
 }
 
 // ---------------------------------------------------------------------------
-// Explore (spec §7.5; v3 contract: Explore absorbs the Library). Files live
-// in the workspace's .hester/explore/; a deep dive is the Hester chat session
-// `explore-<id>`, seeded by /open and written back after every turn. An
-// exploration is a node tree: the root (Seed + Log), thought/source branches,
-// and deterministic decision, spike and evidence nodes.
+// Tasks to Pages (the pre-Desk exploration client went with its routes, 2026-09-28)
 // ---------------------------------------------------------------------------
-
-export type ExplorationStatus = 'active' | 'archived';
-export type ExplorationOriginKind = 'cockpit' | 'someday' | 'hester' | 'library' | 'task' | 'exploration' | 'opener';
-
-export type ExploreNodeKind = 'thought' | 'source_file' | 'source_web' | 'source_db' | 'decision' | 'spike' | 'evidence';
-export type SpikeStatus = 'pending' | 'running' | 'review' | 'done' | 'discarded' | 'failed';
-
-export interface ExploreMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ExploreDecision {
-  text: string;
-  chosen: string[];
-  pruned: string[];
-  reason: string | null;
-}
-
-export interface ExploreSpike {
-  prompt: string;
-  task_id: string | null;
-  status: SpikeStatus;
-  /** null: no timebox. */
-  timebox_min: number | null;
-  worktree: TaskWorktree | null;
-  started_at: string | null;
-  ended_at: string | null;
-}
-
-export interface ExploreEvidence {
-  task_id: string | null;
-  /** The agent's words: always shown as its claim. */
-  summary: string | null;
-  lee_status: Record<string, unknown> | null;
-  files: string[];
-  diffstat: string | null;
-  /** Workspace-relative: .hester/explore/evidence/<exp>-<node>.diff */
-  diff_path: string | null;
-  commits: string[];
-  captured_at: string;
-  claim: boolean;
-}
-
-export interface ExploreNode {
-  id: string;
-  parent: string | null;
-  label: string;
-  kind: ExploreNodeKind;
-  mode?: string | null;
-  collapsed?: boolean;
-  pruned?: boolean;
-  created_at: string;
-  turns?: number;
-  decision?: ExploreDecision;
-  spike?: ExploreSpike;
-  evidence?: ExploreEvidence;
-  /** On GET /cockpit/explorations/{id}, for thought/source nodes. */
-  conversation?: ExploreMessage[];
-}
-
-export interface ExplorationPromotion {
-  to: 'task' | 'workstream' | 'goal';
-  ref: string;
-  at: string;
-  node_ids?: string[] | null;
-}
-
-export interface Exploration {
-  /** Deep next R12: 'goals' marks the workspace's Goals Page (one per workspace). */
-  purpose?: 'goals' | null;
-  id: string;
-  workspace: string;
-  title: string;
-  status: ExplorationStatus;
-  seed: string | null;
-  origin: { kind: ExplorationOriginKind; ref: string | null };
-  session_id: string;
-  turns: number;
-  created_at: string;
-  updated_at: string;
-  last_touched_at: string | null;
-  archived_at: string | null;
-  version: number;
-  /** Only on GET /cockpit/explorations/{id}: the file's markdown body (Seed + Log). */
-  body?: string;
-  /** Ordered; the root is first. Older daemons omit it. */
-  nodes?: ExploreNode[];
-  active_node?: string;
-  serves?: string[];
-  promoted?: ExplorationPromotion[];
-  knowledge_path?: string | null;
-}
-
-export interface ExplorationCreate {
-  title?: string;
-  seed?: string;
-  origin?: { kind: ExplorationOriginKind; ref?: string | null };
-}
-
-export function listExplorations(workspace: string, status: ExplorationStatus | 'all' = 'active'): Promise<HesterResult<Exploration[]>> {
-  return call<Exploration[]>(workspace, 'GET', `/cockpit/explorations?status=${status}`);
-}
-
-export function createExploration(workspace: string, input: ExplorationCreate): Promise<HesterResult<Exploration>> {
-  return call<Exploration>(workspace, 'POST', '/cockpit/explorations', { ...input, workspace });
-}
-
-export function getExploration(workspace: string, id: string): Promise<HesterResult<Exploration>> {
-  return call<Exploration>(workspace, 'GET', `/cockpit/explorations/${encodeURIComponent(id)}`);
-}
-
-export function patchExploration(
-  workspace: string,
-  id: string,
-  body: { title?: string; status?: ExplorationStatus; serves?: string[] },
-): Promise<HesterResult<Exploration>> {
-  return call<Exploration>(workspace, 'PATCH', `/cockpit/explorations/${encodeURIComponent(id)}`, { ...body, workspace });
-}
-
-export function openExploration(
-  workspace: string,
-  id: string,
-): Promise<HesterResult<{ exploration: Exploration; session_id: string; seeded: boolean }>> {
-  return call(workspace, 'POST', `/cockpit/explorations/${encodeURIComponent(id)}/open`, { workspace });
-}
-
-const expPath = (id: string, rest = '') => `/cockpit/explorations/${encodeURIComponent(id)}${rest}`;
-
-export function addExploreNode(
-  workspace: string,
-  expId: string,
-  body: { parent: string; label: string; kind?: ExploreNodeKind; mode?: string },
-): Promise<HesterResult<ExploreNode>> {
-  return call<ExploreNode>(workspace, 'POST', expPath(expId, '/nodes'), body);
-}
-
-/** `reason` applies to decision nodes only. */
-export function patchExploreNode(
-  workspace: string,
-  expId: string,
-  nodeId: string,
-  body: { label?: string; collapsed?: boolean; reason?: string | null },
-): Promise<HesterResult<ExploreNode>> {
-  return call<ExploreNode>(workspace, 'PATCH', expPath(expId, `/nodes/${encodeURIComponent(nodeId)}`), body);
-}
-
-/** Prune a branch; a reason is optional (and can be added later on the decision). */
-export function pruneExploreNode(
-  workspace: string,
-  expId: string,
-  nodeId: string,
-  reason?: string | null,
-): Promise<HesterResult<{ node: ExploreNode; decision: ExploreNode }>> {
-  return call(workspace, 'POST', expPath(expId, `/nodes/${encodeURIComponent(nodeId)}/prune`), reason ? { reason } : {});
-}
-
-export function decideExploration(
-  workspace: string,
-  expId: string,
-  body: { text: string; parent?: string; chosen?: string[]; pruned?: string[]; reason?: string | null },
-): Promise<HesterResult<ExploreNode>> {
-  return call<ExploreNode>(workspace, 'POST', expPath(expId, '/decisions'), body);
-}
-
-export function addSpike(
-  workspace: string,
-  expId: string,
-  body: { parent?: string; prompt: string; title?: string; timebox_min?: number },
-): Promise<HesterResult<ExploreNode>> {
-  return call<ExploreNode>(workspace, 'POST', expPath(expId, '/spikes'), body);
-}
-
-export function patchSpike(
-  workspace: string,
-  expId: string,
-  nodeId: string,
-  body: { task_id?: string; status?: SpikeStatus; worktree?: TaskWorktree | null },
-): Promise<HesterResult<ExploreNode>> {
-  return call<ExploreNode>(workspace, 'PATCH', expPath(expId, `/spikes/${encodeURIComponent(nodeId)}`), body);
-}
-
-export type ExplorationPromoteTo = 'task' | 'workstream' | 'goal';
-
-export interface ExplorationPromoteResult {
-  exploration: Exploration;
-  task?: CockpitTask;
-  workstream_id?: string;
-  title?: string;
-  phase?: string;
-  /** Workspace-relative (or absolute) path of the goal draft. */
-  draft_path?: string;
-}
-
-export function promoteExploration(
-  workspace: string,
-  expId: string,
-  body: { to: ExplorationPromoteTo; node_ids?: string[]; title?: string },
-): Promise<HesterResult<ExplorationPromoteResult>> {
-  return call<ExplorationPromoteResult>(workspace, 'POST', expPath(expId, '/promote'), body);
-}
-
-export function archiveExploration(
-  workspace: string,
-  expId: string,
-  asKnowledge = false,
-): Promise<HesterResult<{ exploration: Exploration; knowledge_path?: string | null }>> {
-  return call(workspace, 'POST', expPath(expId, '/archive'), asKnowledge ? { as_knowledge: true } : {});
-}
 
 /** Escalate a task to a Page card (origin the task, in the first Area); the task stays open. */
 export function escalateTask(workspace: string, taskId: string): Promise<HesterResult<{ card: DeskCard; area: DeskArea }>> {
@@ -645,49 +427,3 @@ export function workspacePath(workspace: string, rel: string): string {
   return `${workspace.replace(/\/+$/, '')}/${rel.replace(/^\.\//, '')}`;
 }
 
-/**
- * Start a spike (v3 §4): create the spike node, launch a delegate agent in a
- * worktree with origin explore `<exp>/<node>`, then mark the spike running
- * with its task id. A failed launch marks the spike `failed`.
- */
-export async function startSpike(
-  workspace: string,
-  expId: string,
-  opts: { parent?: string; prompt: string; title: string; timebox_min?: number },
-  launch: (req: LaunchRequest) => Promise<LaunchResult>,
-): Promise<HesterResult<{ node: ExploreNode; launch: LaunchResult }>> {
-  const title = opts.title.trim().slice(0, 60) || 'Spike';
-  const made = await addSpike(workspace, expId, {
-    ...(opts.parent ? { parent: opts.parent } : {}),
-    prompt: opts.prompt,
-    title,
-    ...(opts.timebox_min ? { timebox_min: opts.timebox_min } : {}),
-  });
-  if (!made.ok) return made;
-  const node = made.data;
-  let res: LaunchResult;
-  try {
-    res = await launch({
-      workspace,
-      lead: 'delegate',
-      kind: 'prototype',
-      // A spike is a claude worktree run, whatever the workspace's default provider.
-      provider: 'claude',
-      worktree: true,
-      prompt: opts.prompt,
-      title,
-      name: `Spike: ${title}`.slice(0, 80),
-      origin: { kind: 'explore', ref: `${expId}/${node.id}` },
-    });
-  } catch {
-    res = { success: false, error: 'Launch failed' };
-  }
-  if (!res.success || !res.task_id) {
-    await patchSpike(workspace, expId, node.id, { status: 'failed' });
-    return { ok: false, error: res.error || 'Launch failed' };
-  }
-  // Forward only: this PATCH never carries a status other than 'running' (Hester
-  // may already have synced the spike further; it refuses to regress one).
-  const marked = await patchSpike(workspace, expId, node.id, { task_id: res.task_id, status: 'running' });
-  return { ok: true, data: { node: marked.ok ? marked.data : node, launch: res } };
-}

@@ -43,7 +43,6 @@ import {
   handoffKindLabel,
   patchAnswer,
   patchQuestion,
-  postSession,
   type SessionAsk,
   type SessionHandoff,
   type StillOpen,
@@ -194,15 +193,19 @@ export const EndSessionSheet: React.FC<EndSessionSheetProps> = ({
         }
       }
     } else if (explorationId) {
+      // No Desk info passed: the one card this sheet is for (the pre-Desk
+      // per-exploration sessions route is gone).
       writes.push(
-        postSession(workspace, explorationId, {
+        postDeskSession(workspace, {
           focus_session_id: focus?.session_id ?? '',
           started_at: focus?.started_at ?? ended,
           ended_at: ended,
           reason,
           stopped_at: stopped,
+          stopped_card_id: explorationId,
           rating: ritual ? rating : null,
-          questions_kept: keptIds,
+          questions_kept: keptIds.map((id) => ({ card_id: explorationId, question_id: id })),
+          cards_touched: [explorationId],
         }),
       );
       if (ritual) {

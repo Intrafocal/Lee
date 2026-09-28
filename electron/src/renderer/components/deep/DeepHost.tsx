@@ -60,7 +60,6 @@ import {
   askDeep,
   autoTitle,
   captureIdea,
-  deleteExploration,
   deskCreateBody,
   draftFromReadme,
   dropDraft,
@@ -128,7 +127,7 @@ import {
   writeMirror,
   type DeepCursor,
 } from './deepBridge';
-import { createDeskPage, getDeskPage, patchDeskPage } from '../../lib/hesterDesk';
+import { createDeskPage, deleteDeskPage, getDeskPage, patchDeskPage } from '../../lib/hesterDesk';
 import { landingCursor, lineEnd, type EscLayer, escapeStep } from '../../lib/deskModel';
 import type { DeskCardKind } from '../../../shared/desk';
 import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from '../cockpit/cockpitMode';
@@ -1480,7 +1479,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   const deleteIfEmpty = useCallback(async (): Promise<boolean> => {
     const rid = realIdRef.current;
     if (!rid || !loaded.current || !isUntitled(shownTitleRef.current) || text.current.trim() || answersRef.current.length || localAsksRef.current.length) return false;
-    const r = await deleteExploration(workspace, rid); // 409 not_empty / 404: leave it
+    const r = await deleteDeskPage(workspace, rid); // 409 not_empty / 404: leave it
     return r.ok;
   }, [workspace]);
   useEffect(

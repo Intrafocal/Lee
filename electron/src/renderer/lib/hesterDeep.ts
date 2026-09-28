@@ -19,14 +19,13 @@
  * card unchanged. A hand-off from a card has origin `{kind: 'page'}`.
  */
 
-import { hesterHeaders, HESTER_DAEMON_URL, type Exploration, type GoalStatus } from './hesterCockpit';
+import { hesterHeaders, HESTER_DAEMON_URL, type GoalStatus } from './hesterCockpit';
 import type { DeskPageCreate } from '../../shared/desk';
 import type {
   Anchor,
   DeepAnswer,
   DeepQuestion,
   DeepReference,
-  DeepSessionRecord,
   HandoffKind,
   HandoffState,
   LaunchRequest,
@@ -68,16 +67,14 @@ async function call<T>(workspace: string, method: string, path: string, body?: u
 /** The shared call, for lib/hesterDesk.ts. */
 export const hesterCall = call;
 
-const expPath = (id: string, rest = '') => `/cockpit/explorations/${encodeURIComponent(id)}${rest}`;
-
 /** A Page card's id (Desk D2): `pg-` and 8 hex. */
 export function isCardId(id: string | null | undefined): boolean {
   return !!id && /^pg-[0-9a-f]{8}$/.test(id);
 }
 
-/** Where a Page's calls go: a card's `/desk/pages/{id}…`, else the exploration's. */
+/** Where a Page's calls go: its card's `/desk/pages/{id}…` (the pre-Desk exploration routes are gone). */
 export function pageRoute(id: string, rest = ''): string {
-  return isCardId(id) ? `/desk/pages/${encodeURIComponent(id)}${rest}` : expPath(id, rest);
+  return `/desk/pages/${encodeURIComponent(id)}${rest}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,32 +190,9 @@ export function patchQuestion(workspace: string, id: string, qid: string, status
   return call<DeepQuestion>(workspace, 'PATCH', pageRoute(id, `/questions/${encodeURIComponent(qid)}`), { status });
 }
 
-export function postSession(workspace: string, id: string, record: Omit<DeepSessionRecord, 'id'>): Promise<DeepResult<DeepSessionRecord>> {
-  return call<DeepSessionRecord>(workspace, 'POST', expPath(id, '/sessions'), record);
-}
-
-/** A child exploration seeded from a selection, linked both ways; doesn't switch. */
-export function exploreFrom(workspace: string, id: string, body: { seed: string; anchor?: Anchor }): Promise<DeepResult<Exploration>> {
-  return call<Exploration>(workspace, 'POST', expPath(id, '/explore'), body);
-}
-
 // ---------------------------------------------------------------------------
-// Explorations with a Page, Ideas capture, the opener
+// Ideas capture, the opener
 // ---------------------------------------------------------------------------
-
-export interface DeepExplorationCreate {
-  title?: string;
-  seed?: string;
-  /** The initial page.md (the opener writes your text into it). */
-  page?: string;
-  origin?: { kind: 'opener' | 'cockpit' | 'exploration'; ref?: string | null };
-  /** Deep next R12: the workspace's Goals Page (Hester returns the existing one, 200). */
-  purpose?: 'goals';
-}
-
-export function createDeepExploration(workspace: string, input: DeepExplorationCreate): Promise<DeepResult<Exploration>> {
-  return call<Exploration>(workspace, 'POST', '/cockpit/explorations', { ...input, workspace });
-}
 
 export interface DeepCaptureSource {
   surface: 'lee';
@@ -269,27 +243,11 @@ export function fetchHandoffTemplate(workspace: string, kind: HandoffKind): Prom
 }
 
 /**
- * R8: removes an exploration only while it is still Untitled with an empty
- * Page and nothing asked or kept; otherwise 409 `not_empty` (callers ignore it).
- */
-export function deleteExploration(workspace: string, id: string): Promise<DeepResult<unknown>> {
-  return call(workspace, 'DELETE', pageRoute(id));
-}
-
-/**
  * R12: Hester's first guess at the four prompts from README.md / CLAUDE.md.
  * A user action; never writes the Page. 400 when the repo has neither file.
  */
 export function draftFromReadme(workspace: string, id: string): Promise<DeepResult<{ text: string; sources?: string[] }>> {
   return call<{ text: string; sources?: string[] }>(workspace, 'POST', pageRoute(id, '/draft-from-readme'), {});
-}
-
-/** R12: the workspace's Goals Page, if there is one (filtered here too: an older Hester ignores `purpose`). */
-export async function findGoalsPage(workspace: string): Promise<DeepResult<Exploration | null>> {
-  const r = await call<Exploration[]>(workspace, 'GET', '/cockpit/explorations?status=all&purpose=goals');
-  if (!r.ok) return r;
-  const list = (Array.isArray(r.data) ? r.data : []).filter((e) => e.purpose === 'goals');
-  return { ok: true, data: list.find((e) => e.status !== 'archived') ?? list[0] ?? null };
 }
 
 // ---- hand-off briefs and launches (R3), pure ----
@@ -674,17 +632,6 @@ export function dropDraft(id: string): void {
   drafts.delete(id);
 }
 
-/** The body that turns a draft into an exploration, with the Page as written now. */
-export function draftCreateBody(d: DraftPage, page: string): DeepExplorationCreate {
-  return {
-    ...(d.sendTitle || !d.seed ? { title: d.title } : {}),
-    ...(d.seed ? { seed: d.seed } : {}),
-    page,
-    origin: d.origin,
-    ...(d.purpose ? { purpose: d.purpose } : {}),
-  };
-}
-
 /** The body that turns an in-memory Page card into a card (POST /desk/pages), with the Page as written now. */
 export function deskCreateBody(d: DraftPage, page: string): DeskPageCreate {
   const at = d.desk ?? { area_id: null };
@@ -717,19 +664,3 @@ export function firstLineInsertion(page: string, line: string): { from: number; 
   return { from: 0, insert: `${t}\n\n` };
 }
 
-/**
- * R12: the Goals Page to open: the existing one (the typed line to go
- * first), else an in-memory one titled "Goals" with purpose 'goals',
- * created on its first save with content (Hester returns the existing one
- * if another window got there first).
- */
-export async function resolveGoalsPage(workspace: string, firstLine: string): Promise<{ id: string; title: string; draft: boolean }> {
-  const found = await findGoalsPage(workspace);
-  if (found.ok && found.data) {
-    setPendingFirstLine(found.data.id, firstLine);
-    return { id: found.data.id, title: found.data.title, draft: false };
-  }
-  const line = firstLine.trim();
-  const id = newDraft({ workspace, title: 'Goals', page: line ? `${line}\n\n` : '', sendTitle: true, origin: { kind: 'cockpit' }, purpose: 'goals' });
-  return { id, title: 'Goals', draft: true };
-}

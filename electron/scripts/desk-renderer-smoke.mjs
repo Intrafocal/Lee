@@ -510,7 +510,7 @@ await test('hesterDesk: every route, method, path, body; workspace and token on 
     [() => desk.addCardQuestion(WS, P, { text: 'Q?', source: 'page' }), 'POST', `/desk/pages/${P}/questions`, { text: 'Q?', source: 'page' }],
     [() => desk.patchCardQuestion(WS, P, 'q-1', 'closed'), 'PATCH', `/desk/pages/${P}/questions/q-1`, { status: 'closed' }],
     [() => desk.draftCardFromReadme(WS, P), 'POST', `/desk/pages/${P}/draft-from-readme`, {}],
-    [() => deep.deleteExploration(WS, P), 'DELETE', `/desk/pages/${P}`, undefined],
+    [() => desk.deleteDeskPage(WS, P), 'DELETE', `/desk/pages/${P}`, undefined],
   ];
   replyFor = (_url, init) => (init.method === 'PUT' ? { status: 200, body: { success: true, data: { version: 'v2' } } } : null);
   for (const [run, method, path, body, query] of cases) {
@@ -556,9 +556,8 @@ await test('hesterDesk: the envelope unwrapped; 404 from an old Hester; 409s kee
 // hesterDeep: card forms
 // ---------------------------------------------------------------------------
 
-await test('pageRoute: pg ids go to /desk/pages, exploration ids stay on their routes', () => {
+await test('pageRoute: a Page goes to /desk/pages (the exploration routes are gone)', () => {
   assert.equal(deep.pageRoute('pg-1a2b3c4d', '/page'), '/desk/pages/pg-1a2b3c4d/page');
-  assert.equal(deep.pageRoute('exp-1a2b3c4d', '/page'), '/cockpit/explorations/exp-1a2b3c4d/page');
   assert.equal(deep.isCardId('pg-1a2b3c4d'), true);
   assert.equal(deep.isCardId('pg-xyz'), false);
 });
