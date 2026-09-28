@@ -55,6 +55,7 @@ import {
   unstashArea,
 } from '../../lib/hesterDesk';
 import { captureIdea as postIdea, newDraft } from '../../lib/hesterDeep';
+import { MicButton } from '../voice/MicButton';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
 import {
   AREA_HEAD,
@@ -520,16 +521,22 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const [flyout, setFlyout] = useState<string | null>(null);
   /** The bottom field captures an idea instead of searching (＋ Capture an idea). */
   const [capturing, setCapturing] = useState(false);
+  /** The capture's text came from the mic (§5.3): it goes to Ideas tagged `input: 'voice'`. */
+  const [captureVoice, setCaptureVoice] = useState(false);
+  const drawerFieldRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (drawer) return;
     setDrawerQuery('');
     setFlyout(null);
     setCapturing(false);
   }, [drawer]);
+  useEffect(() => {
+    if (!capturing) setCaptureVoice(false);
+  }, [capturing]);
   const captureIdea = async (raw: string) => {
     const text = raw.trim();
     if (!text) return;
-    const r = await postIdea(workspace, text, { surface: 'lee' });
+    const r = await postIdea(workspace, text, { surface: 'lee' }, captureVoice ? 'voice' : undefined);
     if (!r.ok) return say(r.error);
     setDrawerQuery('');
     setCapturing(false);
@@ -1072,34 +1079,47 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                         </button>
                       ))}
                   </div>
-                  <input
-                    className="desk-drawer-search"
-                    autoFocus
-                    value={drawerQuery}
-                    placeholder={capturing ? 'Capture an idea…' : 'Search the Drawer'}
-                    aria-label={capturing ? 'Capture an idea' : 'Search the Drawer'}
-                    onChange={(e) => {
-                      setDrawerQuery(e.target.value);
-                      setFlyout(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (capturing && e.key === 'Enter') {
+                  <div className="desk-drawer-field">
+                    <input
+                      ref={drawerFieldRef}
+                      className="desk-drawer-search"
+                      autoFocus
+                      value={drawerQuery}
+                      placeholder={capturing ? 'Capture an idea…' : 'Search the Drawer'}
+                      aria-label={capturing ? 'Capture an idea' : 'Search the Drawer'}
+                      onChange={(e) => {
+                        setDrawerQuery(e.target.value);
+                        setFlyout(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (capturing && e.key === 'Enter') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void captureIdea(drawerQuery);
+                          return;
+                        }
+                        if (e.key !== 'Escape') return;
+                        // One Esc steps back: out of capturing, else clears the query, else closes the Drawer.
                         e.preventDefault();
                         e.stopPropagation();
-                        void captureIdea(drawerQuery);
-                        return;
-                      }
-                      if (e.key !== 'Escape') return;
-                      // One Esc steps back: out of capturing, else clears the query, else closes the Drawer.
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (capturing) {
-                        setCapturing(false);
-                        setDrawerQuery('');
-                      } else if (drawerQuery) setDrawerQuery('');
-                      else setDrawer(false);
-                    }}
-                  />
+                        if (capturing) {
+                          setCapturing(false);
+                          setDrawerQuery('');
+                        } else if (drawerQuery) setDrawerQuery('');
+                        else setDrawer(false);
+                      }}
+                    />
+                    {capturing && (
+                      <MicButton
+                        workspace={workspace}
+                        purpose="capture"
+                        value={drawerQuery}
+                        onChange={(t) => setDrawerQuery(t)}
+                        onVoice={() => setCaptureVoice(true)}
+                        fieldRef={drawerFieldRef}
+                      />
+                    )}
+                  </div>
                 </div>
                 {!drawerQuery.trim() && openFolder && (
                   <div className="deep-popover desk-drawer-flyout" role="menu" aria-label={openFolder.name}>

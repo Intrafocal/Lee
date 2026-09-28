@@ -27,12 +27,12 @@ export function decide(ctx: CockpitCtx, item: AttentionItem, action: 'approve' |
   return run(ctx.notify, () => api.reply(item.id, { action, version: item.version }));
 }
 
-/** Send text exactly as written (C3): a quick-reply chip or the reply box. */
-export function sendText(ctx: CockpitCtx, item: AttentionItem, text: string): Promise<boolean> {
+/** Send text exactly as written (C3): a quick-reply chip or the reply box; `input: 'voice'` when it came from the mic. */
+export function sendText(ctx: CockpitCtx, item: AttentionItem, text: string, input?: 'voice'): Promise<boolean> {
   const api = ctx.copilotApi;
   const body = text.trim();
   if (!api || !body) return Promise.resolve(false);
-  return run(ctx.notify, () => api.reply(item.id, { action: 'text', text: body, version: item.version }));
+  return run(ctx.notify, () => api.reply(item.id, { action: 'text', text: body, version: item.version, ...(input ? { input } : {}) }));
 }
 
 /** Answer a single-select question with one of its options. */

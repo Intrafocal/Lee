@@ -87,6 +87,7 @@ import {
 import { onDeepActions } from './deepBridge';
 import { marginNoteLabel } from './deepView';
 import { pageMarkdown, liveFormatting, tableField, type AssetUrl } from './page/liveMarkdown';
+import { MicButton } from '../voice/MicButton';
 import { formatCommand, formatKeymap, inTable, insertTable, type FormatId } from './page/format';
 import { PageToolbar, type ToolbarState } from './page/PageToolbar';
 import { mentionField, setMention, type ShownMention } from './page/mentionWidget';
@@ -247,6 +248,8 @@ interface PageEditorProps {
   onOpenInWork?: (answerId: string) => void;
   /** Tether §4.4: the Page's `assets/<name>` as a showable URL; without it images stay markdown. */
   assetUrl?: AssetUrl;
+  /** Voice §5.3: the workspace for the Ask field's mic (purpose ask); without it no mic. */
+  voiceWorkspace?: string;
 }
 
 /** The action row slot's width (deep.css .deep-row-slot). */
@@ -1187,6 +1190,16 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
                       viewRef.current?.focus();
                     }
                   }}
+                />
+              )}
+              {asking && props.voiceWorkspace && (
+                <MicButton
+                  workspace={props.voiceWorkspace}
+                  purpose="ask"
+                  value={asking.text}
+                  onChange={(t) => setAsking({ text: t })}
+                  fieldRef={askRef}
+                  className="deep-ask-mic"
                 />
               )}
             </div>

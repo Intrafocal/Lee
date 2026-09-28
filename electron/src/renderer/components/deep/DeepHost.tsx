@@ -1772,6 +1772,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           files={files}
           onQuote={(q) => void onQuote(q)}
           assetUrl={assetUrl}
+          voiceWorkspace={workspace}
           marginPrompts={isGoals ? GOALS_PROMPTS : undefined}
           onOpenInWork={onOpenInWork}
         />

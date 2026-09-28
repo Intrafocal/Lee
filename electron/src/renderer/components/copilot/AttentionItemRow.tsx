@@ -7,10 +7,11 @@
  * with "Open tab".
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
+import { MicButton } from '../voice/MicButton';
 
 interface AttentionItemRowProps {
   item: AttentionItem;
@@ -43,6 +44,9 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
   const [error, setError] = useState<string | null>(null);
   /** Question items: the option picked but not sent yet. */
   const [picked, setPicked] = useState<number | null>(null);
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
+  /** The reply came from the mic (§5.3): tag it `input: 'voice'`. */
+  const [viaVoice, setViaVoice] = useState(false);
 
   const run = async (fn: () => Promise<{ success: boolean; error?: string }>): Promise<boolean> => {
     setBusy(true);
@@ -71,10 +75,11 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
     // Only clear/close on success - on a failure (e.g. a stale 409 from a
     // version bump elsewhere) the user's typed reply must survive so they
     // don't have to retype it.
-    void run(() => api.reply(item.id, { action: 'text', text: trimmed, version: item.version })).then((ok) => {
+    void run(() => api.reply(item.id, { action: 'text', text: trimmed, version: item.version, ...(viaVoice ? { input: 'voice' as const } : {}) })).then((ok) => {
       if (ok) {
         setReplying(false);
         setText('');
+        setViaVoice(false);
       }
     });
   };
@@ -246,10 +251,14 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
       {replying && (
         <div className="copilot-item-reply">
           <textarea
+            ref={replyRef}
             autoFocus
             value={text}
             placeholder="Reply to Claude…"
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!e.target.value.trim()) setViaVoice(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -261,6 +270,18 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
             <button className="copilot-item-btn is-active" disabled={busy || !text.trim()} onClick={sendReply}>
               <Icon name="send" size={12} /> Send
             </button>
+            {item.source.workspace && (
+              <MicButton
+                workspace={item.source.workspace}
+                purpose="reply"
+                itemId={item.id}
+                value={text}
+                onChange={(t) => setText(t)}
+                onVoice={() => setViaVoice(true)}
+                fieldRef={replyRef}
+                disabled={busy}
+              />
+            )}
             <button
               className="copilot-item-btn"
               disabled={busy}

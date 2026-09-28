@@ -50,6 +50,7 @@ import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
 import type { CockpitCtx } from '../CockpitHost';
 import { choosable, choose, decide, sendText } from './actions';
+import { MicButton } from '../../voice/MicButton';
 import { MoreMenu, type MoreItem } from './MoreMenu';
 import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
 import { openDesk } from '../cockpitMode';
@@ -155,12 +156,17 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const replyItem = item && canTextReply(item) ? item : tile?.replyItem ?? null;
   const working = tile ? tile.working : agent?.state === 'busy';
   const mode = replyMode({ replyItem, ptyId, working });
+  /** The reply box's text came from the mic (§5.3): tag the reply `input: 'voice'`. */
+  const [viaVoice, setViaVoice] = useState(false);
   const cleared = () => {
-    if (alive.current) setText('');
+    if (!alive.current) return;
+    setText('');
+    setViaVoice(false);
   };
   const send = (body: string) => {
     if (replyItem) {
-      act(() => sendText(ctx, replyItem, body), cleared);
+      // A quick-reply chip isn't the box's text, so only the box's own send carries the tag.
+      act(() => sendText(ctx, replyItem, body, viaVoice && body === text ? 'voice' : undefined), cleared);
       return;
     }
     const api = ctx.api;
@@ -445,7 +451,10 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
             rows={3}
             disabled={mode === 'busy'}
             placeholder="Or write a reply"
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!e.target.value.trim()) setViaVoice(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -455,6 +464,16 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
           />
           <div className="work-reply-foot">
             <span className="work-hint">{mode === 'busy' ? REPLY_BUSY_LINE : 'Sent exactly as written'}</span>
+            <MicButton
+              workspace={ctx.workspace}
+              purpose="reply"
+              itemId={replyItem?.id}
+              value={text}
+              onChange={(t) => setText(t)}
+              onVoice={() => setViaVoice(true)}
+              fieldRef={replyRef}
+              disabled={busy || mode === 'busy'}
+            />
             {/* Allow is this view's next step while an approval is pending (§0 rule 1). */}
             <Btn kind={sendIsNext(mode, !!approval) ? 'next' : 'plain'} kbd="⌘⏎" disabled={busy || mode === 'busy' || !text.trim()} onClick={() => send(text)}>
               Send

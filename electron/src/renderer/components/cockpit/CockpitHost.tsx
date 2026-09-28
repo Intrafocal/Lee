@@ -855,7 +855,7 @@ export const CockpitHost: React.FC<CockpitHostProps> = ({
       {popover?.kind === 'run' && <RunMenu ctx={ctx} onClose={() => setPopover(null)} />}
       {popover?.kind === 'help' && <KeyHelp onClose={() => setPopover(null)} />}
       {popover?.kind === 'reply' && copilotApi && (
-        <ReplyPopover api={copilotApi} item={popover.item} label={popover.label} onClose={() => setPopover(null)} onError={(m) => notify(m, 'error')} />
+        <ReplyPopover api={copilotApi} workspace={workspace} item={popover.item} label={popover.label} onClose={() => setPopover(null)} onError={(m) => notify(m, 'error')} />
       )}
       {popover?.kind === 'checkin' && api && (
         <CheckinPopover api={api} ptyId={popover.ptyId} label={popover.label} onClose={() => setPopover(null)} notify={notify} />

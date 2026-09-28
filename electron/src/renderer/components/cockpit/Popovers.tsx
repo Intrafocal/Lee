@@ -10,6 +10,7 @@ import { Icon } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 import { CHECKIN_PROMPT, type CheckinError, type CockpitAPI } from '../../../shared/cockpit';
 import { isControlTarget } from './dom';
+import { MicButton } from '../voice/MicButton';
 
 
 // ---------------------------------------------------------------------------
@@ -18,22 +19,27 @@ import { isControlTarget } from './dom';
 
 interface ReplyPopoverProps {
   api: CopilotAPI;
+  /** For the mic (Hester's voice routes are per workspace). */
+  workspace: string;
   item: AttentionItem;
   label: string;
   onClose: () => void;
   onError: (message: string) => void;
 }
 
-export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, item, label, onClose, onError }) => {
+export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, workspace, item, label, onClose, onError }) => {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const fieldRef = useRef<HTMLTextAreaElement | null>(null);
+  /** The text came from the mic (§5.3): the reply is tagged `input: 'voice'`. */
+  const [viaVoice, setViaVoice] = useState(false);
 
   const send = () => {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
     setBusy(true);
     api
-      .reply(item.id, { action: 'text', text: trimmed, version: item.version })
+      .reply(item.id, { action: 'text', text: trimmed, version: item.version, ...(viaVoice ? { input: 'voice' as const } : {}) })
       .then((r) => {
         if (r.success) onClose();
         else onError(r.error === 'stale' ? 'Already handled elsewhere' : r.error || 'failed');
@@ -52,11 +58,15 @@ export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, item, label, on
           </div>
         )}
         <textarea
+          ref={fieldRef}
           autoFocus
           className="cockpit-textarea"
           value={text}
           placeholder="Your reply (Enter sends, Shift+Enter newline, Esc cancels)"
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (!e.target.value.trim()) setViaVoice(false);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();
@@ -72,6 +82,7 @@ export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, item, label, on
           <button className="cockpit-btn is-primary" disabled={busy || !text.trim()} onClick={send}>
             <Icon name="send" size={11} /> Send
           </button>
+          <MicButton workspace={workspace} purpose="reply" itemId={item.id} value={text} onChange={(t) => setText(t)} onVoice={() => setViaVoice(true)} fieldRef={fieldRef} disabled={busy} />
           <button className="cockpit-btn" onClick={onClose}>
             Cancel
           </button>

@@ -366,6 +366,12 @@
   margin-top: var(--space-2);
 }
 
+/* The mic sits next to Send (§5.3). */
+.work-reply-foot .voice-mic {
+  margin-left: auto;
+  margin-right: var(--space-2);
+}
+
 .work-along {
   margin: 0;
   padding: 0;
