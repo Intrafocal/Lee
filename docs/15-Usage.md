@@ -54,6 +54,7 @@ The UI never adds `subscription` to `billed`/`estimate` into one "spend" figure.
 | Hester Gemini | `response.usage_metadata` (`prompt_token_count`, `candidates_token_count`, `cached_content_token_count`, `thoughts_token_count`) | `copilot/model_log.py` wrapper (§3.4) |
 | Hester Ollama | Response `prompt_eval_count`, `eval_count`, `total_duration` | Manual `record_model_call` sites in `prepare.py` (§3.4) |
 | Hester Claude delegates | `ResultMessage.total_cost_usd` and `.usage` in `tasks/claude_delegate.py` (captured today, then dropped) | `record_model_call` (§3.4) |
+| Hester voice (*2026-09-28*) | Gemini transcription: the same wrapper, trigger `user`; local Whisper: `record_model_call(provider='other', location='local', cost_basis='local')` in `voice/providers/whisper.py`, no tokens | `model.call` (§3.4); `voice.transcribe` carries sizes and timings only |
 | API billing (optional) | Anthropic Admin API `/v1/organizations/cost_report` | On-demand fetch (§7) |
 
 ### 3.1 Claude status line relay

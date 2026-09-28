@@ -24,7 +24,7 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 
 - **One Desk per workspace.** Deep mode is *being at the Desk*.
 - **Areas** are named regions of the one Desk surface: zoom out to see them all, zoom in to work in one. They replace explorations as the way thinking is grouped by topic.
-- **Drawers** hold whole Areas you've **stashed** (archived or parked; *renamed from "put away" 2026-09-28*, the ids and routes keep `put-away`). Cards always travel with their Area. You can take an Area back out.
+- **Drawers** hold whole Areas you've **stashed** (archived or parked; *renamed from "put away" 2026-09-28*, ids and routes included: the `stashed` Drawer, `/desk/areas/{id}/stash` and `/unstash`, `stashed_at`; Hester rewrites an old `desk.json` once). Cards always travel with their Area. You can unstash an Area.
 - **Goals** are one card, pinned to the Desk's top-right corner at every zoom, so it's there whichever Area you're in (*revised 2026-09-27*: first drawn once per Area, which read as separate goals). It lists GOALS.md's goals; zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
 - **An Area's menu** (its ⋯, or a right-click on the Area): Rename, New Page here, Stash.
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything, and never reads the lines you draw. Revisit when there's a reason.
@@ -36,7 +36,8 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
   - The tools live in the **taskbar** along the bottom, with the Drawer at its left (opening upward like a start menu) and New Area after the tools; the right end says what the current tool does.
   - In Cursor, click a line to select it; `Delete` (or its right-click menu) deletes it with no confirm, and `⌘Z` undoes the last draw or delete this session. `Esc` goes back to Cursor once nothing smaller is open. Positions and lines are kept by Hester (`desk.json`).
 - **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
-- **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Stashed** (Areas). An Area's cards go with it.
+- **Drawers this round:** the **Ideas** Drawer (the Ideas store, `.hester/ideas/`; was Someday, §6) and **Stashed** (Areas). An Area's cards go with it.
+- **Images on a Page** (*2026-09-28*, [`plans/2026-09-28-tether-review-voice.md`](plans/2026-09-28-tether-review-voice.md) §4.4): a photo, screenshot or scribble sent from a device (Send to Lee) is stored with the card in `pages/<id>/assets/` (`POST /desk/pages/{id}/assets`, PNG or JPEG up to 10 MB) and written into the Page as `![caption](assets/<file>)`; deleting the card deletes its images. `hester desk page` lists them as paths.
 - **The Drawer is a start menu** (*2026-09-28*): the taskbar's Drawer button opens it upward. It lists folders (Ideas, Stashed, then your own Drawers); hovering or → flies a folder out to the right, its entries grouped **Today / This week / Older** (by when they were stashed or captured). Search sits at the bottom by the button, focused on open: every word, any order, results grouped by folder. ↑↓ move, → and ← go in and out of a folder, Enter acts, Esc closes.
 - **Claude Code can read the Desk** (*2026-09-28*): every Claude that Lee launches gets Lee's plugin (`--plugin-dir ~/.lee/claude-plugin`, written at startup next to the hooks) with two read-only skills, `lee:desk` (Areas, Pages and their margins, the last card) and `lee:drawer` (Stashed Areas, Ideas, search). Both call `hester desk …`, which reads the files directly, so they work with Hester off; neither writes.
 
@@ -82,18 +83,18 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | A topic | An **Area** |
 | The session unit | The Desk (§4) |
 | The v3 node tree and "Dive in" Hester chat | **Retired** (*decided 2026-09-27*); old ones aren't kept. Spikes became hand-offs, evidence became hand-off results, decisions became Page sections |
-| The verb "Explore" | **New Page from this** (a Page placed next to the one you're in); Someday triage "Start a Page"; tasks "Think it through on a Page" |
+| The verb "Explore" | **New Page from this** (a Page placed next to the one you're in); Ideas triage "Start a Page"; tasks "Think it through on a Page" (`POST /cockpit/tasks/{id}/escalate` makes a Page card in the first Area, 2026-09-28) |
 | Library › Explorations | The Desk: its cards by Area, and Drawers (Library is gone, §6) |
 | Hand-off origin `exp#answer` | `page#answer` |
 | The Goals Page (`purpose: goals`) | The pinned Goals card (§2) |
-| Tether on devices | Your last card and its stopped-at line (*decided 2026-09-27*; Tether only, no Desk view on devices this round; renamed from Carry, 2026-09-28; the routes keep `/carry`) |
+| Tether on devices | Your last card and its stopped-at line (*decided 2026-09-27*; renamed from Carry 2026-09-28, routes included: `/tether/*`). *2026-09-28:* devices become Work · Review · Hester, and **Review** reads the Desk (phone: Areas → Pages → a Page; T-Deck: Pages, newest first), the Drawer (phone) and Files; still no Desk canvas and no editing on devices |
 
 **Migration** (*decided 2026-09-27*):
 - It **copies**. Each existing exploration becomes a Page card in an Area named after it, with its Page, answers, references, questions and sessions.
 - `.hester/explore/` is left untouched as a backup.
 - Node trees and chats aren't carried over.
 - It's idempotent: running it again changes nothing.
-- The v3 node tree and "Dive in" chat UI are retired from the renderer. The old Hester code may stay, but nothing new depends on it.
+- The v3 node tree and "Dive in" chat UI are retired from the renderer. *2026-09-28:* Hester's pre-Desk routes (`/cockpit/explorations/*`, `/library/sessions/*`) are removed too; `ExplorationStore` stays only as the migration's read-only source.
 
 ## 6. Cockpit and Desk
 
@@ -108,7 +109,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | Goals: status (metrics, on track, Evaluate) | Cockpit's **Goals** |
 | Goals: the Goals Page | The Desk, pinned in every Area (§2) |
 | Library: explorations | The Desk: Areas and Drawers |
-| Library: ideas (Someday) | The Desk: an **"Ideas" Drawer** next to the Drawers of put-away Areas. Captures from the phone and T-Deck land there. Drag one onto an Area to start a Page from it |
+| Library: ideas (Someday, now **Ideas**) | The Desk: an **"Ideas" Drawer** next to the Drawers of stashed Areas. Captures from the phone and T-Deck land there. Drag one onto an Area to start a Page from it |
 | Library: files | The Desk (Workbench) and Manual |
 | Home's opener ("What's on your mind?", start-from links) | The Desk's front: typing on an empty Area starts a Page |
 
@@ -121,7 +122,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 - Aeronaut's one-agent screen gets Check in, Rename, Accept and Assign;
 - "Snoozed · Undo" collapses on the phone;
 - Tether becomes your last Desk card and its stopped-at line;
-- `/carry/capture` spools offline instead of returning 503.
+- `/carry/capture` (now `/tether/capture`) spools offline instead of returning 503.
 
 ## 7. Still open
 

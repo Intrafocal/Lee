@@ -39,7 +39,9 @@ hester/
 │   ├── main.py             # HTTP server on port 9000
 │   ├── agent.py            # ReAct loop agent
 │   ├── session.py          # Redis session management (chat sessions)
-│   ├── cockpit/            # Cockpit tasks, follower, Explore store (explorations.py, spikes.py, explore_ops.py)
+│   ├── cockpit/            # Cockpit tasks, follower, the Desk (desk.py, desk_routes.py); explorations.py is the Desk migration's source
+│   ├── copilot/            # Ideas store, digest, opener, retro, usage, metrics, model-call logging
+│   ├── voice/              # Transcription for the mic (config, audio, hints, routes, providers/)
 │   ├── settings.py         # Configuration
 │   ├── models.py           # Pydantic models
 │   ├── thinking_depth.py   # Response depth control
@@ -358,24 +360,29 @@ hester docs index --all --clear
 hester docs index-status
 ```
 
-### Someday and Goals Commands
+### Ideas, Goals, Desk and Voice Commands
 
 ```bash
-# Capture an idea (writes <dir>/.hester/someday/sd_*.md; no daemon needed)
-hester someday capture "Try a CRDT for the queue" [--dir PATH] [--explore]
-hester someday list [--dir PATH] [--all]
+# Capture an idea (writes <dir>/.hester/ideas/idea_*.md; no daemon needed). Was `hester someday`.
+hester ideas capture "Try a CRDT for the queue" [--dir PATH] [--explore]
+hester ideas list [--dir PATH] [--all]
 
 # GOALS.md metrics from Lee's event log (~/.lee/events/), deterministic
 hester goals metrics [--since 14d] [--until now] [--workspace PATH] [--write] [--json]
 
-# The Desk and the Drawer, read-only from .hester/desk/ and .hester/someday/ (no daemon; never writes).
+# The Desk and the Drawer, read-only from .hester/desk/ and .hester/ideas/ (no daemon; never writes).
 # --dir is any directory inside the workspace (it looks upward); --json for machines.
 # Claude Code sessions Lee launches get these as the lee:desk and lee:drawer skills
 # (electron/src/main/copilot/claude-plugin.ts, passed with --plugin-dir).
 hester desk overview              # Areas and their Page cards, the Goals card, the Drawer's counts, the last card
-hester desk page <id or title>    # a Page's text, answers, hand-offs, open questions, references [--text-only]
+hester desk page <id or title>    # a Page's text, answers, hand-offs, open questions, references, images (as paths) [--text-only]
 hester desk last                  # the last card and where you stopped
 hester desk drawer [words...]     # Stashed Areas and Ideas, newest first; words filter
+
+# Voice (docs/plans/2026-09-28-tether-review-voice.md §5): off unless hester.voice.enabled: true
+hester voice status [--json]      # what GET /voice says: provider, model, available or why not
+hester voice setup                # provider whisper: download the model (the only network fetch; needs lee-tools[voice-local])
+hester voice test FILE.wav        # transcribe a 16 kHz mono 16-bit WAV with the configured provider
 ```
 
 ### Ask Commands
@@ -537,17 +544,19 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/session/{id}` | Get session info |
 | DELETE | `/session/{id}` | Delete session |
 | GET | `/sessions` | List active sessions |
-| POST | `/someday` | Capture an idea into `<workspace>/.hester/someday/` |
-| GET | `/someday` | List Someday items (`?workspace=&status=open\|all`) |
-| POST | `/someday/{id}/triage` | Triage an item (`explore`, `promote`, `drop`, `keep`; `to: task` / `to: explore` also creates one) |
+| POST | `/ideas` | Capture an idea into `<workspace>/.hester/ideas/` (was `/someday`; the old directory is never read) |
+| GET | `/ideas` | List ideas (`?workspace=&status=open\|all`) |
+| POST | `/ideas/{id}/triage` | Triage an idea (`explore`, `promote`, `drop`, `keep`; `to: task` makes a task, `to: explore` a Page card); logs `idea.triage {idea_id}` (metrics also count the old `someday.triage`) |
 | GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
 | GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
-| GET/POST/DELETE | `/copilot/open-next` | Open next (`docs/14-Deep-Work.md` §8.1): `{card_id?, someday_id?}` the next Deep session opens first, in `<ws>/.hester/deep/open_next.json` (`exploration_id` is a legacy alias: a POST maps it to its card, a GET returns it equal to `card_id`). `/desk/last` and the opener's `pick_up` prefer it (a picked capture leads Captured away); it clears when a Desk session that touched the card is recorded, when the capture is triaged, or after 3 days. Devices allowed |
-| GET/POST/PUT | `/desk`, `/desk/migrate`, `/desk/last` | The Desk (`docs/16-Desk.md`; contract `docs/plans/2026-09-27-desk-foundation-contract.md` §3–§6) in `<ws>/.hester/desk/`: `desk.json` (Areas, card layout, Drawers, the Goals card, strokes, `last`, the migration map), `sessions.jsonl`, and `pages/<pg-id>/` (`card.json`, `page.md`, `answers.jsonl`, `references.jsonl`, `questions.jsonl`). Every Desk read first migrates `.hester/explore/` when it's due: copies (never writes there), idempotent through `migration.map`, `exp-<hex>` → `pg-<hex>` / `area-<hex>`, empty Untitled ones skipped, archived ones put away, node trees and chats dropped. `GET /desk/last` is the last card and its stopped-at line (Open next, then `last`, the last session's card, the most recently written) with what arrived since |
-| POST/PATCH/DELETE | `/desk/areas[/{id}]`, `/desk/areas/{id}/put-away`, `/take-out`, `/desk/drawers[/{id}]`, `/desk/cards/{id}` | Areas (an empty Desk gets `Main`; DELETE only when empty, else 409 `not_empty`, unless `{with_cards: true}`: the user confirmed, and its cards go too; its strokes always go), the Put away Drawer and your own (`drw-`; `ideas` is Someday's), card layout (`{x, y, w, h, area_id}`: a card moves within its Area or into another on the Desk, 400 for a malformed or put-away Area; the pinned Goals card doesn't move) |
-| POST/DELETE | `/desk/strokes[/{id}]` | Freehand lines you draw on the Desk; they mean nothing, so Hester never reads, places or connects them. `{area_id: str\|null, points: [[x, y], …], width?}` → `{id: 'stk-<hex>', area_id, points, width, created_at}`; points are relative to the Area (or the Desk when `area_id` is null), 2–2000 per stroke, at most 2000 strokes per Desk, width above 0 and at most 64 (default 2), 400 otherwise. An Area's strokes move with it, stay with it when put away, and go when it's deleted. `GET /desk` returns `strokes` |
-| * | `/desk/pages[/{id}[/page\|/references\|/answers\|/asks\|/handoffs\|/questions\|/draft-from-readme]]` | Page cards: the routes a Page had under `/cockpit/explorations/{id}`, on the card (same functions, same rules: 1 MB, 409 `version_conflict`, anchors, file references, DELETE only an empty Untitled card, unless `{force: true}`: the user confirmed). `POST /desk/pages {purpose: 'goals'}` returns the existing Goals card with 200. Hand-offs launch with origin `{kind: 'page', ref: '<pg>#<ans>'}`; `deep.answer` carries `card_id` and `exploration_id` (the same id) |
-| GET/POST | `/desk/sessions`, `/desk/ideas/{someday_id}/page` | Desk session records (`cards_touched`, `stopped_card_id`, `questions_kept` as card-and-question pairs, reason `device` too; away/quit sessions with no record are written from the event log by the opener). An idea as a Page card in a new Area (or `area_id`), marking it explored; 409 `not_open` |
+| GET/POST/PUT | `/desk`, `/desk/migrate`, `/desk/last` | The Desk (`docs/16-Desk.md`; contract `docs/plans/2026-09-27-desk-foundation-contract.md` §3–§6) in `<ws>/.hester/desk/`: `desk.json` (Areas, card layout, Drawers, the Goals card, strokes, `last`, the migration map), `sessions.jsonl`, and `pages/<pg-id>/` (`card.json`, `page.md`, `answers.jsonl`, `references.jsonl`, `questions.jsonl`, `assets/`). Every Desk read first migrates `.hester/explore/` when it's due: copies (never writes there), idempotent through `migration.map`, `exp-<hex>` → `pg-<hex>` / `area-<hex>`, empty Untitled ones skipped, archived ones stashed, node trees and chats dropped; a `desk.json` from before 2026-09-28 has its `put-away` Drawer and `put_away_at` rewritten to `stashed` / `stashed_at` once. `GET /desk/last` is the last card and its stopped-at line (`last`, the last session's card, the most recently written) with what arrived since |
+| POST/PATCH/DELETE | `/desk/areas[/{id}]`, `/desk/areas/{id}/stash`, `/unstash`, `/desk/drawers[/{id}]`, `/desk/cards/{id}` | Areas (an empty Desk gets `Main`; DELETE only when empty, else 409 `not_empty`, unless `{with_cards: true}`: the user confirmed, and its cards go too; its strokes always go), the Stashed Drawer (`stashed`; unstash of an Area on the Desk is 409 `not_stashed`) and your own (`drw-`; `ideas` is the Ideas store's), card layout (`{x, y, w, h, area_id}`: a card moves within its Area or into another on the Desk, 400 for a malformed or stashed Area; the pinned Goals card doesn't move) |
+| POST/DELETE | `/desk/strokes[/{id}]` | Freehand lines you draw on the Desk; they mean nothing, so Hester never reads, places or connects them. `{area_id: str\|null, points: [[x, y], …], width?}` → `{id: 'stk-<hex>', area_id, points, width, created_at}`; points are relative to the Area (or the Desk when `area_id` is null), 2–2000 per stroke, at most 2000 strokes per Desk, width above 0 and at most 64 (default 2), 400 otherwise. An Area's strokes move with it, stay with it when stashed, and go when it's deleted. `GET /desk` returns `strokes` |
+| * | `/desk/pages[/{id}[/page\|/references\|/answers\|/asks\|/handoffs\|/questions\|/draft-from-readme]]` | Page cards: the Page's routes (deep.py's functions, the rules the pre-Desk exploration Page had: 1 MB, 409 `version_conflict`, anchors, file references, DELETE only an empty Untitled card, unless `{force: true}`: the user confirmed). `POST /desk/pages {purpose: 'goals'}` returns the existing Goals card with 200. Hand-offs launch with origin `{kind: 'page', ref: '<pg>#<ans>'}`; `deep.answer` carries `card_id` and `exploration_id` (the same id) |
+| POST/GET | `/desk/pages/{id}/assets`, `/desk/pages/{id}/assets/{name}` | Images on a Page: the raw body with `Content-Type: image/png\|image/jpeg` (checked against the bytes), up to 10 MB (413; 415 for another type) → 201 `{name: 'img-<hex>.png', path: 'assets/<name>'}`, stored 0600 in `pages/<id>/assets/`; GET serves it. Deleting the card deletes them |
+| GET/POST | `/desk/sessions`, `/desk/ideas/{idea_id}/page` | Desk session records (`cards_touched`, `stopped_card_id`, `questions_kept` as card-and-question pairs, reason `device` too; away/quit sessions with no record are written from the event log by the opener). An idea as a Page card in a new Area (or `area_id`), marking it explored; 409 `not_open` |
+| GET | `/voice` | Voice capabilities (`shared/voice.ts` `VoiceCapabilities`): `{enabled, available, reason?, provider, model, location, accepts, sample_rate, channels, max_seconds, max_bytes}`; `reason` is `disabled`, `no_api_key`, `whisper_not_installed` or `whisper_model_missing`. Config `hester.voice: {enabled, provider: gemini\|whisper, gemini_model, whisper_model, max_seconds, timeout_s}` (merged config, `HESTER_VOICE_*` overrides) |
+| POST | `/voice/transcribe?purpose=reply\|capture\|ask\|send&item_id=&workspace=` | A 16 kHz mono 16-bit PCM WAV as the raw body (`Content-Type: audio/wav`) → `{text, provider, model, location, audio_ms, latency_ms}`. Errors: 503 `voice_disabled` / `voice_unavailable` (+ `reason`), 415 `unsupported_media_type`, 413 `too_large` (Content-Length, before reading) or `too_long`, 422 `too_short`, 502 `provider_error`, 504 `timeout`. The vocabulary hint (≤ 40 terms) comes from the attention item (`reply`) or a Page card (`item_id` = `pg-…`), Lee's tab labels and open files, and the workspace name. Single pass, no session; audio, hint and text are never stored or logged. Each attempt logs `voice.transcribe` (sizes and timings only) |
 | GET | `/cockpit/usage?range=today\|week\|month` | Usage (`docs/15-Usage.md` §5): latest `limits` with age, `totals` and `by_day` by source (claude, pi, hester_cloud, hester_local) with spend (billed + estimate, dollars) apart from subscription (tokens only) and local, `hester` split by trigger, `top_tasks`. Pull-only. Tasks carry `usage` from `agent.usage` (follower) |
 | GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
 | GET | `/workspaces` | Workspaces the daemon is serving (`POST /workspaces/open`, `/workspaces/close`) |
@@ -560,14 +569,8 @@ When running as a server (`hester daemon start`), exposes REST API:
 | POST | `/cockpit/goals/{gid}/workstream` | Build toward: a workstream with `serves: [gid]` |
 | GET/POST | `/cockpit/steward` | `{enabled, not_today_until, active}`; POST `{not_today: bool}` quiets the steward until local midnight. `hester.steward: on\|off` in `.lee/config.yaml` |
 | POST | `/cockpit/proposals/{id}/outcome` | `{outcome: accepted\|dismissed}` for a proposal from a steward answer (`.hester/cockpit/proposals.jsonl`) |
-| GET/POST/PATCH | `/cockpit/explorations[/{id}]` | Pre-Desk; kept working, but nothing new calls them (the Desk migrates from these files). Explorations in `<ws>/.hester/explore/` (one markdown file each, with a node tree); `/{id}/open` seeds the Hester chat session `explore-<id>`, whose turns are written back to the file |
-| POST/PATCH | `/cockpit/explorations/{id}/nodes[/{nid}]`, `/nodes/{nid}/prune`, `/decisions`, `/spikes[/{nid}]` | Tree edits: branches, decisions (reason optional), spikes (agent tasks in a worktree whose evidence comes back as a node) |
-| POST | `/cockpit/explorations/{id}/promote`, `/archive` | Promote to a task, workstream or goal draft (`.hester/goals/drafts/`); archive, optionally as knowledge (`.hester/knowledge/explore-<id>.md`, read by the `knowledge_notes` tool) |
-| POST | `/cockpit/tasks/{id}/escalate` | Open an exploration from a task (the task stays open) |
-| POST/PATCH | `/cockpit/explorations/{id}/handoffs`, `/answers/{aid}` | Deep hand-offs (`docs/plans/2026-09-27-deep-next-contract.md` §2): a `kind: 'handoff'` record in `answers.jsonl`; PATCH `{task_id}` links Lee's launched task (origin `{kind: 'exploration', ref: '<exp>#<aid>'}`) and `handoffs.sync` (follower, task routes) keeps its state and result in step. `GET /cockpit/handoff-template?kind=` returns the brief template |
-| DELETE | `/cockpit/explorations/{id}` | Only a still-Untitled exploration with an empty Page and no answers, references or questions; else 409 `not_empty` |
-| POST | `/cockpit/explorations/{id}/draft-from-readme` | Goals Page (`purpose: 'goals'`, one per workspace; `GET ?purpose=goals`): a first guess at the four prompts from README.md / CLAUDE.md, surface `goals-readme`; returns `{text}` and never writes the Page |
-| * | `/library/sessions[/{id}/...]` | The Library pane: a tree view onto the same exploration files (`session_id` = exploration id). DELETE archives; per-node chats (`library-<id>-<node>` sessions) write each exchange to the file; save goes to Someday |
+| POST | `/cockpit/tasks/{id}/escalate` | A Page card from the task (its title, the agent's last report, its files), origin `{kind: 'task', ref}`, in the Desk's first Area → 201 `{card, area}`; the task stays open with the note `page:<card id>`. The pre-Desk `/cockpit/explorations/*` and `/library/sessions/*` routes are gone (2026-09-28); `.hester/explore/` is only the Desk migration's source |
+| POST/PATCH | `/desk/pages/{id}/handoffs`, `/answers/{aid}` | Deep hand-offs (`docs/plans/2026-09-27-deep-next-contract.md` §2): a `kind: 'handoff'` record in `answers.jsonl`; PATCH `{task_id}` links Lee's launched task (origin `{kind: 'page', ref: '<pg>#<aid>'}`; an old `exploration` origin still syncs) and `handoffs.sync` (follower, task routes) keeps its state and result in step. `GET /cockpit/handoff-template?kind=` returns the brief template |
 
 Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
 

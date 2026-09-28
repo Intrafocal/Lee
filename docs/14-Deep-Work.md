@@ -430,7 +430,9 @@ This works because the thinking already happened during the session, when you as
 
 ### 8.1 Devices: Tether, not Deep
 
-*Renamed from Carry, 2026-09-28; the routes keep `/carry`.* Tether is the Cockpit extended to Dirigible and Aeronaut: you can step away from the Machine during long-running work and still see updates and steer. It includes the stopped-at line, open questions, captures and Open next.
+*Renamed from Carry, 2026-09-28, routes included (`/tether/*`).* Tether is the Cockpit extended to Dirigible and Aeronaut: you can step away from the Machine during long-running work and still see updates and steer. It includes the stopped-at line, open questions and captures (into **Ideas**, which was Someday).
+
+*2026-09-28 ([`plans/2026-09-28-tether-review-voice.md`](plans/2026-09-28-tether-review-voice.md)):* the devices become **Work · Review · Hester**. Work is Tether with a **Pick up** block on top; Review reads the Desk, the Drawer and Files (read-only); **Send to Lee** makes the phone and T-Deck inputs for Lee (a voice note's transcript, a photo, a screenshot, a scribble or text, delivered or sent to a Page, Hester or a tab); voice input is transcribed by Hester. **Open next is removed** (not useful), so the table and list below describe the design as it was before that round.
 
 *Designed 2026-09-27:* the phone and T-Deck screens for Work, one agent and Library (Tether) are in the Cockpit design contract, §8 ([`plans/2026-09-27-cockpit-design-contracts.md`](plans/2026-09-27-cockpit-design-contracts.md)).
 
@@ -444,7 +446,7 @@ This works because the thinking already happened during the session, when you as
 | **Deep** | A state, not a mode: "In deep work" | Same |
 
 - **Tether flows into the opener.** Anything captured on a device lands in **Captured away** (§6), and a capture made into an exploration shows under **Pick up where you left off** with that exploration.
-- **Open next.** A device can pick what the next session opens first: an exploration or a captured thought. The opener puts it at the top of "Pick up where you left off". This replaces the device Focus toggle (Dirigible's `f` key, `screen_waiting.cpp` `focus_toggle`), since Deep can't start remotely.
+- ~~**Open next.** A device can pick what the next session opens first: an exploration or a captured thought.~~ *Removed 2026-09-28* (Hester's `/copilot/open-next`, the opener's preference, Lee's `/carry/open-next`, the device actions); "Pick up where you left off" is your last card again.
 - **No bypass while you're deep.** While a Deep session is running at the machine, devices get no pushes either; agents park (§3.3) and the device header says "In deep work". Pulling the phone out and replying is a hop: agency, never scored (§3.1). `turn_churn` counts prompts from every surface, so poking agents from the phone shows up where it should.
 - **After the ending ritual** the away policy applies as 13 §5.1 says: at most one summary, and wake-me items only. The ritual's handoff step (§7) is where you set it.
 - **Idle-end push** (*decided 2026-09-27*, with 13 v6). When a Deep session is about to end from idleness with Lee still open (a few minutes before `deep.idle_end_minutes`), the devices get **one** push: **Extend** (another 45 minutes, for the walk that's still thinking), **End and rate** (deep / mixed / shallow, plus an optional stopped-at note on Dirigible), or **Capture** a thought into the exploration. Ignoring it ends the session unrated, as today. At most one per session, never in quiet hours; Dirigible uses plain letters (`e` extend, `d`/`m`/`s` rate, `c` capture). It's the only push Deep ever sends, and it arrives when you're already away.
@@ -567,7 +569,7 @@ Deep work builds on 13's Explore (v3) and uses its Someday, tasks and hooks. It 
 2. **D2: Research and code.** **Browse** in Deep mode with bookmark and screenshot (§4.3); the **Board** with screenshots, reference and answer cards and text boxes (§4.2); **Spin off** with results as answer cards (§5.1, §5.3); **Workbench** with tabs, working set, Quick Open, terminals, multi-diff review, batched review comments and `human`-lead tasks (§4.4).
    - **Status (2026-09-27):** D2 is now **the Desk**, per [`16-Desk.md`](16-Desk.md). Its first round, D2 foundations, is contracted in [`plans/2026-09-27-desk-foundation-contract.md`](plans/2026-09-27-desk-foundation-contract.md). It covers the Desk store and the migration from explorations, sessions on the Desk, and the Desk surface with Page cards, the pinned Goals card and the Ideas Drawer. It also restructures the Cockpit into Home, Work, Goals and Ops. Board, Browse, Workbench and Workbook become card kinds in later rounds.
 3. **D3: Renders.** Render target detection and recipes, starting with Web/Storybook and Flutter, then iOS and Lee's own viewers (§9); markup-to-task; stale renders in the opener (§9.4).
-4. **Devices (13 v6, after D1):** the device Cockpit, Tether and Open next (§8.1); the reading list after D2.
+4. **Devices (13 v6, after D1):** the device Cockpit and Tether (§8.1; Open next was built, then removed 2026-09-28); the reading list after D2.
 5. **Later:**
    - **Studio:** deep work not tied to one workspace (strategy, reading, thinking about the world). Likely a v2 of Explore rather than a separate feature.
    - **Voice:** capturing a thought on a walk by voice (`hester/docs/VoicePlan.md`), into "Captured away".
@@ -591,6 +593,6 @@ Resolved in conversation (2026-09-26):
 - ~~Dive in~~ (2026-09-26): Explore's **Dive in / Continue** opens the exploration in Deep (the Page). The per-node chats stay in the Library, which is reachable from Manual; the existing Log is kept.
 
 Open:
-- **Device questions (§8.1):** is **Open next** the right replacement for Dirigible's `f` (the alternative is to drop the key)? Should the Aeronaut reading list be in v6 or later? Does voice capture (`hester/docs/VoicePlan.md`) join v6 for Aeronaut, since it belongs to the walk, or stay later?
+- **Device questions (§8.1):** Should the Aeronaut reading list be in v6 or later? (*2026-09-28:* Open next was dropped rather than replacing `f`; voice input joins every device, Dirigible's behind a build flag, in [`plans/2026-09-28-tether-review-voice.md`](plans/2026-09-28-tether-review-voice.md) §5.)
 - **Board library:** build a small canvas or adopt tldraw/Excalidraw? Depends on licence, bundle size and the renderer CSP.
 - **Render views:** how far should view discovery go (Next routes, Flutter golden tests), and what's the fallback when a web route needs auth or state?

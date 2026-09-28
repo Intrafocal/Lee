@@ -558,7 +558,7 @@ Someday is quick idea capture; Explore is for deeper dives.
 - **One store.** The Library pane is a tree view onto the same `.hester/explore/<id>.md` files (`session_id` is the exploration id). Its Redis tree sessions (2 h TTL) are gone; nothing about an exploration expires, and deleting in the Library archives. Per-node chats keep their agents and write each finished exchange to the node's `## Node <id> · <label>` section of the file.
 - The node tree has **decision**, **spike** and **evidence** nodes. Pruning a branch records a decision; a reason is optional and can be added later. A spike runs an agent in a git worktree as a task with `delegate` lead and a timebox (origin `explore`, ref `<exp>/<node>`); the follower keeps the spike's status in step with the task, and on review or close its summary (labelled as the agent's claim), files, diffstat, diff (`.hester/explore/evidence/<exp>-<node>.diff`) and commits come back as an evidence node.
 - Promote actions: to Task, to Workstream (decision nodes become design decisions), to Goal (a **draft** in `.hester/goals/drafts/<exp>.md`, never GOALS.md). Promotion carries the tree's outline (decisions, spikes, evidence), not a transcript dump.
-- A task can be **escalated** to an exploration (seeded from its title, the agent's last report and its files; the task stays open).
+- A task can be **escalated** to an exploration (seeded from its title, the agent's last report and its files; the task stays open). *2026-09-28:* it escalates to a **Page card** in the Desk's first Area instead (origin `{kind: 'task'}`), and the `/cockpit/explorations/*` and `/library/sessions/*` routes are gone; `.hester/explore/` is kept only as the Desk's one-time migration source (`16-Desk.md`).
 - An exploration can be **archived as knowledge**: a deterministic note at `.hester/knowledge/explore-<id>.md`, which Hester reads with the `knowledge_notes` tool.
 - Everything except the per-node chats (which you trigger) is deterministic; no action requires a reason.
 
@@ -807,11 +807,12 @@ hester:
 | **Event log** (machine-wide): focus and input counts per tab (never content), presence and engagement, hook events, approvals, device actions per device, model/network calls with their triggering action, UI ceremony | `~/.lee/events/` (per day, tagged by workspace), written by Lee main | No (outside the repo) |
 | Per-device tokens | `~/.lee/devices/` (issued at pairing; revocable) | No |
 | Goal metric readings | `.hester/goals/metrics.jsonl` (computed from the event log) | No |
-| Someday (single capture store, shared with devices; replaces the broken `hester ideas`) | `.hester/someday/` | No |
+| Ideas (single capture store, shared with devices; was Someday until 2026-09-28, when `.hester/someday/` was dropped) | `.hester/ideas/` (`idea_<stamp>_<hex>.md`; `hester ideas capture\|list`) | No |
 | Tasks | `.hester/tasks/` (light records, §7.2) | No |
 | Workstreams | `.hester/workstreams/` (existing) | No |
 | Explorations (Explore and the Library; one markdown file each, plus spike diffs in `evidence/`) | `.hester/explore/` (replaces the Library's Redis TTL) | No |
 | Knowledge notes (explorations archived as knowledge) | `.hester/knowledge/` | No |
+| The Desk: Areas, Page cards and their images (`pages/<id>/assets/`) | `.hester/desk/` (`16-Desk.md`) | No |
 | Goal drafts (promoted explorations; GOALS.md is edited only by a human) | `.hester/goals/drafts/` | No |
 | Operations | `.lee/config.yaml` `operations:` / `services:` | No |
 | Lint config | `.lee/config.yaml` `lint:` | No |
@@ -878,6 +879,7 @@ Ordered so the top-priority goals (G1, G4) move first, and so every phase is use
      - Aeronaut's one-agent Check in / Rename / Accept / Assign and "Snoozed · Undo";
      - Tether as your last Desk card and its stopped-at line (`16-Desk.md`);
      - `/carry/capture` spooling offline.
+   - *2026-09-28 (Tether, Review and voice; [`plans/2026-09-28-tether-review-voice.md`](plans/2026-09-28-tether-review-voice.md)):* devices become **Work · Review · Hester**; Carry is **Tether** (`/tether/*`), Someday is **Ideas** (`/ideas`, `idea.triage`; metrics still count `someday.triage`), Put away is **Stashed**; **Open next** is removed; the phone and the T-Deck gain **Send to Lee** and voice input (Hester transcribes: `GET /voice`, `POST /voice/transcribe`).
 8. **Later:** PR checks against goals.
 
 *Decision 2026-09-25:* v2 is built immediately after v0/v1 rather than after the two-week v0 baseline. The v0 success test is therefore read against a confounded baseline: `peek_rate`, `attention_latency` and `focus_interruptions` will reflect v0–v2 together.
