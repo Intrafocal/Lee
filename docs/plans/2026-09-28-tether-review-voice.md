@@ -13,7 +13,7 @@ Four parts, decided in conversation on 2026-09-28:
    - **Review** is read-only: the **Desk** (phone: Areas → Pages → a Page; T-Deck: Pages only, newest first), the **Drawer** (phone only: Stashed Areas and Ideas) and **Files**.
    - **Hester** is the chat, as today.
    - Capture stays a global action (phone: the capture button; T-Deck: `c`), landing in Ideas.
-2. **Send to Lee** (§4): Aeronaut is an input device for Lee while you're at the Machine. A voice note (as its transcript), a photo, a screenshot, a scribble or text goes straight to Lee's focus: the Page you're on, Hester, or an agent's terminal. It never presses Enter.
+2. **Send to Lee** (§4): the phone and the T-Deck are input devices for Lee. A voice note (as its transcript), a photo, a screenshot, a scribble or text goes straight to Lee's focus (the Page you're on, Hester, a tab) or to the tab you're looking at. It's also the **compose** way to type into a tab from a device (§4.6), replacing keystroke-by-keystroke input for anything but TUI control. It presses Enter only when you tap Send yourself.
 3. **Voice** (§5): `VoicePlan.md` as written (Hester transcribes; Lee, Aeronaut and the T-Deck record), adapted to the renames.
 4. **Renames and removals** (§2): Carry → Tether and Someday → Ideas in routes, types, stores, files and the CLI; Put away → Stashed in ids and routes; **Open next** and the pre-Desk routes are removed.
 
@@ -27,8 +27,8 @@ Four parts, decided in conversation on 2026-09-28:
 | **H** Hester | `hester/**`, `tests/**`, `pyproject.toml`, `docs/13…16`, `docs/plans/` updates, `GOALS.md` never | Renames (§2), Open next and pre-Desk routes removed, Page assets (§4.4), the voice package (§5.2), `hester ideas` and `hester desk` updates |
 | **M** Lee main | `electron/src/main/**` (incl. `preload.ts`), `electron/package.json` (`build.mac`), `electron/build/entitlements.mac.plist` (new), main-side smokes, root `CLAUDE.md` | `/tether/*` routes (§3.3, §4.2), capture to `/ideas`, Send to Lee delivery over IPC, mic permission and entitlements (§5.3), event types |
 | **R** Lee renderer | `electron/src/renderer/**`, renderer smokes, `design/icons.json` + generated icons | Renames in the clients, Send to Lee delivery (§4.3), Page images (§4.4), the palette taking images, voice UI (§5.3) |
-| **A** Aeronaut | `aeronaut/**` | Work · Review · Hester, Pick up, Review, Send to Lee, voice and readback, renames |
-| **D** Dirigible | `dirigible/**`, `docs/Dirigible.md` | Work with Pick up, Review (Pages + Files), renames, voice input behind a build flag (§5.6) |
+| **A** Aeronaut | `aeronaut/**` | Work · Review · Hester, Pick up, Review, Send to Lee and compose in the tab view, voice and readback, renames |
+| **D** Dirigible | `dirigible/**`, `docs/Dirigible.md` | Work with Pick up, Review (Pages + Files), compose in the tab view (§4.6), renames, voice input behind a build flag (§5.6) |
 
 One owner per file. A package that must touch another's file keeps the change minimal and lists it as a deviation. Generated icon files belong to R (A and D consume them).
 
@@ -83,7 +83,7 @@ No aliases: the phone, the T-Deck and Lee are installed together after this roun
   - Drawer: Stashed Areas → their Pages (read like Desk), and Ideas (read-only; triage stays in Lee).
   - Files: today's Files screen, moved here.
 - **Hester:** as today, plus the mic (§5.5) and readback.
-- **Send to Lee** (§4.5) is reached from Work's header and Hester's app bar.
+- **Send to Lee** (§4.5) is reached from Work's header and Hester's app bar; a tab's view opens in compose (§4.6).
 
 ### 3.2 Dirigible
 
@@ -149,22 +149,29 @@ While you're at the Machine, the phone is a second input: speak a note, take a p
 export type SendTarget =
   | { kind: 'page'; card_id: string; title: string }
   | { kind: 'hester' }
-  | { kind: 'agent'; pty_id: number; label: string; provider: string | null }
+  | { kind: 'tab'; pty_id: number; label: string; tab_kind: 'agent' | 'terminal' | 'tui'; provider: string | null }
   | { kind: 'board'; card_id: string; title: string }; // reserved: not built this round (no Board cards yet)
 export interface SendTargets {
   /** What Lee's focused window has in front of it now, when it's a target: the zoomed Page, the palette, or the focused agent tab. */
   focus: SendTarget | null;
-  /** Every other target: the open Pages this window has touched this session, Hester, each agent tab. */
+  /** Every other target: the open Pages this window has touched this session, Hester, each PTY tab (agents, terminals, TUIs). */
   targets: SendTarget[];
 }
 export type SendItem =
   | { kind: 'text'; text: string; input?: 'voice' }                        // a voice note arrives as its reviewed transcript (§5)
   | { kind: 'image'; mime: 'image/png' | 'image/jpeg'; data_b64: string; caption?: string; source: 'photo' | 'screenshot' | 'scribble' };
-export interface SendRequest { workspace?: string; target: SendTarget | 'focus'; items: SendItem[] }
+export interface SendRequest {
+  workspace?: string;
+  target: SendTarget | 'focus';
+  items: SendItem[];
+  /** Tab targets only: press Enter after the text. Only from an explicit Send tap, never from voice or a default. */
+  submit?: boolean;
+}
 export interface SendResult { send_id: string; delivered_to: SendTarget }
 ```
 
 - `POST /tether/send`: body ≤ 15 MB, ≤ 4 items, an image ≤ 10 MB decoded, text ≤ 20 000 chars. 400 on anything else; 409 `{error: 'no_target'}` when `focus` is asked for and nothing in front of you is a target; 503 `{error: 'no_window'}` when no Lee window has the workspace.
+- `submit` is refused (400) for non-tab targets and when the items hold no text.
 - M validates, then sends IPC `tether:send` `{send_id, target, items}` to that window; R delivers (§4.3) and answers `tether:send-result` `{send_id, ok, error?}`; M returns 200 after the renderer's answer (timeout 10 s → 504).
 - Event `tether.send` `{source_device, target_kind, items: [{kind, source?, input?, bytes}], ok}`: kinds and sizes only, never content.
 
@@ -174,9 +181,9 @@ export interface SendResult { send_id: string; delivered_to: SendTarget }
 |---|---|---|
 | **page** (zoomed or not) | Inserted as its own paragraph at the Page's cursor (the end when the Page isn't open), through the editor so it saves and undoes normally | Uploaded to the Page's assets (§4.4), then `![caption](assets/<file>)` inserted the same way |
 | **hester** | Opens the palette with the text as the question, not sent | Attached to the palette's question (the palette sends `images` in its `ContextRequest`; add the attach UI if it lacks it) |
-| **agent** | Written to the tab's PTY with no newline | Saved to `~/.lee/inbox/<send_id>-<n>.<ext>` (0600, pruned after 7 days), and its absolute path typed, no newline (Claude Code reads an image path) |
+| **tab** (agent, terminal, TUI) | Pasted into the tab as one piece through xterm's `paste()`, which wraps it in bracketed paste when the program asked for it (Claude Code and zsh do), so a multi-line text doesn't submit line by line; then `\r` only when `submit` is true | Saved to `~/.lee/inbox/<send_id>-<n>.<ext>` (0600, pruned after 7 days), and its absolute path pasted the same way (Claude Code reads an image path) |
 
-A quiet chip in the status bar: "From your phone: photo → Taxonomy · Undo". Undo removes a Page insertion while it's unchanged (a CodeMirror transaction). The agent and Hester targets have no undo, and nothing was sent. The chip goes after 8 s.
+A quiet chip in the status bar: "From your phone: photo → Taxonomy · Undo" (or "From the T-Deck"). Undo removes a Page insertion while it's unchanged (a CodeMirror transaction). Tab and Hester targets have no undo; without `submit`, nothing was sent. Compose sends to the tab you're viewing on the device (§4.6) don't show the chip, since you're watching that tab. The chip goes after 8 s.
 
 ### 4.4 Images on a Page (H, R)
 
@@ -186,6 +193,15 @@ A quiet chip in the status bar: "From your phone: photo → Taxonomy · Undo". U
 ### 4.5 On the phone (A)
 
 A **Send to Lee** sheet: pick **Voice note** (records, transcribes via §5, shows the transcript to edit), **Photo** (camera), **Screenshot** (the photo library, most recent first), **Scribble** (a full-screen canvas: finger strokes, undo, clear, exports PNG) or **Text**. Several items can go in one send. The target defaults to Lee's focus from `GET /tether/targets`, shown as "To: Taxonomy (the Page you're on)", with a picker for the others. Send shows "Sent to Taxonomy" or the error. `Info.plist` gains camera and photo library usage strings.
+
+### 4.6 Compose into a tab, from either device (A, D)
+
+Direct tab input streams each keystroke, which is slow and awkward for anything longer than a few keys, and gets no autocorrect or dictation. It stays for driving TUIs; **compose** becomes the default for writing.
+
+- **Aeronaut:** the tab view (`terminal_screen.dart`) opens in **Compose**: a native multi-line text field (autocorrect, iOS dictation, paste), the mic (§5.5), and attach (photo, screenshot, scribble). Two actions: **Insert** (typed, no Enter) and **Send** (typed, then Enter). A **Keys** toggle switches to today's keystroke mode (arrows, Ctrl, Esc, Tab) for TUIs, and it's remembered per tab. The target is the tab itself (`{kind: 'tab', pty_id}`), through `POST /tether/send`.
+- **Dirigible:** the Tabs screen's tab view gets a **compose line**: typing fills a local buffer (edit with backspace, ball to move, `Shift+Enter` for a new line), Enter sends it as one piece with Enter after, `Alt+Enter` inserts without Enter; a key toggles to keystroke mode for TUIs (the agent picks a plain letter free on that screen, shown in the footer). Voice fills the buffer when `CONFIG_DIRIGIBLE_VOICE` is on.
+- **From Work** (both devices): the Send to Lee entry opens the same composer aimed at Lee's focus, with the target picker. Replies to attention items keep their own Reply field (which already submits) and gain the mic.
+- Voice never taps Send: a transcript fills the field, and you send it.
 
 ## 5. Voice (VoicePlan, carried over)
 
@@ -274,7 +290,7 @@ Kept for later, not this round: native `audio` in `ContextRequest` and the ReAct
 | Z | `npm run build:main`, `npm run typecheck`, the renderer and copilot smokes |
 | H | `PYTHONPATH=$(pwd) ~/.lee/venv/bin/python -m pytest tests/copilot -q -p no:cacheprovider` (new tests: ideas store and routes, stash/unstash and the `put-away` → `stashed` migration, escalate → Page card, Open next and pre-Desk routes gone (404), Page assets, voice audio/config/hints/routes/gemini/whisper with fakes, `hester ideas` and `hester desk` CLI) |
 | M | `build:main`, `typecheck`, `node scripts/copilot-queue-smoke.js`, `copilot-usage-smoke.js` (the `/tether/*` routes, send validation and IPC round trip with a fake window, spool rename) |
-| R | `typecheck`, `deep-renderer`, `desk-renderer`, `cockpit-renderer`, `cockpit-work` smokes, new `voice-smoke.mjs` and a send-delivery smoke (pure logic: target resolution, insertion text, inbox paths) |
+| R | `typecheck`, `deep-renderer`, `desk-renderer`, `cockpit-renderer`, `cockpit-work` smokes, new `voice-smoke.mjs` and a send-delivery smoke (pure logic: target resolution, insertion text, inbox paths, `submit` only for tabs) |
 | A | `flutter analyze`, `flutter test` (Flutter at `~/Development/flutter/bin`) |
 | D | host tests (`make check` in each `dirigible/tools/*-test`; vt-test's 7 colour failures predate this round), `idf.py build` with and without `CONFIG_DIRIGIBLE_VOICE`; never flash |
 
@@ -284,7 +300,8 @@ Nobody runs `dist:mac`, reinstalls Hester, flashes the T-Deck or installs Aerona
 
 - Voice notes reach Lee as reviewed transcripts, never as audio (VoicePlan's "never persisted").
 - Send to Lee has no queue: it needs Lee running, and fails plainly otherwise.
-- Agent targets get text or an image path typed with no newline; nothing is ever submitted.
+- Tab targets get text or an image path pasted in one piece; Enter only with `submit`, which only an explicit Send tap sets.
+- Compose is the default in a device's tab view; keystroke mode stays one toggle away for TUIs.
 - Images on Pages live with the card (`pages/<id>/assets/`) and go when it's deleted.
 - New idea ids use `idea_`; old `sd_` files are gone.
 - The T-Deck's Review key is `v`.
