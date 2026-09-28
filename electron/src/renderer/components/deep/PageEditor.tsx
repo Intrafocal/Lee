@@ -254,12 +254,13 @@ type RowButton = { action: DeepRowAction; label: string; mnemonic: string; title
 function mnemonicLabel(label: string, letter: string): React.ReactNode {
   const i = label.toLowerCase().indexOf(letter);
   if (i < 0) return label;
+  // One span: the button is a flex box, and loose text nodes would each get its gap ("A sk").
   return (
-    <>
+    <span className="deep-row-label">
       {label.slice(0, i)}
       <span className="deep-row-mn">{label[i]}</span>
       {label.slice(i + 1)}
-    </>
+    </span>
   );
 }
 
@@ -1154,6 +1155,9 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
                     {mnemonicLabel(a.label, a.mnemonic)}
                   </button>
                 ))}
+                <kbd className="deep-row-hint" title="⌘. puts the keyboard in this row; then press an underlined letter. Esc goes back to the Page">
+                  ⌘.
+                </kbd>
               </div>
               {asking && (
                 <input

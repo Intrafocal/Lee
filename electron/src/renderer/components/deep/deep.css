@@ -1038,6 +1038,17 @@
   text-underline-offset: 3px;
 }
 
+/* ⌘. at the row's end: how the keyboard gets in. Quiet, and gone once it has. */
+.deep-row-hint {
+  align-self: center;
+  margin: 0 var(--space-1);
+  cursor: help;
+}
+
+.deep-row:focus-within .deep-row-hint {
+  visibility: hidden;
+}
+
 /* ---- [[ and @ pickers (R10, R11) ---- */
 
 .deep-picker {
