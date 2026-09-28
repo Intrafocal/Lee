@@ -23,7 +23,7 @@ class _FixedMachinesNotifier extends MachinesNotifier {
   }
 }
 
-/// Lee main's Carry (Desk D2 §9.3): the last Desk card, with exploration_id as its legacy alias.
+/// Lee main's Tether, `GET /carry` (Desk D2 §9.3): the last Desk card, with exploration_id as its legacy alias.
 Map<String, dynamic> _carry({Map<String, dynamic>? openNext}) => {
       'workspace': '/ws/api',
       'pick_up': {
@@ -192,7 +192,7 @@ void main() {
     });
   });
 
-  testWidgets('LibraryScreen tabs: Carry first, then Ideas; no Explorations tab', (tester) async {
+  testWidgets('LibraryScreen tabs: Tether first, then Ideas; no Explorations tab', (tester) async {
     final lee = _FakeLee();
     await tester.pumpWidget(
       ProviderScope(
@@ -206,9 +206,9 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final tabs = ['Carry', 'Ideas'].map((t) => tester.getTopLeft(find.text(t)).dx).toList();
+    final tabs = ['Tether', 'Ideas'].map((t) => tester.getTopLeft(find.text(t)).dx).toList();
     expect(tabs[0], lessThan(tabs[1]));
     expect(find.text('Explorations'), findsNothing);
-    expect(find.text('Cache design'), findsOneWidget, reason: 'Carry shows first');
+    expect(find.text('Cache design'), findsOneWidget, reason: 'Tether shows first');
   });
 }
