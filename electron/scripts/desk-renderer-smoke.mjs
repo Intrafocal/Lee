@@ -277,8 +277,9 @@ await test('Rectangle sizes an Area: right, bottom or corner; never below a draw
   assert.deepEqual(model.AREA_HANDLES, ['e', 's', 'se']);
 });
 
-await test('New: Page now, Board later; it goes in the Area you are in, else the one mid-view, else the first', () => {
-  assert.deepEqual(model.NEW_KINDS.map((k) => [k.kind, k.ready]), [['page', true], ['board', false]]);
+await test('New: a Page or a Board; it goes in the Area you are in, else the one mid-view, else the first', () => {
+  assert.deepEqual(model.NEW_KINDS.map((k) => [k.kind, k.ready]), [['page', true], ['board', true]]);
+  assert.ok(model.isBoardId('bd-1a2b3c4d') && !model.isBoardId('pg-1a2b3c4d') && !model.isPageId('bd-1a2b3c4d'));
   const areas = [
     { id: 'a1', name: 'One', x: 0, y: 0, w: 500, h: 400 },
     { id: 'a2', name: 'Two', x: 1000, y: 0, w: 500, h: 400 },

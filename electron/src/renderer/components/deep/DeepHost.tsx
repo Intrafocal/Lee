@@ -42,6 +42,10 @@
  * palette and events carry card_id, and the ritual lists the cards touched
  * this session. `explorationId` is unused (the store's DeepNav says which
  * card); App.tsx still passes it until the merge step.
+ *
+ * Boards (docs/16-Desk.md §3.1): a `bd-` card zooms into BoardSurface in
+ * the same layer instead of the Page editor; its own Esc runs first
+ * (capture) and zooms out when there's nothing left to close.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -128,11 +132,12 @@ import {
   type DeepCursor,
 } from './deepBridge';
 import { createDeskPage, deleteDeskPage, getDeskPage, patchDeskPage } from '../../lib/hesterDesk';
-import { landingCursor, lineEnd, type EscLayer, escapeStep } from '../../lib/deskModel';
+import { isBoardId, landingCursor, lineEnd, type EscLayer, escapeStep } from '../../lib/deskModel';
 import type { DeskCardKind } from '../../../shared/desk';
 import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from '../cockpit/cockpitMode';
 import { DeskSurface } from '../desk/DeskSurface';
 import { DeskContext, useDesk, useDeskContext } from '../desk/useDesk';
+import { BoardSurface } from '../board/BoardSurface';
 import { registerPageSink } from '../../lib/tetherDelivery';
 import { pageAssetUrl } from '../../lib/pageAssets';
 import { findInsertion, pageInsertion } from '../../lib/tetherModel';
@@ -177,7 +182,8 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
   useEffect(
     () =>
       cockpitModeStore.onEndSessionRequest(() => {
-        if (cardId) setEndNonce((n) => n + 1);
+        // A Board has no ritual of its own (yet): the bare sheet, with the cards touched.
+        if (cardId && !isBoardId(cardId)) setEndNonce((n) => n + 1);
         else setBareSheet(true);
       }),
     [cardId],
@@ -310,17 +316,21 @@ export function DeepHost(props: DeepHostProps): JSX.Element | null {
         <DeskSurface workspace={workspace} visible={visible && !zoomed} copilot={copilot} onHop={props.onHop} />
         {cardId && surfaceKey && (
           <div className={`desk-card-layer${zoomed ? ' is-zoomed' : ''}`} aria-hidden={!zoomed}>
-            <DeepSurface
-              key={surfaceKey}
-              {...props}
-              visible={visible && zoomed}
-              explorationId={cardId}
-              title={nav.title}
-              endNonce={endNonce}
-              land={land}
-              areaInView={nav.area_id}
-              onPromoted={(realId, t, areaId) => onPromoted(surfaceKey, realId, t, areaId)}
-            />
+            {isBoardId(cardId) ? (
+              <BoardSurface key={cardId} workspace={workspace} boardId={cardId} title={nav.title} visible={visible && zoomed} />
+            ) : (
+              <DeepSurface
+                key={surfaceKey}
+                {...props}
+                visible={visible && zoomed}
+                explorationId={cardId}
+                title={nav.title}
+                endNonce={endNonce}
+                land={land}
+                areaInView={nav.area_id}
+                onPromoted={(realId, t, areaId) => onPromoted(surfaceKey, realId, t, areaId)}
+              />
+            )}
           </div>
         )}
         {bareSheet && (
