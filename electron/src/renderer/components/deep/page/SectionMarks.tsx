@@ -3,8 +3,10 @@
  * Goals Page's quiet prompts (R12).
  *
  * One mark per section with asks or hand-offs, at the section's first line:
- * the most urgent state's mark, a count when there are several, the top
- * item's small label and its question. Clicking a one-item mark opens its
+ * the most urgent state's mark and, for one item, its small label and its
+ * text (an ask's question; a hand-off's result line or the words handed
+ * off, never its brief); several items show the count and the section's
+ * heading. Clicking a one-item mark opens its
  * card; clicking a several-item mark lists the section's cards (answers, and
  * hand-offs with their state, "Open in Work", and Reply when one waits on
  * you). Cards are DeepHost's renderCard. Marks never take focus.
@@ -66,7 +68,7 @@ function Note({ item, count, open, onClick }: { item: MarkItem; count?: number; 
         {count != null && count > 1 && <span className="deep-mark-count">{count}</span>}
         {item.label}
       </span>
-      <span className="deep-note-q">{item.question}</span>
+      {item.question && <span className="deep-note-q">{item.question}</span>}
     </button>
   );
 }
@@ -91,7 +93,8 @@ export function SectionMarkView({ mark, items, listOpen, onToggleList, openMarke
   }
   return (
     <>
-      <Note item={{ ...top, state: mark.state }} count={list.length} open={listOpen} onClick={onToggleList} />
+      {/* The section's heading and the count, not the top item again: the list below shows each one. */}
+      <Note item={{ ...top, state: mark.state, label: mark.heading || 'This section', question: '' }} count={list.length} open={listOpen} onClick={onToggleList} />
       {listOpen && (
         <div className="deep-mark-list">
           {list.map((it) => (

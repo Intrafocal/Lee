@@ -639,6 +639,22 @@ const HANDOFF_STATE_LABEL: Record<string, string> = {
   error: 'stopped',
 };
 
+/**
+ * A hand-off's text in the margin, never its brief (every Research brief
+ * starts with the same boilerplate): the result's first line once one is in,
+ * else the words you handed off, else the brief as a last resort.
+ */
+export function handoffNoteText(a: Pick<DeepAnswer, 'answer' | 'anchor' | 'question'>): string {
+  // The first sentence-like line: a report's heading ("# Findings") says less than its first line.
+  const line = (t: string | null | undefined) => {
+    const lines = (t ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const pick = lines.find((l) => !l.startsWith('#')) ?? lines[0] ?? '';
+    return pick.replace(/^[#>\s*-]+/, '').replace(/\*\*/g, '').trim();
+  };
+  const quote = a.anchor?.kind === 'page' ? a.anchor.quote : undefined;
+  return line(a.answer) || line(quote) || line(a.question);
+}
+
 /** A hand-off's small line in the margin: "Spike · working", "Research · waiting on you". */
 export function handoffLabel(h: { kind: string; state: string } | null | undefined): string {
   if (!h) return 'Hand-off';

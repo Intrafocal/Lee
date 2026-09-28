@@ -164,4 +164,18 @@ test('the chip: device, what, where; none for compose', () => {
   assert.equal(m.CHIP_MS, 8000);
 });
 
+const paste = await bundle('../src/renderer/lib/pasteImage.ts', 'pasteImage');
+
+test('pasting a screenshot into a reply: its path at the caret, spaced; only image files count', () => {
+  assert.deepEqual(paste.insertAt('look at this', 12, 12, '/p/a.png'), { text: 'look at this /p/a.png', caret: 21 });
+  assert.deepEqual(paste.insertAt('see  please', 4, 4, '/p/a.png'), { text: 'see /p/a.png please', caret: 12 });
+  assert.deepEqual(paste.insertAt('', 0, 0, '/p/a.png'), { text: '/p/a.png', caret: 8 });
+  assert.deepEqual(paste.insertAt('replace ME now', 8, 10, '/p/a.png'), { text: 'replace /p/a.png now', caret: 16 });
+  const file = { name: 'shot.png' };
+  const dt = (items) => ({ items });
+  assert.equal(paste.clipboardImage(dt([{ kind: 'string', type: 'text/plain' }])), null);
+  assert.equal(paste.clipboardImage(dt([{ kind: 'file', type: 'image/png', getAsFile: () => file }])), file);
+  assert.equal(paste.clipboardImage(null), null);
+});
+
 console.log(`\n${passed} passed`);

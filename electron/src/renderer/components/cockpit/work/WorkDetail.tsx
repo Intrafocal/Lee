@@ -54,6 +54,7 @@ import { MicButton } from '../../voice/MicButton';
 import { MoreMenu, type MoreItem } from './MoreMenu';
 import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
 import { openDesk } from '../cockpitMode';
+import { pasteImageHandler } from '../../../lib/pasteImage';
 
 /** What the detail view shows, resolved from the list id by WorkSection. */
 export interface DetailSubject {
@@ -450,7 +451,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
             value={text}
             rows={3}
             disabled={mode === 'busy'}
-            placeholder="Or write a reply"
+            placeholder="Or write a reply (paste a screenshot to attach it)"
+            onPaste={pasteImageHandler(() => replyRef.current?.value ?? text, setText)}
             onChange={(e) => {
               setText(e.target.value);
               if (!e.target.value.trim()) setViaVoice(false);

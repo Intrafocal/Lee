@@ -12,6 +12,7 @@ import { Icon } from '../Icon';
 import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { MicButton } from '../voice/MicButton';
+import { pasteImageHandler } from '../../lib/pasteImage';
 
 interface AttentionItemRowProps {
   item: AttentionItem;
@@ -254,7 +255,8 @@ export const AttentionItemRow: React.FC<AttentionItemRowProps> = ({ item, api, c
             ref={replyRef}
             autoFocus
             value={text}
-            placeholder="Reply to Claude…"
+            placeholder="Reply to Claude… (paste a screenshot to attach it)"
+            onPaste={pasteImageHandler(() => replyRef.current?.value ?? text, setText, setError)}
             onChange={(e) => {
               setText(e.target.value);
               if (!e.target.value.trim()) setViaVoice(false);

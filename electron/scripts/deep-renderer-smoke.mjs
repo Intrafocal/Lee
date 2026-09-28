@@ -117,7 +117,8 @@ function test(name, fn) {
   try {
     fn();
     passed += 1;
-    console.log(`ok - ${name}`);
+    
+console.log(`ok - ${name}`);
   } catch (err) {
     console.error(`FAIL - ${name}`);
     console.error(err);
@@ -871,6 +872,14 @@ test('no var(--lit) in renderer CSS outside the terminal', () => {
     offenders.push(`${rel}:${hits.map((h) => h.n).join(',')}`);
   }
   assert.deepEqual(offenders, [], 'var(--lit) in UI CSS');
+});
+
+test('a hand-off in the margin shows its result line, else the words handed off, never the brief', () => {
+  const brief = 'Research: make no code changes. Compare the options for the section below.';
+  const anchor = { kind: 'page', quote: 'One question that determines next direction for Dirigible is', offset: 0, section: 'Dirigible' };
+  assert.equal(mod.handoffNoteText({ question: brief, anchor, answer: '# Findings\n\n**Researched** whether Dirigible can join a tailnet.' }), 'Researched whether Dirigible can join a tailnet.');
+  assert.equal(mod.handoffNoteText({ question: brief, anchor }), 'One question that determines next direction for Dirigible is');
+  assert.equal(mod.handoffNoteText({ question: brief, anchor: { kind: 'none' } }), brief);
 });
 
 console.log(process.exitCode ? '\nsome FAILED' : `\n${passed} passed`);

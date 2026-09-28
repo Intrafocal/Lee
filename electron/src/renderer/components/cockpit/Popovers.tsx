@@ -11,6 +11,7 @@ import type { AttentionItem, CopilotAPI } from '../../../shared/copilot';
 import { CHECKIN_PROMPT, type CheckinError, type CockpitAPI } from '../../../shared/cockpit';
 import { isControlTarget } from './dom';
 import { MicButton } from '../voice/MicButton';
+import { pasteImageHandler } from '../../lib/pasteImage';
 
 
 // ---------------------------------------------------------------------------
@@ -62,7 +63,8 @@ export const ReplyPopover: React.FC<ReplyPopoverProps> = ({ api, workspace, item
           autoFocus
           className="cockpit-textarea"
           value={text}
-          placeholder="Your reply (Enter sends, Shift+Enter newline, Esc cancels)"
+          placeholder="Your reply (Enter sends, Shift+Enter newline, Esc cancels; paste a screenshot to attach it)"
+          onPaste={pasteImageHandler(() => fieldRef.current?.value ?? text, setText)}
           onChange={(e) => {
             setText(e.target.value);
             if (!e.target.value.trim()) setViaVoice(false);

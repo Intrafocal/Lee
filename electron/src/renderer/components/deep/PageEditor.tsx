@@ -61,6 +61,7 @@ import {
   deepRowKey,
   findMention,
   handoffLabel,
+  handoffNoteText,
   lineParts,
   locateAnchor,
   markerState,
@@ -854,7 +855,7 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         id: a.id,
         state: sectionMarkState(a),
         label: isHandoff ? handoffLabel(a.handoff) : marginNoteLabel(markerState(a)),
-        question: a.question,
+        question: isHandoff ? handoffNoteText(a) : a.question,
         answer: a,
       });
     }
