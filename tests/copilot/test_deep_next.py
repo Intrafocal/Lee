@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from hester.daemon.cockpit import deep, deep_ask, goal_status, handoffs, steward
+from hester.daemon.cockpit.desk import DeskStore
 from hester.daemon.cockpit.explorations import ExplorationStore, seed_title
 from hester.daemon.cockpit.follower import EventFollower
 from hester.daemon.cockpit.goals import parse_goals_full
@@ -45,18 +46,16 @@ def test_section_text_goes_after_the_seed_before_the_anchor(tmp_path):
         deep.new_answer(store, exp["id"], {"question": "q", "anchor": anchor(), "section_text": 3})
 
 
-def test_ask_route_takes_section_text(cockpit_env, monkeypatch):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    scheduled = []
-    monkeypatch.setattr(deep_ask.get_runner(), "schedule", lambda job: scheduled.append(job))
-    exp = c.post("/cockpit/explorations", headers=h, json={"seed": "Mesh", "page": PAGE}).json()["data"]
-    r = c.post(f"/cockpit/explorations/{exp['id']}/asks", headers=h,
-               json={"question": "Why?", "anchor": anchor(), "section_text": SECTION})
-    assert r.status_code == 202 and r.json()["data"]["section_text"] == SECTION
-
-
 # ---------------------------------------------------------------- hand-offs (R3)
+
+
+def desk_page(c, h, text=PAGE, **body):
+    """A Page card in the Desk's first Area (or the Goals card); its id."""
+    if body.get("purpose") != "goals":
+        body.setdefault("area_id", c.get("/desk", headers=h).json()["data"]["areas"][0]["id"])
+    r = c.post("/desk/pages", headers=h, json=dict(body, text=text))
+    assert r.status_code in (200, 201), r.text
+    return r.json()["data"]["card"]["id"]
 
 
 def handoff_body(**kw):
@@ -68,15 +67,15 @@ def handoff_body(**kw):
 def test_handoff_create_patch_and_guards(cockpit_env, monkeypatch):
     env = cockpit_env
     c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"seed": "Mesh", "page": PAGE}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}"
+    card = desk_page(c, h, title="Mesh")
+    base = f"/desk/pages/{card}"
 
     for bad in ({"kind": "essay"}, {"provider": "gpt"}, {"brief": "  "}, {"brief": 3}):
         assert c.post(f"{base}/handoffs", headers=h, json=handoff_body(**bad)).status_code == 400, bad
     no_anchor = handoff_body()
     del no_anchor["anchor"]
     assert c.post(f"{base}/handoffs", headers=h, json=no_anchor).status_code == 400
-    assert c.post("/cockpit/explorations/exp-00000000/handoffs", headers=h, json=handoff_body()).status_code == 404
+    assert c.post("/desk/pages/pg-00000000/handoffs", headers=h, json=handoff_body()).status_code == 404
 
     r = c.post(f"{base}/handoffs", headers=h, json=handoff_body())
     assert r.status_code == 201, r.text
@@ -95,7 +94,7 @@ def test_handoff_create_patch_and_guards(cockpit_env, monkeypatch):
     assert row["handoff"]["task_id"] == "task-0000abcd" and row["handoff"]["state"] == "running"
     assert row["status"] == "running"
     assert c.patch(f"{base}/answers/{aid}", headers=h, json={"task_id": "task-9999abcd"}).status_code == 400
-    assert c.get(base, headers=h).json()["data"]["answers_pending"] == 1
+    assert c.get(base, headers=h).json()["data"]["summary"]["handoffs_in_flight"] == 1
 
     # a hand-off isn't retried as an Ask
     assert c.post(f"{base}/answers/{aid}/retry", headers=h).status_code == 400
@@ -114,10 +113,10 @@ def test_handoff_create_patch_and_guards(cockpit_env, monkeypatch):
     assert c.patch(f"{base}/answers/{ask['id']}", headers=h, json={"task_id": "task-0000abcd"}).status_code == 400
 
     # a daemon restart leaves hand-offs alone (their agents run in Lee)
-    store = ExplorationStore(env.a)
+    store = DeskStore(env.a).pages
     assert deep.interrupt_pending(store) == 1
-    assert deep.get_answer(store, exp["id"], aid)["status"] == "running"
-    assert deep.get_answer(store, exp["id"], ask["id"])["status"] == "interrupted"
+    assert deep.get_answer(store, card, aid)["status"] == "running"
+    assert deep.get_answer(store, card, ask["id"])["status"] == "interrupted"
 
 
 def test_patch_task_id_never_steps_back(tmp_path):
@@ -233,22 +232,22 @@ def test_follower_keeps_the_handoff_in_step(tmp_path, monkeypatch, isolated_copi
 def test_discarded_task_and_close_route(cockpit_env):
     env = cockpit_env
     c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"seed": "Mesh", "page": PAGE}).json()["data"]
-    rec = c.post(f"/cockpit/explorations/{exp['id']}/handoffs", headers=h, json=handoff_body(kind="docs")).json()["data"]
-    ref = f"{exp['id']}#{rec['id']}"
-    # the relay (Lee's launcher) creates the task with the exploration origin
+    card = desk_page(c, h, title="Mesh")
+    rec = c.post(f"/desk/pages/{card}/handoffs", headers=h, json=handoff_body(kind="docs")).json()["data"]
+    ref = f"{card}#{rec['id']}"
+    # the relay (Lee's launcher) creates the task with the Page's origin
     r = c.post("/cockpit/tasks", headers=h, json={
         "id": "task-0000beef", "title": "Docs", "lead": "delegate", "kind": "chore", "status": "running",
-        "origin": {"kind": "exploration", "ref": ref}, "timebox_min": 30,
+        "origin": {"kind": "page", "ref": ref}, "timebox_min": 30,
     })
     assert r.status_code == 201, r.text
-    got = c.get(f"/cockpit/explorations/{exp['id']}/answers", headers=h).json()["data"][0]
+    got = c.get(f"/desk/pages/{card}/answers", headers=h).json()["data"][0]
     assert got["handoff"]["task_id"] == "task-0000beef" and got["handoff"]["state"] == "running"
     # the renderer's PATCH arriving after is fine
-    assert c.patch(f"/cockpit/explorations/{exp['id']}/answers/{rec['id']}", headers=h,
+    assert c.patch(f"/desk/pages/{card}/answers/{rec['id']}", headers=h,
                    json={"task_id": "task-0000beef"}).status_code == 200
     assert c.post("/cockpit/tasks/task-0000beef/close", headers=h, json={"status": "discarded"}).status_code == 200
-    got = c.get(f"/cockpit/explorations/{exp['id']}/answers", headers=h).json()["data"][0]
+    got = c.get(f"/desk/pages/{card}/answers", headers=h).json()["data"][0]
     assert got["handoff"]["state"] == "error" and got["status"] == "error" and got["error"] == "discarded"
 
 
@@ -286,34 +285,6 @@ def test_idle_agent_with_an_answer_is_review(tmp_path):
 # ---------------------------------------------------------------- delete empty explorations (R8)
 
 
-def test_delete_only_empty_untitled(cockpit_env, monkeypatch):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-
-    def make(**kw):
-        return c.post("/cockpit/explorations", headers=h, json={"title": "Untitled · Sep 27", **kw}).json()["data"]
-
-    empty = make(page="  \n")
-    r = c.delete(f"/cockpit/explorations/{empty['id']}", headers=h)
-    assert r.status_code == 200 and r.json()["data"] == {"id": empty["id"], "deleted": True}
-    assert not (env.a / ".hester" / "explore" / empty["id"]).exists()
-    assert c.delete(f"/cockpit/explorations/{empty['id']}", headers=h).status_code == 404
-
-    titled = c.post("/cockpit/explorations", headers=h, json={"title": "Mesh sync"}).json()["data"]
-    written = make(page="some words")
-    asked = make()
-    monkeypatch.setattr(deep_ask.get_runner(), "schedule", lambda job: None)
-    c.post(f"/cockpit/explorations/{asked['id']}/asks", headers=h, json={"question": "q", "anchor": {"kind": "none"}})
-    kept = make()
-    c.post(f"/cockpit/explorations/{kept['id']}/references", headers=h, json={"kind": "link", "url": "https://x.org"})
-    questioned = make()
-    c.post(f"/cockpit/explorations/{questioned['id']}/questions", headers=h, json={"text": "why?", "source": "page"})
-    for exp in (titled, written, asked, kept, questioned):
-        r = c.delete(f"/cockpit/explorations/{exp['id']}", headers=h)
-        assert r.status_code == 409 and r.json()["error"] == "not_empty", exp["title"]
-        assert (env.a / ".hester" / "explore" / exp["id"] / "exploration.md").exists()
-
-
 # ---------------------------------------------------------------- file references (R10)
 
 
@@ -347,35 +318,13 @@ def test_file_references(tmp_path):
 # ---------------------------------------------------------------- the Goals Page (R12)
 
 
-def test_goals_purpose_is_unique_and_filtered(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    r = c.post("/cockpit/explorations", headers=h, json={"title": "Goals", "purpose": "goals", "page": "It's for me\n"})
-    assert r.status_code == 201 and r.json()["data"]["purpose"] == "goals"
-    goals = r.json()["data"]
-    again = c.post("/cockpit/explorations", headers=h, json={"title": "Goals", "purpose": "goals", "page": "other"})
-    assert again.status_code == 200 and again.json()["data"]["id"] == goals["id"]
-    assert c.post("/cockpit/explorations", headers=h, json={"title": "x", "purpose": "fun"}).status_code == 400
-    plain = c.post("/cockpit/explorations", headers=h, json={"title": "Mesh"}).json()["data"]
-    assert plain["purpose"] is None and "page_seeded" not in plain
-
-    listed = c.get("/cockpit/explorations?purpose=goals", headers=h).json()["data"]
-    assert [e["id"] for e in listed] == [goals["id"]]
-    assert {e["id"] for e in c.get("/cockpit/explorations", headers=h).json()["data"]} == {goals["id"], plain["id"]}
-    assert c.get("/cockpit/explorations?purpose=fun", headers=h).status_code == 400
-    assert c.get(f"/cockpit/explorations/{goals['id']}", headers=h).json()["data"]["purpose"] == "goals"
-    # other workspaces have their own
-    other = c.post("/cockpit/explorations", headers=hdr(env.b), json={"title": "Goals", "purpose": "goals"})
-    assert other.status_code == 201 and other.json()["data"]["id"] != goals["id"]
-
-
 def test_draft_from_readme(cockpit_env, monkeypatch, isolated_copilot):
     env = cockpit_env
     c, h = env.client, hdr(env.a)
     fake = FakeAgent(reply="```markdown\n## What is this for, and who is it for?\n\nLee.\n```")
     monkeypatch.setattr(steward, "_agent_provider", lambda: fake)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "Goals", "purpose": "goals"}).json()["data"]
-    url = f"/cockpit/explorations/{exp['id']}/draft-from-readme"
+    card = desk_page(c, h, text="", purpose="goals")
+    url = f"/desk/pages/{card}/draft-from-readme"
 
     assert c.post(url, headers=h).status_code == 400, "no README.md or CLAUDE.md"
     assert fake.requests == []
@@ -392,8 +341,8 @@ def test_draft_from_readme(cockpit_env, monkeypatch, isolated_copilot):
     assert len(req.steward_context) < 2 * deep_ask.README_CAP + 500, "each file is capped"
     assert fake.triggers[0]["kind"] == "user" and fake.triggers[0]["surface"] == "goals-readme"
     assert "You are also the user's steward" not in steward.prompt_layer_for_request(req, str(env.a))
-    assert c.get(f"/cockpit/explorations/{exp['id']}/page", headers=h).json()["data"]["text"] == "", "never writes the Page"
-    assert c.post("/cockpit/explorations/exp-00000000/draft-from-readme", headers=h).status_code == 404
+    assert c.get(f"/desk/pages/{card}/page", headers=h).json()["data"]["text"] == "", "never writes the Page"
+    assert c.post("/desk/pages/pg-00000000/draft-from-readme", headers=h).status_code == 404
 
 
 GOALS_MD = """# Goals
@@ -453,28 +402,3 @@ def test_seed_titles():
     assert seed_title("") == ""
 
 
-def test_backfill_fills_empty_pages_once(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    store = ExplorationStore(env.a)
-    exp = store.create({"seed": "Mesh sync without a server"})
-    # an exploration made before the fix: empty page.md, no flag
-    store.page_path(exp["id"]).write_text("")
-    raw = store._path(exp["id"]).read_text().replace("page_seeded: true\n", "")
-    store._path(exp["id"]).write_text(raw)
-    assert c.get(f"/cockpit/explorations/{exp['id']}/page", headers=h).json()["data"]["text"] == "Mesh sync without a server\n\n"
-    # once: clearing it again stays cleared
-    store.page_path(exp["id"]).write_text(" \n")
-    assert c.get(f"/cockpit/explorations/{exp['id']}/page", headers=h).json()["data"]["text"] == " \n"
-
-    # never overwrites text
-    other = store.create({"seed": "Other"})
-    store.page_path(other["id"]).write_text("mine")
-    store._path(other["id"]).write_text(store._path(other["id"]).read_text().replace("page_seeded: true\n", ""))
-    assert store.backfill_page(other["id"]) is False and store.page_path(other["id"]).read_text() == "mine"
-
-    # GET detail and open fill too
-    third = store.create({"seed": "Third"})
-    store.page_path(third["id"]).write_text("")
-    store._path(third["id"]).write_text(store._path(third["id"]).read_text().replace("page_seeded: true\n", ""))
-    assert c.get(f"/cockpit/explorations/{third['id']}", headers=h).json()["data"]["page_chars"] == len("Third\n\n")

@@ -2,13 +2,14 @@
 Hester CLI - Desk: read the workspace's Desk and Drawer (docs/16-Desk.md).
 
 Read-only, straight from ``<workspace>/.hester/desk/`` and
-``.hester/someday/``; no daemon needed, and nothing is ever written (not even
-the migration a daemon read would run). Plain text by default, for people
+``.hester/ideas/``; no daemon needed, and nothing is ever written (not even
+the migration a daemon read would run, so an old ``put-away`` Drawer reads as
+Stashed too). Plain text by default, for people
 and for Claude Code (the ``lee:desk`` and ``lee:drawer`` skills), or --json.
 
 Usage:
     hester desk overview            # Areas and their Page cards, the Goals card, the Drawer's counts, your last card
-    hester desk page <id or title>  # one Page: its text, then answers, hand-offs, open questions, references
+    hester desk page <id or title>  # one Page: its text, then answers, hand-offs, open questions, references, images
     hester desk last                # your last card and where you stopped
     hester desk drawer [words...]   # Stashed Areas and Ideas, newest first; words filter (every word, any order)
 """
@@ -20,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-PUT_AWAY = "put-away"  # shown as "Stashed"
+STASHED = ("stashed", "put-away")  # the Stashed Drawer; 'put-away' until the daemon's next Desk read rewrites it
 PAGE_FILES = ("answers.jsonl", "references.jsonl", "questions.jsonl")
 
 
@@ -84,6 +85,16 @@ class Desk:
     def title(self, card_id: str) -> str:
         return str(self.meta(card_id).get("title") or "Untitled")
 
+    def assets(self, card_id: str) -> List[str]:
+        """The Page's images as paths relative to the Page (``assets/<name>``), oldest first."""
+        d = self.page_dir(card_id) / "assets"
+        try:
+            files = [f for f in d.iterdir() if f.is_file() and not f.name.startswith(".")]
+        except OSError:
+            return []
+        files.sort(key=lambda f: (f.stat().st_mtime, f.name))
+        return [f"assets/{f.name}" for f in files]
+
     def text(self, card_id: str) -> str:
         try:
             return (self.page_dir(card_id) / "page.md").read_text(encoding="utf-8")
@@ -129,9 +140,9 @@ def _last_line(text: str) -> Optional[str]:
 
 def _ideas(workspace: Path) -> List[Dict[str, Any]]:
     try:
-        from hester.daemon.copilot.someday import SomedayStore
+        from hester.daemon.copilot.ideas import IdeasStore
 
-        items = SomedayStore(workspace).list("open")
+        items = IdeasStore(workspace).list("open")
     except Exception:
         return []
     out = [
@@ -212,7 +223,7 @@ def desk_overview(directory: str, as_json: bool):
 @_as_json
 @click.option("--text-only", is_flag=True, help="Only the Page's own text")
 def desk_page(ref: tuple, directory: str, as_json: bool, text_only: bool):
-    """One Page by id (pg-…) or title: its text, then answers, hand-offs, open questions and references."""
+    """One Page by id (pg-…) or title: its text, then answers, hand-offs, open questions, references and images."""
     d = _open(directory)
     hits = d.find(" ".join(ref))
     if not hits:
@@ -230,7 +241,9 @@ def desk_page(ref: tuple, directory: str, as_json: bool, text_only: bool):
     answers = [a for a in rows["answers.jsonl"] if a.get("kind") != "handoff" and not a.get("dismissed_at")]
     handoffs = [a for a in rows["answers.jsonl"] if a.get("kind") == "handoff" and not a.get("dismissed_at")]
     questions = [q for q in rows["questions.jsonl"] if q.get("status", "open") == "open"]
-    data = {**d.brief(card), "text": text, "answers": answers, "handoffs": handoffs, "open_questions": questions, "references": rows["references.jsonl"]}
+    images = d.assets(cid)
+    data = {**d.brief(card), "text": text, "answers": answers, "handoffs": handoffs, "open_questions": questions,
+            "references": rows["references.jsonl"], "images": images}
     if text_only:
         return _emit({"id": cid, "text": text} if as_json else None, as_json, text)
     b = d.brief(card)
@@ -266,6 +279,9 @@ def desk_page(ref: tuple, directory: str, as_json: bool, text_only: bool):
             label = r.get("title") or where or r.get("kind")
             body = (r.get("quote") or "").strip().replace("\n", " ")
             out.append(f"- {label}{f' ({where})' if where and where != label else ''}{f': {body[:240]}' if body else ''}")
+    if images:
+        out.append(f"\n## Images ({len(images)}), in {d.page_dir(cid)}")
+        out.extend(f"- {i}" for i in images)
     _emit(data, as_json, "\n".join(out))
 
 
@@ -305,8 +321,9 @@ def desk_drawer(words: tuple, directory: str, as_json: bool):
         cards = [d.brief(c) for c in d.cards_in(a.get("id"))]
         if ws and not _matches(ws, a.get("name"), *(c["title"] for c in cards)):
             continue
-        folder = "Stashed" if a["drawer_id"] == PUT_AWAY else names.get(a["drawer_id"]) or a["drawer_id"]
-        stashed.append({"id": a.get("id"), "name": a.get("name"), "folder": folder, "at": a.get("put_away_at") or a.get("updated_at"), "cards": cards})
+        folder = "Stashed" if a["drawer_id"] in STASHED else names.get(a["drawer_id"]) or a["drawer_id"]
+        at = a.get("stashed_at") or a.get("put_away_at") or a.get("updated_at")
+        stashed.append({"id": a.get("id"), "name": a.get("name"), "folder": folder, "at": at, "cards": cards})
     stashed.sort(key=lambda a: str(a["at"] or ""), reverse=True)
     ideas = [i for i in _ideas(d.workspace) if not ws or _matches(ws, i["text"], i["surface"])]
     data = {"workspace": str(d.workspace), "stashed": stashed, "ideas": ideas}

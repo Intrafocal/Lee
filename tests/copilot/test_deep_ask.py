@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from hester.daemon.cockpit import deep, deep_ask, steward
+from hester.daemon.cockpit.desk import DeskStore
 from hester.daemon.cockpit.explorations import ExplorationStore
 from hester.daemon.copilot import metrics, model_log
 
@@ -220,37 +221,38 @@ def test_ask_route_validates_and_returns_202(cockpit_env, agent, isolated_copilo
     c, h = env.client, hdr(env.a)
     scheduled = []
     monkeypatch.setattr(deep_ask.get_runner(), "schedule", lambda job: scheduled.append(job))
-    exp = c.post("/cockpit/explorations", headers=h, json={"seed": "Mesh", "page": PAGE}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}"
+    area = c.get("/desk", headers=h).json()["data"]["areas"][0]["id"]
+    card = c.post("/desk/pages", headers=h, json={"area_id": area, "title": "Mesh", "text": PAGE}).json()["data"]["card"]["id"]
+    base = f"/desk/pages/{card}"
 
     assert c.post(f"{base}/asks", headers=h, json={"question": "x" * 2001, "anchor": {"kind": "none"}}).status_code == 400
     assert c.post(f"{base}/asks", headers=h, json={"question": "q"}).status_code == 400, "anchor is required"
     assert c.post(f"{base}/asks", headers=h, json={"question": "q", "anchor": {"kind": "page"}}).status_code == 400
-    assert c.post("/cockpit/explorations/exp-00000000/asks", headers=h, json={"question": "q", "anchor": {"kind": "none"}}).status_code == 404
+    assert c.post("/desk/pages/pg-00000000/asks", headers=h, json={"question": "q", "anchor": {"kind": "none"}}).status_code == 404
 
     r = c.post(f"{base}/asks", headers=h, json={"question": "What's a vector clock?", "anchor": anchor()})
     assert r.status_code == 202, r.text
     ans = r.json()["data"]
     assert ans["status"] == "queued" and ans["surface"] == "deep-ask" and ans["anchor"]["section"] == "Sync"
     [job] = scheduled
-    assert job.answer_id == ans["id"] and job.exp_id == exp["id"]
+    assert job.answer_id == ans["id"] and job.exp_id == card
     assert job.trigger["kind"] == "user" and job.trigger["surface"] == "deep-ask"
     ev = [e for e in queued(isolated_copilot) if e["type"] == "steward.request"]
     assert [(e["data"]["surface"], e["data"]["about_kind"]) for e in ev] == [("deep-ask", "exploration")]
 
     listed = c.get(f"{base}/answers", headers=h).json()["data"]
     assert [a["id"] for a in listed] == [ans["id"]]
-    assert c.get(base, headers=h).json()["data"]["answers_pending"] == 1
+    assert c.get(base, headers=h).json()["data"]["summary"]["answers_pending"] == 1
 
     # retry only an errored or interrupted answer
     assert c.post(f"{base}/answers/{ans['id']}/retry", headers=h).status_code == 400
-    deep.update_answer(ExplorationStore(env.a), exp["id"], ans["id"], {"status": "error", "error": "boom"})
+    deep.update_answer(DeskStore(env.a).pages, card, ans["id"], {"status": "error", "error": "boom"})
     r = c.post(f"{base}/answers/{ans['id']}/retry", headers=h)
     assert r.status_code == 202 and r.json()["data"]["status"] == "queued" and "error" not in r.json()["data"]
     assert len(scheduled) == 2
 
     # PATCH flags
-    deep.update_answer(ExplorationStore(env.a), exp["id"], ans["id"], {"status": "done", "answer": "A"})
+    deep.update_answer(DeskStore(env.a).pages, card, ans["id"], {"status": "done", "answer": "A"})
     r = c.patch(f"{base}/answers/{ans['id']}", headers=h, json={"read": True, "kept": True})
     assert r.status_code == 200 and r.json()["data"]["read_at"] and r.json()["data"]["kept_at"]
     assert c.patch(f"{base}/answers/{ans['id']}", headers=h, json={"answer": "mine"}).status_code == 400

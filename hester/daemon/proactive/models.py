@@ -60,7 +60,7 @@ class BundlesConfig(TaskConfig):
 
 
 class IdeasConfig(TaskConfig):
-    """Ignored. The ideas task was removed with `hester ideas` (replaced by the Someday store).
+    """Ignored. The proactive ideas task was removed; the Ideas store (`hester ideas`) replaced it.
 
     Kept so existing `hester.proactive.tasks.ideas` configs still parse.
     """

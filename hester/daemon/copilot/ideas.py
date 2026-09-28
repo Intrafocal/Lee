@@ -1,9 +1,10 @@
 """
-Someday store: the single idea-capture store, shared with devices.
+Ideas store: the single idea-capture store, shared with devices (was Someday).
 
-One markdown file per item at ``<workspace>/.hester/someday/<id>.md`` (0600),
-YAML frontmatter plus the idea text exactly as captured. Writes are atomic
-(temp file + rename). Replaces the old ``hester ideas``.
+One markdown file per idea at ``<workspace>/.hester/ideas/idea_<stamp>_<hex>.md``
+(0600), YAML frontmatter plus the idea text exactly as captured. Writes are
+atomic (temp file + rename). The old ``.hester/someday/`` is never read.
+``as`` keeps its wire values: ``someday`` (a plain idea) or ``explore``.
 """
 
 import os
@@ -21,7 +22,7 @@ from ..cockpit.desk import PAGE_ID_RE
 from ..cockpit.explorations import EXP_ID_RE
 from ..hester_dir import ensure_gitignored
 
-ID_RE = re.compile(r"^sd_\d{8}T\d{6}_[0-9a-f]{4}$")
+ID_RE = re.compile(r"^idea_\d{8}T\d{6}_[0-9a-f]{4}$")
 STATUSES = ("open", "explored", "promoted", "dropped", "kept")
 AS_VALUES = ("someday", "explore")
 SURFACES = ("lee", "aeronaut", "dirigible", "device", "cli", "shared")
@@ -34,7 +35,7 @@ MAX_SOURCE_FILE = 500
 MAX_SOURCE_CONTEXT = 500
 
 
-class SomedayError(ValueError):
+class IdeaError(ValueError):
     pass
 
 
@@ -114,7 +115,7 @@ def normalize_source(source: Any) -> Dict[str, Any]:
 
 
 @dataclass
-class SomedayItem:
+class Idea:
     id: str
     created_at: str
     text: str
@@ -145,15 +146,15 @@ class SomedayItem:
         return f"---\n{head}---\n{self.text}\n"
 
     @classmethod
-    def parse(cls, content: str) -> "SomedayItem":
+    def parse(cls, content: str) -> "Idea":
         if not content.startswith("---\n"):
-            raise SomedayError("missing frontmatter")
+            raise IdeaError("missing frontmatter")
         end = content.find("\n---\n", 3)
         if end < 0:
-            raise SomedayError("unterminated frontmatter")
+            raise IdeaError("unterminated frontmatter")
         meta = yaml.safe_load(content[4:end + 1]) or {}
         if not isinstance(meta, dict):
-            raise SomedayError("frontmatter is not a mapping")
+            raise IdeaError("frontmatter is not a mapping")
         text = content[end + 5:]
         if text.endswith("\n"):
             text = text[:-1]
@@ -178,7 +179,7 @@ class SomedayItem:
 
 def new_id(now: Optional[datetime] = None) -> str:
     now = now or _utc_now()
-    return f"sd_{now.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(2)}"
+    return f"idea_{now.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{secrets.token_hex(2)}"
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -199,14 +200,14 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-class SomedayStore:
+class IdeasStore:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace)
-        self.dir = self.workspace / ".hester" / "someday"
+        self.dir = self.workspace / ".hester" / "ideas"
 
     def _path(self, item_id: str) -> Path:
         if not ID_RE.match(item_id or ""):
-            raise SomedayError(f"invalid someday id: {item_id!r}")
+            raise IdeaError(f"invalid idea id: {item_id!r}")
         return self.dir / f"{item_id}.md"
 
     def create(
@@ -216,15 +217,15 @@ class SomedayStore:
         source: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
         now: Optional[datetime] = None,
-    ) -> SomedayItem:
+    ) -> Idea:
         if not isinstance(text, str) or not text.strip():
-            raise SomedayError("text is required")
+            raise IdeaError("text is required")
         if len(text) > MAX_TEXT:
-            raise SomedayError(f"text is longer than {MAX_TEXT} characters")
+            raise IdeaError(f"text is longer than {MAX_TEXT} characters")
         if as_ not in AS_VALUES:
-            raise SomedayError(f"as must be one of {', '.join(AS_VALUES)}")
+            raise IdeaError(f"as must be one of {', '.join(AS_VALUES)}")
         now = now or _utc_now()
-        item = SomedayItem(
+        item = Idea(
             id=new_id(now),
             created_at=_iso_seconds(now),
             text=text,
@@ -245,25 +246,25 @@ class SomedayStore:
         _atomic_write(path, item.render())
         return item
 
-    def get(self, item_id: str) -> Optional[SomedayItem]:
+    def get(self, item_id: str) -> Optional[Idea]:
         path = self._path(item_id)
         try:
-            return SomedayItem.parse(path.read_text(encoding="utf-8"))
+            return Idea.parse(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
 
-    def list(self, status: str = "open") -> List[SomedayItem]:
-        items: List[SomedayItem] = []
+    def list(self, status: str = "open") -> List[Idea]:
+        items: List[Idea] = []
         try:
-            paths = sorted(self.dir.glob("sd_*.md"))
+            paths = sorted(self.dir.glob("idea_*.md"))
         except OSError:
             return items
         for p in paths:
             if not ID_RE.match(p.stem):
                 continue
             try:
-                item = SomedayItem.parse(p.read_text(encoding="utf-8"))
-            except (OSError, SomedayError, yaml.YAMLError):
+                item = Idea.parse(p.read_text(encoding="utf-8"))
+            except (OSError, IdeaError, yaml.YAMLError):
                 continue
             if status != "all" and item.status != status:
                 continue
@@ -277,9 +278,9 @@ class SomedayStore:
         action: str,
         note: Optional[str] = None,
         now: Optional[datetime] = None,
-    ) -> SomedayItem:
+    ) -> Idea:
         if action not in TRIAGE_ACTIONS:
-            raise SomedayError(f"action must be one of {', '.join(TRIAGE_ACTIONS)}")
+            raise IdeaError(f"action must be one of {', '.join(TRIAGE_ACTIONS)}")
         item = self.get(item_id)
         if item is None:
             raise KeyError(item_id)
@@ -300,7 +301,7 @@ class SomedayStore:
                 stale += 1
         return {"open": len(open_items), "untriaged_over_7d": stale}
 
-    def triaged_between(self, since: datetime, until: datetime) -> List[SomedayItem]:
+    def triaged_between(self, since: datetime, until: datetime) -> List[Idea]:
         out = []
         for item in self.list("all"):
             at = _parse_time((item.triage or {}).get("at"))
@@ -309,7 +310,7 @@ class SomedayStore:
         return out
 
 
-def age_ms(item: SomedayItem, now: Optional[datetime] = None) -> int:
+def age_ms(item: Idea, now: Optional[datetime] = None) -> int:
     created = _parse_time(item.created_at)
     if not created:
         return 0

@@ -2,8 +2,8 @@
 Session-start digest (v1): deterministic, no model.
 
 Leads with **verified** wins only (commits and merges on the default branch,
-decisions answered in the attention queue, operations that passed, Someday
-items triaged). What an
+decisions answered in the attention queue, operations that passed, ideas
+triaged). What an
 agent says about its own work ("tests pass") is listed separately under
 ``agent_claims`` with ``verified: false`` and is never a win.
 """
@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from . import retro as retro_mod
 from .event_reader import iso, parse_ts, read_events
-from .someday import SomedayStore
+from .ideas import IdeasStore
 
 logger = logging.getLogger("hester.daemon.copilot.digest")
 
@@ -412,17 +412,17 @@ def verified_wins(
     raw = git_wins(Path(ws), since, until)
     raw += decision_wins(events, sessions, ws, since, until)
     raw += operation_wins(events, ws, since, until)
-    raw += _someday_wins(Path(ws), since, until)
+    raw += _idea_wins(Path(ws), since, until)
     return _finish(raw, focus_n, only_related)
 
 
-def _someday_wins(workspace: Path, since: datetime, until: datetime) -> List[Dict[str, Any]]:
+def _idea_wins(workspace: Path, since: datetime, until: datetime) -> List[Dict[str, Any]]:
     wins = []
-    for item in SomedayStore(workspace).triaged_between(since, until):
+    for item in IdeasStore(workspace).triaged_between(since, until):
         action = (item.triage or {}).get("action") or item.status
         wins.append({
             "kind": "someday_decided",
-            "title": f"Someday {action}: {_first_line(item.text, 60)}",
+            "title": f"Idea {action}: {_first_line(item.text, 60)}",
             "ref": item.id,
             "at": iso(parse_ts((item.triage or {}).get("at")) or since),
             "verified": True,
@@ -458,7 +458,7 @@ def build_digest(
         commits
         + decision_wins(events, sessions, ws, since, until)
         + operation_wins(events, ws, since, until)
-        + _someday_wins(Path(ws), since, until)
+        + _idea_wins(Path(ws), since, until)
     )
     wins = _finish(raw_wins, focus_n, only_related)
     claims = _finish(agent_claims(events, sessions, ws, since, until), focus_n, only_related)
@@ -484,7 +484,7 @@ def build_digest(
         if item_ws and _under(os.path.normpath(item_ws), ws):
             waiting.append(item)
 
-    someday_counts = SomedayStore(Path(ws)).counts(now=now)
+    idea_counts = IdeasStore(Path(ws)).counts(now=now)
     q2 = q2_candidates_safe(Path(ws), now)
     retro_status = retro_mod.status(now=now, config=retro_config, directory=retro_dir)
 
@@ -504,7 +504,7 @@ def build_digest(
         "agent_claims": claims,
         "changed": {"agent_files": sorted(agent_files)[:MAX_AGENT_FILES], "commits": len(commits)},
         "waiting": waiting,
-        "someday": someday_counts,
+        "someday": idea_counts,  # the Ideas store's counts; the key is wire data
         "retro": {"due": retro_status["due"], "week": retro_status["week"]},
         "q2_candidates": q2,
     }

@@ -73,7 +73,7 @@ class WorkspaceContext:
     _ws_store: Any = field(default=None, repr=False)
     _tasks: Any = field(default=None, repr=False)
     _readings: Any = field(default=None, repr=False)
-    _someday: Any = field(default=None, repr=False)
+    _ideas: Any = field(default=None, repr=False)
     _explorations: Any = field(default=None, repr=False)
     _desk: Any = field(default=None, repr=False)
     _config: Optional[dict] = field(default=None, repr=False)
@@ -97,11 +97,11 @@ class WorkspaceContext:
             self._readings = ReadingsStore(self.path)
         return self._readings
 
-    def someday(self):
-        if self._someday is None:
-            from ..copilot.someday import SomedayStore
-            self._someday = SomedayStore(self.path)
-        return self._someday
+    def ideas(self):
+        if self._ideas is None:
+            from ..copilot.ideas import IdeasStore
+            self._ideas = IdeasStore(self.path)
+        return self._ideas
 
     def explorations(self):
         if self._explorations is None:

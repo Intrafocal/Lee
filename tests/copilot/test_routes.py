@@ -27,50 +27,50 @@ SHARED = {"Authorization": "Bearer shared-secret"}
 DEVICE = {"Authorization": "Bearer device-token"}
 
 
-def test_someday_create_list_triage(client, tmp_path, isolated_copilot):
+def test_ideas_create_list_triage(client, tmp_path, isolated_copilot):
     ws = tmp_path / "ws"
     ws.mkdir()
-    r = client.post("/someday", headers=SHARED, json={
+    r = client.post("/ideas", headers=SHARED, json={
         "text": "idea one", "workspace": str(ws), "as": "explore", "source": {"surface": "lee"},
     })
     assert r.status_code == 201, r.text
     item = r.json()["data"]
     assert item["text"] == "idea one" and item["as"] == "explore" and item["source"] == {"surface": "lee"}
 
-    r = client.post("/someday", headers=DEVICE, json={"text": "from phone", "workspace": str(ws), "source": {"surface": "lee"}})
+    r = client.post("/ideas", headers=DEVICE, json={"text": "from phone", "workspace": str(ws), "source": {"surface": "lee"}})
     assert r.status_code == 201
     assert r.json()["data"]["source"] == {"surface": "aeronaut", "device_id": "dev_00000000abcd"}
 
-    r = client.get("/someday", headers=SHARED, params={"workspace": str(ws)})
+    r = client.get("/ideas", headers=SHARED, params={"workspace": str(ws)})
     assert sorted(i["text"] for i in r.json()["data"]) == ["from phone", "idea one"]
 
-    r = client.post(f"/someday/{item['id']}/triage", headers=DEVICE, json={"workspace": str(ws), "action": "promote", "note": "go"})
+    r = client.post(f"/ideas/{item['id']}/triage", headers=DEVICE, json={"workspace": str(ws), "action": "promote", "note": "go"})
     assert r.status_code == 200, r.text
     assert r.json()["data"]["status"] == "promoted"
-    [ev] = [e for e in queued(isolated_copilot) if e["type"] == "someday.triage"]
-    assert ev["data"]["someday_id"] == item["id"] and ev["data"]["action"] == "promote"
+    [ev] = [e for e in queued(isolated_copilot) if e["type"] == "idea.triage"]
+    assert ev["data"]["idea_id"] == item["id"] and ev["data"]["action"] == "promote"
     assert ev["actor"] == {"kind": "user", "surface": "device", "device_id": "dev_00000000abcd", "device_kind": "aeronaut"}
     assert ev["workspace"] == str(ws.resolve())
 
-    r = client.get("/someday", headers=SHARED, params={"workspace": str(ws)})
+    r = client.get("/ideas", headers=SHARED, params={"workspace": str(ws)})
     assert len(r.json()["data"]) == 1
-    r = client.get("/someday", headers=SHARED, params={"workspace": str(ws), "status": "all"})
+    r = client.get("/ideas", headers=SHARED, params={"workspace": str(ws), "status": "all"})
     assert len(r.json()["data"]) == 2
 
 
-def test_someday_errors(client, tmp_path):
+def test_ideas_errors(client, tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
-    assert client.post("/someday", headers=SHARED, json={"text": "", "workspace": str(ws)}).status_code == 400
-    assert client.post("/someday", headers=SHARED, json={"text": "x", "workspace": "relative/path"}).status_code == 400
-    assert client.post("/someday", headers=SHARED, json={"text": "x", "workspace": str(tmp_path / "nope")}).status_code == 404
-    assert client.post("/someday", headers=SHARED, content="not json").status_code == 400
-    r = client.post("/someday/sd_20260101T000000_abcd/triage", headers=SHARED, json={"workspace": str(ws), "action": "keep"})
+    assert client.post("/ideas", headers=SHARED, json={"text": "", "workspace": str(ws)}).status_code == 400
+    assert client.post("/ideas", headers=SHARED, json={"text": "x", "workspace": "relative/path"}).status_code == 400
+    assert client.post("/ideas", headers=SHARED, json={"text": "x", "workspace": str(tmp_path / "nope")}).status_code == 404
+    assert client.post("/ideas", headers=SHARED, content="not json").status_code == 400
+    r = client.post("/ideas/idea_20260101T000000_abcd/triage", headers=SHARED, json={"workspace": str(ws), "action": "keep"})
     assert r.status_code == 404
     assert r.json() == {"success": False, "error": "not found"}
-    r = client.post("/someday/bad/triage", headers=SHARED, json={"workspace": str(ws), "action": "keep"})
+    r = client.post("/ideas/bad/triage", headers=SHARED, json={"workspace": str(ws), "action": "keep"})
     assert r.status_code == 400
-    assert client.post("/someday", json={"text": "x", "workspace": str(ws)}).status_code == 401
+    assert client.post("/ideas", json={"text": "x", "workspace": str(ws)}).status_code == 401
 
 
 def test_digest_lee_offline(client, tmp_path, isolated_copilot):

@@ -249,3 +249,23 @@ def test_capture_pickup_ignores_keep_and_unlinked_spool(events_dir):
     rec = metrics.run(T0 - timedelta(days=30), T0, events_dir=events_dir, now=T0)
     assert rec["metrics"]["capture_pickup_eligible"] == 2
     assert rec["metrics"]["capture_pickup"] == 0.5
+
+
+def test_capture_pickup_reads_idea_and_someday_event_names(events_dir):
+    """Someday became Ideas: new events say idea.triage / idea_id, older ones someday.*; both count."""
+    E = make_event
+    device = {"kind": "user", "surface": "device", "device_id": "dev_a", "device_kind": "aeronaut"}
+    evs = [
+        E("capture", at(hours=-24 * 20), {"idea_id": "idea_a", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+        E("idea.triage", at(hours=-24 * 15), {"idea_id": "idea_a", "action": "explore", "age_ms": 1}, source="hester"),
+        E("capture", at(hours=-24 * 20), {"someday_id": "sd_b", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+        E("someday.triage", at(hours=-24 * 16), {"someday_id": "sd_b", "action": "drop", "age_ms": 1}, source="hester"),
+        # a capture event naming it someday_id (Lee's field) joins an idea.triage on the same id
+        E("capture", at(hours=-24 * 20), {"someday_id": "idea_c", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+        E("idea.triage", at(hours=-24 * 17), {"idea_id": "idea_c", "action": "promote", "age_ms": 1}, source="hester"),
+        E("capture", at(hours=-24 * 20), {"idea_id": "idea_d", "text_chars": 3, "as": "someday", "spooled": False}, actor=device, at_machine=False),
+    ]
+    write_events(events_dir, evs)
+    rec = metrics.run(T0 - timedelta(days=30), T0, events_dir=events_dir, now=T0)
+    assert rec["metrics"]["capture_pickup_eligible"] == 4
+    assert rec["metrics"]["capture_pickup"] == 0.75

@@ -21,7 +21,7 @@ from .event_reader import iso, parse_ts, read_events
 from .usage import SPEND_BASES, basis_of, shown_tokens, usage_items
 
 # v2: capture_pickup counts only acting triages (explore/promote/drop, not
-# keep) and leaves out spooled captures that never got a someday_id.
+# keep) and leaves out spooled captures that never got an idea id.
 # v3: attributed_agent_time, background_leverage accepted part, toil_load
 # command repeats and flaky reruns, peek_rate with Cockpit modes,
 # nudge_acceptance, lost_threads.
@@ -49,6 +49,8 @@ DEVICE_CREATIVE = {"capture", "decide", "reply", "launch", "start_work"}
 # GOALS.md: captures "reviewed and acted on (explored, promoted, or explicitly
 # dropped)". A 'keep' triage defers the idea, so it is not a pickup.
 PICKUP_ACTIONS = {"explore", "promote", "drop"}
+# Someday became Ideas (2026-09-28): both names count, so history keeps counting.
+TRIAGE_TYPES = {"idea.triage", "someday.triage"}
 LATENCY_KINDS = {"approval", "waiting", "decision", "blocker"}
 LATENCY_RESOLUTIONS = {"reply", "answered_in_tab"}
 # steward.request surfaces that are you asking Hester for judgment (G3 pull_usage).
@@ -83,6 +85,11 @@ def _ctx(ev: Dict[str, Any]) -> Dict[str, Any]:
 def _data(ev: Dict[str, Any]) -> Dict[str, Any]:
     d = ev.get("data")
     return d if isinstance(d, dict) else {}
+
+
+def _idea_id(d: Dict[str, Any]) -> Optional[str]:
+    """A capture's or triage's idea id: ``idea_id``, or ``someday_id`` in events from before the rename."""
+    return d.get("idea_id") or d.get("someday_id")
 
 
 def _in(ev: Dict[str, Any], start: datetime, end: datetime) -> bool:
@@ -797,8 +804,8 @@ def compute_metrics(
     # capture_pickup
     triaged: Dict[str, List[datetime]] = defaultdict(list)
     for ev in events:
-        if ev.get("type") == "someday.triage":
-            sid = _data(ev).get("someday_id")
+        if ev.get("type") in TRIAGE_TYPES:
+            sid = _idea_id(_data(ev))
             if sid and _data(ev).get("action") in PICKUP_ACTIONS:
                 triaged[sid].append(ev["_ts"])
     eligible = picked = 0
@@ -809,10 +816,10 @@ def compute_metrics(
         away = _ctx(ev).get("at_machine") is False or actor.get("surface") == "device"
         if not away or ev["_ts"] > end - PICKUP_WINDOW:
             continue
-        sid = _data(ev).get("someday_id")
+        sid = _idea_id(_data(ev))
         if not sid and _data(ev).get("spooled"):
             # Spooled while Hester was down: Lee delivers it later but logs no
-            # event linking it to its Someday id, so it can never be joined to a
+            # event linking it to its idea id, so it can never be joined to a
             # triage. Leave it out rather than count it as never picked up.
             continue
         eligible += 1

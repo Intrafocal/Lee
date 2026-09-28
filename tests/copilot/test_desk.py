@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from hester.daemon.cockpit import deep, deep_ask
 from hester.daemon.cockpit.desk import AREA_ID_RE, PAGE_ID_RE, DeskStore
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot.ideas import IdeasStore
 
 from .cockpit_helpers import cockpit_env, hdr  # noqa: F401
 from .conftest import queued
@@ -38,7 +38,7 @@ def test_an_empty_desk_gets_main_and_the_built_in_drawers(cockpit_env):
     assert area["name"] == "Main" and (area["x"], area["y"], area["w"], area["h"]) == (0, 0, 1200, 800)
     assert AREA_ID_RE.match(area["id"]) and area["drawer_id"] is None and area["migrated_from"] is None
     assert desk["cards"] == [] and desk["goals_card_id"] is None and desk["last"] is None and desk["migration"] is None
-    assert [(d["id"], d["kind"]) for d in desk["drawers"]] == [("ideas", "ideas"), ("put-away", "areas")]
+    assert [(d["id"], d["kind"]) for d in desk["drawers"]] == [("ideas", "ideas"), ("stashed", "areas")]
     # read again: still one Main
     assert len(c.get("/desk", headers=h).json()["data"]["areas"]) == 1
 
@@ -56,7 +56,7 @@ def test_areas_create_patch_place_and_delete(cockpit_env):
         assert c.post("/desk/areas", headers=h, json=bad).status_code == 400, bad
     r = c.patch(f"/desk/areas/{sync['id']}", headers=h, json={"name": "Sync", "x": 10})
     assert r.status_code == 200 and r.json()["data"]["name"] == "Sync" and r.json()["data"]["x"] == 10
-    assert c.patch(f"/desk/areas/{sync['id']}", headers=h, json={"drawer_id": "put-away"}).status_code == 400
+    assert c.patch(f"/desk/areas/{sync['id']}", headers=h, json={"drawer_id": "stashed"}).status_code == 400
     assert c.patch("/desk/areas/area-00000000", headers=h, json={"name": "x"}).status_code == 404
 
     new_page(c, h, area_id=main["id"], text="words")
@@ -66,14 +66,14 @@ def test_areas_create_patch_place_and_delete(cockpit_env):
     assert c.delete(f"/desk/areas/{placed['id']}", headers=h).status_code == 404
 
 
-def test_put_away_take_out_and_drawers(cockpit_env):
+def test_stash_unstash_and_drawers(cockpit_env):
     c, h = cockpit_env.client, hdr(cockpit_env.a)
     main = main_area(c, h)
     other = c.post("/desk/areas", headers=h, json={"name": "Other"}).json()["data"]
-    r = c.post(f"/desk/areas/{main['id']}/put-away", headers=h, json={})
-    assert r.status_code == 200 and r.json()["data"]["drawer_id"] == "put-away"
-    assert c.post(f"/desk/areas/{other['id']}/put-away", headers=h, json={"drawer_id": "ideas"}).status_code == 400
-    assert c.post(f"/desk/areas/{other['id']}/put-away", headers=h, json={"drawer_id": "drw-00000000"}).status_code == 400
+    r = c.post(f"/desk/areas/{main['id']}/stash", headers=h, json={})
+    assert r.status_code == 200 and r.json()["data"]["drawer_id"] == "stashed"
+    assert c.post(f"/desk/areas/{other['id']}/stash", headers=h, json={"drawer_id": "ideas"}).status_code == 400
+    assert c.post(f"/desk/areas/{other['id']}/stash", headers=h, json={"drawer_id": "drw-00000000"}).status_code == 400
 
     r = c.post("/desk/drawers", headers=h, json={"name": "Archive"})
     assert r.status_code == 201
@@ -81,21 +81,21 @@ def test_put_away_take_out_and_drawers(cockpit_env):
     assert drawer["id"].startswith("drw-") and drawer["kind"] == "areas" and drawer["count"] == 0
     assert c.patch(f"/desk/drawers/{drawer['id']}", headers=h, json={"name": "Old"}).json()["data"]["name"] == "Old"
     assert c.patch("/desk/drawers/ideas", headers=h, json={"name": "x"}).status_code == 400
-    assert c.patch("/desk/drawers/put-away", headers=h, json={"name": "Shelf"}).json()["data"]["name"] == "Shelf"
+    assert c.patch("/desk/drawers/stashed", headers=h, json={"name": "Shelf"}).json()["data"]["name"] == "Shelf"
     assert c.patch("/desk/drawers/drw-00000000", headers=h, json={"name": "x"}).status_code == 404
-    assert c.post(f"/desk/areas/{other['id']}/put-away", headers=h, json={"drawer_id": drawer["id"]}).status_code == 200
+    assert c.post(f"/desk/areas/{other['id']}/stash", headers=h, json={"drawer_id": drawer["id"]}).status_code == 200
 
-    SomedayStore(cockpit_env.a).create("an idea", source={"surface": "lee"})
+    IdeasStore(cockpit_env.a).create("an idea", source={"surface": "lee"})
     drawers = c.get("/desk", headers=h).json()["data"]["drawers"]
-    assert [d["id"] for d in drawers] == ["ideas", "put-away", drawer["id"]]
+    assert [d["id"] for d in drawers] == ["ideas", "stashed", drawer["id"]]
     assert drawers[0]["count"] == 1 and drawers[0]["area_ids"] == []
     assert drawers[1]["area_ids"] == [main["id"]] and drawers[1]["name"] == "Shelf"
     assert drawers[2]["area_ids"] == [other["id"]] and drawers[2]["count"] == 1
 
-    r = c.post(f"/desk/areas/{main['id']}/take-out", headers=h, json={"x": 7})
+    r = c.post(f"/desk/areas/{main['id']}/unstash", headers=h, json={"x": 7})
     assert r.status_code == 200 and r.json()["data"]["drawer_id"] is None and r.json()["data"]["x"] == 7
-    r = c.post(f"/desk/areas/{main['id']}/take-out", headers=h, json={})
-    assert r.status_code == 409 and r.json()["error"] == "not_put_away"
+    r = c.post(f"/desk/areas/{main['id']}/unstash", headers=h, json={})
+    assert r.status_code == 409 and r.json()["error"] == "not_stashed"
 
 
 def test_pages_create_place_move_and_titles(cockpit_env):
@@ -126,7 +126,7 @@ def test_pages_create_place_move_and_titles(cockpit_env):
     assert r.status_code == 200 and (r.json()["data"]["x"], r.json()["data"]["area_id"]) == (100, other["id"])
     assert c.patch(f"/desk/cards/{card['id']}", headers=h, json={"area_id": "area-00000000"}).status_code == 404
     assert c.patch(f"/desk/cards/{card['id']}", headers=h, json={"kind": "board"}).status_code == 400
-    c.post(f"/desk/areas/{main['id']}/put-away", headers=h, json={})
+    c.post(f"/desk/areas/{main['id']}/stash", headers=h, json={})
     assert c.patch(f"/desk/cards/{card['id']}", headers=h, json={"area_id": main["id"]}).status_code == 400
     assert c.post("/desk/pages", headers=h, json={"area_id": main["id"]}).status_code == 400
 

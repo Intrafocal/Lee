@@ -72,7 +72,7 @@ def _register_commands():
     from .ask import ask
     from .devops import devops
     from .slack import slack
-    from .someday import someday
+    from .ideas import ideas
     from .desk import desk
     from .goals import goals
     from .brief import brief
@@ -93,7 +93,7 @@ def _register_commands():
     cli.add_command(ask)
     cli.add_command(devops)
     cli.add_command(slack)
-    cli.add_command(someday)
+    cli.add_command(ideas)
     cli.add_command(desk)
     cli.add_command(goals)
     cli.add_command(brief)

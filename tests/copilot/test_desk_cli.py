@@ -7,7 +7,7 @@ from click.testing import CliRunner
 from hester.cli.desk import desk
 from hester.daemon.cockpit import deep
 from hester.daemon.cockpit.desk import DeskStore
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot.ideas import IdeasStore
 
 
 def build(ws):
@@ -17,9 +17,9 @@ def build(ws):
     deep.add_question(store.pages, card["id"], {"text": "Does it partition?", "source": "page"})
     parked = store.create_area({"name": "Old board idea"})
     store.create_page({"area_id": parked["id"], "text": "tldraw or our own?\n", "title": "Board"})
-    store.put_away(parked["id"], {})
+    store.stash(parked["id"], {})
     store.set_last(card["id"])
-    SomedayStore(ws).create("Try a CRDT for the queue", source={"surface": "aeronaut"})
+    IdeasStore(ws).create("Try a CRDT for the queue", source={"surface": "aeronaut"})
     return card
 
 

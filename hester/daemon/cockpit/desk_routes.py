@@ -4,23 +4,22 @@ The Desk's HTTP routes on the Hester daemon (:9000), Desk D2 contract §4.
 The copilot envelope as everywhere: ``{success: true, data, workspace,
 workspace_id}``, errors ``{success: false, error}``: 400 with a message, 404
 ``not found``, 409 with a code (``not_empty``, ``version_conflict``,
-``not_put_away``, ``not_open``). The workspace comes from ``?workspace=`` or
+``not_stashed``, ``not_open``). The workspace comes from ``?workspace=`` or
 ``X-Lee-Workspace``, else the body's ``workspace``, else the active one.
 Every route runs the migration first when it's due (``DeskStore.load``).
 
-A Page card has the routes a Page had under ``/cockpit/explorations/{id}``,
-with the same functions (deep.py) on the card's store, so the Page's rules
-hold exactly. Nothing here deletes a card with content or an Area with cards.
+A Page card's records use deep.py's functions (the rules a pre-Desk
+exploration's Page had) on the card's store, so the Page's rules hold exactly. Nothing here deletes a card with content or an Area with cards.
 """
 
 import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import deep, deep_ask, handoffs
-from .desk import DEFAULT_SESSIONS, MAX_SESSIONS, DeskConflict
+from .desk import DEFAULT_SESSIONS, MAX_ASSET_BYTES, MAX_SESSIONS, AssetTypeError, DeskConflict
 from .explorations import ExplorationError, ExplorationNotFound
 from .tasks import TaskError, TaskNotFound
 
@@ -68,11 +67,7 @@ def create_desk_router() -> APIRouter:
 
     @router.get("/desk/last")
     async def desk_last(request: Request):
-        def op(ctx, desk, b):
-            from ..copilot import open_next
-
-            return desk.last(open_next_rec=open_next.get(ctx.path))
-        return await _op(request, op, recover=True)
+        return await _op(request, lambda ctx, desk, b: desk.last(), recover=True)
 
     @router.put("/desk/last")
     async def desk_last_put(request: Request):
@@ -93,13 +88,13 @@ def create_desk_router() -> APIRouter:
         """An empty Area; ``{"with_cards": true}`` deletes its cards too (the user confirmed)."""
         return await _op(request, lambda ctx, desk, b: desk.delete_area(area_id, with_cards=b.get("with_cards") is True))
 
-    @router.post("/desk/areas/{area_id}/put-away")
-    async def desk_area_put_away(area_id: str, request: Request):
-        return await _op(request, lambda ctx, desk, b: desk.put_away(area_id, b))
+    @router.post("/desk/areas/{area_id}/stash")
+    async def desk_area_stash(area_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: desk.stash(area_id, b))
 
-    @router.post("/desk/areas/{area_id}/take-out")
-    async def desk_area_take_out(area_id: str, request: Request):
-        return await _op(request, lambda ctx, desk, b: desk.take_out(area_id, b))
+    @router.post("/desk/areas/{area_id}/unstash")
+    async def desk_area_unstash(area_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: desk.unstash(area_id, b))
 
     @router.post("/desk/drawers")
     async def desk_drawer_create(request: Request):
@@ -134,17 +129,17 @@ def create_desk_router() -> APIRouter:
             return {"card": card, "page": page, "created": created}, 201 if created else 200
         return await _op(request, op)
 
-    @router.post("/desk/ideas/{someday_id}/page")
-    async def desk_idea_to_page(someday_id: str, request: Request):
+    @router.post("/desk/ideas/{idea_id}/page")
+    async def desk_idea_to_page(idea_id: str, request: Request):
         def op(ctx, desk, b):
             from ..copilot import lee_events
+            from ..copilot.ideas import age_ms
             from ..copilot.routes import caller_actor
-            from ..copilot.someday import age_ms
 
-            made = desk.idea_to_page(someday_id, b)
+            made = desk.idea_to_page(idea_id, b)
             try:
-                item = ctx.someday().get(someday_id)
-                lee_events.ingest("someday.triage", {"someday_id": someday_id, "action": "explore", "age_ms": age_ms(item)},
+                item = ctx.ideas().get(idea_id)
+                lee_events.ingest("idea.triage", {"idea_id": idea_id, "action": "explore", "age_ms": age_ms(item)},
                                   workspace=str(ctx.path), actor=caller_actor(request))
             except Exception:
                 pass
@@ -164,6 +159,44 @@ def create_desk_router() -> APIRouter:
         """Deep next R8's guard on a card: only an empty, still-Untitled one goes; else 409 not_empty.
         ``{"force": true}`` deletes it anyway (the user confirmed)."""
         return await _op(request, lambda ctx, desk, b: desk.delete_page(card_id, force=b.get("force") is True))
+
+    # ------------------------------------------------------------ images on a Page
+
+    @router.post("/desk/pages/{card_id}/assets")
+    async def desk_asset_add(card_id: str, request: Request):
+        """Raw body, ``Content-Type: image/png|image/jpeg``, <= 10 MB -> 201 ``{name, path}``."""
+        try:
+            ctx = context_for()
+            length = request.headers.get("content-length")
+            if length and length.isdigit() and int(length) > MAX_ASSET_BYTES:
+                return _err("the image is larger than 10 MB", 413)
+            data = await request.body()
+            if len(data) > MAX_ASSET_BYTES:
+                return _err("the image is larger than 10 MB", 413)
+            async with ctx.lock:
+                desk = ctx.desk()
+                await asyncio.to_thread(desk.load)
+                made = await asyncio.to_thread(desk.pages.add_asset, card_id, request.headers.get("content-type") or "", data)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e), 415 if isinstance(e, AssetTypeError) else 400)
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return _ok(ctx, made, 201)
+
+    @router.get("/desk/pages/{card_id}/assets/{name}")
+    async def desk_asset_get(card_id: str, name: str):
+        try:
+            ctx = context_for()
+            path, content_type = ctx.desk().pages.asset_path(card_id, name)
+        except BadRequest as e:
+            return _err(str(e), e.status)
+        except ExplorationError as e:
+            return _err(str(e))
+        except ExplorationNotFound:
+            return _err("not found", 404)
+        return FileResponse(path, media_type=content_type, headers={"Cache-Control": "private, max-age=86400"})
 
     # ------------------------------------------------------------ a Page card's records (deep.py)
 
@@ -281,12 +314,6 @@ def create_desk_router() -> APIRouter:
 
     @router.post("/desk/sessions")
     async def desk_session_add(request: Request):
-        def op(ctx, desk, b):
-            from ..copilot import open_next
-
-            record = desk.add_session(b)
-            open_next.on_desk_session(ctx.path, record)  # the next session happened (14 §8.1)
-            return record
-        return await _op(request, op, 201)
+        return await _op(request, lambda ctx, desk, b: desk.add_session(b), 201)
 
     return router

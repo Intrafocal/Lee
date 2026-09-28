@@ -113,10 +113,10 @@ def test_migrates_copies_and_runs_again(tmp_path):
     assert ses["questions_kept"] == [{"card_id": a_id, "question_id": fx["q"]["id"]}]
     assert ses["stopped_at"] == "every write carries one" and ses["rating"] == "deep"
 
-    # archived: its Area is put away; goals: pinned, no Area; legacy: the Page from its seed
+    # archived: its Area is stashed; goals: pinned, no Area; legacy: the Page from its seed
     arch_area = areas["area-" + fx["archived"]["id"][4:]]
-    assert arch_area["drawer_id"] == "put-away"
-    put_away = next(d for d in api["drawers"] if d["id"] == "put-away")
+    assert arch_area["drawer_id"] == "stashed"
+    put_away = next(d for d in api["drawers"] if d["id"] == "stashed")
     assert put_away["area_ids"] == [arch_area["id"]]
     goals = cards[pg(fx["goals"]["id"])]
     assert goals["pinned"] and goals["area_id"] is None and api["goals_card_id"] == goals["id"]
@@ -187,8 +187,8 @@ def test_routes_migrate_on_read_and_on_post(cockpit_env):
     assert data["migration"]["migrated"] == 4 and len(data["cards"]) == 4
     r = c.post("/desk/migrate", headers=h)
     assert r.status_code == 200 and (r.json()["data"]["migrated"], r.json()["data"]["already"]) == (0, 4)
-    # the old routes still work, on the old files
-    assert c.get(f"/cockpit/explorations/{fx['archived']['id']}/page", headers=h).json()["data"]["text"] == "old\n"
+    # the pre-Desk routes are gone; the old files stay as they were
+    assert c.get(f"/cockpit/explorations/{fx['archived']['id']}/page", headers=h).status_code == 404
     # the card is its own copy from here on
     card = pg(fx["archived"]["id"])
     page = c.get(f"/desk/pages/{card}/page", headers=h).json()["data"]

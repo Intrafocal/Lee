@@ -5,9 +5,8 @@ The opener (Deep D1 contract section 8.1; spec 14 section 6; Desk D2 §6.4).
 and every surface that could get your brain working, in a fixed order. It is
 assembly, not generation: deterministic, from records, with no model client.
 It ranks nothing beyond "pick up where you left off" first, and that is the
-Desk's ``GET /desk/last``: an Open next pick (14 §8.1, ``open_next.py``), the
-last card zoomed into, the last session's card, or the most recently written
-one. A picked captured thought leads Captured away.
+Desk's ``GET /desk/last``: the last card zoomed into, the last session's card,
+or the most recently written one.
 
 The surfaces read the Desk (``.hester/desk/``; the migration runs first when
 it's due). Items carry ``card_id`` (and ``card_title``), and keep
@@ -28,9 +27,8 @@ from ..cockpit import deep
 from ..cockpit.desk import DeskStore, is_page_id, page_id_for_exploration
 from ..cockpit.goal_status import QUIET_DAYS
 from .digest import q2_candidates_safe
-from . import open_next as open_next_mod
 from .event_reader import iso, parse_ts, read_events
-from .someday import SomedayStore
+from .ideas import IdeasStore
 
 logger = logging.getLogger("hester.daemon.copilot.opener")
 
@@ -161,7 +159,6 @@ def pick_up_from(last: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {
         "card": card,
         "exploration": {"id": card["id"], "title": card.get("title"), "last_touched_at": card.get("last_touched_at")},
-        "open_next": last.get("source") == "open_next",
         "stopped_at": last.get("stopped_at"),
         "stopped_line": last.get("stopped_line"),
         "arrived": {
@@ -186,9 +183,7 @@ def build_opener(
     sessions = deep_sessions(events)
     write_missing_sessions(desk, sessions)
 
-    # Open next (14 §8.1): a device's pick goes first; the read clears a stale one.
-    nxt = open_next_mod.get(ws, now)
-    pick_up = pick_up_from(desk.last(now, nxt))
+    pick_up = pick_up_from(desk.last(now))
     cards = desk.briefs(on_desk=True)
 
     # The end of the last Deep session (records, or the log for sessions with nothing open).
@@ -218,20 +213,12 @@ def build_opener(
 
     since = last_end or (now - CAPTURED_FALLBACK)
     captured = []
-    for item in SomedayStore(ws).list("open"):
+    for item in IdeasStore(ws).list("open"):
         created = parse_ts(item.created_at)
         if item.source.get("surface") in AWAY_SURFACES and created is not None and created > since:
             captured.append({"someday_id": item.id, "text": _clip(item.text, MAX_ITEM_TEXT),
                              "surface": item.source.get("surface"), "created_at": item.created_at})
     captured.sort(key=lambda c: str(c["created_at"]), reverse=True)
-    next_sd = (nxt or {}).get("someday_id")
-    if next_sd:
-        item = SomedayStore(ws).get(next_sd)
-        if item is not None and item.status == "open":
-            captured = [c for c in captured if c["someday_id"] != next_sd]
-            captured.insert(0, {"someday_id": item.id, "text": _clip(item.text, MAX_ITEM_TEXT),
-                                "surface": item.source.get("surface"), "created_at": item.created_at,
-                                "open_next": True})
     if captured:
         surfaces.append({"kind": "captured_away", "count": len(captured), "items": captured[:MAX_ITEMS]})
 
@@ -262,5 +249,4 @@ def build_opener(
     if quiet:
         surfaces.append({"kind": "quiet", "items": quiet[:MAX_QUIET]})
 
-    return {"generated_at": iso(now), "workspace": str(ws), "pick_up": pick_up, "surfaces": surfaces,
-            "open_next": nxt}
+    return {"generated_at": iso(now), "workspace": str(ws), "pick_up": pick_up, "surfaces": surfaces}

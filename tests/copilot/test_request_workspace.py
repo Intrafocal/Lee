@@ -42,9 +42,9 @@ def test_header_and_query_resolution(cockpit_env):
     assert env.registry.peek(env.b) is not None and "request" in env.registry.peek(env.b).sources
 
     # copilot routes default to the request's workspace too
-    c.post("/someday", headers=hdr(env.b), json={"text": "idea in b"})
-    assert [i["text"] for i in c.get("/someday", headers=hdr(env.b)).json()["data"]] == ["idea in b"]
-    assert c.get("/someday", headers=SHARED).json()["data"] == []
+    c.post("/ideas", headers=hdr(env.b), json={"text": "idea in b"})
+    assert [i["text"] for i in c.get("/ideas", headers=hdr(env.b)).json()["data"]] == ["idea in b"]
+    assert c.get("/ideas", headers=SHARED).json()["data"] == []
 
 
 def test_bad_workspace_is_400_before_the_route(cockpit_env, tmp_path):

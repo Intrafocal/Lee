@@ -9,7 +9,7 @@ import pytest
 from hester.daemon.cockpit import deep
 from hester.daemon.cockpit import explorations as ex
 from hester.daemon.cockpit.explorations import ExplorationError, ExplorationNotFound, ExplorationStore, record_session_turn
-from hester.daemon.copilot.someday import normalize_source
+from hester.daemon.copilot.ideas import normalize_source
 
 from .cockpit_helpers import cockpit_env, hdr  # noqa: F401
 
@@ -109,35 +109,6 @@ def test_session_turn_writeback_after_migration(tmp_path):
 # ---------------------------------------------------------------- page
 
 
-def test_page_get_put_conflict_and_cap(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "P"}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}/page"
-    got = c.get(base, headers=h).json()["data"]
-    assert got == {"text": "", "version": deep.page_version("")} and len(got["version"]) == 12
-    r = c.put(base, headers=h, json={"text": "Hello\n", "base_version": got["version"]})
-    assert r.status_code == 200, r.text
-    v1 = r.json()["data"]["version"]
-    assert v1 == deep.page_version("Hello\n")
-    assert (env.a / ".hester" / "explore" / exp["id"] / "page.md").read_text() == "Hello\n"
-    # stale base: 409 carries the current text and version
-    r = c.put(base, headers=h, json={"text": "Mine\n", "base_version": got["version"]})
-    assert r.status_code == 409
-    body = r.json()
-    assert body["error"] == "version_conflict" and body["version"] == v1 and body["text"] == "Hello\n"
-    assert body["data"] == {"error": "version_conflict", "version": v1, "text": "Hello\n"}
-    assert (env.a / ".hester" / "explore" / exp["id"] / "page.md").read_text() == "Hello\n", "nothing dropped"
-    # keep mine: re-PUT with the new version
-    assert c.put(base, headers=h, json={"text": "Mine\n", "base_version": v1}).status_code == 200
-    big = "x" * (1024 * 1024 + 1)
-    assert c.put(base, headers=h, json={"text": big, "base_version": deep.page_version("Mine\n")}).status_code == 400
-    assert c.put(base, headers=h, json={"text": "y"}).status_code == 400
-    assert c.get("/cockpit/explorations/exp-00000000/page", headers=h).status_code == 404
-    listed = c.get("/cockpit/explorations", headers=h).json()["data"][0]
-    assert listed["page_chars"] == len("Mine\n")
-
-
 def test_page_put_touches_at_most_every_few_minutes(tmp_path):
     from datetime import timedelta
 
@@ -151,39 +122,7 @@ def test_page_put_touches_at_most_every_few_minutes(tmp_path):
     assert store.require(exp["id"])["last_touched_at"] > exp["last_touched_at"]
 
 
-def test_opener_create_with_page(cockpit_env):
-    env = cockpit_env
-    r = env.client.post("/cockpit/explorations", headers=hdr(env.a),
-                        json={"seed": "Mesh sync", "page": "Mesh sync\n\n", "origin": {"kind": "opener"}})
-    assert r.status_code == 201, r.text
-    exp = r.json()["data"]
-    assert exp["origin"] == {"kind": "opener", "ref": None} and exp["page_chars"] == len("Mesh sync\n\n")
-
-
-# ---------------------------------------------------------------- references
-
-
-def test_references_crud(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "R"}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}/references"
-    r = c.post(base, headers=h, json={"kind": "quote", "quote": "the vector clock", "section": "Sync", "source": {"kind": "page"}})
-    assert r.status_code == 201, r.text
-    q = r.json()["data"]
-    assert deep.REF_ID_RE.match(q["id"]) and q["source"] == {"kind": "page"} and q["at"]
-    r = c.post(base, headers=h, json={"kind": "link", "url": "https://example.com/a", "title": "A"})
-    link = r.json()["data"]
-    assert r.status_code == 201 and "opened_at" not in link
-    assert [x["id"] for x in c.get(base, headers=h).json()["data"]] == [link["id"], q["id"]] or \
-        {x["id"] for x in c.get(base, headers=h).json()["data"]} == {link["id"], q["id"]}
-    for bad in ({"kind": "link", "url": "javascript:alert(1)"}, {"kind": "quote"}, {"kind": "nope"},
-                {"kind": "quote", "quote": "x", "source": {"kind": "elsewhere"}}):
-        assert c.post(base, headers=h, json=bad).status_code == 400, bad
-    r = c.patch(f"{base}/{link['id']}", headers=h, json={"opened": True, "note": "read later"})
-    assert r.status_code == 200 and r.json()["data"]["opened_at"] and r.json()["data"]["note"] == "read later"
-    assert c.patch(f"{base}/{link['id']}", headers=h, json={"title": "x"}).status_code == 400
-    assert c.patch(f"{base}/ref-00000000", headers=h, json={"opened": True}).status_code == 404
+# ---------------------------------------------------------------- records
 
 
 def test_jsonl_cap_and_atomic_rewrite(tmp_path, monkeypatch):
@@ -201,73 +140,7 @@ def test_jsonl_cap_and_atomic_rewrite(tmp_path, monkeypatch):
     assert json.loads(path.read_text().splitlines()[-1])["note"] == "n"
 
 
-# ---------------------------------------------------------------- questions
-
-
-def test_questions_crud(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "Q"}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}/questions"
-    anchor = {"kind": "page", "quote": "Why does it drift?", "offset": 10, "section": "Sync"}
-    r = c.post(base, headers=h, json={"text": "Why does it drift?", "source": "page", "anchor": anchor})
-    assert r.status_code == 201, r.text
-    q = r.json()["data"]
-    assert q["status"] == "open" and q["anchor"] == anchor and q["id"].startswith("q-")
-    assert c.get(base, headers=h).json()["data"] == [q]
-    assert c.get(f"/cockpit/explorations/{exp['id']}", headers=h).json()["data"]["open_questions"] == 1
-    r = c.patch(f"{base}/{q['id']}", headers=h, json={"status": "closed"})
-    assert r.json()["data"]["status"] == "closed" and r.json()["data"]["closed_at"]
-    assert c.get(f"/cockpit/explorations/{exp['id']}", headers=h).json()["data"]["open_questions"] == 0
-    assert c.post(base, headers=h, json={"text": "x", "source": "nope"}).status_code == 400
-    assert c.post(base, headers=h, json={"text": " ", "source": "page"}).status_code == 400
-    assert c.post(base, headers=h, json={"text": "x", "source": "page", "anchor": {"kind": "page"}}).status_code == 400
-    assert c.patch(f"{base}/q-00000000", headers=h, json={"status": "closed"}).status_code == 404
-    long = c.post(base, headers=h, json={"text": "y" * 900, "source": "ask"}).json()["data"]
-    assert len(long["text"]) == 500
-
-
-# ---------------------------------------------------------------- sessions
-
-
-def test_sessions(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "S"}).json()["data"]
-    base = f"/cockpit/explorations/{exp['id']}/sessions"
-    rec = {"focus_session_id": "fs_1", "started_at": "2026-09-26T10:00:00Z", "ended_at": "2026-09-26T11:00:00Z",
-           "reason": "ritual", "stopped_at": "…only helps if every write", "rating": "deep", "questions_kept": ["q-00000001"]}
-    r = c.post(base, headers=h, json=rec)
-    assert r.status_code == 201, r.text
-    saved = r.json()["data"]
-    assert deep.SESSION_ID_RE.match(saved["id"]) and {k: saved[k] for k in rec} == rec
-    got = c.get(f"/cockpit/explorations/{exp['id']}", headers=h).json()["data"]
-    assert got["last_session"] == saved
-    unrated = dict(rec, reason="esc", rating=None, stopped_at=None, questions_kept=None)
-    assert c.post(base, headers=h, json=unrated).json()["data"]["questions_kept"] == []
-    for bad in (dict(rec, reason="nope"), dict(rec, rating="wow"), dict(rec, started_at="yesterday"),
-                {k: v for k, v in rec.items() if k != "focus_session_id"}):
-        assert c.post(base, headers=h, json=bad).status_code == 400, bad
-    assert len(c.post(base, headers=h, json=dict(rec, stopped_at="z" * 2000)).json()["data"]["stopped_at"]) == 1000
-
-
-# ---------------------------------------------------------------- explore
-
-
-def test_explore_child_links_both_ways(cockpit_env):
-    env = cockpit_env
-    c, h = env.client, hdr(env.a)
-    parent = c.post("/cockpit/explorations", headers=h, json={"title": "Parent"}).json()["data"]
-    anchor = {"kind": "page", "quote": "CRDTs", "offset": 0, "section": None}
-    r = c.post(f"/cockpit/explorations/{parent['id']}/explore", headers=h, json={"seed": "CRDTs for the queue", "anchor": anchor})
-    assert r.status_code == 201, r.text
-    child = r.json()["data"]
-    assert child["origin"] == {"kind": "exploration", "ref": parent["id"]} and child["seed"] == "CRDTs for the queue"
-    assert child["links"][0]["id"] == parent["id"] and child["links"][0]["rel"] == "parent"
-    after = ExplorationStore(env.a).require(parent["id"])
-    assert after["links"][0]["id"] == child["id"] and after["links"][0]["rel"] == "child"
-    assert after["last_touched_at"] == parent["last_touched_at"], "the parent isn't touched"
-    assert c.post(f"/cockpit/explorations/{parent['id']}/explore", headers=h, json={"seed": ""}).status_code == 400
+# ---------------------------------------------------------------- ids
 
 
 def test_bad_ids_and_missing(tmp_path):
@@ -278,7 +151,7 @@ def test_bad_ids_and_missing(tmp_path):
         deep.list_references(store, "exp-00000000")
 
 
-# ---------------------------------------------------------------- someday source
+# ---------------------------------------------------------------- idea source
 
 
 def test_normalize_source_keeps_deep_fields():
@@ -295,13 +168,13 @@ def test_normalize_source_keeps_deep_fields():
     assert "url" not in normalize_source({"url": "https://" + "a" * 2000})
 
 
-def test_someday_device_override_keeps_capture_source(cockpit_env):
+def test_idea_device_override_keeps_capture_source(cockpit_env):
     env = cockpit_env
     body = {"workspace": str(env.a), "text": "an idea", "source": {"surface": "lee", "exploration_id": "exp-0a0b0c0d", "junk": 1}}
-    r = env.client.post("/someday", headers=hdr(device=True), json=body)
+    r = env.client.post("/ideas", headers=hdr(device=True), json=body)
     assert r.status_code == 201, r.text
     src = r.json()["data"]["source"]
     assert src["surface"] == "aeronaut" and src["device_id"] == "dev_00000000abcd"
     assert src["exploration_id"] == "exp-0a0b0c0d" and "junk" not in src
-    r = env.client.post("/someday", headers=hdr(), json=dict(body, source={"surface": "lee", "section": "Intro"}))
+    r = env.client.post("/ideas", headers=hdr(), json=dict(body, source={"surface": "lee", "section": "Intro"}))
     assert r.json()["data"]["source"] == {"surface": "lee", "section": "Intro"}

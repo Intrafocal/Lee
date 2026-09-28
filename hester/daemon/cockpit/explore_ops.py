@@ -4,29 +4,27 @@ Explore operations beyond the store (v3 contracts §5-§8), all deterministic:
 - promote an exploration (or some of its nodes) to a task, a workstream or a
   goal **draft** (never GOALS.md); what is carried is ``outline()``, not a
   transcript;
-- escalate a task into an exploration;
 - archive as knowledge: ``.hester/knowledge/explore-<id>.md``, read back by the
-  ``knowledge_notes`` tool;
-- the Library pane's view of an exploration (``/library/*`` shapes).
+  ``knowledge_notes`` tool.
+
+Their HTTP routes (``/cockpit/explorations/*``, ``/library/*``) are gone; a task
+escalates to a Page card (``DeskStore.task_to_page``).
 """
 
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import yaml
 
 from .explorations import (
     LOG_KINDS,
     PROMOTE_TARGETS,
-    ROOT,
     ExplorationError,
     ExplorationStore,
     all_conversations,
-    children_of,
-    outline_line,
     render_outline,
     subtree_ids,
     to_api,
@@ -37,9 +35,7 @@ from .tasks import atomic_write, clip, first_line, iso_s
 
 MAX_TASK_TITLE = 80
 MAX_OBJECTIVE = 4000
-MAX_ESCALATE_FILES = 20
 MAX_KNOWLEDGE_ANSWER = 1500
-MAX_SAVE_TEXT = 4000
 KNOWLEDGE_DIR = Path(".hester") / "knowledge"
 GOAL_DRAFTS_DIR = Path(".hester") / "goals" / "drafts"
 NOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,120}$")
@@ -211,34 +207,6 @@ def goal_draft(workspace: Path, exp: Dict[str, Any], node_ids: Optional[List[str
 
 
 # ---------------------------------------------------------------------------
-# Escalate a task (§6)
-# ---------------------------------------------------------------------------
-
-
-def escalate(ctx, task_id: str, now: Optional[datetime] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Create an exploration from a task; the task stays open with note ``explore:<id>``."""
-    now = now or utc_now()
-    tasks = ctx.tasks()
-    task = tasks.require(task_id)
-    report = (task.get("lee_status") or {}).get("summary") or task.get("summary")
-    parts = [task["title"]]
-    if report:
-        parts.append(f"Agent's last report (the agent's words): {clip(report)}")
-    files = [f for f in task.get("files") or [] if isinstance(f, str)]
-    if files:
-        more = f" (+{len(files) - MAX_ESCALATE_FILES} more)" if len(files) > MAX_ESCALATE_FILES else ""
-        parts.append("Files: " + ", ".join(files[:MAX_ESCALATE_FILES]) + more)
-    exp = ctx.explorations().create({
-        "title": task["title"],
-        "seed": "\n\n".join(parts),
-        "origin": {"kind": "task", "ref": task_id},
-        "serves": list(task.get("serves") or []),
-    }, now=now)
-    task, _ = tasks.upsert({"id": task_id, "note": f"explore:{exp['id']}"}, now=now)
-    return task, exp
-
-
-# ---------------------------------------------------------------------------
 # Archive as knowledge (§7)
 # ---------------------------------------------------------------------------
 
@@ -347,82 +315,3 @@ def read_knowledge(workspace: Path, name: str) -> Optional[str]:
         return (Path(workspace) / KNOWLEDGE_DIR / f"{name}.md").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Library views (§8)
-# ---------------------------------------------------------------------------
-
-
-def library_node(n: Dict[str, Any], kids: List[str], conversation: List[Dict[str, Any]]) -> Dict[str, Any]:
-    out = {
-        "id": n["id"],
-        "parent_id": n["parent"],
-        "label": n["label"],
-        "node_type": n["kind"],
-        "agent_mode": n.get("mode") or "ideate",
-        "conversation_history": conversation,
-        "children": kids,
-        "collapsed": bool(n.get("collapsed")),
-        "created_at": n.get("created_at"),
-        "pruned": bool(n.get("pruned")),
-        "kind": n["kind"],
-        "turns": int(n.get("turns") or 0),
-    }
-    for key in ("decision", "spike", "evidence"):
-        if n.get(key) is not None:
-            out[key] = n[key]
-    return out
-
-
-def library_nodes(exp: Dict[str, Any], text: str) -> Dict[str, Dict[str, Any]]:
-    convs = all_conversations(exp, text)
-    kids = children_of(exp)
-    return {n["id"]: library_node(n, kids[n["id"]], convs.get(n["id"], [])) for n in exp["nodes"]}
-
-
-def library_session(exp: Dict[str, Any], text: str) -> Dict[str, Any]:
-    return {
-        "session_id": exp["id"],
-        "title": exp["title"],
-        "root_id": ROOT,
-        "active_node_id": exp.get("active_node") or ROOT,
-        "nodes": library_nodes(exp, text),
-        "created_at": exp.get("created_at"),
-        "last_activity": exp.get("last_touched_at") or exp.get("updated_at"),
-        "status": exp.get("status"),
-    }
-
-
-def library_summary(exp: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "session_id": exp["id"],
-        "title": exp["title"],
-        "node_count": len(exp["nodes"]),
-        "created_at": exp.get("created_at"),
-        "last_activity": exp.get("last_touched_at") or exp.get("updated_at"),
-    }
-
-
-def render_subtree(exp: Dict[str, Any], text: str, node_id: str = ROOT, limit: int = MAX_SAVE_TEXT) -> str:
-    """Markdown of a node and its descendants (the Library's Save), clipped to ``limit``."""
-    convs = all_conversations(exp, text)
-    kids = children_of(exp)
-    by_id = {n["id"]: n for n in exp["nodes"]}
-    out: List[str] = []
-
-    def walk(nid: str, depth: int) -> None:
-        n = by_id[nid]
-        hashes = "#" * min(depth + 1, 6)
-        if n["kind"] in LOG_KINDS:
-            out.append(f"{hashes} {n['label']}{' (pruned)' if n.get('pruned') else ''}")
-            for m in convs.get(nid, []):
-                out.append(f"\n**Q:** {m['content']}" if m["role"] == "user" else f"\n{m['content']}")
-        else:
-            out.append(f"- {outline_line(n, by_id)}")
-        out.append("")
-        for child in kids.get(nid, []):
-            walk(child, depth + 1)
-
-    walk(node_id, 0)
-    return clip("\n".join(out).strip(), limit) or exp["title"]

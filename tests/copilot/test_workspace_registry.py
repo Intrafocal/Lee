@@ -56,7 +56,7 @@ def test_stores_are_per_workspace_and_cached(dirs):
     ca, cb = reg.get(a), reg.get(b)
     assert ca.tasks() is ca.tasks() and ca.tasks() is not cb.tasks()
     assert ca.tasks().workspace == a and cb.readings().workspace == b
-    assert ca.ws_store().working_dir == a and cb.someday().workspace == b
+    assert ca.ws_store().working_dir == a and cb.ideas().workspace == b
     (b / ".lee").mkdir()
     (b / ".lee" / "config.yaml").write_text("cockpit:\n  enabled: true\n")
     assert cb.config().get("cockpit") == {"enabled": True}

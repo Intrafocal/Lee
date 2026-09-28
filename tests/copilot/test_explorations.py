@@ -94,37 +94,12 @@ def test_open_session_seeds_once(tmp_path, monkeypatch):
     assert record_session_turn(first["session_id"], None, "q", "a") is True
 
 
-def test_routes(cockpit_env):
+def test_idea_promote_to_explore(cockpit_env):
     env = cockpit_env
     c = env.client
-    r = c.post("/cockpit/explorations", headers=hdr(env.b), json={"workspace": str(env.b), "title": "Explore X", "seed": "why"})
-    assert r.status_code == 201, r.text
-    exp = r.json()["data"]
-    assert exp["workspace"] == str(env.b) and exp["status"] == "active"
-    assert (env.b / ".hester" / "explore" / exp["id"] / "exploration.md").exists()
-    assert c.get("/cockpit/explorations", headers=hdr(env.a)).json()["data"] == [], "per workspace"
-    listed = c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"]
-    assert [e["id"] for e in listed] == [exp["id"]]
-    one = c.get(f"/cockpit/explorations/{exp['id']}", headers=hdr(env.b)).json()["data"]
-    assert "## Seed" in one["body"]
-    r = c.patch(f"/cockpit/explorations/{exp['id']}", headers=hdr(env.b), json={"status": "archived"})
-    assert r.status_code == 200 and r.json()["data"]["status"] == "archived"
-    assert c.get("/cockpit/explorations?status=archived", headers=hdr(env.b)).json()["data"][0]["id"] == exp["id"]
-    r = c.post(f"/cockpit/explorations/{exp['id']}/open", headers=hdr(env.b), json={})
-    assert r.status_code == 200, r.text
-    assert r.json()["data"]["session_id"] == f"explore-{exp['id']}"
-    assert c.get("/cockpit/explorations/exp-00000000", headers=hdr(env.b)).status_code == 404
-    assert c.get("/cockpit/explorations/nope", headers=hdr(env.b)).status_code == 400
-    assert c.post("/cockpit/explorations", headers=hdr(env.b), json={}).status_code == 400
-    assert c.get("/cockpit/explorations", headers={}).status_code == 401
-
-
-def test_someday_promote_to_explore(cockpit_env):
-    env = cockpit_env
-    c = env.client
-    r = c.post("/someday", headers=SHARED, json={"text": "Durable explorations\nwith a tree", "workspace": str(env.b)})
+    r = c.post("/ideas", headers=SHARED, json={"text": "Durable explorations\nwith a tree", "workspace": str(env.b)})
     item = r.json()["data"]
-    r = c.post(f"/someday/{item['id']}/triage", headers=hdr(env.b),
+    r = c.post(f"/ideas/{item['id']}/triage", headers=hdr(env.b),
                json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert r.status_code == 200, r.text
     data = r.json()["data"]
@@ -136,13 +111,13 @@ def test_someday_promote_to_explore(cockpit_env):
     assert card["area_id"] == data["area"]["id"]
     page = c.get(f"/desk/pages/{card['id']}/page", headers=hdr(env.b)).json()["data"]
     assert page["text"] == "Durable explorations\nwith a tree"
-    bad = c.post(f"/someday/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "keep", "to": "explore"})
+    bad = c.post(f"/ideas/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "keep", "to": "explore"})
     assert bad.status_code == 400
-    again = c.post(f"/someday/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
+    again = c.post(f"/ideas/{item['id']}/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert again.status_code == 409 and again.json()["error"] == "not_open"
-    missing = c.post("/someday/sd_nope/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
+    missing = c.post("/ideas/idea_nope/triage", headers=hdr(env.b), json={"workspace": str(env.b), "action": "explore", "to": "explore"})
     assert missing.status_code in (400, 404)
-    assert c.get("/cockpit/explorations", headers=hdr(env.b)).json()["data"] == [], "no exploration is made any more"
+    assert not (env.b / ".hester" / "explore").exists(), "no exploration is made any more"
 
 
 def test_v3_fields_and_record_turn_signatures(tmp_path):

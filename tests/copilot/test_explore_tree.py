@@ -1,12 +1,10 @@
 """Copilot v3: Explore absorbs the Library (contracts 2026-09-26-copilot-v3 §1-§8)."""
 
 import asyncio
-import json
 import os
 import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -15,10 +13,8 @@ from hester.daemon.cockpit import explorations as ex
 from hester.daemon.cockpit.explorations import ExplorationError, ExplorationStore
 from hester.daemon.cockpit.follower import EventFollower
 from hester.daemon.cockpit.tasks import CockpitTaskStore
-from hester.daemon.session import InMemorySessionManager
 from hester.daemon.workstream.store import WorkstreamStore
 
-from .cockpit_helpers import SHARED, cockpit_env, hdr  # noqa: F401
 from .conftest import commit_file, git, make_event, write_events
 
 ANSWER_WITH_HEADINGS = "Here is a plan.\n\n## Log\n\n### Step one\n\n## Node n-00000000 · not a node\n\n# Big heading\n\nDone."
@@ -360,22 +356,7 @@ def test_promote_to_goal_draft(tmp_path):
         asyncio.run(explore_ops.promote(ctx, exp["id"], {"to": "task", "node_ids": ["n-deadbeef"]}))
 
 
-# ---------------------------------------------------------------- escalate, archive, knowledge
-
-
-def test_escalate_task(tmp_path):
-    ctx = Ctx(tmp_path)
-    task, _ = ctx.tasks().upsert({"title": "Flaky follower", "status": "running", "serves": ["G1"]})
-    task["lee_status"] = {"status": "blocked", "summary": "Cursor resets on rotate"}
-    task["files"] = [f"/w/f{i}.py" for i in range(25)]
-    ctx.tasks().save(task)
-    task, exp = explore_ops.escalate(ctx, task["id"])
-    assert exp["title"] == "Flaky follower" and exp["origin"] == {"kind": "task", "ref": task["id"]} and exp["serves"] == ["G1"]
-    seed = exp["seed"]
-    assert seed.startswith("Flaky follower\n\n") and "(the agent's words): Cursor resets on rotate" in seed
-    assert "/w/f19.py" in seed and "/w/f20.py" not in seed and "(+5 more)" in seed
-    assert task["status"] == "running", "the task stays open"
-    assert f"explore:{exp['id']}" in ctx.tasks()._body(task["id"])
+# ---------------------------------------------------------------- archive, knowledge
 
 
 def test_archive_as_knowledge_and_tool(tmp_path):
@@ -409,198 +390,3 @@ def test_archive_as_knowledge_and_tool(tmp_path):
     assert asyncio.run(knowledge_notes(name="../etc/passwd", working_dir=str(tmp_path)))["success"] is False
     assert asyncio.run(knowledge_notes(name="missing", working_dir=str(tmp_path)))["success"] is False
     assert "knowledge_notes" in [t.name for t in COCKPIT_TOOLS] and "knowledge_notes" in TOOL_CATEGORIES["cockpit"]
-
-
-# ---------------------------------------------------------------- HTTP: cockpit routes
-
-
-def test_cockpit_tree_routes(cockpit_env):
-    env = cockpit_env
-    c = env.client
-    h = hdr(env.b)
-    exp = c.post("/cockpit/explorations", headers=h, json={"title": "Routes"}).json()["data"]
-    assert exp["nodes"][0]["id"] == "root" and exp["active_node"] == "root" and exp["serves"] == []
-    eid = exp["id"]
-    r = c.post(f"/cockpit/explorations/{eid}/nodes", headers=h, json={"parent": "root", "label": "A", "mode": "learn"})
-    assert r.status_code == 201, r.text
-    a = r.json()["data"]
-    assert c.post(f"/cockpit/explorations/{eid}/nodes", headers=h, json={"parent": "n-deadbeef", "label": "x"}).status_code == 404
-    r = c.patch(f"/cockpit/explorations/{eid}/nodes/{a['id']}", headers=h, json={"label": "A2", "collapsed": True})
-    assert r.json()["data"]["label"] == "A2" and r.json()["data"]["collapsed"] is True
-    r = c.post(f"/cockpit/explorations/{eid}/decisions", headers=h, json={"text": "Pick A"})
-    assert r.status_code == 201 and r.json()["data"]["decision"]["reason"] is None
-    dec = r.json()["data"]
-    r = c.patch(f"/cockpit/explorations/{eid}/nodes/{dec['id']}", headers=h, json={"reason": "later"})
-    assert r.json()["data"]["decision"]["reason"] == "later"
-    b = c.post(f"/cockpit/explorations/{eid}/nodes", headers=h, json={"parent": "root", "label": "B"}).json()["data"]
-    r = c.post(f"/cockpit/explorations/{eid}/nodes/{b['id']}/prune", headers=h, json={})
-    assert r.status_code == 200 and r.json()["data"]["node"]["pruned"] is True
-    assert r.json()["data"]["decision"]["decision"]["pruned"] == [b["id"]]
-    r = c.post(f"/cockpit/explorations/{eid}/spikes", headers=h, json={"parent": a["id"], "prompt": "try A", "timebox_min": 15})
-    assert r.status_code == 201 and r.json()["data"]["spike"]["timebox_min"] == 15
-    sp = r.json()["data"]
-    r = c.patch(f"/cockpit/explorations/{eid}/spikes/{sp['id']}", headers=h, json={"task_id": "task-abc", "status": "running"})
-    assert r.json()["data"]["spike"]["task_id"] == "task-abc" and r.json()["data"]["spike"]["started_at"]
-    assert c.patch(f"/cockpit/explorations/{eid}/spikes/{sp['id']}", headers=h, json={"status": "bogus"}).status_code == 400
-    r = c.patch(f"/cockpit/explorations/{eid}", headers=h, json={"serves": ["G2"]})
-    assert r.json()["data"]["serves"] == ["G2"]
-
-    one = c.get(f"/cockpit/explorations/{eid}", headers=h).json()["data"]
-    kinds = {n["id"]: n for n in one["nodes"]}
-    assert kinds["root"]["conversation"] == [] and kinds[a["id"]]["conversation"] == []
-    assert "conversation" not in kinds[dec["id"]] and "conversation" not in kinds[sp["id"]]
-
-    r = c.post(f"/cockpit/explorations/{eid}/promote", headers=h, json={"to": "task"})
-    assert r.status_code == 200, r.text
-    assert r.json()["data"]["task"]["origin"] == {"kind": "explore", "ref": eid}
-    r = c.post(f"/cockpit/explorations/{eid}/promote", headers=h, json={"to": "workstream"})
-    assert r.json()["data"]["workstream_id"] and r.json()["data"]["phase"]
-    r = c.post(f"/cockpit/explorations/{eid}/promote", headers=h, json={"to": "goal"})
-    assert r.json()["data"]["draft_path"].startswith(".hester/goals/drafts/")
-    r = c.post(f"/cockpit/explorations/{eid}/archive", headers=h, json={"as_knowledge": True})
-    assert r.status_code == 200 and r.json()["data"]["knowledge_path"] == f".hester/knowledge/explore-{eid}.md"
-    assert (env.b / r.json()["data"]["knowledge_path"]).exists()
-
-
-def test_escalate_route_and_relay_links_spike(cockpit_env):
-    env = cockpit_env
-    c = env.client
-    h = hdr(env.b)
-    task = c.post("/cockpit/tasks", headers=h, json={"workspace": str(env.b), "title": "Hard bug"}).json()["data"]
-    r = c.post(f"/cockpit/tasks/{task['id']}/escalate", headers=h, json={})
-    assert r.status_code == 201, r.text
-    data = r.json()["data"]
-    assert data["exploration"]["origin"] == {"kind": "task", "ref": task["id"]} and data["task"]["status"] == "queued"
-    assert c.post("/cockpit/tasks/task-missing/escalate", headers=h, json={}).status_code == 404
-
-    eid = data["exploration"]["id"]
-    sp = c.post(f"/cockpit/explorations/{eid}/spikes", headers=h, json={"prompt": "repro"}).json()["data"]
-    worktree = {"slug": "x", "path": "/nowhere", "branch": "worktree-x"}
-    relayed = c.post("/cockpit/tasks", headers=h, json={
-        "workspace": str(env.b), "title": "Spike: repro", "status": "running", "lead": "delegate", "kind": "prototype",
-        "origin": {"kind": "explore", "ref": f"{eid}/{sp['id']}"}, "worktree": worktree,
-    }).json()["data"]
-    assert relayed["worktree"] == worktree and relayed["origin"]["kind"] == "explore"
-    node = next(n for n in c.get(f"/cockpit/explorations/{eid}", headers=h).json()["data"]["nodes"] if n["id"] == sp["id"])
-    assert node["spike"]["task_id"] == relayed["id"] and node["spike"]["status"] == "running"
-    c.post(f"/cockpit/tasks/{relayed['id']}/close", headers=h, json={"status": "discarded"})
-    nodes = c.get(f"/cockpit/explorations/{eid}", headers=h).json()["data"]["nodes"]
-    assert next(n for n in nodes if n["id"] == sp["id"])["spike"]["status"] == "discarded"
-    assert any(n["kind"] == "evidence" and n["parent"] == sp["id"] for n in nodes)
-
-
-# ---------------------------------------------------------------- HTTP: the Library
-
-
-def test_library_routes_shapes(cockpit_env):
-    env = cockpit_env
-    c = env.client
-    h = hdr(env.b)
-    r = c.post("/library/sessions", headers=h, json={"title": "Library tree", "working_directory": "."})
-    assert r.status_code == 200, r.text
-    created = r.json()
-    sid = created["session_id"]
-    assert ex.EXP_ID_RE.match(sid) and created["root_id"] == "root" and set(created["nodes"]) == {"root"}
-    assert (env.b / ".hester" / "explore" / sid / "exploration.md").exists()
-    assert ExplorationStore(env.b).require(sid)["origin"] == {"kind": "library", "ref": None}
-
-    listed = c.get("/library/sessions", headers=h).json()
-    assert listed["count"] == 1 and listed["sessions"][0]["session_id"] == sid
-    assert set(listed["sessions"][0]) == {"session_id", "title", "node_count", "created_at", "last_activity"}
-    assert c.get("/library/sessions", headers=hdr(env.a)).json()["count"] == 0, "per workspace"
-
-    r = c.post(f"/library/sessions/{sid}/nodes", headers=h, json={"parent_id": "root", "label": "Branch", "agent_mode": "learn"})
-    assert r.status_code == 200, r.text
-    nid = r.json()["node_id"]
-    assert r.json()["node"]["agent_mode"] == "learn" and r.json()["node"]["parent_id"] == "root"
-    assert c.post(f"/library/sessions/{sid}/nodes", headers=h, json={"parent_id": "n-deadbeef", "label": "x"}).status_code == 404
-    r = c.patch(f"/library/sessions/{sid}/nodes/{nid}", headers=h, json={"label": "Branch 2"})
-    assert r.json() == {"success": True, "node_id": nid, "label": "Branch 2"}
-
-    store = ExplorationStore(env.b)
-    store.record_turn(sid, "q?", "an answer", node_id=nid)
-    store.decide(sid, {"text": "Decide it"})
-    got = c.get(f"/library/sessions/{sid}", headers=h).json()
-    assert got["session_id"] == sid and got["root_id"] == "root" and got["active_node_id"] == nid
-    root, branch = got["nodes"]["root"], got["nodes"][nid]
-    assert root["children"][0] == nid and len(root["children"]) == 2
-    expected = {"id", "parent_id", "label", "node_type", "agent_mode", "conversation_history", "children",
-                "collapsed", "created_at", "pruned", "kind"}
-    assert expected <= set(branch)
-    assert branch["conversation_history"][0]["role"] == "user" and branch["conversation_history"][1]["content"] == "an answer"
-    dec = next(n for n in got["nodes"].values() if n["kind"] == "decision")
-    assert dec["node_type"] == "decision" and dec["decision"]["text"] == "Decide it"
-
-    r = c.post(f"/library/sessions/{sid}/save", headers=h, json={"node_id": nid})
-    assert r.json()["success"] is True
-    items = c.get(f"/someday?workspace={env.b}&status=open", headers=SHARED).json()["data"]
-    item = next(i for i in items if i["id"] == r.json()["idea_id"])
-    assert item["as"] == "explore" and item["source"]["surface"] == "lee" and "an answer" in item["text"]
-
-    r = c.post(f"/library/sessions/{sid}/promote-to-workstream", headers=h, json={"node_ids": [nid]})
-    assert r.status_code == 200, r.text
-    assert set(r.json()) == {"workstream_id", "title", "phase"}
-    assert store.require(sid)["promoted"][0]["to"] == "workstream"
-
-    r = c.delete(f"/library/sessions/{sid}", headers=h)
-    assert r.json() == {"status": "archived", "session_id": sid}
-    assert (env.b / ".hester" / "explore" / sid / "exploration.md").exists() and store.require(sid)["status"] == "archived"
-    assert c.get("/library/sessions", headers=h).json()["count"] == 0
-    assert c.get("/library/sessions/exp-00000000", headers=h).status_code == 404
-    assert c.get("/library/sessions/not-an-id", headers=h).status_code == 404
-
-
-def _sse(text):
-    out = []
-    for block in text.strip().split("\n\n"):
-        lines = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
-        out.append((lines.get("event"), json.loads(lines.get("data", "null"))))
-    return out
-
-
-def test_library_chat_writes_back_to_the_file(cockpit_env, monkeypatch):
-    env = cockpit_env
-    c = env.client
-    h = hdr(env.b)
-    calls = []
-
-    class Agent:
-        async def process_context(self, request, phase_callback=None):
-            calls.append(request)
-            return SimpleNamespace(status="success", response="Stubbed answer\n\n## Heading inside", trace=None)
-
-    mgr = InMemorySessionManager(ttl_seconds=60)
-    monkeypatch.setattr(ex, "_session_manager_getter", lambda: mgr)
-    env.main.app.dependency_overrides[env.main.get_agent] = lambda: Agent()
-    try:
-        sid = c.post("/library/sessions", headers=h, json={"title": "Chatty"}).json()["session_id"]
-        nid = c.post(f"/library/sessions/{sid}/nodes", headers=h,
-                     json={"parent_id": "root", "label": "Branch", "agent_mode": "explore"}).json()["node_id"]
-        ExplorationStore(env.b).record_turn(sid, "earlier", "EARLIER ANSWER", node_id=nid)
-        r = c.post(f"/library/sessions/{sid}/nodes/{nid}/chat", headers=h, json={"message": "What next?"})
-        assert r.status_code == 200, r.text
-        events = _sse(r.text)
-        assert [e for e, _ in events][-2:] == ["response", "done"]
-        assert events[-2][1]["text"] == "Stubbed answer\n\n## Heading inside" and events[-2][1]["node_id"] == nid
-
-        req = calls[0]
-        assert req.session_id == f"library-{sid}-{nid}" and req.message.startswith("@idea_explorer [Exploration context: Chatty")
-        session = asyncio.run(mgr.get(req.session_id))
-        system = [m.content for m in session.conversation_history if m.role == "system"]
-        assert any("EARLIER ANSWER" in m for m in system), "seeded from the file"
-
-        conv = ExplorationStore(env.b).conversation(sid, nid)
-        assert [m["content"] for m in conv] == ["earlier", "EARLIER ANSWER", "What next?", "Stubbed answer\n\n## Heading inside"]
-        got = c.get(f"/library/sessions/{sid}", headers=h).json()
-        assert len(got["nodes"][nid]["conversation_history"]) == 4
-
-        r = c.post(f"/library/sessions/{sid}/synthesize", headers=h, json={"action": "summarize", "node_ids": [nid]})
-        events = _sse(r.text)
-        assert events[0][0] == "node_created"
-        new_id = events[0][1]["node_id"]
-        assert ExplorationStore(env.b).conversation(sid, new_id)[-1]["content"].startswith("Stubbed answer")
-
-        dec = ExplorationStore(env.b).decide(sid, {"text": "no chat here"})
-        assert c.post(f"/library/sessions/{sid}/nodes/{dec['id']}/chat", headers=h, json={"message": "x"}).status_code == 400
-    finally:
-        env.main.app.dependency_overrides.pop(env.main.get_agent, None)

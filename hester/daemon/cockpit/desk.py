@@ -12,6 +12,7 @@ One store per workspace at ``<workspace>/.hester/desk/`` (0700)::
       answers.jsonl             asks and hand-offs (deep.py's rows, same ids)
       references.jsonl          kept quotes and links
       questions.jsonl           questions (an exploration kept them in frontmatter)
+      assets/img-<hex>.png|jpg  images on the Page (``![…](assets/…)`` in page.md); they go with the card
 
 Titles live in ``card.json`` only; ``desk.json`` holds layout and ``GET /desk``
 joins them. ``PageStore`` gives deep.py the surface of an ``ExplorationStore``
@@ -50,23 +51,29 @@ from .explorations import (
     utc_now,
 )
 from .plain import _clip_words
-from .tasks import atomic_write, iso_s
+from .tasks import atomic_write, clip, iso_s
 from ..hester_dir import ensure_gitignored
 
 logger = logging.getLogger("hester.daemon.cockpit.desk")
 
 PAGE_ID_RE = re.compile(r"^pg-[0-9a-f]{8}$")
 AREA_ID_RE = re.compile(r"^area-[0-9a-f]{8}$")
-DRAWER_ID_RE = re.compile(r"^(put-away|ideas|drw-[0-9a-f]{8})$")
+DRAWER_ID_RE = re.compile(r"^(stashed|ideas|drw-[0-9a-f]{8})$")
 STROKE_ID_RE = re.compile(r"^stk-[0-9a-f]{8}$")
 IDEAS_DRAWER = "ideas"
-PUT_AWAY_DRAWER = "put-away"
+STASHED_DRAWER = "stashed"
+LEGACY_PUT_AWAY = "put-away"  # the Stashed Drawer's id before 2026-09-28; load() rewrites it once
 CARD_KINDS = ("page",)
 
 DESK_DIR = Path(".hester") / "desk"
 DESK_FILE = "desk.json"
 SESSIONS_FILE = "sessions.jsonl"
 CARD_FILE = "card.json"
+ASSETS_DIR = "assets"
+ASSET_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
+ASSET_MAGIC = {"png": b"\x89PNG\r\n\x1a\n", "jpg": b"\xff\xd8\xff"}
+ASSET_NAME_RE = re.compile(r"^img-[0-9a-f]{8}\.(png|jpg)$")
+MAX_ASSET_BYTES = 10 * 1024 * 1024
 
 AREA_W, AREA_H, AREA_GAP, AREA_COLS = 1200, 800, 200, 3
 CARD_X, CARD_Y, CARD_W, CARD_H, CARD_GAP = 48, 96, 360, 240, 48
@@ -84,6 +91,7 @@ DEFAULT_STROKE_WIDTH = 2
 IN_FLIGHT = ("launching", "running", "waiting", "review")
 DEFAULT_TITLE = "Untitled"
 GOALS_TITLE = "Goals"
+MAX_ESCALATE_FILES = 20
 
 _LOCK = threading.RLock()
 
@@ -96,8 +104,12 @@ class DeskNotFound(ExplorationNotFound):
     """404 ``not found``."""
 
 
+class AssetTypeError(DeskError):
+    """415: an image upload that isn't image/png or image/jpeg."""
+
+
 class DeskConflict(Exception):
-    """409 with a code: ``not_empty``, ``not_put_away`` or ``not_open``."""
+    """409 with a code: ``not_empty``, ``not_stashed`` or ``not_open``."""
 
     def __init__(self, code: str):
         super().__init__(code)
@@ -322,6 +334,44 @@ class PageStore:
     def page_text(self, card_id: str) -> str:
         return deep.read_page_text(self, card_id)
 
+    # ---- images on a Page (§4.4 of the Tether plan): pages/<id>/assets/, gone with the card
+
+    def add_asset(self, card_id: str, content_type: str, data: bytes) -> Dict[str, str]:
+        """Store an image for the Page; ``{name: '<asset id>.<ext>', path: 'assets/<name>'}``."""
+        self.require(card_id)
+        ext = ASSET_TYPES.get((content_type or "").split(";")[0].strip().lower())
+        if ext is None:
+            raise AssetTypeError("Content-Type must be image/png or image/jpeg")
+        if not data:
+            raise DeskError("the image is empty")
+        if len(data) > MAX_ASSET_BYTES:
+            raise DeskError("the image is larger than 10 MB")
+        if not data.startswith(ASSET_MAGIC[ext]):
+            raise DeskError(f"the body is not a {ext.upper()} image")
+        d = self.exp_dir(card_id) / ASSETS_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        _chmod(d, 0o700)
+        while True:
+            name = f"{_hex_id('img')}.{ext}"
+            if not (d / name).exists():
+                break
+        tmp = d / f".{name}.tmp"
+        tmp.write_bytes(data)
+        _chmod(tmp, 0o600)
+        os.replace(tmp, d / name)
+        return {"name": name, "path": f"{ASSETS_DIR}/{name}"}
+
+    def asset_path(self, card_id: str, name: str) -> Tuple[Path, str]:
+        """(file, content type) of one of the Page's images; DeskNotFound when it isn't there."""
+        self.require(card_id)
+        if not ASSET_NAME_RE.match(name or ""):
+            raise DeskError("invalid asset name")
+        path = self.exp_dir(card_id) / ASSETS_DIR / name
+        if not path.is_file():
+            raise DeskNotFound(name)
+        ext = name.rsplit(".", 1)[1]
+        return path, next(t for t, e in ASSET_TYPES.items() if e == ext)
+
 
 def new_card(card_id: str, title: str, now: datetime, **fields: Any) -> Dict[str, Any]:
     card = {
@@ -341,7 +391,7 @@ def new_card(card_id: str, title: str, now: datetime, **fields: Any) -> Dict[str
 def _empty_raw() -> Dict[str, Any]:
     return {
         "version": 1, "areas": [], "cards": [],
-        "drawers": [{"id": PUT_AWAY_DRAWER, "name": "Put away"}], "strokes": [],
+        "drawers": [{"id": STASHED_DRAWER, "name": "Stashed"}], "strokes": [],
         "goals_card_id": None, "last": None,
         "migration": {"map": {}, "last_report": None},
     }
@@ -359,6 +409,7 @@ class DeskStore:
 
     def _read(self) -> Dict[str, Any]:
         raw = _read_json(self.path) or _empty_raw()
+        _rename_put_away(raw)
         base = _empty_raw()
         for k, v in base.items():
             if k not in raw or not isinstance(raw[k], type(v)) and v is not None:
@@ -369,8 +420,8 @@ class DeskStore:
                           and isinstance(s.get("points"), list)]
         raw["drawers"] = [d for d in raw["drawers"] if isinstance(d, dict) and DRAWER_ID_RE.match(str(d.get("id") or ""))
                           and d.get("id") != IDEAS_DRAWER]
-        if not any(d["id"] == PUT_AWAY_DRAWER for d in raw["drawers"]):
-            raw["drawers"].insert(0, {"id": PUT_AWAY_DRAWER, "name": "Put away"})
+        if not any(d["id"] == STASHED_DRAWER for d in raw["drawers"]):
+            raw["drawers"].insert(0, {"id": STASHED_DRAWER, "name": "Stashed"})
         mig = raw["migration"] if isinstance(raw.get("migration"), dict) else {}
         raw["migration"] = {
             "map": mig.get("map") if isinstance(mig.get("map"), dict) else {},
@@ -383,6 +434,7 @@ class DeskStore:
         return raw
 
     def _write(self, raw: Dict[str, Any]) -> None:
+        raw.pop(RENAMED_KEY, None)
         ensure_gitignored(self.workspace)
         self.root.mkdir(parents=True, exist_ok=True)
         _chmod(self.root, 0o700)
@@ -397,6 +449,8 @@ class DeskStore:
         now = now or utc_now()
         with _LOCK:
             raw = self._read()
+            if raw.get(RENAMED_KEY):
+                self._write(raw)  # 'put-away' -> 'stashed', once
             if self._migration_due(raw):
                 self._migrate(raw, now)
                 raw = self._read()
@@ -430,7 +484,7 @@ class DeskStore:
     @staticmethod
     def _area_record(area_id: str, name: str, x, y, w, h, now: datetime, migrated_from=None) -> Dict[str, Any]:
         return {
-            "id": area_id, "name": name, "x": x, "y": y, "w": w, "h": h, "drawer_id": None, "put_away_at": None,
+            "id": area_id, "name": name, "x": x, "y": y, "w": w, "h": h, "drawer_id": None, "stashed_at": None,
             "created_at": iso_s(now), "updated_at": iso_s(now), "migrated_from": migrated_from,
         }
 
@@ -511,21 +565,21 @@ class DeskStore:
 
     @staticmethod
     def area_api(a: Dict[str, Any]) -> Dict[str, Any]:
-        return {k: a.get(k) for k in ("id", "name", "x", "y", "w", "h", "drawer_id", "put_away_at", "created_at", "updated_at", "migrated_from")}
+        return {k: a.get(k) for k in ("id", "name", "x", "y", "w", "h", "drawer_id", "stashed_at", "created_at", "updated_at", "migrated_from")}
 
     @staticmethod
     def stroke_api(s: Dict[str, Any]) -> Dict[str, Any]:
         return {k: s.get(k) for k in ("id", "area_id", "points", "width", "created_at")}
 
     def drawers_api(self, raw: Dict[str, Any]) -> List[Dict[str, Any]]:
-        from ..copilot.someday import SomedayStore
+        from ..copilot.ideas import IdeasStore
 
         try:
-            ideas = len(SomedayStore(self.workspace).list("open"))
+            ideas = len(IdeasStore(self.workspace).list("open"))
         except Exception:
             ideas = 0
         out = [{"id": IDEAS_DRAWER, "name": "Ideas", "kind": "ideas", "area_ids": [], "count": ideas}]
-        drawers = sorted(raw["drawers"], key=lambda d: 0 if d["id"] == PUT_AWAY_DRAWER else 1)
+        drawers = sorted(raw["drawers"], key=lambda d: 0 if d["id"] == STASHED_DRAWER else 1)
         for d in drawers:
             out.append(self.drawer_api(raw, d))
         return out
@@ -533,7 +587,7 @@ class DeskStore:
     @staticmethod
     def drawer_api(raw: Dict[str, Any], d: Dict[str, Any]) -> Dict[str, Any]:
         inside = [a for a in raw["areas"] if a.get("drawer_id") == d["id"]]
-        inside.sort(key=lambda a: str(a.get("put_away_at") or ""), reverse=True)
+        inside.sort(key=lambda a: str(a.get("stashed_at") or ""), reverse=True)
         return {"id": d["id"], "name": d.get("name") or "", "kind": "areas",
                 "area_ids": [a["id"] for a in inside], "count": len(inside)}
 
@@ -563,7 +617,7 @@ class DeskStore:
         return self.card_api(entry, card, raw)
 
     def briefs(self, raw: Optional[Dict[str, Any]] = None, on_desk: bool = False) -> List[Dict[str, Any]]:
-        """Every card as {id, kind, title, area_id, area_name, purpose, last_touched_at, goals, page_updated_at, put_away}."""
+        """Every card as {id, kind, title, area_id, area_name, purpose, last_touched_at, goals, page_updated_at, stashed}."""
         raw = raw or self.load()
         areas = {a["id"]: a for a in raw["areas"]}
         out = []
@@ -572,15 +626,15 @@ class DeskStore:
             if card is None:
                 continue
             area = areas.get(entry.get("area_id"))
-            put_away = bool(area and area.get("drawer_id"))
-            if on_desk and put_away:
+            stashed = bool(area and area.get("drawer_id"))
+            if on_desk and stashed:
                 continue
             out.append({
                 "id": entry["id"], "kind": card.get("kind") or "page", "title": card.get("title") or DEFAULT_TITLE,
                 "area_id": entry.get("area_id") if area else None, "area_name": area.get("name") if area else None,
                 "purpose": card.get("purpose") if card.get("purpose") == "goals" else None,
                 "last_touched_at": card.get("last_touched_at"), "created_at": card.get("created_at"),
-                "goals": [g for g in card.get("goals") or [] if isinstance(g, str)], "put_away": put_away,
+                "goals": [g for g in card.get("goals") or [] if isinstance(g, str)], "stashed": stashed,
             })
         return out
 
@@ -648,30 +702,30 @@ class DeskStore:
         if (raw.get("last") or {}).get("card_id") == card_id:
             raw["last"] = None
 
-    def put_away(self, area_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    def stash(self, area_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
-        drawer_id = body.get("drawer_id") or PUT_AWAY_DRAWER
+        drawer_id = body.get("drawer_id") or STASHED_DRAWER
         with _LOCK:
             raw = self.load(now)
             area = self._area(raw, area_id)
             if drawer_id == IDEAS_DRAWER or not any(d["id"] == drawer_id for d in raw["drawers"]):
                 raise DeskError("drawer_id must be a Drawer that holds Areas")
             area["drawer_id"] = drawer_id
-            area["put_away_at"] = iso_s(now)
+            area["stashed_at"] = iso_s(now)
             area["updated_at"] = iso_s(now)
             self._write(raw)
         return self.area_api(area)
 
-    def take_out(self, area_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    def unstash(self, area_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or utc_now()
         x, y = _num(body, "x"), _num(body, "y")
         with _LOCK:
             raw = self.load(now)
             area = self._area(raw, area_id)
             if not area.get("drawer_id"):
-                raise DeskConflict("not_put_away")
+                raise DeskConflict("not_stashed")
             area["drawer_id"] = None
-            area["put_away_at"] = None
+            area["stashed_at"] = None
             if x is not None:
                 area["x"] = x
             if y is not None:
@@ -720,7 +774,7 @@ class DeskStore:
                     raise DeskError("area_id must be an Area id")
                 area = self._area(raw, body["area_id"])
                 if area.get("drawer_id"):
-                    raise DeskError("that Area is put away")
+                    raise DeskError("that Area is stashed")
                 entry["area_id"] = area["id"]
             for k in ("x", "y", "w", "h"):
                 v = _num(body, k, positive=k in ("w", "h"))
@@ -758,7 +812,7 @@ class DeskStore:
         with _LOCK:
             raw = self.load(now)
             if area_id is not None and self._area(raw, area_id).get("drawer_id"):
-                raise DeskError("that Area is put away")
+                raise DeskError("that Area is stashed")
             if len(raw["strokes"]) >= MAX_STROKES:
                 raise DeskError(f"the Desk has {MAX_STROKES} lines; delete some first")
             stroke = {
@@ -830,7 +884,7 @@ class DeskStore:
                 if area is None:
                     raise DeskError("area_id is required")
                 if area.get("drawer_id"):
-                    raise DeskError("that Area is put away")
+                    raise DeskError("that Area is stashed")
                 w, h = pos["w"] or CARD_W, pos["h"] or CARD_H
                 if pos["x"] is None or pos["y"] is None:
                     fx, fy = self._free_card_slot(raw, area, w, h)
@@ -885,18 +939,18 @@ class DeskStore:
             self._write(raw)
             return dict(raw["last"])
 
-    def idea_to_page(self, someday_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    def idea_to_page(self, idea_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
         """POST /desk/ideas/{id}/page: the idea's text as a Page, in ``area_id`` or a new Area named after it."""
-        from ..copilot.someday import ID_RE as SOMEDAY_ID_RE
-        from ..copilot.someday import SomedayStore
+        from ..copilot.ideas import ID_RE as IDEA_ID_RE
+        from ..copilot.ideas import IdeasStore
 
         now = now or utc_now()
-        if not SOMEDAY_ID_RE.match(someday_id or ""):
-            raise DeskError("invalid someday id")
-        someday = SomedayStore(self.workspace)
-        item = someday.get(someday_id)
+        if not IDEA_ID_RE.match(idea_id or ""):
+            raise DeskError("invalid idea id")
+        ideas = IdeasStore(self.workspace)
+        item = ideas.get(idea_id)
         if item is None:
-            raise DeskNotFound(someday_id)
+            raise DeskNotFound(idea_id)
         if item.status != "open":
             raise DeskConflict("not_open")
         name = idea_name(item.text)
@@ -911,8 +965,40 @@ class DeskStore:
                 "text": item.text if len(item.text.encode("utf-8")) <= MAX_PAGE_BYTES else "",
                 "origin": {"kind": "someday", "ref": item.id},
             }, now)
-            someday.triage(item.id, "explore", note=f"page:{card['id']}", now=now)
+            ideas.triage(item.id, "explore", note=f"page:{card['id']}", now=now)
+        # ``someday_id`` is the wire name (shared/desk.ts IdeaToPageResult).
         return {"card": card, "area": area, "someday_id": item.id}
+
+    def task_to_page(self, tasks, task_id: str, now: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        POST /cockpit/tasks/{id}/escalate: a Page card from a task (its title, the
+        agent's last report, its files), origin ``{kind: 'task', ref}``, in the first
+        Area on the Desk. The task stays open with the note ``page:<card id>``.
+        """
+        now = now or utc_now()
+        task = tasks.require(task_id)
+        report = (task.get("lee_status") or {}).get("summary") or task.get("summary")
+        parts = [task["title"]]
+        if report:
+            parts.append(f"Agent's last report (the agent's words): {clip(report)}")
+        files = [f for f in task.get("files") or [] if isinstance(f, str)]
+        if files:
+            more = f" (+{len(files) - MAX_ESCALATE_FILES} more)" if len(files) > MAX_ESCALATE_FILES else ""
+            parts.append("Files: " + ", ".join(files[:MAX_ESCALATE_FILES]) + more)
+        with _LOCK:
+            raw = self.load(now)
+            area = next((a for a in raw["areas"] if not a.get("drawer_id")), None)
+            if area is None:
+                area = self.create_area({"name": "Main"}, now)
+            card, _, _ = self.create_page({
+                "area_id": area["id"], "title": task["title"],
+                "text": seed_page("\n\n".join(parts)), "origin": {"kind": "task", "ref": task_id},
+            }, now)
+            serves = [str(g) for g in task.get("serves") or []]
+            if serves:
+                self.pages.write_card(dict(self.pages.read_card(card["id"]) or {}, id=card["id"], goals=serves))
+        tasks.upsert({"id": task_id, "note": f"page:{card['id']}"}, now=now)
+        return {"card": card, "area": self.area_api(area)}
 
     # ---------------------------------------------------------------- sessions
 
@@ -1088,7 +1174,6 @@ class DeskStore:
                 f"{report['skipped_empty']} empty skipped, {len(report['errors'])} errors"
             )
         self._write(raw)
-        self._rewrite_open_next(mapping)
         return report
 
     def _migrate_one(self, raw, exp, d: Path, has_dir: bool, page: Optional[str], now: datetime) -> str:
@@ -1155,29 +1240,12 @@ class DeskStore:
         area = self._area_record(area_id, _clip_words(name, MAX_NAME), x, y, AREA_W, AREA_H, now, migrated_from=exp_id)
         area["created_at"] = exp.get("created_at") or iso_s(now)
         if exp.get("status") == "archived":
-            area["drawer_id"] = PUT_AWAY_DRAWER
-            area["put_away_at"] = exp.get("archived_at") or iso_s(now)
+            area["drawer_id"] = STASHED_DRAWER
+            area["stashed_at"] = exp.get("archived_at") or iso_s(now)
         raw["areas"].append(area)
         raw["cards"].append({"id": card_id, "kind": "page", "area_id": area_id,
                              "x": CARD_X, "y": CARD_Y, "w": CARD_W, "h": CARD_H})
         return card_id
-
-    def _rewrite_open_next(self, mapping: Dict[str, Optional[str]]) -> None:
-        """Open next's ``exploration_id`` becomes ``card_id`` through the map."""
-        from ..copilot import open_next
-
-        rec = open_next._read(self.workspace)
-        exp_id = (rec or {}).get("exploration_id")
-        if not exp_id or exp_id not in mapping:
-            return
-        rec = dict(rec)
-        rec.pop("exploration_id", None)
-        if mapping[exp_id]:
-            rec["card_id"] = mapping[exp_id]
-        if not rec.get("card_id") and not rec.get("someday_id"):
-            open_next.clear(self.workspace)
-            return
-        atomic_write(open_next.path_for(self.workspace), json.dumps(rec, indent=2) + "\n")
 
     def card_for_exploration(self, exp_id: Any) -> Optional[str]:
         """The Page card an exploration id maps to (the migration's map, else ``pg-<hex>`` when it exists)."""
@@ -1190,9 +1258,9 @@ class DeskStore:
 
     # ---------------------------------------------------------------- GET /desk/last (§6.4)
 
-    def last(self, now: Optional[datetime] = None, open_next_rec: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def last(self, now: Optional[datetime] = None) -> Dict[str, Any]:
         from ..copilot.event_reader import parse_ts
-        from ..copilot.someday import SomedayStore
+        from ..copilot.ideas import IdeasStore
 
         now = now or utc_now()
         raw = self.load(now)
@@ -1201,10 +1269,7 @@ class DeskStore:
         latest = sessions[0] if sessions else None
 
         card_id, source = None, None
-        nxt = (open_next_rec or {}).get("card_id")
-        if nxt in briefs:
-            card_id, source = nxt, "open_next"
-        elif (raw.get("last") or {}).get("card_id") in briefs:
+        if (raw.get("last") or {}).get("card_id") in briefs:
             card_id, source = raw["last"]["card_id"], "last"
         elif latest and latest.get("stopped_card_id") in briefs:
             card_id, source = latest["stopped_card_id"], "session"
@@ -1240,7 +1305,7 @@ class DeskStore:
         arrived["open_questions"] = sum(
             1 for q in deep.read_jsonl(self.pages.dir / card_id / deep.QUESTIONS_FILE) if q.get("status") == "open"
         )
-        for item in SomedayStore(self.workspace).list("open"):
+        for item in IdeasStore(self.workspace).list("open"):
             created = parse_ts(item.created_at)
             if item.source.get("card_id") == card_id and (since is None or (created is not None and created > since)):
                 arrived["captured"] += 1
@@ -1249,6 +1314,34 @@ class DeskStore:
             "stopped_line": stopped_line(page, stopped),
         })
         return out
+
+
+RENAMED_KEY = "_renamed_put_away"  # set by _read when it rewrote the old names; load() writes once
+
+
+def _rename_put_away(raw: Any) -> None:
+    """The Drawer ``put-away`` became ``stashed`` and ``put_away_at`` ``stashed_at`` (2026-09-28): rewrite in place."""
+    if not isinstance(raw, dict):
+        return
+    changed = False
+    for d in raw.get("drawers") or []:
+        if isinstance(d, dict) and d.get("id") == LEGACY_PUT_AWAY:
+            d["id"] = STASHED_DRAWER
+            if d.get("name") in (None, "", "Put away"):
+                d["name"] = "Stashed"
+            changed = True
+    for a in raw.get("areas") or []:
+        if not isinstance(a, dict):
+            continue
+        if a.get("drawer_id") == LEGACY_PUT_AWAY:
+            a["drawer_id"] = STASHED_DRAWER
+            changed = True
+        if "put_away_at" in a:
+            a.setdefault("stashed_at", a.get("put_away_at"))
+            del a["put_away_at"]
+            changed = True
+    if changed:
+        raw[RENAMED_KEY] = True
 
 
 def _migrated_session(r: Dict[str, Any], card_id: str) -> Dict[str, Any]:

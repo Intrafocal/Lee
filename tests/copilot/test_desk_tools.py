@@ -25,9 +25,9 @@ def test_a_card_moves_between_areas_with_validation(cockpit_env):
         assert r.status_code == 400, bad
     assert c.patch(f"/desk/cards/{card['id']}", headers=h, json={"area_id": "area-00000000"}).status_code == 404
     assert c.patch(f"/desk/cards/{card['id']}", headers=h, json={"x": "1"}).status_code == 400
-    c.post(f"/desk/areas/{main['id']}/put-away", headers=h, json={})
+    c.post(f"/desk/areas/{main['id']}/stash", headers=h, json={})
     r = c.patch(f"/desk/cards/{card['id']}", headers=h, json={"area_id": main["id"]})
-    assert r.status_code == 400 and "put away" in r.json()["error"]
+    assert r.status_code == 400 and "stashed" in r.json()["error"]
     # still where it was put
     got = next(x for x in c.get("/desk", headers=h).json()["data"]["cards"] if x["id"] == card["id"])
     assert got["area_id"] == other["id"]
@@ -97,9 +97,9 @@ def test_stroke_validation(cockpit_env, monkeypatch):
     assert c.post("/desk/strokes", headers=h, json={"points": ok, "area_id": "area-00000000"}).status_code == 404
     assert c.post("/desk/strokes", headers=h, json={"points": [[0, 0]] * desk_mod.MAX_STROKE_POINTS}).status_code == 201
 
-    c.post(f"/desk/areas/{main['id']}/put-away", headers=h, json={})
+    c.post(f"/desk/areas/{main['id']}/stash", headers=h, json={})
     r = c.post("/desk/strokes", headers=h, json={"points": ok, "area_id": main["id"]})
-    assert r.status_code == 400 and "put away" in r.json()["error"]
+    assert r.status_code == 400 and "stashed" in r.json()["error"]
 
     monkeypatch.setattr(desk_mod, "MAX_STROKES", 2)
     assert c.post("/desk/strokes", headers=h, json={"points": ok}).status_code == 201
@@ -107,7 +107,7 @@ def test_stroke_validation(cockpit_env, monkeypatch):
     assert r.status_code == 400 and "lines" in r.json()["error"]
 
 
-def test_put_away_keeps_lines_and_delete_takes_them(cockpit_env):
+def test_stash_keeps_lines_and_delete_takes_them(cockpit_env):
     c, h = cockpit_env.client, hdr(cockpit_env.a)
     main = main_area(c, h)
     other = c.post("/desk/areas", headers=h, json={"name": "Other"}).json()["data"]
@@ -116,10 +116,10 @@ def test_put_away_keeps_lines_and_delete_takes_them(cockpit_env):
     kept = c.post("/desk/strokes", headers=h, json={"area_id": main["id"], "points": [[0, 0], [9, 9]]}).json()["data"]
     bare = c.post("/desk/strokes", headers=h, json={"points": [[0, 0], [9, 9]]}).json()["data"]
 
-    c.post(f"/desk/areas/{other['id']}/put-away", headers=h, json={})
+    c.post(f"/desk/areas/{other['id']}/stash", headers=h, json={})
     ids = {s["id"] for s in c.get("/desk", headers=h).json()["data"]["strokes"]}
-    assert ids == {mine["id"], kept["id"], bare["id"]}, "put away: its lines stay with it"
-    c.post(f"/desk/areas/{other['id']}/take-out", headers=h, json={})
+    assert ids == {mine["id"], kept["id"], bare["id"]}, "stashed: its lines stay with it"
+    c.post(f"/desk/areas/{other['id']}/unstash", headers=h, json={})
 
     assert c.delete(f"/desk/areas/{other['id']}", headers=h).status_code == 409, "lines don't confirm a delete; cards do"
     r = c.request("DELETE", f"/desk/areas/{other['id']}", headers=h, json={"with_cards": True})

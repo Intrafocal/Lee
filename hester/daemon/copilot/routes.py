@@ -1,8 +1,8 @@
 """
 Copilot HTTP routes on the Hester daemon (:9000).
 
-Someday (capture store), the session-start digest, the weekly retro, Open next
-(14 §8.1) and usage (15 §5).
+Ideas (the capture store, was Someday), the session-start digest, the opener,
+the weekly retro and usage (15 §5).
 Every endpoint takes an explicit ``workspace`` (absolute path), falling back
 to the daemon's current workspace, so it works for any open Lee window.
 Callers are the shared token (Lee, the renderer) or a paired device token;
@@ -12,7 +12,6 @@ the auth middleware puts the caller on ``request.state.principal``.
 import asyncio
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,11 +29,10 @@ from ..cockpit.tasks import to_api as task_to_api
 from ..workspaces.registry import get_registry
 from . import digest as digest_mod
 from . import lee_events
-from . import open_next as open_next_mod
 from . import retro as retro_mod
 from . import usage as usage_mod
 from .event_reader import parse_ts
-from .someday import SomedayError, SomedayStore, age_ms
+from .ideas import IdeaError, IdeasStore, age_ms
 
 logger = logging.getLogger("hester.daemon.copilot.routes")
 
@@ -76,19 +74,6 @@ def caller_surface(request: Request) -> str:
     if p.get("kind") == "device":
         return str(p.get("device_kind") or "device")
     return "lee"
-
-
-_SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
-
-
-def _relayed_surface(request: Request, body: Dict[str, Any]) -> str:
-    """A device's own surface; the shared token (Lee main relaying POST /carry/open-next) may name the device's."""
-    p = principal_of(request)
-    if p.get("kind") != "device":
-        claimed = body.get("surface")
-        if isinstance(claimed, str) and _SURFACE_RE.match(claimed):
-            return claimed
-    return caller_surface(request)
 
 
 def resolve_workspace(value: Optional[str]) -> Path:
@@ -158,10 +143,10 @@ async def fetch_attention_items(timeout: float = 2.0) -> Optional[List[Dict[str,
 def create_copilot_router() -> APIRouter:
     router = APIRouter(tags=["copilot"])
 
-    # ------------------------------------------------------------------ someday
+    # ------------------------------------------------------------------ ideas
 
-    @router.post("/someday")
-    async def someday_create(request: Request):
+    @router.post("/ideas")
+    async def ideas_create(request: Request):
         try:
             body = await _json_body(request)
             ws = resolve_workspace(body.get("workspace"))
@@ -171,7 +156,7 @@ def create_copilot_router() -> APIRouter:
                 # A device principal overrides surface and device_id; the rest is normalised as usual.
                 source = dict(source, surface=p.get("device_kind") or "device", device_id=p.get("device_id"))
             tags = body.get("tags") if isinstance(body.get("tags"), list) else None
-            item = SomedayStore(ws).create(
+            item = IdeasStore(ws).create(
                 text=body.get("text"),
                 as_=body.get("as") or "someday",
                 source=source,
@@ -179,22 +164,22 @@ def create_copilot_router() -> APIRouter:
             )
         except BadRequest as e:
             return _err(str(e), e.status)
-        except SomedayError as e:
+        except IdeaError as e:
             return _err(str(e))
         return _ok(item.to_dict(), 201)
 
-    @router.get("/someday")
-    async def someday_list(request: Request, workspace: Optional[str] = None, status: str = "open"):
+    @router.get("/ideas")
+    async def ideas_list(request: Request, workspace: Optional[str] = None, status: str = "open"):
         try:
             ws = resolve_workspace(workspace)
         except BadRequest as e:
             return _err(str(e), e.status)
         if status not in ("open", "all", "explored", "promoted", "dropped", "kept"):
             return _err("status must be open or all")
-        return _ok([i.to_dict() for i in SomedayStore(ws).list(status)])
+        return _ok([i.to_dict() for i in IdeasStore(ws).list(status)])
 
-    @router.post("/someday/{item_id}/triage")
-    async def someday_triage(item_id: str, request: Request):
+    @router.post("/ideas/{item_id}/triage")
+    async def ideas_triage(item_id: str, request: Request):
         task_id = None
         try:
             body = await _json_body(request)
@@ -218,7 +203,7 @@ def create_copilot_router() -> APIRouter:
                     exp_id = item_id
                 else:
                     raise BadRequest("to must be 'task' or 'explore'")
-            store = SomedayStore(ws)
+            store = IdeasStore(ws)
             if exp_id is not None:
                 # Desk D2: the idea becomes a Page card in a new Area (as POST /desk/ideas/{id}/page),
                 # which marks it explored; ``exploration`` is a legacy alias of the card.
@@ -232,7 +217,7 @@ def create_copilot_router() -> APIRouter:
                 item = store.triage(item_id, action, note=note)
         except BadRequest as e:
             return _err(str(e), e.status)
-        except SomedayError as e:
+        except IdeaError as e:
             return _err(str(e))
         except DeskConflict as e:
             return _err(e.code, 409)
@@ -241,8 +226,8 @@ def create_copilot_router() -> APIRouter:
         except KeyError:
             return _err("not found", 404)
         lee_events.ingest(
-            "someday.triage",
-            {"someday_id": item.id, "action": item.triage["action"], "age_ms": age_ms(item)},
+            "idea.triage",
+            {"idea_id": item.id, "action": item.triage["action"], "age_ms": age_ms(item)},
             workspace=str(ws),
             actor=caller_actor(request),
         )
@@ -256,7 +241,7 @@ def create_copilot_router() -> APIRouter:
         async with ctx.lock:
             task, _ = ctx.tasks().upsert({
                 "id": task_id,
-                "title": first_line(item.text, 80) or "Someday idea",
+                "title": first_line(item.text, 80) or "Idea",
                 "status": "queued",
                 "lead": "delegate",
                 "kind": "unknown",
@@ -340,52 +325,6 @@ def create_copilot_router() -> APIRouter:
             actor=caller_actor(request),
         )
         return _ok(data)
-
-    # ------------------------------------------------------------------ open next
-
-    @router.get("/copilot/open-next")
-    async def copilot_open_next_get(request: Request, workspace: Optional[str] = None):
-        """14 §8.1: what the next Deep session opens first, or null (stale picks clear on read)."""
-        try:
-            ws = resolve_workspace(workspace)
-        except BadRequest as e:
-            return _err(str(e), e.status)
-        ctx = get_registry().get(ws, source="request")
-        async with ctx.lock:
-            data = await asyncio.to_thread(open_next_mod.get, ws)
-        return _ok(data)
-
-    @router.post("/copilot/open-next")
-    async def copilot_open_next_set(request: Request):
-        """``{workspace?, card_id? (or the legacy exploration_id), someday_id?}``; the caller's surface is recorded (devices allowed)."""
-        try:
-            body = await _json_body(request)
-            ws = resolve_workspace(body.get("workspace"))
-        except BadRequest as e:
-            return _err(str(e), e.status)
-        ctx = get_registry().get(ws, source="request")
-        async with ctx.lock:
-            try:
-                data = await asyncio.to_thread(
-                    open_next_mod.set_, ws,
-                    card_id=body.get("card_id"), exploration_id=body.get("exploration_id"),
-                    someday_id=body.get("someday_id"),
-                    surface=_relayed_surface(request, body),
-                )
-            except open_next_mod.OpenNextError as e:
-                return _err(str(e), e.status)
-        return _ok(data)
-
-    @router.delete("/copilot/open-next")
-    async def copilot_open_next_clear(request: Request, workspace: Optional[str] = None):
-        try:
-            ws = resolve_workspace(workspace)
-        except BadRequest as e:
-            return _err(str(e), e.status)
-        ctx = get_registry().get(ws, source="request")
-        async with ctx.lock:
-            cleared = await asyncio.to_thread(open_next_mod.clear, ws)
-        return _ok({"cleared": cleared})
 
     # ------------------------------------------------------------------ usage
 

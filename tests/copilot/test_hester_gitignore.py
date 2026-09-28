@@ -4,7 +4,7 @@ import subprocess
 
 from hester.daemon import hester_dir
 from hester.daemon.cockpit.desk import DeskStore
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot.ideas import IdeasStore
 
 
 def git(ws, *args):
@@ -16,7 +16,7 @@ def test_desk_and_ideas_are_ignored_but_plugins_are_not(tmp_path):
     git(tmp_path, "init", "-q")
     store = DeskStore(tmp_path)
     store.create_page({"area_id": store.create_area({"name": "Mesh"})["id"], "text": "private thinking\n"})
-    SomedayStore(tmp_path).create("an idea")
+    IdeasStore(tmp_path).create("an idea")
     plugin = tmp_path / ".hester" / "plugins" / "p" / "plugin.yaml"
     plugin.parent.mkdir(parents=True)
     plugin.write_text("name: p\n")

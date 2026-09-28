@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from hester.daemon.cockpit import deep, handoffs
 from hester.daemon.cockpit.desk import DeskStore, stopped_line, tail_clip
 from hester.daemon.cockpit.explorations import ExplorationStore
-from hester.daemon.copilot import metrics, open_next
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot import metrics
+from hester.daemon.copilot.ideas import IdeasStore
 from hester.daemon.workspaces.registry import WorkspaceRegistry
 
 from .cockpit_helpers import cockpit_env, hdr  # noqa: F401
@@ -89,10 +89,6 @@ def test_last_picks_in_order(tmp_path):
     last = desk.last(NOW)
     assert (last["source"], last["card"]["id"]) == ("last", blank["id"])
     assert last["stopped_at"] is None and last["stopped_line"] is None, "an empty Page has no line"
-    # 1: a live Open next
-    open_next.set_(tmp_path, card_id=newer["id"], now=NOW)
-    last = desk.last(NOW, open_next.get(tmp_path, NOW))
-    assert (last["source"], last["card"]["id"], last["stopped_at"]) == ("open_next", newer["id"], "newer words")
 
 
 def test_stopped_line_found_not_found_and_absent():
@@ -119,10 +115,10 @@ def test_last_counts_what_arrived(tmp_path):
     deep.update_answer(desk.pages, card["id"], ho["id"], {"status": "done", "answered_at": iso(ago(minutes=20)),
                                                           "handoff": dict(ho["handoff"], state="done")})
     deep.add_question(desk.pages, card["id"], {"text": "Open?", "source": "page"})
-    someday = SomedayStore(tmp_path)
-    someday.create("before", source={"surface": "aeronaut", "card_id": card["id"]}, now=ago(hours=3))
-    someday.create("after", source={"surface": "aeronaut", "card_id": card["id"]}, now=ago(minutes=10))
-    someday.create("elsewhere", source={"surface": "aeronaut", "card_id": other["id"]}, now=ago(minutes=10))
+    ideas = IdeasStore(tmp_path)
+    ideas.create("before", source={"surface": "aeronaut", "card_id": card["id"]}, now=ago(hours=3))
+    ideas.create("after", source={"surface": "aeronaut", "card_id": card["id"]}, now=ago(minutes=10))
+    ideas.create("elsewhere", source={"surface": "aeronaut", "card_id": other["id"]}, now=ago(minutes=10))
 
     # no session yet: unread answers, all captures on it
     last = desk.last(NOW)
@@ -208,8 +204,8 @@ def test_page_origin_tasks_and_the_brief(cockpit_env):
 
 def test_idea_to_page_new_area_or_given(cockpit_env):
     c, h = cockpit_env.client, hdr(cockpit_env.a)
-    someday = SomedayStore(cockpit_env.a)
-    long = someday.create("Try a CRDT for the attention queue so devices can merge offline edits without a server\nmore",
+    ideas = IdeasStore(cockpit_env.a)
+    long = ideas.create("Try a CRDT for the attention queue so devices can merge offline edits without a server\nmore",
                           source={"surface": "aeronaut"})
     r = c.post(f"/desk/ideas/{long.id}/page", headers=h, json={})
     assert r.status_code == 201, r.text
@@ -218,17 +214,17 @@ def test_idea_to_page_new_area_or_given(cockpit_env):
     assert len(data["area"]["name"]) <= 60 and data["area"]["name"].endswith("…") and " " in data["area"]["name"]
     assert data["card"]["title"] == data["area"]["name"]
     assert c.get(f"/desk/pages/{data['card']['id']}/page", headers=h).json()["data"]["text"] == long.text
-    assert someday.get(long.id).status == "explored"
-    assert someday.get(long.id).triage["note"] == f"page:{data['card']['id']}"
+    assert ideas.get(long.id).status == "explored"
+    assert ideas.get(long.id).triage["note"] == f"page:{data['card']['id']}"
     card_json = DeskStore(cockpit_env.a).pages.read_card(data["card"]["id"])
     assert card_json["origin"] == {"kind": "someday", "ref": long.id}
 
     again = c.post(f"/desk/ideas/{long.id}/page", headers=h, json={})
     assert again.status_code == 409 and again.json()["error"] == "not_open"
-    assert c.post("/desk/ideas/sd_20260101T000000_abcd/page", headers=h, json={}).status_code == 404
+    assert c.post("/desk/ideas/idea_20260101T000000_abcd/page", headers=h, json={}).status_code == 404
     assert c.post("/desk/ideas/nope/page", headers=h, json={}).status_code == 400
 
-    short = someday.create("Short idea", source={"surface": "lee"})
+    short = ideas.create("Short idea", source={"surface": "lee"})
     main = next(a for a in c.get("/desk", headers=h).json()["data"]["areas"] if a["name"] == "Main")
     r = c.post(f"/desk/ideas/{short.id}/page", headers=h, json={"area_id": main["id"], "x": 500, "y": 500})
     assert r.status_code == 201

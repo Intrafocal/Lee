@@ -6,7 +6,7 @@ from hester.daemon.cockpit import deep
 from hester.daemon.cockpit.desk import DeskStore
 from hester.daemon.cockpit.explorations import ExplorationStore
 from hester.daemon.copilot import opener
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot.ideas import IdeasStore
 
 from .cockpit_helpers import cockpit_env, hdr  # noqa: F401
 from .conftest import make_event, queued, write_events
@@ -56,7 +56,7 @@ def test_pick_up_falls_back_to_the_latest_page(tmp_path, events_dir):
     assert pick["card"]["id"] == written["id"] and pick["card"]["kind"] == "page"
     assert pick["exploration"] == {"id": written["id"], "title": "Mesh sync", "last_touched_at": iso(ago(days=2))}
     assert pick["stopped_at"] == "the vector clock only helps if every write" and pick["stopped_line"] == 3
-    assert pick["arrived"] == {"answers": 0, "open_questions": 0} and pick["open_next"] is False
+    assert pick["arrived"] == {"answers": 0, "open_questions": 0} and "open_next" not in pick and "open_next" not in op
 
 
 def test_pick_up_prefers_the_latest_session_and_counts_arrivals(tmp_path, events_dir):
@@ -115,10 +115,10 @@ def test_missing_sessions_from_legacy_exploration_events(tmp_path, events_dir):
 def test_captured_away_windows_on_the_last_deep_session(tmp_path, events_dir):
     desk = DeskStore(tmp_path)
     card = page(desk, "Sync", "s\n", now=ago(days=1))
-    someday = SomedayStore(tmp_path)
-    someday.create("from the phone, before", source={"surface": "aeronaut"}, now=ago(hours=6))
-    after = someday.create("from the watch, after", source={"surface": "dirigible"}, now=ago(hours=2))
-    someday.create("typed in Lee", source={"surface": "lee"}, now=ago(hours=1))
+    ideas = IdeasStore(tmp_path)
+    ideas.create("from the phone, before", source={"surface": "aeronaut"}, now=ago(hours=6))
+    after = ideas.create("from the watch, after", source={"surface": "dirigible"}, now=ago(hours=2))
+    ideas.create("typed in Lee", source={"surface": "lee"}, now=ago(hours=1))
     op = opener.build_opener(tmp_path, now=NOW, events_dir=events_dir)
     [cap] = [s for s in op["surfaces"] if s["kind"] == "captured_away"]
     assert cap["count"] == 2, "no Deep session yet: the last 7 days, away surfaces only"
@@ -130,7 +130,7 @@ def test_captured_away_windows_on_the_last_deep_session(tmp_path, events_dir):
     assert cap["count"] == 1 and cap["items"][0]["someday_id"] == after.id
     assert cap["items"][0]["surface"] == "dirigible"
 
-    old = SomedayStore(tmp_path / "old")
+    old = IdeasStore(tmp_path / "old")
     old.create("ten days ago", source={"surface": "aeronaut"}, now=ago(days=10))
     assert "captured_away" not in kinds(opener.build_opener(tmp_path / "old", now=NOW, events_dir=events_dir))
 
@@ -142,7 +142,7 @@ def test_reading_list_questions_quiet_and_fixed_order(tmp_path, events_dir):
     fresh = page(desk, "Fresh one", now=ago(days=1))
     shelf = desk.create_area({"name": "Shelved"})
     put_away = page(desk, "Put away", now=ago(days=30), area_id=shelf["id"])
-    desk.put_away(shelf["id"], {})
+    desk.stash(shelf["id"], {})
     unread = deep.add_reference(desk.pages, fresh["id"], {"kind": "link", "url": "https://crdt.tech", "title": "CRDTs"})
     opened = deep.add_reference(desk.pages, fresh["id"], {"kind": "link", "url": "https://example.com"})
     deep.patch_reference(desk.pages, fresh["id"], opened["id"], {"opened": True})
@@ -153,7 +153,7 @@ def test_reading_list_questions_quiet_and_fixed_order(tmp_path, events_dir):
     closed = deep.add_question(desk.pages, fresh["id"], {"text": "Closed?", "source": "page"})
     deep.patch_question(desk.pages, fresh["id"], closed["id"], {"status": "closed"})
     session(desk, [picked["id"]], ago(hours=3), ago(hours=2), reason="esc")
-    SomedayStore(tmp_path).create("phone note", source={"surface": "aeronaut"}, now=ago(hours=1))
+    IdeasStore(tmp_path).create("phone note", source={"surface": "aeronaut"}, now=ago(hours=1))
 
     op = opener.build_opener(tmp_path, now=NOW, events_dir=events_dir)
     order = kinds(op)
@@ -164,7 +164,7 @@ def test_reading_list_questions_quiet_and_fixed_order(tmp_path, events_dir):
     first = s["open_questions"]["items"][0]
     assert first["card_id"] == first["exploration_id"] == fresh["id"]
     assert first["card_title"] == first["exploration_title"] == "Fresh one"
-    assert s["reading_list"]["count"] == 1, "a put-away Area's cards aren't read"
+    assert s["reading_list"]["count"] == 1, "a stashed Area's cards aren't read"
     assert s["reading_list"]["items"] == [{
         "card_id": fresh["id"], "exploration_id": fresh["id"], "reference_id": unread["id"],
         "title": "CRDTs", "url": "https://crdt.tech",

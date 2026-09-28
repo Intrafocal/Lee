@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from hester.daemon.copilot import digest
-from hester.daemon.copilot.someday import SomedayStore
+from hester.daemon.copilot.ideas import IdeasStore
 
 from .conftest import commit_file, git, make_event, minutes, write_events
 
@@ -90,7 +90,7 @@ def test_detect_since_uses_away_ms_without_start_line(now, events_dir):
 
 
 def test_verified_wins_vs_claims(repo, now, events_dir, agent_events, tmp_path):
-    store = SomedayStore(repo)
+    store = IdeasStore(repo)
     item = store.create("Try CRDTs", now=now - timedelta(days=2))
     store.triage(item.id, "keep", now=now - minutes(30))
 
@@ -247,10 +247,10 @@ def test_q2_candidates(tmp_path, now, events_dir):
     assert got[1]["detail"] == "Never evaluated." and got[2]["detail"] == "Last evaluated 20 days ago."
     assert got[3]["goal_id"] is None
 
-    # nothing serving G3 any more (its card's Area put away) -> goal-unserved for it; capped at 5
+    # nothing serving G3 any more (its card's Area stashed) -> goal-unserved for it; capped at 5
     desk = DeskStore(ws)
     area = next(c["area_id"] for c in desk.desk()["cards"] if c["id"] == pg(fresh["id"]))
-    desk.put_away(area, {})
+    desk.stash(area, {})
     got = q2_candidates(ws, now)
     assert ("goal-unserved", "G3") in [(c["kind"], c["ref"]) for c in got] and len(got) <= 5
 
