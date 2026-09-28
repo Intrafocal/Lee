@@ -26,6 +26,14 @@
 
 namespace dirigible_app::voice {
 
+/// The mic button's label: LVGL's symbol font has no microphone (its "audio"
+/// glyph is a music note), so a word, like the tab view's Keys and Type.
+inline constexpr const char* MIC_LABEL = "Mic";
+
+/// What the mic button shows: stop while recording, "..." from the tap until
+/// the transcript lands, else Mic.
+const char* button_label();
+
 /// Ask Hester whether voice is on (GET /voice, cached 5 minutes).  Cheap:
 /// call it whenever a screen with a mic opens.  `changed` runs when the
 /// answer lands, so the screen can show or hide its mic.

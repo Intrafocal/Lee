@@ -288,7 +288,7 @@ void mic_label()
 {
     auto& c = cs();
     if (!c.mic_lbl) return;
-    lv_label_set_text(c.mic_lbl, voice::recording() ? LV_SYMBOL_STOP : LV_SYMBOL_AUDIO);
+    lv_label_set_text(c.mic_lbl, voice::button_label());
     lv_obj_set_style_text_color(c.mic_lbl, voice::recording() ? dg::ember() : dg::text1(), 0);
 }
 
@@ -339,7 +339,7 @@ void build_compose(lv_obj_t* parent)
 #if CONFIG_DIRIGIBLE_VOICE
     const int w_mic = 24;
     x -= BTN_GAP + w_mic;
-    c.mic = bar_button(c.strip, x, w_mic, LV_SYMBOL_AUDIO, false, mic_cb, nullptr, &c.mic_lbl);
+    c.mic = bar_button(c.strip, x, w_mic, voice::MIC_LABEL, false, mic_cb, nullptr, &c.mic_lbl);
     lv_obj_set_style_text_font(c.mic_lbl, dg::ui_font(), 0);
     lv_obj_add_flag(c.mic, LV_OBJ_FLAG_HIDDEN);
 #endif

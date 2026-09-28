@@ -854,7 +854,7 @@ void mic_render()
     if (!s.c_mic) return;
     if (voice::available()) lv_obj_clear_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);
     else                    lv_obj_add_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s.c_mic_lbl, voice::recording() ? LV_SYMBOL_STOP : LV_SYMBOL_AUDIO);
+    lv_label_set_text(s.c_mic_lbl, voice::button_label());
     lv_obj_set_style_text_color(s.c_mic_lbl, voice::recording() ? dg::ember() : dg::text1(), 0);
 }
 
@@ -1658,7 +1658,7 @@ void build_compose(lv_obj_t* parent)
     lv_obj_set_style_border_color(s.c_mic, dg::ground5(), 0);
     lv_obj_set_ext_click_area(s.c_mic, 4);
     if (lv_obj_get_group(s.c_mic)) lv_group_remove_obj(s.c_mic);   // touch; the key is m
-    s.c_mic_lbl = label(s.c_mic, F_BODY, dg::text1(), LV_SYMBOL_AUDIO);
+    s.c_mic_lbl = label(s.c_mic, F_BODY, dg::text1(), voice::MIC_LABEL);
     lv_obj_center(s.c_mic_lbl);
     lv_obj_add_event_cb(s.c_mic, [](lv_event_t*) { mic_toggle(); }, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);

@@ -70,13 +70,18 @@ void mic_render()
     if (on) lv_obj_clear_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
     else    lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_width(a.hester_input, SCREEN_W - 4 - (on ? MIC_W + 3 : 0));
-    lv_label_set_text(s_mic_lbl, voice::recording() ? LV_SYMBOL_STOP : LV_SYMBOL_AUDIO);
+    lv_label_set_text(s_mic_lbl, voice::button_label());
     lv_obj_set_style_text_color(s_mic_lbl, voice::recording() ? dg::ember() : dg::text1(), 0);
 }
 
 void mic_toggle()
 {
-    if (voice::recording()) { voice::stop(); mic_render(); return; }
+    if (voice::recording()) {
+        voice::stop();
+        mic_render();
+        if (app().view == View::Hester) chrome_set_footer("transcribing...", "voice");
+        return;
+    }
     if (voice::busy()) return;
     voice::start(dirigible::VoicePurpose::Ask, "",
         [](bool ok, const std::string& text) {
@@ -164,7 +169,7 @@ void hester_build(lv_obj_t* parent)
     lv_obj_set_style_border_width(s_mic, 1, 0);
     lv_obj_set_style_border_color(s_mic, dg::ground5(), 0);
     lv_obj_set_style_radius(s_mic, DG_RADIUS, 0);
-    s_mic_lbl = make_label(s_mic, LV_SYMBOL_AUDIO, dg::text1());
+    s_mic_lbl = make_label(s_mic, voice::MIC_LABEL, dg::text1());
     lv_obj_center(s_mic_lbl);
     lv_obj_add_event_cb(s_mic, [](lv_event_t*) { mic_toggle(); }, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);

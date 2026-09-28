@@ -2,14 +2,13 @@ menu "Dirigible"
 
     config DIRIGIBLE_VOICE
         bool "Voice input (T-Deck mic, transcribed by Hester)"
-        default n
+        default y
         help
             Record a clip on the T-Deck's ES7210 microphone and have Hester
             transcribe it (POST /voice/transcribe) into the reply, capture,
             Hester or compose box it belongs to.  Nothing is ever sent by
-            voice.  Off until it has been checked on a device: the mic's pins,
-            its power and the ES7210's address come from LilyGO's pin map and
-            are unverified here (see tdeck_board.h).  Links
-            espressif/esp_codec_dev's ES7210 driver.
+            voice.  On since it was checked on a device (2026-09-28): the
+            ES7210 answers at 0x40 on LilyGO's pins, in TDM with the two mics
+            on slots 0 and 1.  Links espressif/esp_codec_dev's ES7210 driver.
 
 endmenu

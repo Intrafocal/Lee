@@ -132,6 +132,9 @@ void upload()
     // guess at it).
     if (ms < dirigible::VOICE_MIN_MS) { finish(false, "Too short - tap, speak, tap"); return; }
     const auto* samples = (const int16_t*)(s.wav.data() + dirigible::WAV_HEADER_BYTES);
+    // The level, for checking the mic on a new board: speech should peak well above the silence gate.
+    ESP_LOGI(TAG, "clip %d ms, peak %d of 32767 (gate %d)", (int)ms,
+             dirigible::voice_peak(samples, pcm / sizeof(int16_t)), dirigible::VOICE_SILENCE_PEAK);
     if (dirigible::voice_is_silent(samples, pcm / sizeof(int16_t))) {
         finish(false, "Didn't hear anything");
         return;
@@ -193,7 +196,15 @@ bool available()
 }
 
 bool busy()      { return st().phase != Phase::Idle; }
-bool recording() { return st().phase == Phase::Recording; }
+// Stopping counts as done at the tap: the worker takes up to a read (32 ms)
+// and the timer up to 200 ms to notice, and the button shouldn't wait for them.
+bool recording() { return st().phase == Phase::Recording && !st().stop_flag.load(); }
+
+const char* button_label()
+{
+    if (recording()) return LV_SYMBOL_STOP;
+    return busy() ? "..." : MIC_LABEL;   // "...": stopped, Hester is transcribing
+}
 
 bool start(VoicePurpose purpose, const std::string& item_id, Done done, Tick tick)
 {

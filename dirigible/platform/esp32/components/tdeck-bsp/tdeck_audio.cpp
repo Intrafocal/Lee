@@ -26,7 +26,7 @@
 #include "tdeck_board.h"
 
 #include "driver/i2c.h"
-#include "driver/i2s_std.h"
+#include "driver/i2s_tdm.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "es7210_adc.h"
@@ -42,8 +42,14 @@ const audio_codec_ctrl_if_t   *s_ctrl  = nullptr;
 const audio_codec_if_t        *s_codec = nullptr;
 esp_codec_dev_handle_t         s_dev   = nullptr;
 
-constexpr int CHANNELS = 2;              // MIC1 + MIC2
+// TDM with the ES7210's four inputs, as LilyGO's own examples run it: with two
+// mics in plain I2S the T-Deck read nothing but zeros. Checked on a device
+// (2026-09-28): the two mics are slots 0 and 1 (speech peaked at 28k / 19k),
+// slots 2 and 3 only carry noise (~1-2k), so the mono mix is the average of
+// 0 and 1; summing all four clipped. The per-slot peaks are logged at stop.
+constexpr int CHANNELS = 4;              // MIC1..MIC4, one TDM slot each
 constexpr size_t STEREO_CHUNK = 256;     // frames per read
+int s_slot_peak[CHANNELS] = {};
 constexpr TickType_t I2C_WAIT = pdMS_TO_TICKS(50);
 
 // ---------------------------------------------------------------------------
@@ -117,19 +123,20 @@ esp_err_t tdeck_mic_start(uint32_t sample_rate)
         s_rx = nullptr;
         return err;
     }
-    i2s_std_config_t std_cfg = {};
-    std_cfg.clk_cfg.sample_rate_hz = sample_rate;
-    std_cfg.clk_cfg.clk_src        = I2S_CLK_SRC_DEFAULT;
-    std_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
-    std_cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-    std_cfg.gpio_cfg.mclk = (gpio_num_t)TDECK_MIC_PIN_MCLK;
-    std_cfg.gpio_cfg.bclk = (gpio_num_t)TDECK_MIC_PIN_BCLK;
-    std_cfg.gpio_cfg.ws   = (gpio_num_t)TDECK_MIC_PIN_WS;
-    std_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
-    std_cfg.gpio_cfg.din  = (gpio_num_t)TDECK_MIC_PIN_DIN;
-    err = i2s_channel_init_std_mode(s_rx, &std_cfg);
+    i2s_tdm_config_t tdm_cfg = {};
+    tdm_cfg.clk_cfg.sample_rate_hz = sample_rate;
+    tdm_cfg.clk_cfg.clk_src        = I2S_CLK_SRC_DEFAULT;
+    tdm_cfg.clk_cfg.mclk_multiple  = I2S_MCLK_MULTIPLE_256;
+    tdm_cfg.slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO,
+        (i2s_tdm_slot_mask_t)(I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3));
+    tdm_cfg.gpio_cfg.mclk = (gpio_num_t)TDECK_MIC_PIN_MCLK;
+    tdm_cfg.gpio_cfg.bclk = (gpio_num_t)TDECK_MIC_PIN_BCLK;
+    tdm_cfg.gpio_cfg.ws   = (gpio_num_t)TDECK_MIC_PIN_WS;
+    tdm_cfg.gpio_cfg.dout = I2S_GPIO_UNUSED;
+    tdm_cfg.gpio_cfg.din  = (gpio_num_t)TDECK_MIC_PIN_DIN;
+    err = i2s_channel_init_tdm_mode(s_rx, &tdm_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2s std mode: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "i2s tdm mode: %s", esp_err_to_name(err));
         teardown();
         return err;
     }
@@ -152,7 +159,7 @@ esp_err_t tdeck_mic_start(uint32_t sample_rate)
     if (s_ctrl) {
         es7210_codec_cfg_t es_cfg = {};
         es_cfg.ctrl_if = s_ctrl;
-        es_cfg.mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2;
+        es_cfg.mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2 | ES7210_SEL_MIC3 | ES7210_SEL_MIC4;  // 3+ turns on TDM
         s_codec = es7210_codec_new(&es_cfg);
     }
     if (!s_data || !s_ctrl || !s_codec) {
@@ -183,7 +190,8 @@ esp_err_t tdeck_mic_start(uint32_t sample_rate)
         return ESP_FAIL;
     }
     esp_codec_dev_set_in_gain(s_dev, TDECK_MIC_GAIN_DB);
-    ESP_LOGI(TAG, "mic on: %u Hz, 2 mics averaged", (unsigned)sample_rate);
+    for (int& p : s_slot_peak) p = 0;
+    ESP_LOGI(TAG, "mic on: %u Hz, TDM, mics on slots 0 and 1", (unsigned)sample_rate);
     return ESP_OK;
 }
 
@@ -199,7 +207,12 @@ size_t tdeck_mic_read(int16_t *dst, size_t max_samples, uint32_t timeout_ms)
             break;
         }
         for (size_t i = 0; i < want; i++) {
-            dst[done + i] = (int16_t)(((int)frames[2 * i] + (int)frames[2 * i + 1]) / 2);
+            for (int c = 0; c < CHANNELS; c++) {
+                const int v = frames[CHANNELS * i + c];
+                s_slot_peak[c] = std::max(s_slot_peak[c], v < 0 ? -v : v);
+            }
+            // The two mics (slots 0 and 1), averaged; slots 2 and 3 are noise.
+            dst[done + i] = (int16_t)(((int)frames[CHANNELS * i] + (int)frames[CHANNELS * i + 1]) / 2);
         }
         done += want;
     }
@@ -210,5 +223,5 @@ void tdeck_mic_stop(void)
 {
     if (!s_dev && !s_rx) return;
     teardown();
-    ESP_LOGI(TAG, "mic off");
+    ESP_LOGI(TAG, "mic off; slot peaks %d %d %d %d", s_slot_peak[0], s_slot_peak[1], s_slot_peak[2], s_slot_peak[3]);
 }

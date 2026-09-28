@@ -497,11 +497,10 @@ grant out of a poll.
 
 ## Voice input
 
-Built behind `CONFIG_DIRIGIBLE_VOICE` (Kconfig, `firmware/main/Kconfig.projbuild`,
-**default off**) until it has been checked on a device with the user; it is
-built and host-tested, never flashed by an agent. Hester transcribes (plan
-2026-09-28 §5): the device records, sends the clip, and puts the transcript in
-the box it belongs to. Nothing is sent by voice, and Approve / Deny are never
+On by default (`CONFIG_DIRIGIBLE_VOICE`, Kconfig in `firmware/main/Kconfig.projbuild`
+and `sdkconfig.defaults`) since it was checked on a device with the user on
+2026-09-28. Hester transcribes (plan 2026-09-28 §5): the device records, sends
+the clip, and puts the transcript in the box it belongs to. Nothing is sent by voice, and Approve / Deny are never
 voice-triggered.
 
 - **Where:** Work's reply and capture boxes (a mic on the box's heading line,
@@ -525,12 +524,21 @@ voice-triggered.
   esp_codec_dev's I2C control links IDF's new I2C driver, and IDF aborts at
   boot when both drivers are linked.
 
-**First on-device check** (the pins are from LilyGO's `utilities.h` and
-`hardware/microcontrollers/lilygo-t-deck/BOARD.md`, not verified here):
-MCLK 48, BCLK 47, LRCK 21, DIN 14, the ES7210 answering at I2C 0x40 (the log
-says `no ES7210 at 0x40` otherwise, and the mic hides until reboot), no mic
-power gate beyond GPIO 10, and whether two mics in plain I2S (LilyGO's own
-examples use TDM with four slots) give usable levels at 30 dB of gain.
+**Checked on a device (2026-09-28).** LilyGO's pins are right (MCLK 48,
+BCLK 47, LRCK 21, DIN 14, the ES7210 at I2C 0x40, no power gate beyond
+GPIO 10). Two things differ from the first build:
+- **TDM, not plain I2S.** With two mics in standard I2S every sample read 0.
+  The mic now runs as LilyGO's examples do: TDM, four 16-bit slots, all four
+  ES7210 inputs selected (three or more is what switches esp_codec_dev's
+  driver to TDM).
+- **The mics are slots 0 and 1.** Speech peaked at about 28k and 19k there,
+  while slots 2 and 3 only carried noise (about 1-2k). The mono clip is the
+  average of slots 0 and 1; summing all four clipped. `tdeck.mic` logs the
+  per-slot peaks at every stop, and `dirigible.voice` the clip's peak against
+  the silence gate, for checking a new board.
+- The button reads **Mic** (LVGL's symbol font has no microphone; its audio
+  glyph is a music note), ■ while recording, and **...** from the stop tap
+  until the transcript lands.
 
 ## Security
 
