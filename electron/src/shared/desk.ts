@@ -5,10 +5,11 @@
 import type { Anchor, DepthRating } from './cockpit';
 
 /** Only 'page' this round; 'board' | 'browser' | 'workbench' | 'workbook' slot in later. */
-export type DeskCardKind = 'page';
-export const DESK_CARD_KINDS: readonly DeskCardKind[] = ['page'];
+export type DeskCardKind = 'page' | 'board';
+export const DESK_CARD_KINDS: readonly DeskCardKind[] = ['page', 'board'];
 
 export const PAGE_ID_RE = /^pg-[0-9a-f]{8}$/;
+export const BOARD_ID_RE = /^bd-[0-9a-f]{8}$/;
 export const AREA_ID_RE = /^area-[0-9a-f]{8}$/;
 export const DRAWER_ID_RE = /^(stashed|ideas|drw-[0-9a-f]{8})$/;
 export const STROKE_ID_RE = /^stk-[0-9a-f]{8}$/;

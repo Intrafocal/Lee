@@ -9,6 +9,7 @@
  * Only stable v0/v1 types are imported from ./copilot.
  */
 
+import type { BoardAnchor } from './board';
 import type { AgentState, LeeStatusBlock } from './copilot';
 import type { DeskCardBrief, DeskCardKind } from './desk';
 
@@ -782,6 +783,7 @@ export type DeepRendererEvent =
 
 export type Anchor =
   | { kind: 'page'; quote: string; offset: number; section: string | null }
+  | BoardAnchor
   | { kind: 'none' };
 export interface DeepReference {
   id: string; kind: 'quote' | 'link'; quote?: string; url?: string; title?: string; note?: string;
