@@ -481,7 +481,9 @@ export function checkSendRequest(body: unknown): SendCheck {
   const submit = body.submit === true;
   if (submit) {
     if (target !== 'focus' && target.kind === 'page') return bad('submit is not allowed for a Page');
-    if (!items.some((i) => i.kind === 'text')) return bad('submit needs a text item');
+    // A tab takes Send with only an image (its path typed, then Enter); Hester needs a question.
+    const tabLike = target === 'focus' || target.kind === 'tab';
+    if (!items.some((i) => i.kind === 'text') && !(tabLike && items.some((i) => i.kind === 'image'))) return bad('submit needs a text item');
   }
   if (body.compose !== undefined && typeof body.compose !== 'boolean') return bad('compose must be a boolean');
   return { ok: true, target, items, submit, compose: body.compose === true, bytes };

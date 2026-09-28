@@ -30,12 +30,14 @@ export function hasText(items: readonly SendItem[]): boolean {
 /**
  * Main validated the request; this is the renderer's own guard, so a send it
  * can't honour fails plainly instead of doing half of it. Submit (Send) is for
- * tabs and Hester only, and only with text (§4.2).
+ * tabs and Hester only; Hester needs text, a tab takes an image alone (§4.2).
  */
 export function checkSend(target: SendTarget, items: readonly SendItem[], submit: boolean | undefined): SendCheck {
   if (!items.length) return { ok: false, error: 'no_items' };
   if (target.kind === 'board') return { ok: false, error: 'board_not_built' };
-  if (submit && (target.kind === 'page' || !hasText(items))) return { ok: false, error: 'submit_not_allowed' };
+  // A tab takes Send with only an image (its path, then Enter); Hester needs text.
+  const imageForTab = target.kind === 'tab' && items.some((i) => i.kind === 'image');
+  if (submit && (target.kind === 'page' || (!hasText(items) && !imageForTab))) return { ok: false, error: 'submit_not_allowed' };
   return { ok: true };
 }
 

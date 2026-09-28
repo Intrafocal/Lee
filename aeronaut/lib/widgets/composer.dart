@@ -294,7 +294,10 @@ class ComposerState extends ConsumerState<Composer> {
                   kind: BtnKind.next,
                   height: widget.compact ? 40 : 48,
                   busy: _busy == 'send',
-                  onPressed: _busy == null && hasText ? () => _go(submit: true) : null,
+                  // A tab takes Send with only an image (its path, then Enter); Hester needs words.
+                  onPressed: _busy == null && (hasText || (_images.isNotEmpty && widget.target?.kind == SendTargetKind.tab))
+                      ? () => _go(submit: true)
+                      : null,
                 ),
               ),
             ],

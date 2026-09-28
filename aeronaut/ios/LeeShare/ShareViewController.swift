@@ -120,10 +120,12 @@ final class ShareModel: ObservableObject {
 
   init(context: NSExtensionContext?) { self.context = context }
 
+  /// Send: a tab takes an image alone (its path, then Enter); Hester needs words; a Page has no Send.
   var canSubmit: Bool {
     guard let t = selected, t.kind != "page", t.kind != "board" else { return false }
-    return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let words = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return words || (t.kind == "tab" && !images.isEmpty)
   }
 
   var hasContent: Bool {
@@ -306,12 +308,12 @@ struct ShareView: View {
       }
       .navigationTitle(model.config?.name ?? "Lee")
       .navigationBarTitleDisplayMode(.inline)
+      // In the top bar: a bottom bar goes under the keyboard while you type the note.
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.cancel() } }
-        ToolbarItemGroup(placement: .bottomBar) {
+        ToolbarItemGroup(placement: .confirmationAction) {
           Button("Deliver") { model.send(submit: false) }
             .disabled(model.busy || model.selected == nil || !model.hasContent)
-          Spacer()
           Button("Send") { model.send(submit: true) }
             .font(.body.weight(.semibold))
             .disabled(model.busy || !model.canSubmit)

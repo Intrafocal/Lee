@@ -225,7 +225,10 @@ String? sendProblem(List<SendItem> items, {required bool submit, required SendTa
   }
   if (submit) {
     if (target != null && !target.canSubmit) return 'A Page takes Deliver only.';
-    if (!items.any((i) => i is TextItem)) return 'Send needs some text; Deliver the image instead.';
+    // A tab takes Send with only an image (its path, then Enter); Hester needs a question.
+    if (!items.any((i) => i is TextItem) && target != null && target.kind != SendTargetKind.tab) {
+      return 'Hester needs a question to Send; Deliver the image instead.';
+    }
   }
   return null;
 }

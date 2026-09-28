@@ -247,13 +247,14 @@ void main() {
       expect(targets.all[1].canSubmit, isTrue);
     });
 
-    test('sendProblem: Pages take Deliver only; Send needs text; limits', () {
+    test('sendProblem: Pages take Deliver only; Hester needs text to Send; limits', () {
       const page = SendTarget.page(cardId: 'pg-1', title: 'T');
       const tab = SendTarget.tab(ptyId: 1, label: 'zsh', tabKind: 'terminal');
       final image = ImageItem(mime: 'image/jpeg', bytes: Uint8List(4), source: ImageSourceKind.photo);
       expect(sendProblem(const [TextItem('x')], submit: true, target: page), 'A Page takes Deliver only.');
       expect(sendProblem(const [TextItem('x')], submit: false, target: page), isNull);
-      expect(sendProblem([image], submit: true, target: tab), contains('needs some text'));
+      expect(sendProblem([image], submit: true, target: tab), isNull, reason: 'a tab takes an image alone');
+      expect(sendProblem([image], submit: true, target: const SendTarget.hester()), contains('needs a question'));
       expect(sendProblem([image], submit: false, target: tab), isNull);
       expect(sendProblem(const [], submit: false, target: tab), isNotNull);
       expect(sendProblem(List.filled(5, const TextItem('x')), submit: false, target: tab), contains('Up to 4'));

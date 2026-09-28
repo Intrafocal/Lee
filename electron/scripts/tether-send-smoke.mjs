@@ -60,11 +60,12 @@ const BOARD = { kind: 'board', card_id: 'pg-0000beef', title: 'Board' };
 const text = (t, extra = {}) => ({ kind: 'text', text: t, ...extra });
 const photo = (extra = {}) => ({ kind: 'image', mime: 'image/png', data_b64: 'iVBORw0KGgo=', source: 'photo', ...extra });
 
-test('checkSend: submit only for tabs and Hester, and only with text', () => {
+test('checkSend: submit only for tabs and Hester; Hester needs text, a tab takes an image alone', () => {
   assert.deepEqual(m.checkSend(TAB, [text('ls')], true), { ok: true });
   assert.deepEqual(m.checkSend(HESTER, [text('why?')], true), { ok: true });
   assert.deepEqual(m.checkSend(PAGE, [text('note')], true), { ok: false, error: 'submit_not_allowed' }, 'a Page has only Deliver');
-  assert.deepEqual(m.checkSend(TAB, [photo()], true), { ok: false, error: 'submit_not_allowed' }, 'no text, no Send');
+  assert.deepEqual(m.checkSend(TAB, [photo()], true), { ok: true }, 'a tab takes an image alone: its path, then Enter');
+  assert.deepEqual(m.checkSend(HESTER, [photo()], true), { ok: false, error: 'submit_not_allowed' }, 'Hester needs a question');
   assert.deepEqual(m.checkSend(TAB, [text('   ')], true), { ok: false, error: 'submit_not_allowed' }, 'blank text is no text');
   assert.deepEqual(m.checkSend(PAGE, [text('note')], false), { ok: true });
   assert.deepEqual(m.checkSend(PAGE, [photo()], undefined), { ok: true });
