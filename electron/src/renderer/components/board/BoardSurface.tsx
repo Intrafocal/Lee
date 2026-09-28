@@ -528,6 +528,8 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
       return capture();
     }
     if (tool === 'annotate') {
+      // No mousedown after this: its focus would land on the Board and blur the new note.
+      e.preventDefault();
       const onNote = itemAt(list, p, 0, ['note']);
       if (onNote) return beginEdit(onNote.id);
       if (!canAdd(list)) return say('This Board is full');
