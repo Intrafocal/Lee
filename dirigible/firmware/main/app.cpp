@@ -478,9 +478,7 @@ static bool key_hook(uint8_t ascii, void*)
     case View::Pairing:  return pairing_key(ascii);
     case View::Files:    return files_key(ascii);
     case View::Viewer:   return viewer_key(ascii);
-    case View::Hester:
-        if (ascii == 0x1B) { app_back(); return true; }
-        return false;
+    case View::Hester:   return hester_key(ascii);
     case View::Tabs:
         if (ascii == 0x1B) { app_back(); return true; }
         // w stays the window picker here (Work is back, or the menu).

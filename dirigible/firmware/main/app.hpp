@@ -323,6 +323,9 @@ void terminal_ball(int dx, int dy, bool click);
 void hester_build(lv_obj_t* parent);
 void hester_focus();
 void hester_submit();
+/// Keys on the Hester view: Esc goes back; with voice built in, Enter stops a
+/// clip and Backspace drops it.  False lets the question box type.
+bool hester_key(uint8_t ascii);
 void hester_ball(int dx, int dy, bool click);   // scrolls the answer
 
 void pairing_build(lv_obj_t* parent);

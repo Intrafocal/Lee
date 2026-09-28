@@ -58,6 +58,13 @@
  * Send (Enter) buttons: Cancel (or the header back, a trackball hold, or
  * Backspace in an empty box) closes it and keeps the draft.  The T-Deck
  * keyboard has no Esc, so nothing here needs one.
+ *
+ * Voice (CONFIG_DIRIGIBLE_VOICE, plan 2026-09-28 §5.6): m on a page opens
+ * the reply box (with nothing to answer, the capture box) and starts a clip;
+ * the box's mic button does the same.  Tap again, or Enter, to stop: the
+ * transcript lands in the box through lv_textarea_add_text for you to read
+ * and send, and the reply goes up tagged input: 'voice'.  Backspace while
+ * recording throws the clip away.  The footer counts the 30 s.
  */
 
 #include <algorithm>
@@ -72,6 +79,7 @@
 #include "esp_log.h"
 #include "theme.hpp"
 #include "ui_text.hpp"
+#include "voice_input.hpp"
 
 #ifndef DIRIGIBLE_UI_DEMO
 #define DIRIGIBLE_UI_DEMO 0
@@ -209,7 +217,10 @@ struct State {
     lv_obj_t* c_ta     = nullptr;
     lv_obj_t* c_hint   = nullptr;
     lv_obj_t* c_status = nullptr;
+    lv_obj_t* c_mic    = nullptr;   // voice builds only; hidden unless Hester has voice
+    lv_obj_t* c_mic_lbl = nullptr;
     Compose   mode = Compose::None;
+    bool      voiced = false;       // the box holds a transcript: tag the send input: 'voice'
     std::string reply_id;          // item the reply box answers
     int         reply_version = -1;   // the version the human was shown
     std::string reply_draft;       // kept across Cancel; capped by REPLY_MAX
@@ -490,6 +501,12 @@ void footer()
 {
     auto& s = st();
     if (app().view != View::Waiting) return;
+#if CONFIG_DIRIGIBLE_VOICE
+    if (s.mode != Compose::None && voice::busy()) {
+        chrome_set_footer(voice::recording() ? "Enter or tap: stop  Bksp: drop" : "transcribing...", "voice");
+        return;
+    }
+#endif
     switch (s.mode) {
     case Compose::Reply:   chrome_set_footer("Enter sends  hold: cancel", "reply"); return;
     case Compose::Capture: chrome_set_footer("Enter sends  hold: cancel", "idea");  return;
@@ -560,12 +577,19 @@ void send(const std::string& id, const char* verb, const std::string& text,
     else if (strcmp(verb, "snooze") == 0) c->attentionSnooze(id, SNOOZE_MIN, std::move(cb));
     else if (strcmp(verb, "open") == 0)   c->attentionOpen(id, std::move(cb));
     else if (strcmp(verb, "choose") == 0) c->attentionChoose(id, choice, version, std::move(cb));
-    else                                  c->attentionReply(id, verb, text, version, std::move(cb));
+    else {
+        // A reply typed from a transcript says so (voice acceptance, §5.2).
+        const bool voice = strcmp(verb, "text") == 0 && st().mode == Compose::Reply && st().voiced;
+        c->attentionReply(id, verb, text, version, std::move(cb), voice);
+    }
 #endif
 }
 
 void close_compose(bool keep_draft);
 void set_status(const char* text, lv_color_t colour);
+#if CONFIG_DIRIGIBLE_VOICE
+void mic_render();
+#endif
 const std::vector<dirigible::AttentionQuestion>& questions_of(const AttentionItem& it);
 bool pickable(const AttentionItem& it);
 void set_hl(int i);
@@ -720,6 +744,9 @@ void close_compose(bool keep_draft)
 {
     auto& s = st();
     if (s.mode == Compose::None) return;
+#if CONFIG_DIRIGIBLE_VOICE
+    if (voice::recording()) voice::cancel();
+#endif
     const char* text = lv_textarea_get_text(s.c_ta);
     if (s.mode == Compose::Reply) {
         if (keep_draft) { s.reply_draft = text ? text : ""; s.reply_draft_id = s.reply_id; }
@@ -758,11 +785,16 @@ void open_compose(Compose mode)
         lv_textarea_set_text(s.c_ta, s.capture_draft.c_str());
     }
     s.mode = mode;
+    s.voiced = false;
     lv_label_set_text(s.c_head, head.c_str());
     set_status("", dg::text3());
     lv_obj_clear_flag(s.compose, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s.compose);
     ta_active(true);
+#if CONFIG_DIRIGIBLE_VOICE
+    mic_render();
+    voice::refresh([] { mic_render(); });
+#endif
     footer();
 }
 
@@ -811,13 +843,75 @@ void capture_submit()
     r.spooled = (spool = !spool);
     done(r);
 #else
-    conn()->capture(raw, done);
+    conn()->capture(raw, done, s.voiced);
 #endif
 }
+
+#if CONFIG_DIRIGIBLE_VOICE
+void mic_render()
+{
+    auto& s = st();
+    if (!s.c_mic) return;
+    if (voice::available()) lv_obj_clear_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);
+    else                    lv_obj_add_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s.c_mic_lbl, voice::recording() ? LV_SYMBOL_STOP : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_color(s.c_mic_lbl, voice::recording() ? dg::ember() : dg::text1(), 0);
+}
+
+/// Start a clip into the open box (or stop the one recording).
+void mic_toggle()
+{
+    auto& s = st();
+    if (s.mode == Compose::None) return;
+    if (voice::recording()) { voice::stop(); footer(); mic_render(); return; }
+    if (voice::busy()) return;
+    const Compose mode = s.mode;
+    const auto purpose = mode == Compose::Reply ? dirigible::VoicePurpose::Reply
+                                                : dirigible::VoicePurpose::Capture;
+    const std::string item = mode == Compose::Reply ? s.reply_id : std::string();
+    const bool ok = voice::start(purpose, item,
+        [mode](bool ok, const std::string& text) {
+            auto& s = st();
+            mic_render();
+            footer();
+            if (s.mode != mode) return;   // the box closed meanwhile
+            if (!ok) { set_status(text.c_str(), dg::text3()); return; }
+            voice::fill(s.c_ta, text);
+            s.voiced = true;
+            set_status("Check it, then Enter", dg::text2());   // voice never sends
+        },
+        [](int ms) {
+            if (app().view == View::Waiting) chrome_set_footer(voice::elapsed_text(ms).c_str(), "voice");
+        });
+    if (ok) set_status("Listening...", dg::ember());
+    mic_render();
+    footer();
+}
+
+/// m: the box this page's voice belongs in, recording.
+void voice_key()
+{
+    auto& s = st();
+    if (!voice::available()) { flash("voice is off in Hester"); voice::refresh(); return; }
+    const auto* it = current();
+    if (it && it->kind != AttentionKind::Question && it->can(dirigible::ActReply)) {
+        open_compose(Compose::Reply);
+    } else if (!it) {
+        open_compose(Compose::Capture);
+    } else {
+        flash("no reply here");
+        return;
+    }
+    if (s.mode != Compose::None) mic_toggle();
+}
+#endif
 
 void compose_submit()
 {
     auto& s = st();
+#if CONFIG_DIRIGIBLE_VOICE
+    if (voice::busy()) return;   // the transcript isn't in yet
+#endif
     if (s.mode == Compose::Capture) { capture_submit(); return; }
     const char* raw = lv_textarea_get_text(s.c_ta);
     if (!raw || !*raw) { set_status("Type a reply first", dg::text3()); return; }
@@ -1551,6 +1645,24 @@ void build_compose(lv_obj_t* parent)
     lv_label_set_long_mode(s.c_head, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s.c_head, SCREEN_W - 2 * PAD);
     lv_obj_set_pos(s.c_head, PAD, META_Y + 1);
+#if CONFIG_DIRIGIBLE_VOICE
+    // The mic sits on the heading's line, right: the box and its buttons keep
+    // their places whether or not voice is on.
+    lv_obj_set_width(s.c_head, SCREEN_W - 2 * PAD - 40);
+    s.c_mic = flat_btn(s.compose);
+    lv_obj_set_size(s.c_mic, 34, 17);
+    lv_obj_set_pos(s.c_mic, SCREEN_W - (PAD - 2) - 34, 2);
+    lv_obj_set_style_bg_color(s.c_mic, dg::ground1(), 0);
+    lv_obj_set_style_bg_color(s.c_mic, dg::ground3(), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(s.c_mic, 1, 0);
+    lv_obj_set_style_border_color(s.c_mic, dg::ground5(), 0);
+    lv_obj_set_ext_click_area(s.c_mic, 4);
+    if (lv_obj_get_group(s.c_mic)) lv_group_remove_obj(s.c_mic);   // touch; the key is m
+    s.c_mic_lbl = label(s.c_mic, F_BODY, dg::text1(), LV_SYMBOL_AUDIO);
+    lv_obj_center(s.c_mic_lbl);
+    lv_obj_add_event_cb(s.c_mic, [](lv_event_t*) { mic_toggle(); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(s.c_mic, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     s.c_ta = lv_textarea_create(s.compose);
     lv_textarea_set_one_line(s.c_ta, false);   // wraps; Enter is caught and sends
@@ -1848,6 +1960,14 @@ bool waiting_key(uint8_t k)
     auto& s = st();
 
     if (s.mode != Compose::None) {
+#if CONFIG_DIRIGIBLE_VOICE
+        if (voice::recording()) {
+            // Enter stops and transcribes; Backspace drops the clip.
+            if (k == '\r' || k == '\n') mic_toggle();
+            else if (k == 0x08 || k == 0x7F) { voice::cancel(); footer(); }
+            return true;
+        }
+#endif
         if (k == 0x1B) { close_compose(true); return true; }
         if (k == '\r' || k == '\n') { compose_submit(); return true; }
         // Backspace in an empty box is the keyboard's way out (no Esc key).
@@ -1871,6 +1991,11 @@ bool waiting_key(uint8_t k)
     case 'p':
         if (!pick_up_open()) flash("nothing to pick up");
         return true;
+#if CONFIG_DIRIGIBLE_VOICE
+    case 'm':
+        voice_key();
+        return true;
+#endif
     case 'g': case 'w': case 'e': case 'f':
         // Go / Wait / Why / Diff.  On Work already, so w is Wait, not "go to Work".
         if (!quick_reply((char)k) && it && !takes_text(*it)) flash("no quick reply here");
