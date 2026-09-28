@@ -103,13 +103,29 @@ one-agent reply bar (`input: 'voice'` on the reply), the capture sheets
 Composer (`send`, tagged on the text item). Readback
 (`providers/speech_provider.dart`, `services/speech_service.dart`
 `flutter_tts`, `services/speech_sanitizer.dart`, vectors in
-`test/speech_sanitizer_test.dart`): "Speak replies" (`SpeakerToggle`, in
-SharedPreferences) turns on when you send anything by voice; it reads
-Hester's final answers and new items from agents you replied to by voice
-(approvals: title plus "Approve or deny on screen."), foreground only, and
-stops when you start recording. The listeners are in `RootShell`.
-`theme/pending_icons.dart` holds `mic`, `speaker` and `camera` until the
-generated Phosphor set has them; then switch and delete it.
+`test/speech_sanitizer_test.dart`): a voice message gets **only its next
+reply** read, once: Hester's answer to a spoken question, or an agent's next
+item after a spoken reply to it (approvals: title plus "Approve or deny on
+screen."); a typed question or reply disarms it (2026-09-28: one voice
+message used to switch readback on for good). "Speak replies"
+(`SpeakerToggle`, in SharedPreferences) is manual only and reads every
+Hester answer. Foreground only; recording stops it. The voice is iOS's
+default for the language, i.e. the one chosen in Settings › Accessibility ›
+Spoken Content (don't pick one in code). The listeners are in `RootShell`.
+`theme/pending_icons.dart` now only holds `speakerOff`.
+
+**Share extension** (`ios/LeeShare/`, target `LeeShare`, bundle
+`com.intrafocal.aeronaut.LeeShare`, iOS 16+): "Lee" in the iOS share sheet
+sends screenshots, photos (up to 4, downscaled to 2048 px JPEG), text or a
+link to `POST /tether/send` with Deliver or Send, targets from
+`GET /tether/targets`. Native SwiftUI, no Flutter. It reads the active
+Machine (URL, token, name, workspace) from the App Group
+`group.com.intrafocal.aeronaut`, which Aeronaut writes through the
+`aeronaut/app_group` channel (`services/app_group.dart`, `AppGroupBridge` in
+`AppDelegate.swift`) whenever the active Machine changes (`RootShell`). Both
+targets carry the App Group entitlement; the target was added with the
+`xcodeproj` gem, and its Embed phase sits before Flutter's Thin Binary
+script (after it, Xcode reports a build cycle).
 
 Design rules (§0): phosphor marks the one next step per view (`BtnKind.next`
 in `widgets/work_ui.dart`), never nav or tabs; ember is a dot and means needs

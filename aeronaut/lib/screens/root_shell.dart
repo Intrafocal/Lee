@@ -10,6 +10,7 @@ import '../models/hester_models.dart';
 import '../providers/attention_provider.dart';
 import '../providers/hester_provider.dart';
 import '../providers/machines_provider.dart';
+import '../services/app_group.dart';
 import '../providers/speech_provider.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
@@ -77,6 +78,14 @@ class _RootShellState extends ConsumerState<RootShell> {
     // they're already looking at Work.
     _notifyRoseSub = ref.read(attentionProvider.notifier).notifyRoseStream.listen(_onNotifyRose);
     _listenForReadback();
+    // The share extension sends to whichever Machine is active here.
+    ref.listenManual<MachinesState>(machinesProvider, (prev, next) {
+      final m = next.activeMachine;
+      final was = prev?.activeMachine;
+      if (prev == null || m?.id != was?.id || m?.token != was?.token || m?.host != was?.host || m?.hostPort != was?.hostPort || m?.workspace != was?.workspace) {
+        AppGroup.publishMachine(m);
+      }
+    }, fireImmediately: true);
   }
 
   /// Readback (§5.5): Hester's final answers, and new items from agents
