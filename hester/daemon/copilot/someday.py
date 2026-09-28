@@ -19,6 +19,7 @@ import yaml
 
 from ..cockpit.desk import PAGE_ID_RE
 from ..cockpit.explorations import EXP_ID_RE
+from ..hester_dir import ensure_gitignored
 
 ID_RE = re.compile(r"^sd_\d{8}T\d{6}_[0-9a-f]{4}$")
 STATUSES = ("open", "explored", "promoted", "dropped", "kept")
@@ -235,6 +236,7 @@ class SomedayStore:
         while path.exists():
             item.id = new_id(now)
             path = self._path(item.id)
+        ensure_gitignored(self.workspace)
         self.dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.dir, 0o700)

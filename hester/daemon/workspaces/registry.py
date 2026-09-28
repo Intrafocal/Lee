@@ -21,6 +21,7 @@ import httpx
 from ...shared.auth import auth_headers
 from ...shared.config import config_paths, load_merged_config
 from ...shared.workspace import get_active_workspace, workspace_id
+from ..hester_dir import ensure_gitignored
 
 logger = logging.getLogger("hester.daemon.workspaces.registry")
 
@@ -170,6 +171,7 @@ class WorkspaceRegistry:
                     path=path, id=workspace_id(path), sources=set(), opened_at=now, last_used=now,
                 )
                 self._contexts[str(path)] = ctx
+                ensure_gitignored(path)  # .hester/ stays out of the project's git
             ctx.sources.update(sources)
             ctx.last_used = now
             self._cap_locked()

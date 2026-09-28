@@ -51,6 +51,7 @@ from .explorations import (
 )
 from .plain import _clip_words
 from .tasks import atomic_write, iso_s
+from ..hester_dir import ensure_gitignored
 
 logger = logging.getLogger("hester.daemon.cockpit.desk")
 
@@ -382,6 +383,7 @@ class DeskStore:
         return raw
 
     def _write(self, raw: Dict[str, Any]) -> None:
+        ensure_gitignored(self.workspace)
         self.root.mkdir(parents=True, exist_ok=True)
         _chmod(self.root, 0o700)
         _write_json(self.path, raw)
