@@ -589,6 +589,10 @@ the submodule is gone.
 
 ---
 
+## Spikes
+
+- **Tailnet and Surfaces** (2026-09-28, [`spikes/2026-09-28-dirigible-tailnet-surfaces.md`](spikes/2026-09-28-dirigible-tailnet-surfaces.md)): MicroLink joins the tailnet and finds a direct path, but Tailscale 1.102.4 never answers its WireGuard handshake, so no data flows; the next step is the `fugo101/microlink` fork (IDF 6) or Tailscale Funnel. Declarative JSON Surfaces render from SD in about 58 ms and send events; SD needs MISO 38 on the shared SPI bus and long filenames.
+
 ## Ideas (not planned)
 
 Everything below was in the original specification and is not being built. It

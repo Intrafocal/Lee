@@ -18,7 +18,7 @@ Four parts, decided in conversation on 2026-09-28:
 3. **Voice** (§5): `VoicePlan.md` as written (Hester transcribes; Lee, Aeronaut and the T-Deck record), adapted to the renames.
 4. **Renames and removals** (§2): Carry → Tether and Someday → Ideas in routes, types, stores, files and the CLI; Put away → Stashed in ids and routes; **Open next** and the pre-Desk routes are removed.
 
-**Not this round:** a Desk canvas on devices; editing on devices; Board cards (a Board target is reserved in §4 but not built); native audio in the ReAct loop, server TTS, spoken alerts (§5.8); Dirigible over Tailscale (a research question); renaming the `deep.*` internals (events, the `deep` focus source, `DeepHost`), which run through G0's metrics and months of logs.
+**Not this round:** a Desk canvas on devices; editing on devices; Board cards (a Board target is reserved in §4 but not built); native audio in the ReAct loop, server TTS, spoken alerts (§5.8); Dirigible over Tailscale (a research question; spiked 2026-09-28: [`../spikes/2026-09-28-dirigible-tailnet-surfaces.md`](../spikes/2026-09-28-dirigible-tailnet-surfaces.md)); renaming the `deep.*` internals (events, the `deep` focus source, `DeepHost`), which run through G0's metrics and months of logs.
 
 ## 1. Packages and ownership
 
