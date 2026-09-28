@@ -87,6 +87,14 @@ A Board is where the Operator thinks visually: a canvas of screenshots, images, 
 - **Hester stores it; Lee draws it.** The canvas is Lee's own, built on the Desk surface's camera and tools, not tldraw or Excalidraw: the vocabulary is small, it should look like the Desk, tldraw needs a paid licence, and Excalidraw's look, size and remote fonts fit Lee's CSP and style badly. Revisit Excalidraw if Boards ever need shapes and connectors.
 - **Later:** the **Visualize** hand-off (an agent makes a diagram, mockup or render, and it lands on the Board as an image whose source is the hand-off); Renders (14 §9); refreshing assets from their source.
 
+**Built** (*2026-09-28*, plan phases B1–B4):
+
+- Hester stores Boards (`.hester/desk/boards/<bd-id>/`), with assets and their `source` (Page assets record it too), `preview.png`, and the Page's Ask and hand-off routes over a Board. A Board Ask sends the selection's picture straight to Gemini (`hester.google_api_key`); with no key it ends in a one-line error. `hester desk board <id>` prints a Board for Claude.
+- Lee's canvas: Select, Annotate (pinned or not), Highlight and Draw; images by paste, drop and file; undo; saving with its version; the Desk card's picture and hover preview; New › Board, "New Board here", and pasting an image on an empty spot of an Area.
+- On a selection, ⌘. opens the Page's action row (Ask about this… · Hand off). Ask drops a sticky that opens to the answer, with follow-ups and Retry; Hand off opens the Page's sheet and drops a clipboard that opens to the result, with Open in Work and Reply.
+- Links: `[[` in a Page or in a Board's note picks a Page or Board; a note's links show under its text and open the card; a pasted `[[card]]` becomes a link box.
+- **Not yet:** Send to Lee with a Board zoomed, and the phone's Review of Boards (both wait on Deep sessions counting Boards: today a zoomed Board isn't the session's card, isn't on the touched list, and has no ending ritual of its own); making a link box other than by pasting.
+
 ## 4. Sessions
 
 *Decided 2026-09-27.*
