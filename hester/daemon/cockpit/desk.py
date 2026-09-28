@@ -13,6 +13,8 @@ One store per workspace at ``<workspace>/.hester/desk/`` (0700)::
       references.jsonl          kept quotes and links
       questions.jsonl           questions (an exploration kept them in frontmatter)
       assets/img-<hex>.png|jpg  images on the Page (``![…](assets/…)`` in page.md); they go with the card
+      assets.jsonl              one row per image: {name, mime, bytes, created_at, source?}
+    boards/<bd-id>/             a Board card (board.py): card.json, board.json, answers.jsonl, assets, preview.png
 
 Titles live in ``card.json`` only; ``desk.json`` holds layout and ``GET /desk``
 joins them. ``PageStore`` gives deep.py the surface of an ``ExplorationStore``
@@ -57,13 +59,15 @@ from ..hester_dir import ensure_gitignored
 logger = logging.getLogger("hester.daemon.cockpit.desk")
 
 PAGE_ID_RE = re.compile(r"^pg-[0-9a-f]{8}$")
+BOARD_ID_RE = re.compile(r"^bd-[0-9a-f]{8}$")
+CARD_ID_RE = re.compile(r"^(pg|bd)-[0-9a-f]{8}$")
 AREA_ID_RE = re.compile(r"^area-[0-9a-f]{8}$")
 DRAWER_ID_RE = re.compile(r"^(stashed|ideas|drw-[0-9a-f]{8})$")
 STROKE_ID_RE = re.compile(r"^stk-[0-9a-f]{8}$")
 IDEAS_DRAWER = "ideas"
 STASHED_DRAWER = "stashed"
 LEGACY_PUT_AWAY = "put-away"  # the Stashed Drawer's id before 2026-09-28; load() rewrites it once
-CARD_KINDS = ("page",)
+CARD_KINDS = ("page", "board")
 
 DESK_DIR = Path(".hester") / "desk"
 DESK_FILE = "desk.json"
@@ -73,7 +77,10 @@ ASSETS_DIR = "assets"
 ASSET_TYPES = {"image/png": "png", "image/jpeg": "jpg"}
 ASSET_MAGIC = {"png": b"\x89PNG\r\n\x1a\n", "jpg": b"\xff\xd8\xff"}
 ASSET_NAME_RE = re.compile(r"^img-[0-9a-f]{8}\.(png|jpg)$")
+ASSETS_FILE = "assets.jsonl"
+ASSET_SOURCE_KINDS = ("card", "answer", "file", "url")
 MAX_ASSET_BYTES = 10 * 1024 * 1024
+MAX_SOURCE_TEXT = 2000
 
 AREA_W, AREA_H, AREA_GAP, AREA_COLS = 1200, 800, 200, 3
 CARD_X, CARD_Y, CARD_W, CARD_H, CARD_GAP = 48, 96, 360, 240, 48
@@ -128,6 +135,15 @@ def page_id_for_exploration(exp_id: Any) -> Optional[str]:
 
 def is_page_id(value: Any) -> bool:
     return isinstance(value, str) and bool(PAGE_ID_RE.match(value))
+
+
+def is_board_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(BOARD_ID_RE.match(value))
+
+
+def is_card_id(value: Any) -> bool:
+    """A Page's (``pg-``) or a Board's (``bd-``) card id."""
+    return isinstance(value, str) and bool(CARD_ID_RE.match(value))
 
 
 def _chmod(path: Path, mode: int) -> None:
@@ -249,6 +265,108 @@ def stopped_line(page: str, stopped_at: Optional[str]) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
+# Images (a Page's and a Board's) and where they came from
+# ---------------------------------------------------------------------------
+
+
+def norm_asset_source(raw: Any) -> Optional[Dict[str, Any]]:
+    """
+    An asset's optional ``source`` (shared/board.ts AssetSource): ``{kind: 'card',
+    card_id, item_id?} | {kind: 'answer', card_id, answer_id} | {kind: 'file',
+    path} | {kind: 'url', url}``, each with an optional ``taken_at``. Recorded only.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or raw.get("kind") not in ASSET_SOURCE_KINDS:
+        raise DeskError(f"source.kind must be one of {', '.join(ASSET_SOURCE_KINDS)}")
+    kind = raw["kind"]
+    out: Dict[str, Any] = {"kind": kind}
+
+    def text(key: str) -> str:
+        v = raw.get(key)
+        if not isinstance(v, str) or not v.strip() or len(v) > MAX_SOURCE_TEXT or "\0" in v:
+            raise DeskError(f"source.{key} must be a non-empty string")
+        return v.strip()
+
+    if kind in ("card", "answer"):
+        out["card_id"] = text("card_id")
+        if not is_card_id(out["card_id"]):
+            raise DeskError("source.card_id must be a card id")
+        if kind == "answer":
+            out["answer_id"] = text("answer_id")
+            if not deep.ANSWER_ID_RE.match(out["answer_id"]):
+                raise DeskError("source.answer_id must be an answer id")
+        elif raw.get("item_id") is not None:
+            out["item_id"] = text("item_id")
+    elif kind == "file":
+        out["path"] = text("path")
+    else:
+        out["url"] = text("url")
+        if not deep.is_http_url(out["url"]):
+            raise DeskError("source.url must be an http(s) URL")
+    taken = raw.get("taken_at")
+    if taken is not None:
+        if not isinstance(taken, str) or deep._parse(taken) is None:
+            raise DeskError("source.taken_at must be an ISO 8601 time")
+        out["taken_at"] = taken
+    return out
+
+
+def parse_asset_source(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    """``?source=`` on an upload: JSON, checked by ``norm_asset_source``."""
+    if value is None or value == "":
+        return None
+    try:
+        raw = json.loads(value)
+    except ValueError:
+        raise DeskError("source must be JSON")
+    return norm_asset_source(raw)
+
+
+def image_ext(content_type: str, data: bytes) -> str:
+    """``png`` or ``jpg`` for an upload; AssetTypeError (415) or DeskError unless it's a PNG or JPEG up to 10 MB."""
+    ext = ASSET_TYPES.get((content_type or "").split(";")[0].strip().lower())
+    if ext is None:
+        raise AssetTypeError("Content-Type must be image/png or image/jpeg")
+    if not data:
+        raise DeskError("the image is empty")
+    if len(data) > MAX_ASSET_BYTES:
+        raise DeskError("the image is larger than 10 MB")
+    if not data.startswith(ASSET_MAGIC[ext]):
+        raise DeskError(f"the body is not a {ext.upper()} image")
+    return ext
+
+
+def write_file(path: Path, data: bytes) -> None:
+    """Bytes in place atomically, 0600."""
+    tmp = path.parent / f".{path.name}.tmp"
+    tmp.write_bytes(data)
+    _chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def store_asset(card_dir: Path, prefix: str, ext: str, data: bytes, source: Optional[Dict[str, Any]] = None,
+                now: Optional[datetime] = None) -> Dict[str, Any]:
+    """``assets/<prefix>-<hex>.<ext>`` and its ``assets.jsonl`` row ``{name, mime, bytes, created_at, source?}``."""
+    d = card_dir / ASSETS_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    _chmod(d, 0o700)
+    while True:
+        name = f"{_hex_id(prefix)}.{ext}"
+        if not (d / name).exists():
+            break
+    write_file(d / name, data)
+    row: Dict[str, Any] = {
+        "name": name, "mime": next(t for t, e in ASSET_TYPES.items() if e == ext), "bytes": len(data),
+        "created_at": iso_s(now or utc_now()),
+    }
+    if source:
+        row["source"] = source
+    deep.append_jsonl(card_dir / ASSETS_FILE, row)
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Page cards: the ExplorationStore surface deep.py needs
 # ---------------------------------------------------------------------------
 
@@ -336,30 +454,12 @@ class PageStore:
 
     # ---- images on a Page (§4.4 of the Tether plan): pages/<id>/assets/, gone with the card
 
-    def add_asset(self, card_id: str, content_type: str, data: bytes) -> Dict[str, str]:
-        """Store an image for the Page; ``{name: '<asset id>.<ext>', path: 'assets/<name>'}``."""
+    def add_asset(self, card_id: str, content_type: str, data: bytes,
+                  source: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        """Store an image for the Page (a row in ``assets.jsonl``, with ``source`` when given); ``{name, path}``."""
         self.require(card_id)
-        ext = ASSET_TYPES.get((content_type or "").split(";")[0].strip().lower())
-        if ext is None:
-            raise AssetTypeError("Content-Type must be image/png or image/jpeg")
-        if not data:
-            raise DeskError("the image is empty")
-        if len(data) > MAX_ASSET_BYTES:
-            raise DeskError("the image is larger than 10 MB")
-        if not data.startswith(ASSET_MAGIC[ext]):
-            raise DeskError(f"the body is not a {ext.upper()} image")
-        d = self.exp_dir(card_id) / ASSETS_DIR
-        d.mkdir(parents=True, exist_ok=True)
-        _chmod(d, 0o700)
-        while True:
-            name = f"{_hex_id('img')}.{ext}"
-            if not (d / name).exists():
-                break
-        tmp = d / f".{name}.tmp"
-        tmp.write_bytes(data)
-        _chmod(tmp, 0o600)
-        os.replace(tmp, d / name)
-        return {"name": name, "path": f"{ASSETS_DIR}/{name}"}
+        row = store_asset(self.exp_dir(card_id), "img", image_ext(content_type, data), data, source)
+        return {"name": row["name"], "path": f"{ASSETS_DIR}/{row['name']}"}
 
     def asset_path(self, card_id: str, name: str) -> Tuple[Path, str]:
         """(file, content type) of one of the Page's images; DeskNotFound when it isn't there."""
@@ -404,6 +504,19 @@ class DeskStore:
         self.path = self.root / DESK_FILE
         self.sessions_path = self.root / SESSIONS_FILE
         self.pages = PageStore(self.workspace)
+        from .board import BoardStore
+
+        self.boards = BoardStore(self.workspace)
+
+    def store(self, card_id: Any):
+        """The card's store: ``boards`` for a ``bd-`` id, else ``pages``."""
+        return self.boards if is_board_id(card_id) else self.pages
+
+    def read_card(self, card_id: Any) -> Optional[Dict[str, Any]]:
+        return self.store(card_id).read_card(card_id) if is_card_id(card_id) else None
+
+    def card_exists(self, card_id: Any) -> bool:
+        return is_card_id(card_id) and self.store(card_id).exists(card_id)
 
     # ---------------------------------------------------------------- desk.json
 
@@ -415,7 +528,7 @@ class DeskStore:
             if k not in raw or not isinstance(raw[k], type(v)) and v is not None:
                 raw[k] = v
         raw["areas"] = [a for a in raw["areas"] if isinstance(a, dict) and AREA_ID_RE.match(str(a.get("id") or ""))]
-        raw["cards"] = [c for c in raw["cards"] if isinstance(c, dict) and is_page_id(c.get("id"))]
+        raw["cards"] = [c for c in raw["cards"] if isinstance(c, dict) and is_card_id(c.get("id"))]
         raw["strokes"] = [s for s in raw["strokes"] if isinstance(s, dict) and STROKE_ID_RE.match(str(s.get("id") or ""))
                           and isinstance(s.get("points"), list)]
         raw["drawers"] = [d for d in raw["drawers"] if isinstance(d, dict) and DRAWER_ID_RE.match(str(d.get("id") or ""))
@@ -427,7 +540,7 @@ class DeskStore:
             "map": mig.get("map") if isinstance(mig.get("map"), dict) else {},
             "last_report": mig.get("last_report") if isinstance(mig.get("last_report"), dict) else None,
         }
-        if not isinstance(raw.get("last"), dict) or not is_page_id(raw["last"].get("card_id")):
+        if not isinstance(raw.get("last"), dict) or not is_card_id(raw["last"].get("card_id")):
             raw["last"] = None
         if not is_page_id(raw.get("goals_card_id")):
             raw["goals_card_id"] = None
@@ -473,10 +586,10 @@ class DeskStore:
         return next((c for c in raw["cards"] if c["id"] == card_id), None)
 
     def _require_card(self, raw: Dict[str, Any], card_id: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        if not is_page_id(card_id):
+        if not is_card_id(card_id):
             raise DeskError("invalid card id")
         entry = self._entry(raw, card_id)
-        card = self.pages.read_card(card_id)
+        card = self.read_card(card_id)
         if entry is None or card is None:
             raise DeskNotFound(card_id)
         return entry, dict(card, id=card_id)
@@ -513,12 +626,14 @@ class DeskStore:
     def _unique(self, prefix: str, taken: set) -> str:
         while True:
             new = _hex_id(prefix)
-            if new not in taken and not (prefix == "pg" and (self.pages.dir / new).exists()):
+            if new not in taken and not (prefix in ("pg", "bd") and (self.store(new).dir / new).exists()):
                 return new
 
     # ---------------------------------------------------------------- API shapes
 
     def summary(self, card_id: str) -> Dict[str, Any]:
+        if is_board_id(card_id):
+            return self.boards.summary(card_id)
         d = self.pages.dir / card_id
         page = d / PAGE_FILE
         text, updated = "", None
@@ -596,7 +711,7 @@ class DeskStore:
         raw = self.load(now)
         cards = []
         for entry in raw["cards"]:
-            card = self.pages.read_card(entry["id"])
+            card = self.read_card(entry["id"])
             if card is not None:
                 cards.append(self.card_api(entry, dict(card, id=entry["id"]), raw))
         return {
@@ -622,7 +737,7 @@ class DeskStore:
         areas = {a["id"]: a for a in raw["areas"]}
         out = []
         for entry in raw["cards"]:
-            card = self.pages.read_card(entry["id"])
+            card = self.read_card(entry["id"])
             if card is None:
                 continue
             area = areas.get(entry.get("area_id"))
@@ -695,7 +810,7 @@ class DeskStore:
 
     def _drop_card(self, raw: Dict[str, Any], card_id: str) -> None:
         """Remove a card and its folder from ``raw`` (caller holds the lock and writes)."""
-        shutil.rmtree(self.pages.dir / card_id, ignore_errors=True)
+        shutil.rmtree(self.store(card_id).dir / card_id, ignore_errors=True)
         raw["cards"] = [c for c in raw["cards"] if c["id"] != card_id]
         if raw.get("goals_card_id") == card_id:
             raw["goals_card_id"] = None
@@ -783,7 +898,7 @@ class DeskStore:
             if "title" in body:
                 card["title"] = _title(body["title"])
                 card["updated_at"] = iso_s(now)
-                self.pages.write_card(card)
+                self.store(card_id).write_card(card)
             if layout:
                 self._write(raw)
             return self.card_api(entry, card, raw)
@@ -865,17 +980,17 @@ class DeskStore:
                 src = body.get("from")
                 area = None
                 if src is not None:
-                    if not isinstance(src, dict) or not is_page_id(src.get("card_id")):
+                    if not isinstance(src, dict) or not is_card_id(src.get("card_id")):
                         raise DeskError("from.card_id must be a card id")
                     if src.get("anchor") is not None:
-                        deep.norm_anchor(src["anchor"])
+                        deep.norm_anchor(src["anchor"], self.store(src["card_id"]), src["card_id"])
                     src_entry, _ = self._require_card(raw, src["card_id"])
                     if body.get("area_id") is None and src_entry.get("area_id"):
                         area = self._area(raw, src_entry["area_id"])
                         if pos["x"] is None and pos["y"] is None:
                             pos["x"] = src_entry.get("x", 0) + src_entry.get("w", CARD_W) + CARD_GAP
                             pos["y"] = src_entry.get("y", 0)
-                    origin = origin or {"kind": "page", "ref": src["card_id"]}
+                    origin = origin or {"kind": "board" if is_board_id(src["card_id"]) else "page", "ref": src["card_id"]}
                 if area is None and body.get("area_id") is not None:
                     area = self._area(raw, body["area_id"])
                 if area is None and src is not None:
@@ -925,6 +1040,58 @@ class DeskStore:
             raw = self.load(now)
             self._require_card(raw, card_id)
             if not force and not self.is_empty(card_id):
+                raise DeskConflict("not_empty")
+            self._drop_card(raw, card_id)
+            self._write(raw)
+        return {"deleted": True}
+
+    # ---------------------------------------------------------------- Boards (board.py)
+
+    def create_board(self, body: Dict[str, Any], now: Optional[datetime] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """POST /desk/boards ``{area_id?, title?, x?, y?}`` -> (card, {version, items}). No Area: the first on the Desk."""
+        from .board import board_version, new_board_card
+
+        now = now or utc_now()
+        title = _title(body["title"]) if body.get("title") is not None else None
+        pos = {k: _num(body, k, positive=k in ("w", "h")) for k in ("x", "y", "w", "h")}
+        with _LOCK:
+            raw = self.load(now)
+            if body.get("area_id") is not None:
+                area = self._area(raw, body["area_id"])
+            else:
+                area = next((a for a in raw["areas"] if not a.get("drawer_id")), None)
+                if area is None:
+                    raise DeskError("area_id is required")
+            if area.get("drawer_id"):
+                raise DeskError("that Area is stashed")
+            w, h = pos["w"] or CARD_W, pos["h"] or CARD_H
+            if pos["x"] is None or pos["y"] is None:
+                fx, fy = self._free_card_slot(raw, area, w, h)
+                pos["x"] = fx if pos["x"] is None else pos["x"]
+                pos["y"] = fy if pos["y"] is None else pos["y"]
+            card_id = self._unique("bd", {c["id"] for c in raw["cards"]})
+            entry = {"id": card_id, "kind": "board", "area_id": area["id"], "x": pos["x"], "y": pos["y"], "w": w, "h": h}
+            card = new_board_card(card_id, title or DEFAULT_TITLE, now)
+            self.boards.write_card(card)
+            self.boards._save(card_id, [])
+            raw["cards"].append(entry)
+            self._write(raw)
+            return self.card_api(entry, card, raw), {"version": board_version([]), "items": []}
+
+    def patch_board(self, card_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+        """PATCH /desk/boards/{id}: its title, or its place as ``/desk/cards/{id}`` takes it."""
+        if not is_board_id(card_id):
+            raise DeskError("invalid card id")
+        return self.patch_card(card_id, body, now)
+
+    def delete_board(self, card_id: str, now: Optional[datetime] = None, force: bool = False) -> Dict[str, Any]:
+        """Only an empty Untitled Board, unless ``force`` (the user confirmed). Not undoable."""
+        if not is_board_id(card_id):
+            raise DeskError("invalid card id")
+        with _LOCK:
+            raw = self.load(now)
+            self._require_card(raw, card_id)
+            if not force and not self.boards.is_empty(card_id):
                 raise DeskConflict("not_empty")
             self._drop_card(raw, card_id)
             self._write(raw)
@@ -1022,16 +1189,16 @@ class DeskStore:
         touched_raw = body.get("cards_touched")
         if touched_raw is None:
             touched_raw = []
-        if not isinstance(touched_raw, list) or not all(is_page_id(c) for c in touched_raw):
+        if not isinstance(touched_raw, list) or not all(is_card_id(c) for c in touched_raw):
             raise DeskError("cards_touched must be a list of card ids")
         touched: List[str] = []
         for c in touched_raw:
-            if c not in touched and self.pages.exists(c):
+            if c not in touched and self.card_exists(c):
                 touched.append(c)
         stopped_card = body.get("stopped_card_id")
-        if stopped_card is not None and not is_page_id(stopped_card):
+        if stopped_card is not None and not is_card_id(stopped_card):
             raise DeskError("stopped_card_id must be a card id or null")
-        if stopped_card is not None and not self.pages.exists(stopped_card):
+        if stopped_card is not None and not self.card_exists(stopped_card):
             stopped_card = None
         if kept_raw is None:
             kept_raw = []
@@ -1287,13 +1454,15 @@ class DeskStore:
                "arrived": arrived, "last_session": latest}
         if card_id is None:
             return out
-        page = self.pages.page_text(card_id)
+        board = is_board_id(card_id)
+        page = "" if board else self.pages.page_text(card_id)  # a Board has no line to stop at
         stopped = latest.get("stopped_at") if latest and latest.get("stopped_card_id") == card_id else None
         if not stopped:
             line = deep.last_nonempty_line(page)
             stopped = tail_clip(line) if line else None
         since = parse_ts((latest or {}).get("ended_at"))
-        for a in deep.read_jsonl(self.pages.dir / card_id / deep.ANSWERS_FILE):
+        card_dir = self.store(card_id).dir / card_id
+        for a in deep.read_jsonl(card_dir / deep.ANSWERS_FILE):
             if a.get("status") != "done":
                 continue
             key = "handoffs" if deep.is_handoff(a) else "answers"
@@ -1303,7 +1472,7 @@ class DeskStore:
                 at = parse_ts(a.get("answered_at"))
                 arrived[key] += 1 if at is not None and at > since else 0
         arrived["open_questions"] = sum(
-            1 for q in deep.read_jsonl(self.pages.dir / card_id / deep.QUESTIONS_FILE) if q.get("status") == "open"
+            1 for q in deep.read_jsonl(card_dir / deep.QUESTIONS_FILE) if q.get("status") == "open"
         )
         for item in IdeasStore(self.workspace).list("open"):
             created = parse_ts(item.created_at)
@@ -1311,7 +1480,7 @@ class DeskStore:
                 arrived["captured"] += 1
         out.update({
             "card": self.brief_api(briefs[card_id]), "source": source, "stopped_at": stopped,
-            "stopped_line": stopped_line(page, stopped),
+            "stopped_line": None if board else stopped_line(page, stopped),
         })
         return out
 
@@ -1366,5 +1535,7 @@ def idea_name(text: str) -> str:
 
 
 def store_for(ctx, some_id: str):
-    """The record store for an id: a Page card's (``pg-``) or an exploration's (``exp-``)."""
+    """The record store for an id: a Page card's (``pg-``), a Board's (``bd-``) or an exploration's (``exp-``)."""
+    if is_board_id(some_id):
+        return ctx.desk().boards
     return ctx.desk().pages if is_page_id(some_id) else ctx.explorations()

@@ -61,3 +61,47 @@ def test_no_desk_and_ambiguous_titles(tmp_path):
     assert code == 2 and "Several cards match" in out
     code, out = run("page", "nothing like this", "--dir", str(tmp_path))
     assert code == 1
+
+
+def test_boards_in_the_overview_and_hester_desk_board(tmp_path):
+    card = build(tmp_path)
+    store = DeskStore(tmp_path)
+    b, _ = store.create_board({"area_id": card["area_id"], "title": "Header renders"})
+    bid = b["id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 8
+    img = store.boards.add_asset(bid, "image/png", png, source={"kind": "url", "url": "https://example.com/a"})
+    sel = store.boards.add_asset(bid, "image/png", png, kind="selection")
+    items = [
+        {"id": "it-00000001", "kind": "image", "x": 0, "y": 0, "w": 200, "h": 100, "z": 1, "asset": img["name"]},
+        {"id": "it-00000002", "kind": "highlight", "x": 10, "y": 10, "w": 50, "h": 20, "z": 2, "item_id": "it-00000001"},
+        {"id": "it-00000003", "kind": "note", "x": 300, "y": 0, "w": 120, "h": 60, "z": 3, "text": "Too tall",
+         "pin": {"item_id": "it-00000002", "u": 0.5, "v": 0.5}},
+        {"id": "it-00000004", "kind": "link", "x": 300, "y": 100, "w": 120, "h": 40, "z": 4, "card_id": card["id"]},
+    ]
+    store.boards.write(bid, {"version": None, "items": items})
+    anchor = {"kind": "board", "item_ids": ["it-00000001"], "rect": {"x": 0, "y": 0, "w": 200, "h": 100},
+              "snapshot": sel["path"], "notes": ["Too tall"]}
+    ask = deep.new_answer(store.boards, bid, {"question": "Which is cleaner?", "anchor": anchor})
+    deep.update_answer(store.boards, bid, ask["id"], {"status": "done", "answer": "The left one."})
+    deep.new_handoff(store.boards, bid, {"kind": "research", "brief": "Research: header heights", "anchor": anchor})
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+
+    code, out = run("overview", "--dir", str(tmp_path))
+    assert code == 0 and f"Header renders ({bid}) · board · 4 items" in out and f"Mesh sync ({card['id']}) · page ·" in out
+
+    code, out = run("board", "header", "--dir", str(tmp_path))
+    folder = tmp_path / ".hester" / "desk" / "boards" / bid
+    assert code == 0, out
+    assert f"{folder / 'assets' / img['name']} (from url: https://example.com/a)" in out
+    assert "- Too tall [pinned to highlight it-00000002]" in out and f"- on image {img['name']}: Too tall" in out
+    assert f"- Mesh sync ({card['id']})" in out
+    assert "### Q: Which is cleaner?" in out and "The left one." in out and f"Selection (image): {folder / sel['path']}" in out
+    assert "### Research to claude: queued" in out and "Brief: Research: header heights" in out
+
+    code, out = run("page", bid, "--dir", str(tmp_path), "--json")
+    data = json.loads(out)
+    assert code == 0 and data["kind"] == "board" and [n["text"] for n in data["notes"]] == ["Too tall"]
+    assert data["images"][0]["source"] == {"kind": "url", "url": "https://example.com/a"}
+    code, _ = run("board", "mesh", "--dir", str(tmp_path))
+    assert code == 1, "a Page isn't a Board"
+    assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before, "read-only: nothing written"

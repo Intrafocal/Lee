@@ -4,7 +4,8 @@ task. Deterministic, no model.
 
 The record lives in the Page card's ``answers.jsonl`` (``kind: 'handoff'``,
 ``surface: 'deep-handoff'``; ``deep.new_handoff`` creates it). Lee launches the
-task with ``origin: {kind: 'page', ref: '<pg id>#<answer id>'}`` (Desk D2), or
+task with ``origin: {kind: 'page', ref: '<pg id>#<answer id>'}`` (Desk D2), a
+Board's with ``{kind: 'board', ref: '<bd id>#<answer id>'}``, or
 the pre-Desk ``{kind: 'exploration', ref: '<exp id>#<answer id>'}``, which
 follows the migration to its card when there is one; whenever such a task is relayed, followed or closed (the follower and the task
 routes call ``sync``), the record follows it:
@@ -27,7 +28,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from . import deep
-from .desk import PAGE_ID_RE
+from .desk import BOARD_ID_RE, CARD_ID_RE, PAGE_ID_RE
 from .explorations import EXP_ID_RE, utc_now
 from .tasks import clip, iso_s
 
@@ -35,7 +36,9 @@ logger = logging.getLogger("hester.daemon.cockpit.handoffs")
 
 ORIGIN_KIND = "exploration"  # the pre-Desk form
 PAGE_ORIGIN_KIND = "page"
-ORIGIN_KINDS = (PAGE_ORIGIN_KIND, ORIGIN_KIND)
+BOARD_ORIGIN_KIND = "board"
+ORIGIN_KINDS = (PAGE_ORIGIN_KIND, BOARD_ORIGIN_KIND, ORIGIN_KIND)
+ORIGIN_ID_RE = {PAGE_ORIGIN_KIND: PAGE_ID_RE, BOARD_ORIGIN_KIND: BOARD_ID_RE, ORIGIN_KIND: EXP_ID_RE}
 STATE_MAP = {
     "queued": "running", "running": "running", "idle": "running",
     "waiting": "waiting", "review": "review", "done": "done", "discarded": "error",
@@ -45,13 +48,13 @@ STATE_MAP = {
 def parse_ref(ref: Any, kind: str = ORIGIN_KIND) -> Tuple[Optional[str], Optional[str]]:
     """
     ``exp-1a2b3c4d#ans-5e6f7a8b`` (kind ``exploration``) or
-    ``pg-1a2b3c4d#ans-5e6f7a8b`` (kind ``page``) -> (record id, answer id);
-    (None, None) otherwise.
+    ``pg-1a2b3c4d#ans-5e6f7a8b`` (kind ``page``) or ``bd-…#ans-…`` (kind
+    ``board``) -> (record id, answer id); (None, None) otherwise.
     """
     if not isinstance(ref, str) or "#" not in ref:
         return None, None
     rec_id, _, answer_id = ref.partition("#")
-    id_re = PAGE_ID_RE if kind == PAGE_ORIGIN_KIND else EXP_ID_RE
+    id_re = ORIGIN_ID_RE.get(kind, EXP_ID_RE)
     if not id_re.match(rec_id) or not deep.ANSWER_ID_RE.match(answer_id):
         return None, None
     return rec_id, answer_id
@@ -69,9 +72,9 @@ def resolve(ctx, origin: Dict[str, Any]) -> Tuple[Any, Optional[str], Optional[s
     rec_id, answer_id = parse_ref(origin.get("ref"), kind)
     if rec_id is None:
         return None, None, None
-    if kind == PAGE_ORIGIN_KIND:
-        pages = ctx.desk().pages
-        return (pages, rec_id, answer_id) if pages.exists(rec_id) else (None, None, None)
+    if kind in (PAGE_ORIGIN_KIND, BOARD_ORIGIN_KIND):
+        store = ctx.desk().store(rec_id)
+        return (store, rec_id, answer_id) if store.exists(rec_id) else (None, None, None)
     card_id = ctx.desk().card_for_exploration(rec_id)
     if card_id is not None:
         return ctx.desk().pages, card_id, answer_id
@@ -103,7 +106,7 @@ def _ingest(ctx, exp_id: str, row: Dict[str, Any]) -> None:
             "workspace": str(ctx.path), "exploration_id": exp_id, "answer_id": row["id"], "status": row.get("status"),
             "kind": "handoff", "state": (row.get("handoff") or {}).get("state"),
         }
-        if PAGE_ID_RE.match(exp_id):
+        if CARD_ID_RE.match(exp_id):
             data["card_id"] = exp_id  # Desk D2 §5.3: both fields
         lee_events.ingest("deep.answer", data, workspace=str(ctx.path), actor={"kind": "hester"})
     except Exception as e:  # never fail over telemetry

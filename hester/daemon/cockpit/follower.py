@@ -73,7 +73,7 @@ FOLLOW_TYPES = {
 }
 
 # Origins whose ref points back at what launched them (a spike node, a hand-off record).
-REF_ORIGINS = ("explore", "exploration", "page")
+REF_ORIGINS = ("explore", "exploration", "page", "board")
 
 LEE_STATUS_MAP = {"done": "review", "blocked": "waiting", "waiting": "waiting", "in-progress": "running"}
 

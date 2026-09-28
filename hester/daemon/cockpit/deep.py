@@ -245,14 +245,27 @@ def summary(exp_dir: Path, exp: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def norm_anchor(raw: Any) -> Dict[str, Any]:
-    """``{kind:'page', quote, offset, section}`` or ``{kind:'none'}``; stored verbatim otherwise."""
+def is_board_store(store: Any) -> bool:
+    """A Board's store (``board.BoardStore``): its anchors are ``board`` ones."""
+    return callable(getattr(store, "norm_anchor", None))
+
+
+def norm_anchor(raw: Any, store: Any = None, exp_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    ``{kind:'page', quote, offset, section}`` or ``{kind:'none'}``; on a Board
+    (``store`` a BoardStore) ``{kind:'board', item_ids, rect, snapshot, notes}``
+    instead of a page one, its snapshot one of that Board's selections.
+    """
     if raw is None:
         return {"kind": "none"}
     if not isinstance(raw, dict):
         raise ExplorationError("anchor must be an object")
     if raw.get("kind") == "none":
         return {"kind": "none"}
+    if is_board_store(store):
+        if raw.get("kind") != "board":
+            raise ExplorationError("anchor.kind must be board or none on a Board")
+        return store.norm_anchor(exp_id, raw)
     if raw.get("kind") != "page":
         raise ExplorationError("anchor.kind must be page or none")
     quote = raw.get("quote")
@@ -468,7 +481,7 @@ def new_answer(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now: 
         raise ExplorationError(f"question is longer than {MAX_QUESTION} characters")
     if "anchor" not in body:
         raise ExplorationError("anchor is required")
-    anchor = norm_anchor(body.get("anchor"))
+    anchor = norm_anchor(body.get("anchor"), store, exp_id)
     answer: Dict[str, Any] = {
         "id": _new_id("ans"), "anchor": anchor, "question": question, "status": "queued",
         "surface": "deep-ask", "asked_at": iso_s(now),
@@ -524,7 +537,14 @@ def new_handoff(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now:
         raise ExplorationError(f"brief is longer than {MAX_BRIEF} characters")
     if "anchor" not in body:
         raise ExplorationError("anchor is required")
-    anchor = norm_anchor(body.get("anchor"))
+    anchor = norm_anchor(body.get("anchor"), store, exp_id)
+    if anchor.get("kind") == "board":
+        # The agent reads the selection as an image: its absolute path and the annotations go in the brief.
+        image = str(store.snapshot_path(exp_id, anchor["snapshot"]).absolute())
+        if image not in brief:
+            brief = brief.rstrip("\n") + "\n\n" + board_selection_text(image, anchor.get("notes") or [])
+            if len(brief) > MAX_BRIEF:
+                raise ExplorationError(f"brief is longer than {MAX_BRIEF} characters")
     record: Dict[str, Any] = {
         "id": _new_id("ans"), "kind": "handoff", "anchor": anchor, "question": _clip(first_line(brief), MAX_QUESTION),
         "status": "queued", "surface": HANDOFF_SURFACE, "asked_at": iso_s(now),
@@ -678,9 +698,18 @@ def handoff_brief(kind: str, section_text: str, exploration_title: str, explorat
     parts = [handoff_template(kind)]
     if section.strip():
         parts.append(section.strip("\n"))
-    noun = "Page" if str(exploration_id).startswith("pg-") else "exploration"
+    noun = {"pg-": "Page", "bd-": "Board"}.get(str(exploration_id)[:3], "exploration")
     parts.append(f"From the {noun} '{exploration_title}' ({exploration_id})")
     return "\n\n".join(parts)
+
+
+def board_selection_text(image_path: str, notes: List[str]) -> str:
+    """A Board hand-off's selection for the agent: the flattened image's absolute path, then the annotations in it."""
+    lines = [f"The selection on the Board, as an image (read it): {image_path}"]
+    if notes:
+        lines.append("The annotations in it:")
+        lines.extend(f"- {' '.join(n.split())}" for n in notes)
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -711,7 +740,7 @@ def add_question(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now
         "id": _new_id("q"), "text": _clip(text, MAX_QUESTION_TEXT), "source": source, "status": "open", "at": iso_s(now),
     }
     if body.get("anchor") is not None:
-        question["anchor"] = norm_anchor(body["anchor"])
+        question["anchor"] = norm_anchor(body["anchor"], store, exp_id)
     if _in_file(store):
         path = _dir(store, exp_id) / QUESTIONS_FILE
         with _LOCK:
