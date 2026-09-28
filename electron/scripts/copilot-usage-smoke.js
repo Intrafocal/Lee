@@ -967,6 +967,25 @@ test('POST /tether/send: 409 no_target, a renderer error (502), and 504 when the
   }
 });
 
+test('voice: media is audio from Lee\'s own page only; every other permission as before', () => {
+  const { allowPermission, allowPermissionCheck } = require(path.join(dist, 'media-permissions.js'));
+  const app = 'file:///Applications/Lee.app/Contents/Resources/app.asar/dist/renderer/public/index.html';
+  assert.strictEqual(allowPermission('media', app, ['audio'], false, false), true);
+  assert.strictEqual(allowPermission('media', app, ['audio', 'video'], false, false), false, 'never the camera');
+  assert.strictEqual(allowPermission('media', app, [], false, false), false);
+  assert.strictEqual(allowPermission('media', 'https://example.com/', ['audio'], true, false), false, 'browser tabs never get the mic');
+  assert.strictEqual(allowPermission('media', app, ['audio'], true, false), false, 'nor a webview on a file');
+  assert.strictEqual(allowPermission('media', 'http://localhost:5173/', ['audio'], false, true), true, 'the dev server');
+  assert.strictEqual(allowPermission('media', 'http://localhost:5173/', ['audio'], false, false), false, 'only in dev');
+  for (const p of ['clipboard-read', 'notifications', 'fullscreen', 'geolocation']) {
+    assert.strictEqual(allowPermission(p, 'https://example.com/', undefined, true, false), true, p);
+    assert.strictEqual(allowPermissionCheck(p, 'https://example.com', undefined, true, false), true, p);
+  }
+  assert.strictEqual(allowPermissionCheck('media', 'file://', 'audio', false, false), true);
+  assert.strictEqual(allowPermissionCheck('media', 'file://', 'video', false, false), false);
+  assert.strictEqual(allowPermissionCheck('media', 'https://example.com', 'audio', true, false), false);
+});
+
 (async () => {
   let failed = 0;
   for (const [name, fn] of tests) {
