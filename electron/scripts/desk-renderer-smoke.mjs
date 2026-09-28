@@ -265,6 +265,31 @@ await test('tools: V, M, D, R pick one; never with a modifier or while typing; E
   assert.equal(model.toolCursor('draw', false), 'crosshair');
 });
 
+await test('Rectangle sizes an Area: right, bottom or corner; never below a drawn Area or its cards', () => {
+  const a = { w: 800, h: 500 };
+  assert.deepEqual(model.resizeArea(a, 'se', { x: 100.4, y: -50 }), { w: 900, h: 450 });
+  assert.deepEqual(model.resizeArea(a, 'e', { x: -100, y: 999 }), { w: 700, h: 500 }, 'the right edge leaves the height');
+  assert.deepEqual(model.resizeArea(a, 's', { x: 999, y: 60 }), { w: 800, h: 560 }, 'the bottom edge leaves the width');
+  assert.deepEqual(model.resizeArea(a, 'se', { x: -2000, y: -2000 }), { ...model.MIN_DRAWN_AREA }, 'the smallest drawn Area');
+  const content = model.areaContent([{ x: 24, y: 64, w: 360, h: 240 }, { x: 420, y: 64, w: 360, h: 240 }]);
+  assert.deepEqual(content, { right: 796, bottom: 320 });
+  assert.deepEqual(model.resizeArea(a, 'se', { x: -500, y: -500 }, content), { w: 796, h: 320 }, "not over its cards");
+  assert.deepEqual(model.AREA_HANDLES, ['e', 's', 'se']);
+});
+
+await test('New: Page now, Board later; it goes in the Area you are in, else the one mid-view, else the first', () => {
+  assert.deepEqual(model.NEW_KINDS.map((k) => [k.kind, k.ready]), [['page', true], ['board', false]]);
+  const areas = [
+    { id: 'a1', name: 'One', x: 0, y: 0, w: 500, h: 400 },
+    { id: 'a2', name: 'Two', x: 1000, y: 0, w: 500, h: 400 },
+  ];
+  assert.equal(model.newCardArea(areas, 'a2', { x: 10, y: 10 })?.id, 'a2');
+  assert.equal(model.newCardArea(areas, null, { x: 1200, y: 100 })?.id, 'a2');
+  assert.equal(model.newCardArea(areas, null, { x: 700, y: 100 })?.id, 'a1');
+  assert.equal(model.newCardArea(areas, 'gone', null)?.id, 'a1');
+  assert.equal(model.newCardArea([], null, { x: 0, y: 0 }), null);
+});
+
 await test('move: a drag in screen px is Desk px; a card lands in the Area under the pointer, kept inside it', () => {
   assert.deepEqual(model.dragDelta({ x: 10, y: 10 }, { x: 60, y: -10 }, 0.5), { x: 100, y: -40 });
   assert.equal(model.movedEnough({ x: 0, y: 0 }, { x: 2, y: 2 }), false, 'a click');

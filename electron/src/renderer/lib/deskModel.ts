@@ -304,7 +304,7 @@ export const DESK_TOOLS: ReadonlyArray<{ tool: DeskTool; key: string; label: str
   { tool: 'cursor', key: 'V', label: 'Cursor', icon: 'pointer' },
   { tool: 'move', key: 'M', label: 'Move', icon: 'move' },
   { tool: 'draw', key: 'D', label: 'Draw', icon: 'draw' },
-  { tool: 'area', key: 'R', label: 'Rectangle: a new Area', icon: 'area' },
+  { tool: 'area', key: 'R', label: 'Rectangle: a new Area, or size one', icon: 'area' },
 ];
 
 export interface KeyLike {
@@ -393,10 +393,61 @@ export function dropArea(area: Pick<DeskRect, 'x' | 'y'>, delta: Point): { x: nu
   return { x: Math.round(area.x + delta.x), y: Math.round(area.y + delta.y) };
 }
 
+/**
+ * Rectangle on an existing Area: its right edge, bottom edge or corner drags
+ * to size it. The top-left stays put, so its cards and lines (kept relative
+ * to that corner) stay where they are. Never smaller than a drawn Area, nor
+ * than what's in it (`content`: the right and bottom of its cards, Area px).
+ */
+export type AreaHandle = 'e' | 's' | 'se';
+export const AREA_HANDLES: readonly AreaHandle[] = ['e', 's', 'se'];
+
+export function resizeArea(
+  area: Pick<DeskRect, 'w' | 'h'>,
+  handle: AreaHandle,
+  delta: Point,
+  content: { right: number; bottom: number } = { right: 0, bottom: 0 },
+): { w: number; h: number } {
+  const minW = Math.max(MIN_DRAWN_AREA.w, Math.ceil(content.right));
+  const minH = Math.max(MIN_DRAWN_AREA.h, Math.ceil(content.bottom));
+  return {
+    w: handle === 's' ? area.w : Math.max(minW, Math.round(area.w + delta.x)),
+    h: handle === 'e' ? area.h : Math.max(minH, Math.round(area.h + delta.y)),
+  };
+}
+
+/** The right and bottom of an Area's cards, in Area px, with a margin; what resizing can't cut off. */
+export function areaContent(cards: ReadonlyArray<Pick<DeskRect, 'x' | 'y' | 'w' | 'h'>>, margin = 16): { right: number; bottom: number } {
+  let right = 0;
+  let bottom = 0;
+  for (const c of cards) {
+    right = Math.max(right, c.x + c.w + margin);
+    bottom = Math.max(bottom, c.y + c.h + margin);
+  }
+  return { right, bottom };
+}
+
+/** The taskbar's New menu: what you can start on the Desk. Board and the rest come later (§3). */
+export type NewKind = 'page' | 'board';
+export const NEW_KINDS: ReadonlyArray<{ kind: NewKind; label: string; ready: boolean }> = [
+  { kind: 'page', label: 'Page', ready: true },
+  { kind: 'board', label: 'Board', ready: false },
+];
+
+/** Where New puts a card: the Area you're in, else the one under the middle of the view, else the first. */
+export function newCardArea(areas: readonly DeskArea[], current: string | null, viewCentre: Point | null): DeskArea | null {
+  return (
+    (current ? areas.find((a) => a.id === current) : undefined) ??
+    (viewCentre ? areaAt(areas, viewCentre) : null) ??
+    areas[0] ??
+    null
+  );
+}
+
 /** What you changed here and Hester hasn't answered yet: shown at once, dropped once GET /desk has it. */
 export interface DeskEdits {
   cards: Readonly<Record<string, { area_id: string; x: number; y: number }>>;
-  areas: Readonly<Record<string, { x: number; y: number }>>;
+  areas: Readonly<Record<string, { x: number; y: number; w?: number; h?: number }>>;
   /** Strokes drawn and not yet in the Desk (temporary ids). */
   added: readonly DeskStroke[];
   /** Strokes deleted and maybe still in the Desk. */

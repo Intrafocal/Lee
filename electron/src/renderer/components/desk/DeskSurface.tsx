@@ -21,8 +21,11 @@
  *   to start a Page, or drag one onto an Area).
  * - Tools, in a small bar at the bottom: Cursor (V; all of the above),
  *   Move (M; drag a card within or between Areas, or an Area by its name
- *   strip, cards and lines with it) and Draw (D; freehand lines, in the
- *   Area where they start, else on the Desk). Lines mean nothing to Hester.
+ *   strip, cards and lines with it), Draw (D; freehand lines, in the
+ *   Area where they start, else on the Desk; they mean nothing to Hester)
+ *   and Rectangle (R; drag out a new Area, or drag an Area's right edge,
+ *   bottom edge or corner to size it). New, after the tools, is a menu of
+ *   what to start (a Page; a Board once it's built) in the current Area.
  *   In Cursor a click selects a line; Delete, or its right-click menu,
  *   deletes it, and ⌘Z undoes the last draw or delete. Moves and lines show
  *   at once and settle when Hester has them (deskModel's DeskEdits).
@@ -63,7 +66,10 @@ import {
   IDENTITY,
   NO_EDITS,
   STROKE_STEP_PX,
+  AREA_HANDLES,
+  NEW_KINDS,
   areaAt,
+  areaContent,
   areasOnDesk,
   cameraTransform,
   cardCountLine,
@@ -78,6 +84,7 @@ import {
   focusRect,
   isEmptySpot,
   movedEnough,
+  newCardArea,
   panBy,
   placeNewCard,
   drawerFolders,
@@ -85,6 +92,7 @@ import {
   byDate,
   type DrawerEntry,
   rectFromDrag,
+  resizeArea,
   screenToDesk,
   deskToScreen,
   strokeFromDrag,
@@ -93,6 +101,7 @@ import {
   toolForKey,
   withEdits,
   zoomAt,
+  type AreaHandle,
   type Camera,
   type DeskEdits,
   type DeskTool,
@@ -120,7 +129,7 @@ const TOOL_HINT: Record<DeskTool, string> = {
   cursor: 'Click an empty spot in an Area to start a Page',
   move: 'Drag a Page, or an Area from anywhere inside it',
   draw: 'Draw anywhere. Lines are yours; Hester doesn’t read them',
-  area: 'Drag out a new Area, then name it',
+  area: 'Drag out a new Area and name it, or drag an Area’s edge or corner to size it',
 };
 
 /** A press on the Desk, by what it started. */
@@ -129,7 +138,8 @@ type Gesture =
   | { kind: 'card'; id: number; x: number; y: number; moved: boolean; card: DeskCard; from: DeskArea }
   | { kind: 'area'; id: number; x: number; y: number; moved: boolean; area: DeskArea }
   | { kind: 'draw'; id: number; points: Point[]; last: Point }
-  | { kind: 'rect'; id: number; a: Point; b: Point };
+  | { kind: 'rect'; id: number; a: Point; b: Point }
+  | { kind: 'size'; id: number; x: number; y: number; moved: boolean; area: DeskArea; handle: AreaHandle; content: { right: number; bottom: number } };
 
 /** ⌘Z: the last line drawn goes; the last one deleted comes back. */
 type StrokeUndo = { kind: 'drew'; id: string } | { kind: 'deleted'; stroke: DeskStroke };
@@ -205,9 +215,10 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     if (e.button !== 0) return;
     const t = e.target as Element;
     if (t.closest('.desk-card-menu')) return; // a press on a card's or a line's menu is its own
-    if ((menuFor && !t.closest('.desk-area-menu')) || drawer || cardMenu || strokeMenu) {
+    if ((menuFor && !t.closest('.desk-area-menu')) || drawer || newMenu || cardMenu || strokeMenu) {
       setMenuFor(null);
       setDrawer(false);
+      setNewMenu(false);
       setCardMenu(null);
       setStrokeMenu(null);
       return;
@@ -223,6 +234,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       return capture();
     }
     if (tool === 'area') {
+      const grip = t.closest('[data-handle]') as HTMLElement | null;
+      const gripArea = grip ? onDesk.find((a) => a.id === grip.dataset.areaId) : null;
+      if (grip && gripArea && desk) {
+        const content = areaContent(cardsIn(desk, gripArea.id));
+        drag.current = { kind: 'size', ...base, area: gripArea, handle: grip.dataset.handle as AreaHandle, content };
+        setOwn(cam);
+        return capture();
+      }
       if (t.closest('button, input, textarea, .desk-area-menu')) return;
       const p = screenToDesk(cam, localPoint(e.clientX, e.clientY));
       drag.current = { kind: 'rect', id: e.pointerId, a: p, b: p };
@@ -268,6 +287,11 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       setSketch(rectFromDrag(d.a, d.b));
       return;
     }
+    if (d.kind === 'size') {
+      d.moved = true;
+      setSizing({ id: d.area.id, ...resizeArea(d.area, d.handle, dragDelta(d, now, cam.scale), d.content) });
+      return;
+    }
     if (d.kind === 'draw') {
       if (Math.hypot(now.x - d.last.x, now.y - d.last.y) < STROKE_STEP_PX) return;
       d.last = now;
@@ -299,6 +323,11 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       setPendingArea({ rect: rectFromDrag(d.a, screenToDesk(cam, localPoint(now.x, now.y))), name: '' });
       return;
     }
+    if (d.kind === 'size') {
+      setSizing(null);
+      if (d.moved) void sizeArea(d.area, resizeArea(d.area, d.handle, dragDelta(d, now, cam.scale), d.content));
+      return;
+    }
     if (d.kind === 'draw') {
       setInk(null);
       const body = strokeFromDrag(d.points, cam.scale, onDesk);
@@ -320,10 +349,13 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     setLift(null);
     setInk(null);
     setSketch(null);
+    setSizing(null);
   };
 
   // ---- Rectangle: outline an Area, then name it ----
   const [sketch, setSketch] = useState<DeskRect | null>(null);
+  // An Area being sized by its edge or corner (Desk px).
+  const [sizing, setSizing] = useState<{ id: string; w: number; h: number } | null>(null);
   const [pendingArea, setPendingArea] = useState<{ rect: DeskRect; name: string } | null>(null);
   const makeDrawnArea = async () => {
     const p = pendingArea;
@@ -351,6 +383,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     setEdits((e) => ({ ...e, areas: { ...e.areas, [a.id]: to } }));
     const r = await patchArea(workspace, a.id, to);
     if (!r.ok) say(r.error);
+    else await ctx?.refresh();
+    setEdits((e) => dropEdit(e, { area: a.id }));
+  };
+  const sizeArea = async (a: DeskArea, to: { w: number; h: number }) => {
+    if (to.w === a.w && to.h === a.h) return;
+    setEdits((e) => ({ ...e, areas: { ...e.areas, [a.id]: { x: a.x, y: a.y, ...to } } }));
+    const r = await patchArea(workspace, a.id, to);
+    if (!r.ok) say(oldHester(r.status) ?? r.error);
     else await ctx?.refresh();
     setEdits((e) => dropEdit(e, { area: a.id }));
   };
@@ -454,17 +494,18 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     flashTimer.current = setTimeout(() => setFlash(null), 6000);
   }, []);
 
-  // ---- Areas: new, rename, stash ----
-  const [newArea, setNewArea] = useState<string | null>(null);
-  const makeArea = async () => {
-    const name = (newArea ?? '').trim();
-    setNewArea(null);
-    if (!name) return;
-    const r = await createArea(workspace, { name });
-    if (!r.ok) return say(r.error);
-    await ctx?.refresh();
-    zoomToArea(r.data.id, 'click');
+  // ---- New (the taskbar's menu): a Page now, a Board and the rest later; Rectangle makes Areas ----
+  const [newMenu, setNewMenu] = useState(false);
+  const startNew = (kind: string) => {
+    setNewMenu(false);
+    if (kind !== 'page' || !desk) return;
+    const centre = screenToDesk(cam, { x: size.w / 2, y: size.h / 2 });
+    const area = newCardArea(onDesk, zoom !== 'overview' ? nav.area_id : null, centre);
+    if (!area) return say('Draw an Area first: Rectangle (R)');
+    startPage(area, { x: 0, y: AREA_HEAD });
   };
+
+  // ---- Areas: rename, stash ----
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const rename = async () => {
@@ -670,14 +711,13 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       if (strokeMenu) open.push('popover');
       if (selected) open.push('selection');
       if (preview) open.push('preview');
-      if (drawer || menuFor || confirm || cardMenu) open.push('drawer');
+      if (drawer || newMenu || menuFor || confirm || cardMenu) open.push('drawer');
       const step = deskEscapeStep(open, zoom === 'card' ? 'overview' : zoom, tool);
       if (step.kind === 'none') return;
       e.preventDefault();
       if (step.kind === 'tool') pickTool('cursor');
       else if (step.kind === 'zoom') zoomOut('overview', 'key');
       else if (step.layer === 'input') {
-        setNewArea(null);
         setRenaming(null);
         t?.blur();
       } else if (step.layer === 'popover') setStrokeMenu(null);
@@ -685,6 +725,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       else if (step.layer === 'preview') setPreview(null);
       else {
         setDrawer(false);
+        setNewMenu(false);
         setMenuFor(null);
         setConfirm(null);
         setCardMenu(null);
@@ -810,7 +851,13 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                   key={area.id}
                   data-area-id={area.id}
                   className={`desk-area${area.id === nav.area_id && zoom !== 'overview' ? ' is-current' : ''}${lifted || lifting ? ' is-lifted' : ''}${dropHere ? ' is-drop' : ''}`}
-                  style={{ left: area.x, top: area.y, width: area.w, height: area.h, transform: lifted ? `translate(${lift.dx}px, ${lift.dy}px)` : undefined }}
+                  style={{
+                    left: area.x,
+                    top: area.y,
+                    width: sizing?.id === area.id ? sizing.w : area.w,
+                    height: sizing?.id === area.id ? sizing.h : area.h,
+                    transform: lifted ? `translate(${lift.dx}px, ${lift.dy}px)` : undefined,
+                  }}
                   aria-label={area.name}
                   onContextMenu={(e) => {
                     if ((e.target as Element).closest('.desk-card, input, textarea')) return;
@@ -911,6 +958,11 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                       }}
                     />
                   ))}
+
+                  {tool === 'area' &&
+                    AREA_HANDLES.map((h) => (
+                      <span key={h} className={`desk-area-grip is-${h}`} data-handle={h} data-area-id={area.id} aria-hidden="true" />
+                    ))}
                 </section>
               );
             })}
@@ -1155,26 +1207,26 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               />
             ))}
             <span className="desk-taskbar-sep" aria-hidden="true" />
-            {newArea != null ? (
-              <input
-                className="deep-title-input desk-new-area"
-                autoFocus
-                value={newArea}
-                placeholder="Name the Area"
-                aria-label="New Area name"
-                maxLength={120}
-                onChange={(e) => setNewArea(e.target.value)}
-                onBlur={() => void makeArea()}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void makeArea();
-                  }
-                }}
-              />
-            ) : (
-              <IconAction icon="plus" label="New Area" onClick={() => setNewArea('')} disabled={status !== 'ok'} />
-            )}
+            <span className="desk-new-anchor">
+              <IconAction icon="plus" label="New" expanded={newMenu} onClick={() => setNewMenu((m) => !m)} disabled={status !== 'ok'} />
+              {newMenu && (
+                <div className="deep-popover desk-new-menu" role="menu" aria-label="New">
+                  {NEW_KINDS.map((k) => (
+                    <button
+                      key={k.kind}
+                      className="deep-pop-row"
+                      role="menuitem"
+                      disabled={!k.ready}
+                      title={k.ready ? undefined : 'Coming soon'}
+                      onClick={() => startNew(k.kind)}
+                    >
+                      {k.label}
+                      {!k.ready && <span className="deep-muted"> · soon</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
           </span>
           <span className="deep-muted desk-hint desk-taskbar-right">{TOOL_HINT[tool]}</span>
         </footer>
