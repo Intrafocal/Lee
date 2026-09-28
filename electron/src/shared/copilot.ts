@@ -90,7 +90,11 @@ export type LeeEventType =
   | 'limits.snapshot'
   // Desk D2 §5.1 (Lee main): deep.idle_push {session_id, ends_at}; deep.extend {session_id, minutes, surface}
   | 'deep.idle_push'
-  | 'deep.extend';
+  | 'deep.extend'
+  // Tether, Review and voice §5.2, §4.2: voice.transcribe {purpose, provider, model, location, audio_ms, bytes, ok, error?, text_chars, latency_ms}
+  // (Hester -> Lee via POST /events/ingest); tether.send {source_device, target_kind, items: [{kind, source?, input?, bytes}], ok} (Lee main)
+  | 'voice.transcribe'
+  | 'tether.send';
 
 export type EventSource = 'lee-main' | 'renderer' | 'hook' | 'hester' | 'device';
 
@@ -172,6 +176,8 @@ export interface CaptureRequest {
   workspace?: string | null;
   /** 'explore' marks it as the seed of an exploration (tag only in v0). */
   as?: 'someday' | 'explore';
+  /** 'voice' when the text came from a transcript (§5.2); copied onto the capture event. */
+  input?: 'voice';
 }
 
 export interface CaptureResult {
@@ -414,6 +420,8 @@ export interface ReplyRequest {
   choice?: number;
   /** Must equal the item's current version. */
   version: number;
+  /** 'voice' when the text came from a transcript (§5.2); copied onto attention.reply. */
+  input?: 'voice';
 }
 
 export interface SnoozeRequest {

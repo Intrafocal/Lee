@@ -17,7 +17,7 @@
  * - Local memory: the one-time exp-<hex> → pg-<hex> key migration.
  */
 
-import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS, PUT_AWAY_DRAWER } from '../../shared/desk';
+import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS, STASHED_DRAWER } from '../../shared/desk';
 import type { Desk, DeskArea, DeskCard, DeskCardSummary, DeskLast, DeskRect, DeskStroke, DeskStrokeCreate } from '../../shared/desk';
 import type { IconName } from '../icons/iconData.generated';
 import type { TaskOrigin, TaskStatus } from '../../shared/cockpit';
@@ -562,14 +562,14 @@ export function parseTouched(raw: unknown): Touched {
 /** The strip's counts: open ideas (the Ideas Drawer's count), and put-away Areas. */
 export function drawerCounts(desk: Pick<Desk, 'drawers' | 'areas'>): { ideas: number; putAway: number } {
   const ideas = desk.drawers.find((d) => d.id === IDEAS_DRAWER)?.count ?? 0;
-  const pa = desk.drawers.find((d) => d.id === PUT_AWAY_DRAWER);
-  const putAway = pa ? Math.max(pa.count, pa.area_ids.length) : desk.areas.filter((a) => a.drawer_id === PUT_AWAY_DRAWER).length;
+  const pa = desk.drawers.find((d) => d.id === STASHED_DRAWER);
+  const putAway = pa ? Math.max(pa.count, pa.area_ids.length) : desk.areas.filter((a) => a.drawer_id === STASHED_DRAWER).length;
   return { ideas, putAway };
 }
 
 /** Put-away Areas, most recently put away first (the Drawer's order, then any it doesn't list). */
 export function putAwayAreas(desk: Pick<Desk, 'drawers' | 'areas'>): DeskArea[] {
-  const order = desk.drawers.find((d) => d.id === PUT_AWAY_DRAWER)?.area_ids ?? [];
+  const order = desk.drawers.find((d) => d.id === STASHED_DRAWER)?.area_ids ?? [];
   const away = desk.areas.filter((a) => !!a.drawer_id);
   const rank = (a: DeskArea) => {
     const i = order.indexOf(a.id);
@@ -717,7 +717,7 @@ export function drawerFolders(
 ): DrawerFolder[] {
   const areaEntry = (a: DeskArea): DrawerEntry => {
     const n = desk.cards.filter((c) => c.area_id === a.id).length;
-    return { kind: 'area', id: a.id, text: a.name, at: a.put_away_at ?? a.updated_at ?? null, meta: `${n} ${n === 1 ? 'card' : 'cards'}` };
+    return { kind: 'area', id: a.id, text: a.name, at: a.stashed_at ?? a.updated_at ?? null, meta: `${n} ${n === 1 ? 'card' : 'cards'}` };
   };
   const inDrawer = (id: string) => desk.areas.filter((a) => a.drawer_id === id).map(areaEntry).sort(newestFirst);
   const folders: DrawerFolder[] = [
@@ -728,9 +728,9 @@ export function drawerFolders(
         .map((i) => ({ kind: 'idea' as const, id: i.id, text: i.text, at: i.created_at, meta: i.source?.surface && i.source.surface !== 'lee' ? `from ${i.source.surface}` : '' }))
         .sort(newestFirst),
     },
-    { id: PUT_AWAY_DRAWER, name: STASHED, entries: inDrawer(PUT_AWAY_DRAWER) },
+    { id: STASHED_DRAWER, name: STASHED, entries: inDrawer(STASHED_DRAWER) },
   ];
-  const own = desk.drawers.filter((d) => d.kind === 'areas' && d.id !== PUT_AWAY_DRAWER).sort((a, b) => a.name.localeCompare(b.name));
+  const own = desk.drawers.filter((d) => d.kind === 'areas' && d.id !== STASHED_DRAWER).sort((a, b) => a.name.localeCompare(b.name));
   for (const d of own) folders.push({ id: d.id, name: d.name, entries: inDrawer(d.id) });
   return folders;
 }

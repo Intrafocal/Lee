@@ -10,14 +10,14 @@ export const DESK_CARD_KINDS: readonly DeskCardKind[] = ['page'];
 
 export const PAGE_ID_RE = /^pg-[0-9a-f]{8}$/;
 export const AREA_ID_RE = /^area-[0-9a-f]{8}$/;
-export const DRAWER_ID_RE = /^(put-away|ideas|drw-[0-9a-f]{8})$/;
+export const DRAWER_ID_RE = /^(stashed|ideas|drw-[0-9a-f]{8})$/;
 export const STROKE_ID_RE = /^stk-[0-9a-f]{8}$/;
 /** Hester's caps: points per stroke, strokes per Desk. */
 export const MAX_STROKE_POINTS = 2000;
 export const MAX_STROKES = 2000;
-/** The two built-in Drawers. 'ideas' is the Someday store; 'put-away' holds Areas. */
+/** The two built-in Drawers. 'ideas' is the Ideas store; 'stashed' holds Areas. */
 export const IDEAS_DRAWER = 'ideas';
-export const PUT_AWAY_DRAWER = 'put-away';
+export const STASHED_DRAWER = 'stashed';
 
 /** Desk coordinates, in CSS px at zoom 1. Areas sit on the Desk; a card's x/y are relative to its Area's top-left. */
 export interface DeskRect { x: number; y: number; w: number; h: number }
@@ -25,10 +25,10 @@ export interface DeskRect { x: number; y: number; w: number; h: number }
 export interface DeskArea extends DeskRect {
   id: string;
   name: string;
-  /** null: on the Desk. Else the Drawer it's put away in (x/y are kept for taking it back out). */
+  /** null: on the Desk. Else the Drawer it's stashed in (x/y are kept for unstashing it). */
   drawer_id: string | null;
-  /** When it was stashed (put away), else null. Older Hesters omit it. */
-  put_away_at?: string | null;
+  /** When it was stashed, else null. Older Hesters omit it. */
+  stashed_at?: string | null;
   created_at: string;
   updated_at: string;
   /** The exploration it was migrated from, else null. */
@@ -67,16 +67,16 @@ export interface DeskDrawer {
   id: string;
   name: string;
   kind: 'areas' | 'ideas';
-  /** kind 'areas': its Areas, most recently put away first. Always [] for 'ideas'. */
+  /** kind 'areas': its Areas, most recently stashed first. Always [] for 'ideas'. */
   area_ids: string[];
-  /** Areas in it, or open Someday items for 'ideas'. */
+  /** Areas in it, or open Ideas for 'ideas'. */
   count: number;
 }
 
 /**
  * A freehand line you drew. It means nothing: Hester stores it and never
  * reads, places or connects it. Points are relative to its Area's top-left,
- * or to the Desk when area_id is null; it moves, is put away and is deleted
+ * or to the Desk when area_id is null; it moves, is stashed and is deleted
  * with its Area.
  */
 export interface DeskStroke {
@@ -103,9 +103,9 @@ export interface Desk {
   workspace: string;
   areas: DeskArea[];
   cards: DeskCard[];
-  /** Always both built-ins first: [ideas, put-away], then any others. */
+  /** Always both built-ins first: [ideas, stashed], then any others. */
   drawers: DeskDrawer[];
-  /** Every stroke, put-away Areas' too. Absent from a Hester older than the Desk's tools. */
+  /** Every stroke, stashed Areas' too. Absent from a Hester older than the Desk's tools. */
   strokes?: DeskStroke[];
   goals_card_id: string | null;
   last: { card_id: string; at: string } | null;

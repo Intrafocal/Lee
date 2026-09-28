@@ -128,8 +128,8 @@ await test('zoom maths: screen → Desk → screen round-trips; zoomAt keeps the
 
 const A1 = { id: 'area-1a2b3c4d', name: 'Mesh sync', x: 0, y: 0, w: 1200, h: 800, drawer_id: null, created_at: '', updated_at: '2026-09-27T10:00:00Z', migrated_from: null };
 const A2 = { ...A1, id: 'area-00000002', name: 'Board', x: 1400, y: 0 };
-const A3 = { ...A1, id: 'area-00000003', name: 'Old', x: 2800, y: 0, drawer_id: 'put-away', updated_at: '2026-09-20T10:00:00Z' };
-const A4 = { ...A1, id: 'area-00000004', name: 'Older', x: 0, y: 1000, drawer_id: 'put-away', updated_at: '2026-09-21T10:00:00Z' };
+const A3 = { ...A1, id: 'area-00000003', name: 'Old', x: 2800, y: 0, drawer_id: 'stashed', updated_at: '2026-09-20T10:00:00Z' };
+const A4 = { ...A1, id: 'area-00000004', name: 'Older', x: 0, y: 1000, drawer_id: 'stashed', updated_at: '2026-09-21T10:00:00Z' };
 const summary = { page_chars: 10, page_updated_at: null, excerpt: '', answers_unread: 0, answers_pending: 0, handoffs_in_flight: 0, open_questions: 0 };
 const card = (id, area_id, x, y, extra = {}) => ({ id, kind: 'page', area_id, x, y, w: 360, h: 240, title: id, purpose: null, pinned: false, created_at: '', updated_at: '', last_touched_at: null, migrated_from: null, summary, ...extra });
 const C1 = card('pg-1a2b3c4d', A1.id, 48, 96);
@@ -142,7 +142,7 @@ const DESK = {
   cards: [C1, C2, G],
   drawers: [
     { id: 'ideas', name: 'Ideas', kind: 'ideas', area_ids: [], count: 3 },
-    { id: 'put-away', name: 'Put away', kind: 'areas', area_ids: [A4.id, A3.id], count: 2 },
+    { id: 'stashed', name: 'Put away', kind: 'areas', area_ids: [A4.id, A3.id], count: 2 },
   ],
   goals_card_id: G.id,
   last: null,
@@ -210,14 +210,14 @@ await test('the Drawer: folders (Ideas, Stashed, your own), newest first, by dat
   assert.equal(model.dateBucket(at(22), now), 'week', 'six days back is this week');
   assert.equal(model.dateBucket(at(21), now), 'older');
   assert.equal(model.dateBucket(null, now), 'older');
-  const area = (id, name, drawer_id, put_away_at) => ({ id, name, drawer_id, put_away_at, x: 0, y: 0, w: 1, h: 1, created_at: at(1), updated_at: at(1), migrated_from: null });
+  const area = (id, name, drawer_id, stashed_at) => ({ id, name, drawer_id, stashed_at, x: 0, y: 0, w: 1, h: 1, created_at: at(1), updated_at: at(1), migrated_from: null });
   const desk = {
     drawers: [
       { id: 'ideas', name: 'Ideas', kind: 'ideas', area_ids: [], count: 2 },
-      { id: 'put-away', name: 'Put away', kind: 'areas', area_ids: [], count: 2 },
+      { id: 'stashed', name: 'Put away', kind: 'areas', area_ids: [], count: 2 },
       { id: 'drw-00000001', name: 'Archive', kind: 'areas', area_ids: [], count: 0 },
     ],
-    areas: [area('area-1', 'Mesh sync', 'put-away', at(20)), area('area-2', 'Taxonomy', 'put-away', at(28)), area('area-3', 'On the Desk', null, null)],
+    areas: [area('area-1', 'Mesh sync', 'stashed', at(20)), area('area-2', 'Taxonomy', 'stashed', at(28)), area('area-3', 'On the Desk', null, null)],
     cards: [{ id: 'pg-1', area_id: 'area-2' }, { id: 'pg-2', area_id: 'area-2' }],
   };
   const ideas = [
