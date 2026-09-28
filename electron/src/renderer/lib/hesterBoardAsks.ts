@@ -53,7 +53,7 @@ export function createBoardHandoff(
 }
 
 /**
- * Queues a Visualize (202): Hester's diagram agent makes a diagram, image
+ * Queues a Visualize (201): Hester's diagram agent makes a diagram, image
  * or table from the selection and the brief. The row is `kind: 'visualize'`
  * with `visual: null` until it's done (a model call the user asked for, C2).
  */

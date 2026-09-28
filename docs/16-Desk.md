@@ -85,16 +85,18 @@ A Board is where the Operator thinks visually: a canvas of screenshots, images, 
 - **Starting one:** "New Board here" in an Area's menu, or pasting an image on an empty part of an Area.
 - **On the Desk** a Board card's hover preview is a picture of the Board, which Lee saves (`preview.png`) as you work. The phone's Review shows the same picture; the T-Deck stays Pages only.
 - **Hester stores it; Lee draws it.** The canvas is Lee's own, built on the Desk surface's camera and tools, not tldraw or Excalidraw: the vocabulary is small, it should look like the Desk, tldraw needs a paid licence, and Excalidraw's look, size and remote fonts fit Lee's CSP and style badly. Revisit Excalidraw if Boards ever need shapes and connectors.
-- **Later:** the **Visualize** hand-off (an agent makes a diagram, mockup or render, and it lands on the Board as an image whose source is the hand-off); Renders (14 §9); refreshing assets from their source.
+- **Visualize:** Hester's diagram agent makes a diagram, picture or table of a selection, and it lands on the Board beside a frame that shows its progress (built, below).
+- **Later:** Renders (14 §9); refreshing assets from their source.
 
-**Built** (*2026-09-28*, plan phases B1–B4):
+**Built** (*2026-09-28*, plan phases B1–B6):
 
 - Hester stores Boards (`.hester/desk/boards/<bd-id>/`), with assets and their `source` (Page assets record it too), `preview.png`, and the Page's Ask and hand-off routes over a Board. A Board Ask sends the selection's picture straight to Gemini (`hester.google_api_key`); with no key it ends in a one-line error. `hester desk board <id>` prints a Board for Claude.
 - Lee's canvas: Select, Annotate (pinned or not), Highlight and Draw; images by paste, drop and file; undo; saving with its version; the Desk card's picture and hover preview; New › Board, "New Board here", and pasting an image on an empty spot of an Area.
 - On a selection, ⌘. opens the Page's action row (Ask about this… · Hand off). Ask drops a sticky that opens to the answer, with follow-ups and Retry; Hand off opens the Page's sheet and drops a clipboard that opens to the result, with Open in Work and Reply.
-- Visualize (B6, Lee's half): **Visualize** (`v`) in the same row asks "What should it show?", sends the selection's picture and the brief to Hester's diagram agent (`POST …/visualize`), and drops a frame that shows progress, an error with Retry, then what it made. The result lands beside the frame once: Hester's image as an image; a Mermaid diagram drawn to PNG in Lee and saved with the answer as its source; markdown as a note.
+- Visualize (B6): **Visualize** (`v`) in the same row asks "What should it show?", sends the selection's picture, its notes and the brief to Hester (`POST …/visualize`), and drops a frame that shows progress, an error with Retry, then what it made. Hester runs its existing `diagram` agent (the `visualize` prompt; `render_mermaid`, `generate_image`, `render_markdown`) on Gemini, with the same key as a Board Ask. The result lands beside the frame once: Hester's image as an image (saved with the answer as its source); a Mermaid diagram drawn to PNG in Lee and saved the same way; markdown as a note.
 - Links: `[[` in a Page or in a Board's note picks a Page or Board; a note's links show under its text and open the card; a pasted `[[card]]` becomes a link box.
-- **Not yet:** Send to Lee with a Board zoomed, and the phone's Review of Boards (both wait on Deep sessions counting Boards: today a zoomed Board isn't the session's card, isn't on the touched list, and has no ending ritual of its own); making a link box other than by pasting.
+- Sessions and devices (B5): a zoomed Board is the session's card (`/desk/last`, the touched list, Deep reopens on it) and has its own ending ritual (where you stopped from the top note, its Asks, and question lines in its notes still open). Send to Lee puts a device's images in the middle of the view and its text in a note, one undo step; a touched Board that isn't open gets them through Hester. The phone's Review opens a Board as its picture (pinch to zoom) with its notes, links, Asks and hand-offs; voice hints include a Board's title and notes.
+- **Not yet:** making a link box other than by pasting; Boards on the T-Deck.
 
 ## 4. Sessions
 

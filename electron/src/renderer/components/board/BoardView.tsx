@@ -560,7 +560,7 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop, 
           prefill={sheet.prefill}
           questions={[]}
           focus={copilot.focus ?? copilot.snapshot?.focus ?? null}
-          running={rows.filter((a) => !isHandoff(a) && !a.dismissed_at && isPending(a)).length}
+          running={rows.filter((a) => !isHandoff(a) && a.kind !== 'visualize' && !a.dismissed_at && isPending(a)).length}
           runningHandoffs={rows.filter(handoffInFlight).length}
           session={session}
           onAsk={askStillOpen}

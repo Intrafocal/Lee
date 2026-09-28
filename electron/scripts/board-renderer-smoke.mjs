@@ -580,12 +580,13 @@ await test('B5 ritual: where you stopped, the Board’s Asks and hand-offs, and 
     { id: 'ans-4', question: 'older, running', status: 'running', asked_at: '2026-09-27T11:00:00Z', read_at: null, dismissed_at: null, kind: 'ask' },
     { id: 'ans-5', question: 'spike', status: 'done', asked_at: '2026-09-28T12:00:00Z', read_at: null, dismissed_at: null, kind: 'handoff', handoff: { kind: 'spike', state: 'running' } },
     { id: 'ans-6', question: 'gone', status: 'done', asked_at: '2026-09-28T12:00:00Z', read_at: null, dismissed_at: 't', kind: 'ask' },
+    { id: 'ans-7', question: 'Why is Mesh slow?', status: 'running', asked_at: '2026-09-28T12:00:00Z', read_at: null, dismissed_at: null, kind: 'visualize' },
   ];
   const r = ritual.boardRitual(items, answers, since);
   assert.equal(r.prefill, 'why is Mesh slow?');
-  assert.deepEqual(r.asked.map((a) => [a.id, a.state]), [['ans-1', 'unread'], ['ans-2', 'unread'], ['ans-4', 'pending']], "this session's, then older ones still open");
+  assert.deepEqual(r.asked.map((a) => [a.id, a.state]), [['ans-1', 'unread'], ['ans-2', 'unread'], ['ans-4', 'pending']], "this session's, then older ones still open; never a Visualize");
   assert.deepEqual(r.handedOff.map((h) => h.id), ['ans-5']);
-  assert.deepEqual(r.stillOpen.map((o) => [o.text, o.note_id]), [['why is Mesh slow?', 'n2'], ['Which palette?', 'n1']], 'top to bottom; asked lines left out');
+  assert.deepEqual(r.stillOpen.map((o) => [o.text, o.note_id]), [['why is Mesh slow?', 'n2'], ['Which palette?', 'n1']], 'top to bottom; asked lines left out (a Visualize\'s brief is not asked)');
   assert.equal(r.stillOpen[1].sectionText, 'Which **palette**?\nkeep the grid', 'the whole note as the section');
   assert.equal(ritual.boardRitual(items, [], null, 1).stillOpen.length, 1, 'at most max');
 });

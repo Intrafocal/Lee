@@ -55,7 +55,7 @@ export function toggleVisual(item: BoardVisual, items: readonly BoardItem[], ope
   return { ...item, open, ...size, z: open && item.z < top ? top + 1 : item.z };
 }
 
-type RowLike = Pick<DeepAnswer, 'id' | 'question' | 'status' | 'error' | 'read_at' | 'visual'>;
+type RowLike = Pick<DeepAnswer, 'id' | 'question' | 'brief' | 'status' | 'error' | 'read_at' | 'visual'>;
 
 export type FrameState = 'queued' | 'running' | 'new' | 'done' | 'error' | 'missing';
 
@@ -86,7 +86,8 @@ export function madeLine(v: VisualResult): string {
 /** A frame's words from its row (null: the row is gone, or not loaded yet). */
 export function frameText(a: RowLike | null | undefined): FrameText {
   if (!a) return { state: 'missing', brief: '', status: 'Not found', line: null, error: null, canRetry: false };
-  const brief = a.question?.trim() ?? '';
+  // Hester keeps the whole brief in `brief` and its first line in `question`.
+  const brief = (a.brief ?? a.question)?.trim() ?? '';
   if (isPending(a)) {
     const queued = a.status === 'queued';
     return { state: queued ? 'queued' : 'running', brief, status: queued ? 'Waiting to start…' : 'Making it…', line: null, error: null, canRetry: false };

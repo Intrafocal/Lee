@@ -51,7 +51,9 @@ export function boardStoppedAt(items: readonly BoardItem[]): string {
 
 type RitualAnswer = Pick<DeepAnswer, 'id' | 'question' | 'status' | 'asked_at' | 'read_at' | 'dismissed_at' | 'kind' | 'surface' | 'handoff'>;
 
-export function boardRitual(items: readonly BoardItem[], answers: readonly RitualAnswer[], since: string | null, max = 8): BoardRitual {
+export function boardRitual(items: readonly BoardItem[], all: readonly RitualAnswer[], since: string | null, max = 8): BoardRitual {
+  // A Visualize isn't a question: its frame shows it, and it isn't kept or asked again.
+  const answers = all.filter((a) => a.kind !== 'visualize');
   const lists = sessionLists(answers, since);
   const asked = [...lists.asked];
   // Older Asks still open: running, or answered and not read yet.

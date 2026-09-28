@@ -118,6 +118,7 @@ await test('frame: what it says while queued, running, failed, done', () => {
   const queued = model.frameText(row({ status: 'queued' }));
   assert.deepEqual([queued.state, queued.status, queued.brief, queued.canRetry], ['queued', 'Waiting to start…', 'The login flow as a diagram', false]);
   assert.equal(model.frameText(row({ status: 'running' })).status, 'Making it…');
+  assert.equal(model.frameText(row({ status: 'queued', question: 'Login flow', brief: 'Login flow\nas a sequence diagram' })).brief, 'Login flow\nas a sequence diagram', 'the whole brief when Hester keeps it');
   const err = model.frameText(row({ status: 'error', error: 'No model for images' }));
   assert.deepEqual([err.state, err.status, err.error, err.canRetry], ['error', 'Couldn’t make it', 'No model for images', true]);
   assert.equal(model.frameText(row({ status: 'interrupted' })).error, 'Interrupted before it finished.');
