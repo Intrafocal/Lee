@@ -40,6 +40,9 @@ import { digitTarget } from './lib/cockpitModel';
 import { ModeSwitcher, switcherIntercept } from './components/cockpit/ModeSwitcher';
 import { DeepHost } from './components/deep/DeepHost';
 import { requestDeepActions } from './components/deep/deepBridge';
+import { registerPaletteSink, startTetherDelivery, type PaletteImage } from './lib/tetherDelivery';
+import { buildSendTargets } from './lib/tetherModel';
+import { publishSendTargets } from './lib/tetherIpc';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -156,6 +159,8 @@ const App: React.FC = () => {
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // Whether to auto-submit the pending prompt (default true for most cases)
   const [autoSubmitPrompt, setAutoSubmitPrompt] = useState<boolean>(true);
+  // Images for the palette's question (Send to Lee, Tether §4.3)
+  const [pendingImages, setPendingImages] = useState<PaletteImage[] | null>(null);
 
   // Hester daemon health status
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus>('checking');
@@ -2581,6 +2586,42 @@ const App: React.FC = () => {
     return map;
   }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
+  // ---- Send to Lee (Tether §4.3): deliver what devices send this window ----
+  const tetherWorkspace = useRef(workspace);
+  tetherWorkspace.current = workspace;
+  useEffect(() => startTetherDelivery(() => tetherWorkspace.current), []);
+  // Hester as a target: the palette opens with the question (asked only with Send).
+  useEffect(
+    () =>
+      registerPaletteSink(({ text, images, submit }) => {
+        setPendingPrompt(text || null);
+        setAutoSubmitPrompt(submit);
+        setPendingImages(images.length ? images : null);
+        setShowCommandPalette(true);
+      }),
+    [],
+  );
+  // What this window can take (GET /tether/targets): the zoomed Page, the palette, the focused PTY tab, the rest.
+  const touchedPageTitles = useRef(new Map<string, string>());
+  const deepNav = cockpitMode.state.deep;
+  if (deepNav.card_id && /^pg-/.test(deepNav.card_id) && deepNav.title) touchedPageTitles.current.set(deepNav.card_id, deepNav.title);
+  const focusedTabId = focusedPanel === 'left' ? activeLeftTabId : focusedPanel === 'right' ? activeRightTabId : focusedPanel === 'bottom' ? activeBottomTabId : activeTabId;
+  const focusedPtyId = tabs.find((t) => t.id === focusedTabId)?.ptyId ?? null;
+  const zoomedPage = cockpitMode.state.mode === 'deep' && deepNav.zoom === 'card' && deepNav.card_id && /^pg-/.test(deepNav.card_id) ? { card_id: deepNav.card_id, title: deepNav.title } : null;
+  const sendTargetsKey = JSON.stringify([zoomedPage, showCommandPalette, focusedPtyId, [...touchedPageTitles.current], tabs.map((t) => [t.ptyId, t.label, t.type, t.provider ?? t.runProvider ?? null])]);
+  useEffect(() => {
+    publishSendTargets(
+      buildSendTargets({
+        zoomedPage,
+        paletteOpen: showCommandPalette,
+        focusedPtyId: cockpitMode.state.mode === 'manual' ? focusedPtyId : null,
+        touchedPages: [...touchedPageTitles.current].map(([card_id, title]) => ({ card_id, title })),
+        tabs: tabs.map((t) => ({ ptyId: t.ptyId, label: t.label, type: t.type, provider: t.provider ?? t.runProvider ?? null })),
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendTargetsKey, cockpitMode.state.mode]);
+
   // While Deep shows an exploration, the palette can Keep its answer there (D1 §5).
   const deepExplorationId = cockpitMode.state.mode === 'deep' ? cockpitMode.state.deep.exploration_id : null;
   const paletteExploration = useMemo(
@@ -2651,6 +2692,8 @@ const App: React.FC = () => {
           setPendingPrompt(null);
           setAutoSubmitPrompt(true); // Reset to default
         }}
+        initialImages={pendingImages}
+        onImagesConsumed={() => setPendingImages(null)}
       />
       <TitleBar />
       <TabBar

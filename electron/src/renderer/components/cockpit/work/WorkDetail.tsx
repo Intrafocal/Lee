@@ -9,8 +9,8 @@
  * from its activity (§7.1, folded) and the actions: icons for Resume (a
  * not-open task's Claude session), Check in, Rename, Open terminal in
  * Manual, Confirm, Accept / Discard and Close agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
- * workstream), Escalate → Explore (an exploration seeded from it, a Page
- * on the Desk), Hester's view (/suggest, answered inline with its
+ * workstream), Escalate → Page (a Page card made from it, in the Desk's
+ * first Area), Hester's view (/suggest, answered inline with its
  * proposals) and Assign…, plus Open its Page for a hand-off's task (its
  * origin's card at the Desk, Desk D2 §8).
  *
@@ -50,6 +50,7 @@ import { AgentMarkdown } from '../AgentMarkdown';
 import { StewardAnswerView } from '../StewardAnswerView';
 import type { CockpitCtx } from '../CockpitHost';
 import { choosable, choose, decide, sendText } from './actions';
+import { MicButton } from '../../voice/MicButton';
 import { MoreMenu, type MoreItem } from './MoreMenu';
 import { AssignPicker, LinkPicker, PriorityPicker } from './Pickers';
 import { openDesk } from '../cockpitMode';
@@ -155,12 +156,17 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
   const replyItem = item && canTextReply(item) ? item : tile?.replyItem ?? null;
   const working = tile ? tile.working : agent?.state === 'busy';
   const mode = replyMode({ replyItem, ptyId, working });
+  /** The reply box's text came from the mic (§5.3): tag the reply `input: 'voice'`. */
+  const [viaVoice, setViaVoice] = useState(false);
   const cleared = () => {
-    if (alive.current) setText('');
+    if (!alive.current) return;
+    setText('');
+    setViaVoice(false);
   };
   const send = (body: string) => {
     if (replyItem) {
-      act(() => sendText(ctx, replyItem, body), cleared);
+      // A quick-reply chip isn't the box's text, so only the box's own send carries the tag.
+      act(() => sendText(ctx, replyItem, body, viaVoice && body === text ? 'voice' : undefined), cleared);
       return;
     }
     const api = ctx.api;
@@ -252,8 +258,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         return false;
       }
       ctx.hester.refresh();
-      // The task stays open; its exploration becomes a Page on the Desk (Desk D2 §6.1).
-      ctx.notify(`On your Desk: ${r.data.exploration.title}`);
+      // The task stays open; the Page card is in the first Area, with the task as its origin.
+      ctx.notify(`On your Desk: ${r.data.card.title}`);
       return true;
     });
   };
@@ -358,7 +364,7 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
       disabled: busy,
       onClick: () => task && taskAct(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream'),
     },
-    escalate: { label: 'Escalate → Explore', disabled: busy, onClick: escalate },
+    escalate: { label: 'Escalate → Page', disabled: busy, onClick: escalate },
     'hester-view': { label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view", disabled: view.phase === 'loading', onClick: hesterView },
     assign: { label: 'Assign…', onClick: () => togglePanel('assign') },
   };
@@ -445,7 +451,10 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
             rows={3}
             disabled={mode === 'busy'}
             placeholder="Or write a reply"
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!e.target.value.trim()) setViaVoice(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -455,6 +464,16 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
           />
           <div className="work-reply-foot">
             <span className="work-hint">{mode === 'busy' ? REPLY_BUSY_LINE : 'Sent exactly as written'}</span>
+            <MicButton
+              workspace={ctx.workspace}
+              purpose="reply"
+              itemId={replyItem?.id}
+              value={text}
+              onChange={(t) => setText(t)}
+              onVoice={() => setViaVoice(true)}
+              fieldRef={replyRef}
+              disabled={busy || mode === 'busy'}
+            />
             {/* Allow is this view's next step while an approval is pending (§0 rule 1). */}
             <Btn kind={sendIsNext(mode, !!approval) ? 'next' : 'plain'} kbd="⌘⏎" disabled={busy || mode === 'busy' || !text.trim()} onClick={() => send(text)}>
               Send

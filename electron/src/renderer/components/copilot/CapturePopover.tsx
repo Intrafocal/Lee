@@ -1,6 +1,6 @@
 /**
  * CapturePopover - single text field + "as exploration" checkbox; captures
- * an idea into Someday from any surface (contracts §9.1, §8.1).
+ * an idea into Ideas from any surface (contracts §9.1, §8.1).
  */
 
 import React, { useState } from 'react';

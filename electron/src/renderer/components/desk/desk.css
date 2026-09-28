@@ -445,6 +445,24 @@
   border-color: var(--text-3);
 }
 
+/* The search field, and the mic beside it while capturing (§5.3). */
+.desk-drawer-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.desk-drawer-field .desk-drawer-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.desk-drawer-field .voice-mic {
+  margin-top: var(--space-2);
+  margin-right: var(--space-1);
+}
+
 .desk-drawer-group {
   padding: var(--space-2) var(--space-3) var(--space-1);
   font-size: 11px;

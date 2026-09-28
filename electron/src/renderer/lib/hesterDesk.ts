@@ -15,6 +15,7 @@
  */
 
 import { hesterCall as call, type DeepResult } from './hesterDeep';
+import { HESTER_DAEMON_URL, hesterHeaders } from './hesterCockpit';
 import type {
   Desk,
   DeskArea,
@@ -72,12 +73,12 @@ export function deleteArea(workspace: string, id: string, withCards = false): Pr
   return call<{ deleted: true; cards: number }>(workspace, 'DELETE', `/desk/areas/${seg(id)}`, withCards ? { with_cards: true } : undefined);
 }
 
-export function putAwayArea(workspace: string, id: string, drawerId?: string): Promise<DeepResult<DeskArea>> {
-  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/put-away`, drawerId ? { drawer_id: drawerId } : {});
+export function stashArea(workspace: string, id: string, drawerId?: string): Promise<DeepResult<DeskArea>> {
+  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/stash`, drawerId ? { drawer_id: drawerId } : {});
 }
 
-export function takeOutArea(workspace: string, id: string, at?: { x: number; y: number }): Promise<DeepResult<DeskArea>> {
-  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/take-out`, at ?? {});
+export function unstashArea(workspace: string, id: string, at?: { x: number; y: number }): Promise<DeepResult<DeskArea>> {
+  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/unstash`, at ?? {});
 }
 
 // ---- Drawers ----
@@ -137,8 +138,49 @@ export function postDeskSession(workspace: string, record: DeskSessionCreate): P
 // ---- the Ideas Drawer ----
 
 /** A Page from an idea: in `area_id` at x/y, or without one in a new Area named after it. 409 `not_open`. */
-export function ideaToPage(workspace: string, somedayId: string, body: IdeaToPage = {}): Promise<DeepResult<IdeaToPageResult>> {
-  return call<IdeaToPageResult>(workspace, 'POST', `/desk/ideas/${seg(somedayId)}/page`, body);
+export function ideaToPage(workspace: string, ideaId: string, body: IdeaToPage = {}): Promise<DeepResult<IdeaToPageResult>> {
+  return call<IdeaToPageResult>(workspace, 'POST', `/desk/ideas/${seg(ideaId)}/page`, body);
+}
+
+// ---- a Page's images (Tether §4.4) ----
+
+/** Upload an image to a Page's assets (raw body, ≤ 10 MB): `{name, path: 'assets/<name>'}`. */
+export async function uploadPageAsset(
+  workspace: string,
+  id: string,
+  bytes: Uint8Array,
+  mime: 'image/png' | 'image/jpeg',
+): Promise<DeepResult<{ name: string; path: string }>> {
+  const url = `${HESTER_DAEMON_URL}/desk/pages/${seg(id)}/assets?workspace=${encodeURIComponent(workspace)}`;
+  try {
+    const res = await fetch(url, { method: 'POST', headers: await hesterHeaders(workspace, { 'Content-Type': mime }), body: bytes.slice().buffer });
+    let parsed: unknown = null;
+    try {
+      parsed = await res.json();
+    } catch {
+      parsed = null;
+    }
+    const env = parsed && typeof parsed === 'object' && 'success' in parsed ? (parsed as { success: boolean; data?: unknown; error?: string }) : null;
+    const data = (env ? env.data : parsed) as { name?: unknown; path?: unknown } | null;
+    if (!res.ok || (env && env.success !== true) || !data || typeof data.name !== 'string') {
+      const detail = env?.error || (parsed && typeof parsed === 'object' && 'error' in parsed ? String((parsed as { error: unknown }).error) : null);
+      return { ok: false, error: detail || (res.status === 404 ? 'Not available in this Hester' : `Hester error (${res.status})`), status: res.status };
+    }
+    return { ok: true, data: { name: data.name, path: typeof data.path === 'string' ? data.path : `assets/${data.name}` } };
+  } catch {
+    return { ok: false, error: 'Hester offline' };
+  }
+}
+
+/** A Page's image, fetched with auth: its bytes as a Blob, or null. */
+export async function fetchPageAsset(workspace: string, id: string, name: string): Promise<Blob | null> {
+  const url = `${HESTER_DAEMON_URL}/desk/pages/${seg(id)}/assets/${seg(name)}?workspace=${encodeURIComponent(workspace)}`;
+  try {
+    const res = await fetch(url, { headers: await hesterHeaders(workspace) });
+    return res.ok ? await res.blob() : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- a Page card's own routes (hesterDeep's, by card id) ----

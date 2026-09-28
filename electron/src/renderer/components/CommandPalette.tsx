@@ -20,6 +20,12 @@
  * Home" (⌘⏎) hands the whole answer to Home's StewardAnswerView, where they
  * can be accepted (no second model call). The input
  * has no ring (the §1.4 rule): its rule brightens and the caret shows.
+ *
+ * Images (Tether §4.3): the question can carry images, attached here (the
+ * image button, or pasting one into the field) or sent from a device with
+ * Send to Lee (`initialImages`). They go to Hester as the ContextRequest's
+ * `images`; a question with images always streams (the steward takes text
+ * only). The mic (§5.3, purpose `ask`) fills the field; it never asks.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -29,6 +35,8 @@ import { askSteward } from '../lib/hesterCockpit';
 import type { AboutRef, StewardAnswer } from '../../shared/cockpit';
 import { cockpitModeStore } from './cockpit/cockpitMode';
 import { aboutLine, deskAboutFor, paletteAboutFor, paletteRoute, publishedPaletteAbout, stewardExtras } from './paletteAbout';
+import { MicButton } from './voice/MicButton';
+import type { PaletteImage } from '../lib/tetherDelivery';
 
 const HESTER_DAEMON_PORT = 9000;
 
@@ -83,6 +91,27 @@ interface CommandPaletteProps {
   onPromptConsumed?: () => void;
   /** The exploration open in Deep, if any: enables Keep. */
   exploration?: { workspace: string; id: string };
+  /** Images to attach to the question (Send to Lee); taken once, like initialPrompt. */
+  initialImages?: PaletteImage[] | null;
+  onImagesConsumed?: () => void;
+}
+
+/** Largest image the palette attaches (Hester's own limit is higher; this keeps the request sane). */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function readImageFile(file: File): Promise<PaletteImage | null> {
+  if (file.type !== 'image/png' && file.type !== 'image/jpeg') return Promise.resolve(null);
+  if (file.size > MAX_IMAGE_BYTES) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const url = String(r.result ?? '');
+      const b64 = url.slice(url.indexOf(',') + 1);
+      resolve(b64 ? { mime: file.type as PaletteImage['mime'], data_b64: b64, source: 'file', caption: file.name } : null);
+    };
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(file);
+  });
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -97,6 +126,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   autoSubmit = true,
   onPromptConsumed,
   exploration: explorationProp,
+  initialImages = null,
+  onImagesConsumed,
 }) => {
   // At the Desk, Keep needs a card zoomed in (the overview has none to keep into).
   const deskNav = cockpitModeStore.get().deep;
@@ -113,6 +144,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [about, setAbout] = useState<AboutRef | null>(null);
   const [steward, setSteward] = useState<{ answer: StewardAnswer; question: string } | null>(null);
   const askSeq = useRef(0);
+  const [images, setImages] = useState<PaletteImage[]>([]);
+  const imagesRef = useRef<PaletteImage[]>([]);
+  imagesRef.current = images;
+  const fileRef = useRef<HTMLInputElement>(null);
+  /** The question came from the mic: tag the request `input: 'voice'`. */
+  const viaVoice = useRef(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -131,6 +168,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       hasAutoSubmittedRef.current = false;
     }
   }, [isOpen]);
+
+  // Images sent with Send to Lee join whatever is attached already.
+  useEffect(() => {
+    if (!isOpen || !initialImages?.length) return;
+    setImages((l) => [...l, ...initialImages]);
+    imagesRef.current = [...imagesRef.current, ...initialImages];
+    onImagesConsumed?.();
+  }, [isOpen, initialImages, onImagesConsumed]);
+
+  // A new prompt while open (a second Send to Lee) is taken like the first.
+  useEffect(() => {
+    if (initialPrompt) hasAutoSubmittedRef.current = false;
+  }, [initialPrompt]);
 
   // Handle initial prompt - auto-submit when provided (if autoSubmit is true)
   useEffect(() => {
@@ -169,6 +219,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         setKept('idle');
         setAbout(null);
         setSteward(null);
+        setImages([]);
+        viaVoice.current = false;
         sessionIdRef.current = `palette-${Date.now()}`;
       }, 200);
     }
@@ -203,7 +255,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     setIsProcessing(true);
 
     // About an item: the steward answers in one piece (no phases, no session).
-    const route = paletteRoute(about);
+    // A question with images streams: the steward takes text only.
+    const attached = imagesRef.current;
+    const route = attached.length ? paletteRoute(null) : paletteRoute(about);
     if (route.kind === 'steward') {
       const seq = ++askSeq.current;
       const r = await askSteward(workspace, queryText.trim(), route.about);
@@ -250,7 +304,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             dock_position: t.dockPosition,
           })),
         },
+        // Tether §4.3: images attached here or sent from a device (base64, as ImageData takes them).
+        ...(attached.length ? { images: attached.map((i) => ({ data: i.data_b64, mime_type: i.mime, source: i.source })) } : {}),
+        ...(viaVoice.current ? { input: 'voice' as const } : {}),
       };
+      viaVoice.current = false;
 
       const fetchResponse = await fetch(
         `http://127.0.0.1:${HESTER_DAEMON_PORT}/context/stream`,
@@ -460,10 +518,69 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type === 'image/png' || f.type === 'image/jpeg');
+              if (!files.length) return;
+              e.preventDefault();
+              void Promise.all(files.map(readImageFile)).then((got) => setImages((l) => [...l, ...got.filter((x): x is PaletteImage => !!x)]));
+            }}
             disabled={isProcessing || isDaemonHealthy === false}
+          />
+          <MicButton
+            workspace={workspace}
+            purpose="ask"
+            value={query}
+            onChange={(t) => setQuery(t)}
+            onVoice={() => {
+              viaVoice.current = true;
+            }}
+            fieldRef={inputRef}
+            disabled={isProcessing || isDaemonHealthy === false}
+          />
+          <button
+            type="button"
+            className="command-palette-attach"
+            onClick={() => fileRef.current?.click()}
+            disabled={isProcessing || isDaemonHealthy === false}
+            aria-label="Attach an image"
+            title="Attach an image (or paste one)"
+          >
+            <Icon name="image" size={14} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg"
+            multiple
+            hidden
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              e.target.value = '';
+              void Promise.all(files.map(readImageFile)).then((got) => setImages((l) => [...l, ...got.filter((x): x is PaletteImage => !!x)]));
+              inputRef.current?.focus();
+            }}
           />
           <span className="command-palette-shortcut">⌘/</span>
         </form>
+
+        {images.length > 0 && (
+          <div className="command-palette-images">
+            {images.map((img, i) => (
+              <span key={`${i}:${img.data_b64.length}`} className="command-palette-image" title={img.caption || img.source}>
+                <img src={`data:${img.mime};base64,${img.data_b64}`} alt={img.caption || 'attached image'} />
+                <button
+                  type="button"
+                  className="command-palette-image-remove"
+                  onClick={() => setImages((l) => l.filter((_, j) => j !== i))}
+                  disabled={isProcessing}
+                  aria-label="Remove this image"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Daemon status warning */}
         {isDaemonHealthy === false && (

@@ -59,7 +59,7 @@ import {
   addReference,
   askDeep,
   autoTitle,
-  captureSomeday,
+  captureIdea,
   deleteExploration,
   deskCreateBody,
   draftFromReadme,
@@ -134,6 +134,9 @@ import type { DeskCardKind } from '../../../shared/desk';
 import { promoteCard, touchedCards, zoomIntoCard, zoomOut, type DeskLand } from '../cockpit/cockpitMode';
 import { DeskSurface } from '../desk/DeskSurface';
 import { DeskContext, useDesk, useDeskContext } from '../desk/useDesk';
+import { registerPageSink } from '../../lib/tetherDelivery';
+import { pageAssetUrl } from '../../lib/pageAssets';
+import { findInsertion, pageInsertion } from '../../lib/tetherModel';
 import './deep.css';
 import './HandoffSheet.css';
 
@@ -466,6 +469,31 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
   useEffect(() => () => {
     if (flashTimer.current) clearTimeout(flashTimer.current);
   }, []);
+
+  // A Page card's images (Tether §4.4), fetched with auth into blob URLs.
+  const assetUrl = useMemo(() => (realId && isCardId(realId) ? (name: string) => pageAssetUrl(workspace, realId, name) : undefined), [workspace, realId]);
+
+  // ---- Send to Lee (Tether §4.3): a device's text or image lands at this Page's cursor ----
+  useEffect(() => {
+    if (!realId) return;
+    return registerPageSink({
+      cardId: realId,
+      insert: (t) => {
+        const ed = editor.current;
+        if (!ed) return null;
+        const ins = pageInsertion(ed.getText(), ed.cursor().head, t);
+        ed.insert(ins.from, ins.insert);
+        return ins;
+      },
+      remove: (ins) => {
+        const ed = editor.current;
+        const at = ed ? findInsertion(ed.getText(), ins) : null;
+        if (!ed || !at) return false;
+        ed.remove(at.from, at.to);
+        return true;
+      },
+    });
+  }, [realId]);
 
   // ---- title and purpose ----
   const [shownTitle, setShownTitle] = useState(title || draft0?.title || '');
@@ -1270,7 +1298,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     const doc = text.current;
     const eid = await ensureId();
     if (!eid) return say('Hester offline: capture needs Hester', 'warn');
-    const r = await captureSomeday(workspace, t, {
+    const r = await captureIdea(workspace, t, {
       surface: 'lee',
       ...(isCardId(eid) ? { card_id: eid } : { exploration_id: eid }),
       section: sectionAt(doc, from),
@@ -1743,6 +1771,8 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
           mentionTargets={mentionTargets}
           files={files}
           onQuote={(q) => void onQuote(q)}
+          assetUrl={assetUrl}
+          voiceWorkspace={workspace}
           marginPrompts={isGoals ? GOALS_PROMPTS : undefined}
           onOpenInWork={onOpenInWork}
         />

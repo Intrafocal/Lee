@@ -25,6 +25,7 @@ import type { UseCopilotResult } from '../hooks/useCopilot';
 import { offscreenNeeds } from '../lib/copilotAttention';
 import './copilot/copilot.css';
 import { CockpitModeChip } from './cockpit/CockpitModeChip';
+import { SendChip } from './tether/SendChip';
 import { cockpitModeStore, endDeepSession, goDeep, useCockpitModeState } from './cockpit/cockpitMode';
 import { cockpitShows, cockpitStatusCounts, cockpitStatusParts } from '../lib/cockpitModel';
 import { deepStatusLine } from './deep/deepView';
@@ -337,6 +338,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-center">
+        <SendChip />
         {inCockpit && (
           <span className="status-cockpit-line">
             {cockpitParts.working && <span className="status-item status-cockpit-count">{cockpitParts.working}</span>}

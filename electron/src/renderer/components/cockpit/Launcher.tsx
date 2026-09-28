@@ -133,7 +133,7 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onNew
     const body = text.trim();
     if (!body || busy) return;
     if (!ctx.copilotApi) {
-      setError('Someday is not available here');
+      setError('Ideas is not available here');
       return;
     }
     setBusy(true);
@@ -144,7 +144,7 @@ export const Launcher: React.FC<LauncherProps> = ({ ctx, prefill, onClose, onNew
           setError('Could not park it');
           return;
         }
-        ctx.notify(r.spooled ? 'Parked (queued for Hester)' : 'Parked in Someday');
+        ctx.notify(r.spooled ? 'Parked (queued for Hester)' : 'Parked in Ideas');
         ctx.hester.refresh();
         onClose();
       })

@@ -6,7 +6,7 @@
  * both the `{success, data}` envelope and a bare body. A failure keeps the
  * parsed error body (`body`) so the Page's 409 can show both sides (§4.3).
  *
- * Also the Someday capture (POST /someday with a Deep source, §5), the opener
+ * Also the Ideas capture (POST /ideas with a Deep source, §5), the opener
  * (GET /copilot/opener, §8.2) and an exploration create that takes `page` and
  * origin `opener` (§3.2).
  *
@@ -203,7 +203,7 @@ export function exploreFrom(workspace: string, id: string, body: { seed: string;
 }
 
 // ---------------------------------------------------------------------------
-// Explorations with a Page, Someday capture, the opener
+// Explorations with a Page, Ideas capture, the opener
 // ---------------------------------------------------------------------------
 
 export interface DeepExplorationCreate {
@@ -230,9 +230,14 @@ export interface DeepCaptureSource {
   context?: string;
 }
 
-/** Capture to Someday with where it came from (§5). */
-export function captureSomeday(workspace: string, text: string, source: DeepCaptureSource): Promise<DeepResult<{ id: string }>> {
-  return call<{ id: string }>(workspace, 'POST', '/someday', { workspace, text, as: 'someday', source });
+/** Capture to Ideas with where it came from (§5); `input: 'voice'` when the text came from the mic. */
+export function captureIdea(
+  workspace: string,
+  text: string,
+  source: DeepCaptureSource,
+  input?: 'voice',
+): Promise<DeepResult<{ id: string }>> {
+  return call<{ id: string }>(workspace, 'POST', '/ideas', { workspace, text, as: 'someday', source, ...(input ? { input } : {}) });
 }
 
 export function fetchOpener(workspace: string): Promise<DeepResult<Opener>> {
