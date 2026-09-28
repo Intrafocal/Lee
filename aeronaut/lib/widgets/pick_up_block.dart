@@ -8,7 +8,7 @@ import '../screens/root_shell.dart' show RootTab, rootTabProvider;
 import '../theme/aeronaut_theme.dart';
 import 'work_ui.dart';
 
-/// Opens the Page [cardId] in Review, on Review's own stack.
+/// Opens the card [cardId] (a Page or a Board) in Review, on Review's own stack.
 void openPageInReview(WidgetRef ref, String cardId, String title) {
   ref.read(reviewSectionProvider.notifier).state = ReviewSection.desk;
   ref.read(reviewPageRequestProvider.notifier).state = PageRequest(cardId, title);
@@ -18,7 +18,7 @@ void openPageInReview(WidgetRef ref, String cardId, String title) {
 /// Work's first block (docs/plans/2026-09-28-tether-review-voice.md §3.1),
 /// from Lee's `GET /tether`: your last card's title and Area, where you
 /// stopped (your words, in the writing font) and up to five open
-/// questions. A tap opens the Page in Review. Quiet when there's nothing
+/// questions. A tap opens it (a Page or a Board) in Review. Quiet when there's nothing
 /// to pick up or Hester is away: Work is about what needs you.
 class PickUpBlock extends ConsumerWidget {
   const PickUpBlock({super.key});

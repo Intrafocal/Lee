@@ -10,13 +10,16 @@ import 'package:http/testing.dart';
 import 'package:aeronaut/models/machine.dart';
 import 'package:aeronaut/providers/machines_provider.dart';
 import 'package:aeronaut/providers/tether_provider.dart';
+import 'package:aeronaut/screens/board_screen.dart';
 import 'package:aeronaut/screens/page_screen.dart';
 import 'package:aeronaut/screens/review_screen.dart';
 import 'package:aeronaut/screens/root_shell.dart';
 import 'package:aeronaut/services/machine_store.dart';
 import 'package:aeronaut/services/tether_api.dart';
 import 'package:aeronaut/theme/aeronaut_theme.dart';
+import 'package:aeronaut/theme/phosphor_icons.generated.dart';
 import 'package:aeronaut/theme/phosphor_tokens.dart';
+import 'package:aeronaut/widgets/phosphor_icon.dart';
 import 'package:aeronaut/widgets/pick_up_block.dart';
 
 import 'tether_api_test.dart' show cardJson, tetherJson;
@@ -44,7 +47,11 @@ class _FakeLee {
         return _ok({
           'workspace': '/ws/api',
           'areas': [
-            {'id': 'ar-1', 'name': 'Storage', 'cards': [cardJson('pg-0000abcd'), cardJson('pg-2', title: 'Old notes')]},
+            {
+              'id': 'ar-1',
+              'name': 'Storage',
+              'cards': [cardJson('pg-0000abcd'), cardJson('pg-2', title: 'Old notes'), cardJson('bd-1', title: 'Settings mockup', kind: 'board')],
+            },
           ],
           'goals_card': null,
           'last_card_id': 'pg-0000abcd',
@@ -62,6 +69,24 @@ class _FakeLee {
           ],
           'references': [],
         });
+      case '/tether/boards/bd-1':
+        return _ok({
+          'card': cardJson('bd-1', title: 'Settings mockup', kind: 'board'),
+          'has_preview': true,
+          'notes': ['Move the save button up'],
+          'links': [
+            {'card_id': 'pg-0000abcd', 'title': 'Cache design'},
+          ],
+          'asks': [
+            {'id': 'a1', 'question': 'Is the header too tall?', 'answer': 'A little.', 'status': 'done'},
+          ],
+          'handoffs': [
+            {'id': 'h1', 'kind': 'build', 'status': 'running', 'result': null},
+          ],
+        });
+      case '/tether/boards/bd-2':
+        return _ok({'card': cardJson('bd-2', title: 'Blank', kind: 'board'), 'has_preview': false});
+      case '/tether/boards/bd-1/preview':
       case '/tether/pages/pg-0000abcd/assets/a1.png':
         return http.Response.bytes(_png, 200, headers: {'content-type': 'image/png'});
       case '/tether/drawer':
@@ -104,7 +129,7 @@ void main() {
     expect(find.text('Drawer'), findsOneWidget);
     expect(find.text('Files'), findsOneWidget);
     expect(find.text('Storage'), findsOneWidget);
-    expect(find.text('2 Pages'), findsOneWidget);
+    expect(find.text('2 Pages · 1 Board'), findsOneWidget);
 
     await tester.tap(find.text('Storage'));
     await tester.pumpAndSettle();
@@ -125,6 +150,46 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Mostly.'), findsOneWidget);
     expect(find.text('OPEN QUESTIONS · 1'), findsOneWidget);
+  });
+
+  testWidgets('Review › Desk: a Board opens as its picture, notes, links, asks and hand-offs', (tester) async {
+    final lee = _FakeLee();
+    await _pump(tester, lee, const ReviewScreen());
+    await tester.tap(find.text('Storage'));
+    await tester.pumpAndSettle();
+
+    final row = find.byKey(const ValueKey('card-bd-1'));
+    expect(tester.widget<PhosphorIcon>(find.descendant(of: row, matching: find.byType(PhosphorIcon)).first).icon, PhosphorIcons.image,
+        reason: "a Board wears Lee's Board glyph");
+    await tester.tap(find.text('Settings mockup'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BoardScreen), findsOneWidget);
+    expect(lee.paths, contains('/tether/boards/bd-1/preview'));
+    expect(find.byKey(const ValueKey('board-picture')), findsOneWidget);
+    expect(find.byType(InteractiveViewer), findsOneWidget, reason: 'pinch to zoom');
+    final note = tester.widget<SelectableText>(find.widgetWithText(SelectableText, 'Move the save button up'));
+    expect(note.style!.fontFamily, Phosphor.fontWrite, reason: 'notes are your words');
+
+    expect(find.text('ASKS · 1'), findsOneWidget);
+    expect(find.text('HAND-OFFS · 1'), findsOneWidget);
+    await tester.tap(find.text('ASKS · 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Is the header too tall?'), findsOneWidget);
+    expect(find.text('A little.'), findsOneWidget);
+
+    // A link to a Page opens that Page.
+    await tester.tap(find.byKey(const ValueKey('board-link-pg-0000abcd')));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageScreen), findsOneWidget);
+  });
+
+  testWidgets('a Board with no picture shows a quiet placeholder and fetches none', (tester) async {
+    final lee = _FakeLee();
+    await _pump(tester, lee, const BoardScreen(cardId: 'bd-2'));
+    expect(find.byKey(const ValueKey('board-no-picture')), findsOneWidget);
+    expect(find.text('No notes on this Board yet.'), findsOneWidget);
+    expect(lee.paths, isNot(contains('/tether/boards/bd-2/preview')));
   });
 
   testWidgets('Review › Drawer: Stashed Areas and Ideas, read-only', (tester) async {

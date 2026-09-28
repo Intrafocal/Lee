@@ -34,9 +34,9 @@ Map<String, dynamic> tetherJson() => {
       'spooled': 1,
     };
 
-Map<String, dynamic> cardJson(String id, {String title = 'Cache design', bool stashed = false}) => {
+Map<String, dynamic> cardJson(String id, {String title = 'Cache design', bool stashed = false, String kind = 'page'}) => {
       'id': id,
-      'kind': 'page',
+      'kind': kind,
       'title': title,
       'area_id': 'ar-1',
       'area_name': 'Storage',
@@ -93,6 +93,38 @@ void main() {
       expect(drawer.stashed.single.stashedAt, isNotNull);
       expect(drawer.stashed.single.cards.single.stashed, isTrue);
       expect(drawer.ideas.single.fromDevice, isTrue, reason: 'blank ideas are dropped');
+    });
+
+    test('TetherBoard: notes, links, asks and hand-offs as Lee sends them', () {
+      final board = TetherBoard.fromJson({
+        'card': cardJson('bd-1', title: '', kind: 'board'),
+        'has_preview': true,
+        'notes': ['Move the button up', '  '],
+        'links': [
+          {'card_id': 'pg-1', 'title': 'Cache design'},
+          {'card_id': 'bd-2', 'title': ''},
+          {'card_id': '', 'title': 'nowhere'},
+        ],
+        'asks': [
+          {'id': 'a1', 'question': 'Is this legible?', 'answer': null, 'status': 'queued'},
+        ],
+        'handoffs': [
+          {'id': 'h1', 'kind': 'build', 'status': 'done', 'result': 'Moved it.'},
+        ],
+      });
+      expect(board.card.isBoard, isTrue);
+      expect(board.card.displayTitle, 'Untitled Board');
+      expect(board.hasPreview, isTrue);
+      expect(board.notes, ['Move the button up'], reason: 'blank notes are dropped');
+      expect(board.links.map((l) => l.cardId), ['pg-1', 'bd-2'], reason: 'a link without a card is dropped');
+      expect(board.links.last.isBoard, isTrue);
+      expect(board.links.last.displayTitle, 'Untitled Board');
+      expect(board.asks.single.answer, isNull);
+      expect(board.handoffs.single.result, 'Moved it.');
+
+      final bare = TetherBoard.fromJson({'card': cardJson('bd-3', kind: 'board')});
+      expect(bare.hasPreview, isFalse);
+      expect(bare.notes, isEmpty);
     });
   });
 
@@ -155,6 +187,22 @@ void main() {
       expect(requests.last.url.queryParameters['limit'], '50');
       expect((await api.getPage('pg-1')).value!.text, 'hi');
       expect((await api.getDrawer()).value!.ideas, isEmpty);
+    });
+
+    test('a Board and its preview, with the workspace', () async {
+      respond = (r) => switch (r.url.path) {
+            '/tether/boards/bd-1' => _ok({'card': cardJson('bd-1', kind: 'board'), 'has_preview': true, 'notes': ['hi']}),
+            '/tether/boards/bd-1/preview' => http.Response.bytes([1, 2, 3], 200, headers: {'content-type': 'image/png'}),
+            _ => http.Response('not found', 404),
+          };
+      final read = await api.getBoard('bd-1', workspace: '/ws/api');
+      expect(requests.last.url.queryParameters, {'workspace': '/ws/api'});
+      expect(read.value!.notes, ['hi']);
+      final preview = api.boardPreviewUri('bd-1', workspace: '/ws/api');
+      expect(preview.path, '/tether/boards/bd-1/preview');
+      expect(await api.fetchAsset(preview), [1, 2, 3]);
+      expect(requests.last.headers['Authorization'], 'Bearer t');
+      expect(await api.fetchAsset(api.boardPreviewUri('bd-9')), isNull, reason: 'no preview is a 404');
     });
 
     test('an unknown route (a Lee from before this round) says to update Lee', () async {

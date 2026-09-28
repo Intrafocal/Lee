@@ -11,7 +11,7 @@ import 'api_auth.dart';
 
 /// HTTP client for Lee main's `/tether/*` routes on :9001
 /// (docs/plans/2026-09-28-tether-review-voice.md §3.3, §4.2): Work's Pick
-/// up, capture, Review's Desk / Page / Drawer, and Send to Lee.
+/// up, capture, Review's Desk / Page / Board / Drawer, and Send to Lee.
 ///
 /// Same auth model as `CopilotApi`: a 401 goes through [ApiAuth]; a 403 is a
 /// device that may read but not act, reported as a result-level error.
@@ -109,6 +109,16 @@ class TetherApi {
   Future<TetherRead<TetherPage>> getPage(String id, {String? workspace}) =>
       _read(_uri('/tether/pages/${Uri.encodeComponent(id)}', {'workspace': workspace ?? ''}),
           (p) => p is Map<String, dynamic> ? TetherPage.fromJson(p) : null);
+
+  /// `GET /tether/boards/:id`: a Board's notes, links, asks and hand-offs.
+  Future<TetherRead<TetherBoard>> getBoard(String id, {String? workspace}) =>
+      _read(_uri('/tether/boards/${Uri.encodeComponent(id)}', {'workspace': workspace ?? ''}),
+          (p) => p is Map<String, dynamic> ? TetherBoard.fromJson(p) : null);
+
+  /// Where a Board's picture lives: `GET /tether/boards/:id/preview` (PNG;
+  /// [fetchAsset] gives null on its 404 when there is none).
+  Uri boardPreviewUri(String id, {String? workspace}) =>
+      _uri('/tether/boards/${Uri.encodeComponent(id)}/preview', {'workspace': workspace ?? ''});
 
   /// `GET /tether/drawer`: Stashed Areas and Ideas.
   Future<TetherRead<TetherDrawer>> getDrawer({String? workspace}) =>

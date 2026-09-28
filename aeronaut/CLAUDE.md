@@ -47,7 +47,14 @@ order: Work, Review, Hester, Machine (`screens/root_shell.dart`, `RootTab`).
   first) → `screens/page_screen.dart` (`GET /tether/pages/:id`: the markdown
   in Newsreader, `![…](assets/<name>)` fetched with the token from
   `GET /tether/pages/:id/assets/:name`, then Answers, Hand-offs, Open
-  questions and References folded). Drawer (`GET /tether/drawer`): Stashed
+  questions and References folded). Boards (`bd-…`, the `image` glyph; an
+  Area row counts "2 Pages · 1 Board") open in `screens/board_screen.dart`
+  through `openDeskCard` (every open in Review and Pick up goes through it):
+  `GET /tether/boards/:id` (`TetherBoard`) and, when `has_preview`, the PNG
+  from `GET /tether/boards/:id/preview` in an `InteractiveViewer` (a quiet
+  placeholder otherwise), then its notes in Newsreader, its links (a tap
+  opens that Page or Board), Asks and Hand-offs folded (`ReviewFold`,
+  `ReviewEntry`, shared with the Page). Drawer (`GET /tether/drawer`): Stashed
   Areas → their Pages, and Ideas (no triage: that stays in Lee). Files:
   `FilesBrowserBody`, moved from Machine.
 - **Hester**: the chat, with the mic, Send to Lee and Speak replies in its

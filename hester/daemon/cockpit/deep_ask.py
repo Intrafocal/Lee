@@ -9,6 +9,10 @@ proposals and no steer. The answer lands in ``answers.jsonl``; Lee hears about
 it through the ingested ``deep.answer`` event and nothing else happens: no
 notification, no toast, no attention item.
 
+A Visualize on a Board (``kind: 'visualize'``, Boards B6) runs here too, as
+an Ask does, but through Hester's diagram agent (visualize.py); its result
+lands in the answer's ``visual``.
+
 An Ask on a Board (a ``bd-`` card) is the exception to the routing: it sends
 the selection Lee flattened (the anchor's snapshot PNG) with the annotations
 in it straight to Gemini, which reads images, with the voice package's key
@@ -375,13 +379,20 @@ async def run_job(job: Job) -> Optional[Dict[str, Any]]:
     board = is_board_id(exp_id)  # a Board's Ask goes to Gemini with the selection's image
     image: Optional[bytes] = None
     prep_error: Optional[str] = None
+    visual = False
     async with ctx.lock:
         answer = await asyncio.to_thread(deep.update_answer, store, exp_id, aid, {"status": "running"})
         if answer is None:
             return None
+        visual = board and deep.is_visualize(answer)  # B6: the diagram agent, not an Ask (visualize.py)
         if board:
             try:
-                context, image = await asyncio.to_thread(board_prompt_for, store, exp_id, answer)
+                if visual:
+                    from . import visualize
+
+                    context, image = await asyncio.to_thread(visualize.prompt_for, store, exp_id, answer)
+                else:
+                    context, image = await asyncio.to_thread(board_prompt_for, store, exp_id, answer)
             except BoardAskError as e:
                 context, prep_error = "", str(e)
         else:
@@ -392,13 +403,22 @@ async def run_job(job: Job) -> Optional[Dict[str, Any]]:
         if prep_error:
             raise BoardAskError(prep_error)
         model_name = None
+        made: Optional[Dict[str, Any]] = None
         with model_log.collect_calls() as calls:
-            if board:
+            if visual:
+                from . import visualize
+
+                text, raw, model_name = await visualize.run_agent(Path(ctx.path), context, image)
+                async with ctx.lock:
+                    made = await asyncio.to_thread(visualize.save_result, store, exp_id, aid, raw)
+            elif board:
                 text, model_name = await ask_with_image(Path(ctx.path), context, image)
             else:
                 steward_context = INSTRUCTION + "\n\n" + context
                 text = await steward.call_model(Path(ctx.path), SURFACE, answer["question"], steward_context, steward.new_request_id())
         fields = {"status": "done", "answer": text.strip(), "answered_at": iso_s(utc_now()), "error": None}
+        if made is not None:
+            fields["visual"] = made
         last = next((c for c in reversed(calls) if c.get("ok")), calls[-1] if calls else None)
         if last is not None:
             fields["model"] = {"location": "local" if last.get("location") == "local" else "cloud", "name": last.get("name") or ""}

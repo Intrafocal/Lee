@@ -376,6 +376,21 @@ def create_desk_router() -> APIRouter:
     _answer_routes("pages", _card)
     _answer_routes("boards", _board)
 
+    @router.post("/desk/boards/{card_id}/visualize")
+    async def desk_board_visualize(card_id: str, request: Request):
+        """
+        ``{brief, anchor}`` (VisualizeCreate, B6) -> 201 a ``kind: 'visualize'`` answer, queued;
+        Hester's diagram agent runs it in the background like an Ask (visualize.py). Retry as for an Ask.
+        """
+        trigger = deep_ask.request_trigger()
+
+        def op(ctx, desk, b):
+            row = deep.new_visualize(_board(desk, card_id), card_id, b)
+            _log_deep_request(ctx, request)
+            deep_ask.get_runner().schedule(deep_ask.Job(ctx, card_id, row["id"], trigger))
+            return row
+        return await _op(request, op, 201, recover=True)
+
     @router.get("/desk/pages/{card_id}/questions")
     async def desk_questions(card_id: str, request: Request):
         return await _op(request, lambda ctx, desk, b: deep.list_questions(_card(desk, card_id), card_id))

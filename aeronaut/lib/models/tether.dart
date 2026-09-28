@@ -3,8 +3,9 @@ import 'package:equatable/equatable.dart';
 /// Tether: the Cockpit on the phone (docs/14-Deep-Work.md §8.1). Mirrors
 /// Lee main's `/tether/*` routes, `electron/src/shared/tether.ts`
 /// (docs/plans/2026-09-28-tether-review-voice.md §3.3), by hand:
-/// [Tether] feeds Work's Pick up block; [TetherDesk], [TetherPage] and
-/// [TetherDrawer] feed Review. Devices read the Desk; they never edit it.
+/// [Tether] feeds Work's Pick up block; [TetherDesk], [TetherPage],
+/// [TetherBoard] and [TetherDrawer] feed Review. Devices read the Desk;
+/// they never edit it.
 
 /// The card to pick up: your last Desk card.
 class TetherPickUp extends Equatable {
@@ -177,7 +178,10 @@ class TetherCard extends Equatable {
     );
   }
 
-  String get displayTitle => title.trim().isEmpty ? 'Untitled page' : title;
+  /// A Board (images and their marks) rather than a Page of writing.
+  bool get isBoard => kind == 'board' || id.startsWith('bd-');
+
+  String get displayTitle => title.trim().isNotEmpty ? title : (isBoard ? 'Untitled Board' : 'Untitled page');
 
   @override
   List<Object?> get props => [id, kind, title, areaId, areaName, stashed, updatedAt, chars, answers, openQuestions];
@@ -332,6 +336,102 @@ class TetherPage extends Equatable {
 
   @override
   List<Object?> get props => [card, text, answers, handoffs, openQuestions, references];
+}
+
+/// A link on a Board to another Desk card (`pg-…` or `bd-…`).
+class BoardLink extends Equatable {
+  final String cardId;
+  final String title;
+
+  const BoardLink({required this.cardId, this.title = ''});
+
+  factory BoardLink.fromJson(Map<String, dynamic> json) =>
+      BoardLink(cardId: json['card_id'] as String? ?? '', title: json['title'] as String? ?? '');
+
+  bool get isBoard => cardId.startsWith('bd-');
+
+  String get displayTitle => title.trim().isNotEmpty ? title : (isBoard ? 'Untitled Board' : 'Untitled page');
+
+  @override
+  List<Object?> get props => [cardId, title];
+}
+
+/// An Ask on a Board: the sticky note's question and its answer.
+class BoardAsk extends Equatable {
+  final String id;
+  final String question;
+  final String? answer;
+  final String status;
+
+  const BoardAsk({required this.id, this.question = '', this.answer, this.status = ''});
+
+  factory BoardAsk.fromJson(Map<String, dynamic> json) => BoardAsk(
+        id: json['id'] as String? ?? '',
+        question: json['question'] as String? ?? '',
+        answer: _nonEmpty(json['answer']),
+        status: json['status'] as String? ?? '',
+      );
+
+  @override
+  List<Object?> get props => [id, question, answer, status];
+}
+
+/// A hand-off from a Board: the clipboard's kind, state and result.
+class BoardHandoff extends Equatable {
+  final String id;
+  final String kind;
+  final String status;
+  final String? result;
+
+  const BoardHandoff({required this.id, this.kind = '', this.status = '', this.result});
+
+  factory BoardHandoff.fromJson(Map<String, dynamic> json) => BoardHandoff(
+        id: json['id'] as String? ?? '',
+        kind: json['kind'] as String? ?? '',
+        status: json['status'] as String? ?? '',
+        result: _nonEmpty(json['result']),
+      );
+
+  @override
+  List<Object?> get props => [id, kind, status, result];
+}
+
+/// `GET /tether/boards/:id` (Boards B5): a Board, read-only. Its picture is
+/// `GET /tether/boards/:id/preview` (PNG; 404 when there is none).
+class TetherBoard extends Equatable {
+  final TetherCard card;
+  final bool hasPreview;
+
+  /// Annotation text, top to bottom.
+  final List<String> notes;
+  final List<BoardLink> links;
+  final List<BoardAsk> asks;
+  final List<BoardHandoff> handoffs;
+
+  const TetherBoard({
+    required this.card,
+    this.hasPreview = false,
+    this.notes = const [],
+    this.links = const [],
+    this.asks = const [],
+    this.handoffs = const [],
+  });
+
+  factory TetherBoard.fromJson(Map<String, dynamic> json) {
+    return TetherBoard(
+      card: TetherCard.fromJson(json['card'] is Map<String, dynamic> ? json['card'] as Map<String, dynamic> : const {}),
+      hasPreview: json['has_preview'] as bool? ?? false,
+      notes: json['notes'] is List
+          ? (json['notes'] as List).whereType<String>().where((n) => n.trim().isNotEmpty).toList()
+          : const [],
+      links: _list(json['links'], BoardLink.fromJson).where((l) => l.cardId.isNotEmpty).toList(),
+      asks: _list(json['asks'], BoardAsk.fromJson),
+      handoffs: _list(json['handoffs'], BoardHandoff.fromJson),
+    );
+  }
+
+  @override
+  List<Object?> get props => [card, hasPreview, notes, links, asks, handoffs];
 }
 
 /// A thought captured into Ideas (Lee, the phone, the T-Deck).

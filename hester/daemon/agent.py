@@ -590,7 +590,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
             "summarize": summarize_text,
             # Visualization tools
             "render_mermaid": execute_render_mermaid,
-            "generate_image": execute_generate_image,
+            "generate_image": partial(execute_generate_image, working_dir=working_dir),
             "render_markdown": execute_render_markdown,
             # Workstream tools (no working_dir needed - use orchestrator)
             "workstream_create": execute_workstream_create,

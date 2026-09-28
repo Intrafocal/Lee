@@ -291,8 +291,9 @@ def _print_board(d: Desk, card: Dict[str, Any], as_json: bool) -> None:
     assets = {r.get("name"): r for r in _jsonl(d.page_dir(cid) / "assets.jsonl")}
     rows = _jsonl(d.page_dir(cid) / "answers.jsonl")
     answers = {a.get("id"): a for a in rows}
-    asks = [a for a in rows if a.get("kind") != "handoff" and not a.get("dismissed_at")]
+    asks = [a for a in rows if a.get("kind") not in ("handoff", "visualize") and not a.get("dismissed_at")]
     handoffs = [a for a in rows if a.get("kind") == "handoff" and not a.get("dismissed_at")]
+    visualizes = [a for a in rows if a.get("kind") == "visualize" and not a.get("dismissed_at")]
 
     def of(kind: str) -> List[Dict[str, Any]]:
         return sorted((i for i in items if i.get("kind") == kind), key=lambda i: (i.get("y", 0), i.get("x", 0)))
@@ -310,7 +311,7 @@ def _print_board(d: Desk, card: Dict[str, Any], as_json: bool) -> None:
                    "notes": [n["text"] for n in notes if n["pinned_to"] == i.get("id")]} for i in of("highlight")]
     links = [{"id": i.get("id"), "card_id": i.get("card_id"), "title": d.title(i["card_id"]) if i.get("card_id") else None} for i in of("link")]
     data = {**b, "dir": str(d.page_dir(cid)), "images": images, "notes": notes, "highlights": highlights, "links": links,
-            "strokes": len(of("stroke")), "asks": asks, "handoffs": handoffs,
+            "strokes": len(of("stroke")), "asks": asks, "handoffs": handoffs, "visualizes": visualizes,
             "preview": str(d.page_dir(cid) / "preview.png") if (d.page_dir(cid) / "preview.png").is_file() else None}
 
     out = [f"# {b['title']} ({cid}), a Board", f"Area: {b['area'] or '-'}{' (stashed)' if b['stashed'] else ''} · updated {b['updated_at'] or '?'}"]
@@ -356,7 +357,28 @@ def _print_board(d: Desk, card: Dict[str, Any], as_json: bool) -> None:
             out.extend(_answer_lines(h, d, cid))
             if h.get("answer"):
                 out.append(str(h["answer"]).rstrip())
+    if visualizes:
+        out.append(f"\n## Visualizes ({len(visualizes)}), made by Hester's diagram agent")
+        for v in visualizes:
+            out.append(f"\n### {v.get('question')}")
+            out.extend(_answer_lines(v, d, cid))
+            out.append(f"Status: {v.get('status')}" + (f" ({v['error']})" if v.get("error") else ""))
+            made = _visual_text(v.get("visual"), d, cid)
+            if made:
+                out.append(f"Result: {made}")
+            if v.get("answer"):
+                out.append(str(v["answer"]).rstrip())
     _emit(data, as_json, "\n".join(out))
+
+
+def _visual_text(visual: Any, d: Desk, cid: str) -> str:
+    """A Visualize's result (shared/board.ts VisualResult): the image's path, or what kind of text and its title."""
+    if not isinstance(visual, dict):
+        return ""
+    title = f" \"{visual['title']}\"" if visual.get("title") else ""
+    if visual.get("type") == "image":
+        return f"{d.page_dir(cid) / 'assets' / str(visual.get('asset'))}{title}"
+    return ("mermaid diagram" if visual.get("type") == "mermaid" else "markdown") + title
 
 
 @desk.command("board")
@@ -364,7 +386,7 @@ def _print_board(d: Desk, card: Dict[str, Any], as_json: bool) -> None:
 @_dir
 @_as_json
 def desk_board(ref: tuple, directory: str, as_json: bool):
-    """One Board by id (bd-…) or title: images (paths and sources), annotations, highlights, links, asks and hand-offs."""
+    """One Board by id (bd-…) or title: images (paths and sources), annotations, highlights, links, asks, hand-offs and visualizes."""
     d = _open(directory)
     _print_board(d, _one(d, ref, "board"), as_json)
 
