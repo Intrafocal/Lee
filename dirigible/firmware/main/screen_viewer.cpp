@@ -11,7 +11,10 @@
  *   - from the Files tree, where back returns to the tree;
  *   - from an editor-like tab in the tab list, where it follows the tab:
  *     `editors[tab].file` is re-read when the tab switches file, and the
- *     modified flag and cursor line track Lee live (Aeronaut's EditorScreen).
+ *     modified flag and cursor line track Lee live (Aeronaut's EditorScreen);
+ *   - from Review or Work's Pick up, for a Desk Page: its markdown comes from
+ *     GET /tether/pages/:id?text_only=1 instead of /fs/read (a Page is not
+ *     a file in the workspace), and back returns to Review.
  *
  * Adapted for 320x204:
  *
@@ -156,6 +159,8 @@ struct State {
 
     // what is open
     std::string path;
+    std::string card_id;           // non-empty: a Desk Page, not a file
+    std::string page_title;
     View        from   = View::Tabs;
     int         tab_id = -1;       // >= 0: following an editor-like tab
     bool        modified = false;
@@ -209,6 +214,7 @@ void forget_slots()
 }
 
 bool is_md() { return st().kind == dirigible::FileViewKind::Markdown; }
+bool is_page() { return !st().card_id.empty(); }
 bool is_code() { return st().kind == dirigible::FileViewKind::Code; }
 
 /// One line's scroll step in the current mode.
@@ -428,7 +434,7 @@ void render_meta()
     if (s.have_meta) {
         m = fmt_bytes(s.size) + "  " + (s.mtime_ms > 0 ? fmt_mtime(s.mtime_ms) + "  " : "");
     }
-    m += kind_name(s.kind);
+    m += is_page() ? "page" : kind_name(s.kind);
     if (is_code() && s.loaded) m += s.wrap ? " wrap" : "";
     lv_label_set_text(s.meta, m.c_str());
 
@@ -1124,11 +1130,75 @@ void fetch_content()
     });
 }
 
+/// A Desk Page: one request for its markdown, no stat (Lee caps it at 200 KB).
+void load_page()
+{
+    auto& s = st();
+    s.gen++;
+    clear_content();
+    s.have_meta = false;
+    s.kind = dirigible::FileViewKind::Markdown;
+    s.wrap = false;
+    show_message("Loading", s.page_title);
+
+#if DIRIGIBLE_UI_DEMO
+    static const char* const PAGE =
+        "# Tether the T-Deck\n"
+        "\n"
+        "The T-Deck is for reading and steering, not editing. Work keeps the pager; "
+        "Review reads the Desk.\n"
+        "\n"
+        "## Open questions\n"
+        "\n"
+        "- Is `v` the right key for Review?\n"
+        "- Would a voice capture on the walk beat typing?\n"
+        "\n"
+        "The pager should hold one thought, not three. Next: what Review says when "
+        "there's nothing on the Desk.\n";
+    s.have_meta = true;
+    s.size = (int64_t)strlen(PAGE);
+    s.mtime_ms = 0;
+    ingest(PAGE);
+    layout();
+    if (s.cursor_line > 0) scroll_to_source(s.cursor_line - 1);
+    render();
+#else
+    auto* c = conn();
+    if (!c) { show_message("Not connected", "Reconnect from the menu."); return; }
+    const int gen = s.gen;
+    c->fetchTetherPage(s.card_id, [gen](int status, const dirigible::TetherPageText* page) {
+        auto& s = st();
+        if (gen != s.gen) return;
+        if (!page) {
+            if (status == 503)      show_message("Hester is offline", "The Page comes back when it does.");
+            else if (status == 404) show_message("Page not found", "It may have been deleted, or this Lee is too old.");
+            else if (status == 401 || status == 403) show_message("Token rejected", "Re-pair this machine from the menu.");
+            else show_message("Couldn't load the Page", status ? "HTTP " + std::to_string(status) : "Lee did not answer.");
+            return;
+        }
+        s.have_meta = true;
+        s.size      = (int64_t)page->text.size();
+        s.mtime_ms  = page->card.updated_ms > 0 ? (double)page->card.updated_ms : 0;
+        if (!page->card.title.empty() && page->card.title != s.page_title) {
+            s.page_title = page->card.title;
+            if (app().view == View::Viewer) chrome_set_title(ui_fold(s.page_title).c_str());
+        }
+        if (page->text.empty()) { show_message("An empty Page", "Nothing written here yet."); return; }
+        ingest(page->text);
+        layout();
+        if (s.cursor_line > 0) scroll_to_source(s.cursor_line - 1);
+        ESP_LOGI(TAG, "page %s: %d lines, %d rows", s.card_id.c_str(), s.src_lines, (int)s.disp.size());
+        render();
+    });
+#endif
+}
+
 /// Stat first, then decide whether the content is worth downloading.
 void load()
 {
     using dirigible::FileViewKind;
     auto& s = st();
+    if (is_page()) { load_page(); return; }
     s.gen++;
     clear_content();
     s.have_meta = false;
@@ -1211,6 +1281,7 @@ void open_in_lee()
 {
     auto& s = st();
     auto* c = conn();
+    if (is_page()) { chrome_set_centre("read-only here"); return; }
     if (!c || s.path.empty()) return;
     if (s.tab_id >= 0) c->focusTab(s.tab_id);
     else               c->openFile(s.path.c_str());
@@ -1238,6 +1309,12 @@ void enter()
 {
     auto& s = st();
     app_show(View::Viewer);
+    if (is_page()) {
+        // A Page is read here and written at the Desk: no Open.
+        chrome_set_title(ui_fold(s.page_title.empty() ? std::string("Page") : s.page_title).c_str());
+        chrome_add_footer_button("Reload (R)", reload_btn_cb, nullptr);
+        return;
+    }
     chrome_set_title(base_name(s.path).c_str());
     chrome_add_footer_button(s.tab_id >= 0 ? "Focus (O)" : "Open (O)", open_btn_cb, nullptr);
     chrome_add_footer_button("Reload (R)", reload_btn_cb, nullptr);
@@ -1373,6 +1450,7 @@ void viewer_build(lv_obj_t* parent)
 void viewer_open_path(const std::string& path, View from)
 {
     auto& s = st();
+    s.card_id.clear();
     s.path        = path;
     s.from        = from;
     s.tab_id      = -1;
@@ -1382,9 +1460,24 @@ void viewer_open_path(const std::string& path, View from)
     load();
 }
 
+void viewer_open_page(const std::string& card_id, const std::string& title, View from, int line)
+{
+    auto& s = st();
+    s.card_id     = card_id;
+    s.page_title  = title;
+    s.path.clear();
+    s.from        = from;
+    s.tab_id      = -1;
+    s.modified    = false;
+    s.cursor_line = line > 0 ? line : 0;
+    enter();
+    load();
+}
+
 void viewer_open_tab(int tab_id)
 {
     auto& s = st();
+    s.card_id.clear();
     s.tab_id = tab_id;
     s.from   = View::Tabs;
 
@@ -1436,6 +1529,7 @@ void viewer_close()
     auto& s = st();
     s.gen++;
     s.tab_id = -1;
+    s.card_id.clear();
     clear_content();
 }
 
@@ -1507,6 +1601,7 @@ void viewer_open_demo()
 
     auto& s = st();
     s.gen++;
+    s.card_id.clear();
     s.path = "demo/markdown-sample.md";
     s.from = View::Waiting;
     s.tab_id = -1;

@@ -657,7 +657,7 @@ void step_discover()
     card_update();
     set_centre("3/4 find Lee");
     lv_obj_t* body = fresh_body();
-    chrome_set_footer("ball/tap a Lee", nullptr);
+    chrome_set_footer("ball/tap a Machine", nullptr);
     chrome_add_footer_button("Manual", [](lv_event_t*) { step_host(); }, nullptr);
     chrome_add_footer_button("Rescan", [](lv_event_t*) { step_discover(); }, nullptr);
     add_back_button();

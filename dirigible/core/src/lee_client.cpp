@@ -413,7 +413,8 @@ void LeeConnection::fetchAttention(std::function<void(bool ok)> cb) {
 
 void LeeConnection::attentionReply(const std::string& id, const char* action,
                                    const std::string& text, int version,
-                                   std::function<void(const ReplyResult&)> cb) {
+                                   std::function<void(const ReplyResult&)> cb,
+                                   bool voice) {
     if (!http_) {
         ReplyResult r;
         reply_result_parse(0, nullptr, r);
@@ -422,7 +423,10 @@ void LeeConnection::attentionReply(const std::string& id, const char* action,
     }
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "action", action);
-    if (strcmp(action, "text") == 0) cJSON_AddStringToObject(body, "text", text.c_str());
+    if (strcmp(action, "text") == 0) {
+        cJSON_AddStringToObject(body, "text", text.c_str());
+        if (voice) cJSON_AddStringToObject(body, "input", "voice");
+    }
     cJSON_AddNumberToObject(body, "version", version);
 
     const std::string url = buildHttpUrl("/attention/") + url_encode(id) + "/reply";
@@ -498,7 +502,8 @@ void LeeConnection::focusSet(bool on, std::function<void(const ReplyResult&)> cb
 }
 
 void LeeConnection::capture(const std::string& text,
-                            std::function<void(const CaptureOutcome&)> cb) {
+                            std::function<void(const CaptureOutcome&)> cb,
+                            bool voice) {
     if (!http_) {
         CaptureOutcome r;
         capture_outcome_parse(0, nullptr, r);
@@ -507,6 +512,7 @@ void LeeConnection::capture(const std::string& text,
     }
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "text", text.c_str());
+    if (voice) cJSON_AddStringToObject(body, "input", "voice");
     // Lee's default is the focused window; capture belongs to the one we follow.
     if (const LeeWindow* w = activeWindow(); w && !w->workspace.empty()) {
         cJSON_AddStringToObject(body, "workspace", w->workspace.c_str());
@@ -519,7 +525,7 @@ void LeeConnection::capture(const std::string& text,
 }
 
 // ---------------------------------------------------------------------------
-// Tether (Carry in the routes) and check-in
+// Tether, Review and Send to Lee
 // ---------------------------------------------------------------------------
 
 std::string LeeConnection::followedWorkspace() const {
@@ -527,25 +533,31 @@ std::string LeeConnection::followedWorkspace() const {
     return w ? w->workspace : std::string();
 }
 
-void LeeConnection::fetchCarry(std::function<void(int, const CarryState*)> cb) {
+/// `url` with ?workspace= (or &workspace=) for the followed window.
+static std::string with_workspace(std::string url, const std::string& ws) {
+    if (ws.empty()) return url;
+    url += url.find('?') == std::string::npos ? "?workspace=" : "&workspace=";
+    return url + url_encode(ws);
+}
+
+void LeeConnection::fetchTether(std::function<void(int, const TetherState*)> cb) {
     if (!http_) {
         if (cb) cb(0, nullptr);
         return;
     }
-    std::string url = buildHttpUrl("/carry");
-    const std::string ws = followedWorkspace();
-    if (!ws.empty()) url += "?workspace=" + url_encode(ws);
+    const std::string url = with_workspace(buildHttpUrl("/tether"), followedWorkspace());
     std::weak_ptr<int> alive = alive_;
     http_->get(url, [alive, cb](int status, cJSON* resp) {
         if (alive.expired() || !cb) return;
-        CarryState carry;
-        const bool ok = status >= 200 && status < 300 && carry_parse(resp, carry);
-        cb(status, ok ? &carry : nullptr);
+        TetherState tether;
+        const bool ok = status >= 200 && status < 300 && tether_parse(resp, tether);
+        cb(status, ok ? &tether : nullptr);
     });
 }
 
-void LeeConnection::carryCapture(const std::string& text, const std::string& card_id,
-                                 std::function<void(const CaptureOutcome&)> cb) {
+void LeeConnection::tetherCapture(const std::string& text, const std::string& card_id,
+                                  std::function<void(const CaptureOutcome&)> cb,
+                                  bool voice) {
     if (!http_) {
         CaptureOutcome r;
         capture_outcome_parse(0, nullptr, r);
@@ -555,22 +567,67 @@ void LeeConnection::carryCapture(const std::string& text, const std::string& car
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "text", text.c_str());
     if (!card_id.empty()) cJSON_AddStringToObject(body, "card_id", card_id.c_str());
+    if (voice) cJSON_AddStringToObject(body, "input", "voice");
     const std::string ws = followedWorkspace();
     if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
-    http_->post(buildHttpUrl("/carry/capture"), body, [cb](int status, cJSON* resp) {
+    http_->post(buildHttpUrl("/tether/capture"), body, [cb](int status, cJSON* resp) {
         CaptureOutcome r;
         capture_outcome_parse(status, resp, r);
         if (cb) cb(r);
     });
 }
 
-void LeeConnection::carryOpenNext(const std::string& card_id,
-                                  std::function<void(const ReplyResult&)> cb) {
-    cJSON* body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "card_id", card_id.c_str());
-    const std::string ws = followedWorkspace();
-    if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
-    postAction("/carry/open-next", body, std::move(cb));
+void LeeConnection::fetchTetherPages(std::function<void(int, const std::vector<TetherCard>*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    const std::string url = with_workspace(buildHttpUrl("/tether/pages?limit=") +
+                                               std::to_string(TETHER_MAX_PAGES),
+                                           followedWorkspace());
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        std::vector<TetherCard> pages;
+        const bool ok = status >= 200 && status < 300 && tether_pages_parse(resp, pages);
+        cb(status, ok ? &pages : nullptr);
+    });
+}
+
+void LeeConnection::fetchTetherPage(const std::string& card_id,
+                                    std::function<void(int, const TetherPageText*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    const std::string url = with_workspace(buildHttpUrl("/tether/pages/") + url_encode(card_id) +
+                                               "?text_only=1",
+                                           followedWorkspace());
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        TetherPageText page;
+        const bool ok = status >= 200 && status < 300 && tether_page_text_parse(resp, page);
+        cb(status, ok ? &page : nullptr);
+    });
+}
+
+void LeeConnection::tetherSend(int pty_id, const std::string& label, const char* tab_type,
+                               const std::string& text, bool submit, bool voice,
+                               std::function<void(const SendOutcome&)> cb) {
+    if (!http_) {
+        SendOutcome r;
+        send_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = tether_send_body(pty_id, label, tether_tab_kind(tab_type), text, submit,
+                                   voice, followedWorkspace());
+    http_->post(buildHttpUrl("/tether/send"), body, [cb](int status, cJSON* resp) {
+        SendOutcome r;
+        send_outcome_parse(status, resp, r);
+        if (cb) cb(r);
+    });
 }
 
 void LeeConnection::deepIdleEnd(const std::string& item_id, int version, const char* action,

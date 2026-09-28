@@ -97,7 +97,7 @@ void row_clicked(lv_event_t* e)
     if (!tab) return;
 
     if (tab_has_pty(tab->type) && tab->pty_id >= 0) {
-        terminal_open(tab->pty_id, tab->label ? tab->label : "pty");
+        terminal_open(tab->pty_id, tab->label ? tab->label : "pty", tab->type);
     } else if (tab->type && strcmp(tab->type, "files") == 0) {
         files_open();
     } else if (dirigible::tab_is_editor_like(tab->type)) {

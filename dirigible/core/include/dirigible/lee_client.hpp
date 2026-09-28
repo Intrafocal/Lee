@@ -1,9 +1,9 @@
 #pragma once
 
 #include "dirigible/attention.hpp"
-#include "dirigible/carry.hpp"
 #include "dirigible/fs.hpp"
 #include "dirigible/models.hpp"
+#include "dirigible/tether.hpp"
 #include "dirigible/transport.hpp"
 #include <cstdint>
 #include <functional>
@@ -86,6 +86,9 @@ public:
     /// Step to the next (+1) or previous (-1) window, wrapping.
     void cycleWindow(int step);
 
+    /// The followed window's workspace, "" until /windows answers.
+    std::string followedWorkspace() const;
+
     // Commands — domain/action/params matching Lee's POST /command.  The
     // active window's id is added as params.window_id unless already set.
     void sendCommand(const char* domain, const char* action,
@@ -127,9 +130,11 @@ public:
 
     /// POST /attention/:id/reply.  `action` is "approve", "deny" or "text";
     /// `text` is sent only for "text".  `version` must echo the item's.
+    /// `voice` tags a text reply `input: 'voice'` (it came from a transcript).
     void attentionReply(const std::string& id, const char* action,
                         const std::string& text, int version,
-                        std::function<void(const ReplyResult&)> cb);
+                        std::function<void(const ReplyResult&)> cb,
+                        bool voice = false);
 
     /// POST /attention/:id/reply {"action":"choose","choice":n,"version":v}:
     /// pick option `choice` (0-based) of a single-select question item.
@@ -159,30 +164,41 @@ public:
     /// or POST /focus/stop.  The new state arrives in the next snapshot.
     void focusSet(bool on, std::function<void(const ReplyResult&)> cb);
 
-    /// POST /capture into Hester's Someday list, for the followed window's
-    /// workspace.
+    /// POST /capture into Hester's Ideas, for the followed window's
+    /// workspace.  `voice` tags it `input: 'voice'`.
     void capture(const std::string& text,
-                 std::function<void(const CaptureOutcome&)> cb);
+                 std::function<void(const CaptureOutcome&)> cb,
+                 bool voice = false);
 
-    // Tether (Carry in the code and routes; Cockpit design §8.2; 14 §8.1), for
-    // the followed window's workspace (Lee's default, the focused window's,
-    // until /windows answers).
+    // Tether (docs/14-Deep-Work.md §8.1; plan 2026-09-28 §3.3), for the
+    // followed window's workspace (Lee's default, the focused window's, until
+    // /windows answers).  Results are non-owning, valid only for the callback.
 
-    /// GET /carry.  `carry` is null unless it parsed; 503 means Hester is
-    /// offline.  Valid only for the callback.
-    void fetchCarry(std::function<void(int status, const CarryState* carry)> cb);
+    /// GET /tether.  `tether` is null unless it parsed; 503 means Hester is
+    /// offline.
+    void fetchTether(std::function<void(int status, const TetherState* tether)> cb);
 
-    /// POST /carry/capture {text, card_id?}: a thought captured into a
-    /// Desk card (or, with an empty id, into Someday).  Lee spools it while
+    /// POST /tether/capture {text, card_id?}: a thought captured into a
+    /// Desk card (or, with an empty id, into Ideas).  Lee spools it while
     /// Hester is offline and answers spooled: true.
-    void carryCapture(const std::string& text, const std::string& card_id,
-                      std::function<void(const CaptureOutcome&)> cb);
+    void tetherCapture(const std::string& text, const std::string& card_id,
+                       std::function<void(const CaptureOutcome&)> cb,
+                       bool voice = false);
 
-    /// POST /carry/open-next {card_id}: the next Deep session opens this
-    /// card first.  (An id from a Lee before the Desk is an exploration id;
-    /// Lee main sends it on as one.)
-    void carryOpenNext(const std::string& card_id,
-                       std::function<void(const ReplyResult&)> cb);
+    /// GET /tether/pages?limit=50: every Page, stashed ones too, newest
+    /// first (Review's list).  `pages` is null unless it parsed.
+    void fetchTetherPages(std::function<void(int status, const std::vector<TetherCard>* pages)> cb);
+
+    /// GET /tether/pages/:id?text_only=1: the Page's markdown for the viewer.
+    void fetchTetherPage(const std::string& card_id,
+                         std::function<void(int status, const TetherPageText* page)> cb);
+
+    /// POST /tether/send: `text` into tab `pty_id` as one piece (§4.6).
+    /// `submit` is Send (Enter after it); false is Deliver.  `tab_type` is
+    /// the Lee tab type, mapped to the target's tab_kind.
+    void tetherSend(int pty_id, const std::string& label, const char* tab_type,
+                    const std::string& text, bool submit, bool voice,
+                    std::function<void(const SendOutcome&)> cb);
 
     /// POST /deep/idle-end (Desk D2 §9.2): answer the "Still thinking?"
     /// push.  `action` is "extend" or "end_rate"; `rating` is "deep",
@@ -214,9 +230,6 @@ private:
     /// report it as a ReplyResult.
     void postAction(const std::string& path, cJSON* body,
                     std::function<void(const ReplyResult&)> cb);
-
-    /// The followed window's workspace, "" until /windows answers.
-    std::string followedWorkspace() const;
 
     std::string buildWsUrl() const;
     std::string buildHttpUrl(const char* path) const;

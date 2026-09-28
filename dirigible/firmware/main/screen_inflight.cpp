@@ -264,7 +264,7 @@ void footer()
         right = "in flight";
     }
     if (s.open_pty >= 0) chrome_set_footer("j/k agents  c check in", right.c_str());
-    else                 chrome_set_footer("ball pick  c check in  w l", right.c_str());
+    else                 chrome_set_footer("ball pick  c check in  w v", right.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +621,7 @@ void build_list(lv_obj_t* parent)
     s.empty = panel(parent);
     lv_obj_t* l = label(s.empty, F_TITLE, dg::text2(), "No agents running");
     lv_obj_align(l, LV_ALIGN_CENTER, 0, -10);
-    lv_obj_t* hint = label(s.empty, F_META, dg::text3(), "Agents Lee launches show up here.\nw Work   l Library   t Tabs");
+    lv_obj_t* hint = label(s.empty, F_META, dg::text3(), "Agents Lee launches show up here.\nw Work   v Review   t Tabs");
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 22);
     lv_obj_add_flag(s.empty, LV_OBJ_FLAG_HIDDEN);

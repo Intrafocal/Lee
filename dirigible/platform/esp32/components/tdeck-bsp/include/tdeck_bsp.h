@@ -18,6 +18,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -92,6 +93,27 @@ void tdeck_bsp_set_ball_hook(tdeck_ball_hook_t hook, void *user);
 /** Fired once per hold when the ball is pressed without rolling (B-series). */
 typedef void (*tdeck_long_press_cb_t)(void *user);
 void tdeck_bsp_set_long_press_cb(tdeck_long_press_cb_t cb, void *user);
+
+// ---------------------------------------------------------------------------
+// Microphone (built only with CONFIG_DIRIGIBLE_VOICE; tdeck_audio.cpp)
+// ---------------------------------------------------------------------------
+
+/**
+ * Power the ES7210 mic ADC and start I2S RX at `sample_rate` Hz, 16-bit.
+ * Idempotent while running.  Fails (and leaves everything off) when the codec
+ * does not answer on I2C.
+ */
+esp_err_t tdeck_mic_start(uint32_t sample_rate);
+
+/**
+ * Read up to `max_samples` mono 16-bit samples into `dst`, blocking at most
+ * `timeout_ms`.  Returns the number read (0 on timeout or when stopped).
+ * Call from one task at a time; not from the LVGL task.
+ */
+size_t tdeck_mic_read(int16_t *dst, size_t max_samples, uint32_t timeout_ms);
+
+/** Stop I2S RX and close the codec.  Safe to call when not started. */
+void tdeck_mic_stop(void);
 
 // ---------------------------------------------------------------------------
 // Battery

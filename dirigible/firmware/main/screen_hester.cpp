@@ -19,6 +19,11 @@
  * The ReAct phases no longer overwrite the answer area: they run in the header
  * centre slot as `prep think act ...`, which is the one place every screen
  * already reserves for status.
+ *
+ * Voice (CONFIG_DIRIGIBLE_VOICE): a mic button right of the question, shown
+ * when Hester has voice.  Tap to record, tap (or Enter) to stop; the
+ * transcript fills the question for you to read and ask with Enter.  No
+ * letter key here: the question box has the keyboard.
  */
 
 #include <cstdio>
@@ -27,6 +32,7 @@
 #include "esp_log.h"
 #include "theme.hpp"
 #include "ui_text.hpp"
+#include "voice_input.hpp"
 
 static const char* TAG = "dirigible.hester";
 
@@ -50,6 +56,44 @@ void input_event(lv_event_t* e)
 {
     if (lv_event_get_code(e) == LV_EVENT_READY) hester_submit();
 }
+
+#if CONFIG_DIRIGIBLE_VOICE
+constexpr int MIC_W = 30;
+lv_obj_t* s_mic = nullptr;
+lv_obj_t* s_mic_lbl = nullptr;
+
+void mic_render()
+{
+    auto& a = app();
+    if (!s_mic) return;
+    const bool on = voice::available();
+    if (on) lv_obj_clear_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_width(a.hester_input, SCREEN_W - 4 - (on ? MIC_W + 3 : 0));
+    lv_label_set_text(s_mic_lbl, voice::recording() ? LV_SYMBOL_STOP : LV_SYMBOL_AUDIO);
+    lv_obj_set_style_text_color(s_mic_lbl, voice::recording() ? dg::ember() : dg::text1(), 0);
+}
+
+void mic_toggle()
+{
+    if (voice::recording()) { voice::stop(); mic_render(); return; }
+    if (voice::busy()) return;
+    voice::start(dirigible::VoicePurpose::Ask, "",
+        [](bool ok, const std::string& text) {
+            auto& a = app();
+            mic_render();
+            if (a.view == View::Hester) chrome_set_footer("Enter ask  ball scrolls", "hester");
+            if (!ok) { chrome_set_centre(text.c_str()); return; }
+            voice::fill(a.hester_input, text);
+            hester_focus();
+            chrome_set_centre("check it, then Enter");   // voice never asks
+        },
+        [](int ms) {
+            if (app().view == View::Hester) chrome_set_footer(voice::elapsed_text(ms).c_str(), "voice");
+        });
+    mic_render();
+}
+#endif
 
 }  // namespace
 
@@ -108,6 +152,24 @@ void hester_build(lv_obj_t* parent)
     lv_obj_add_event_cb(a.hester_input, input_event, LV_EVENT_READY, nullptr);
     if (a.group) lv_group_add_obj(a.group, a.hester_input);
 
+#if CONFIG_DIRIGIBLE_VOICE
+    s_mic = lv_btn_create(a.view_hester);
+    lv_obj_remove_style_all(s_mic);
+    if (lv_obj_get_group(s_mic)) lv_group_remove_obj(s_mic);   // touch: the box keeps the keyboard
+    lv_obj_set_size(s_mic, MIC_W, input_h);
+    lv_obj_set_pos(s_mic, SCREEN_W - 2 - MIC_W, BODY_H - input_h - 1);
+    lv_obj_set_style_bg_opa(s_mic, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_mic, dg::ground3(), 0);
+    lv_obj_set_style_bg_color(s_mic, dg::ground4(), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(s_mic, 1, 0);
+    lv_obj_set_style_border_color(s_mic, dg::ground5(), 0);
+    lv_obj_set_style_radius(s_mic, DG_RADIUS, 0);
+    s_mic_lbl = make_label(s_mic, LV_SYMBOL_AUDIO, dg::text1());
+    lv_obj_center(s_mic_lbl);
+    lv_obj_add_event_cb(s_mic, [](lv_event_t*) { mic_toggle(); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(s_mic, LV_OBJ_FLAG_HIDDEN);
+#endif
+
     lv_obj_add_flag(a.view_hester, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -115,6 +177,24 @@ void hester_focus()
 {
     auto& a = app();
     if (a.group && a.hester_input) lv_group_focus_obj(a.hester_input);
+#if CONFIG_DIRIGIBLE_VOICE
+    mic_render();
+    voice::refresh([] { mic_render(); });
+#endif
+}
+
+bool hester_key(uint8_t ascii)
+{
+#if CONFIG_DIRIGIBLE_VOICE
+    if (voice::recording()) {
+        if (ascii == '\r' || ascii == '\n') mic_toggle();
+        else if (ascii == 0x08 || ascii == 0x7F) { voice::cancel(); mic_render(); }
+        return true;
+    }
+    if (voice::busy() && (ascii == '\r' || ascii == '\n')) return true;   // the transcript isn't in yet
+#endif
+    if (ascii == 0x1B) { app_back(); return true; }
+    return false;
 }
 
 void hester_ball(int, int dy, bool)
