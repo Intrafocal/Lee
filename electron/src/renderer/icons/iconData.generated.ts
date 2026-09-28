@@ -72,6 +72,9 @@ export const strokeIcons = {
   'move': 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
   'draw': 'M3 17c3-6 5-8 7-6s-1 6 2 6 5-8 9-9',
   'area': 'M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z',
+  'mic': 'M9 6a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6',
+  'speaker': 'M4 9.5h3.5L12 6v12l-4.5-3.5H4zM15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10',
+  'camera': 'M4 8.5a2 2 0 0 1 2-2h2.5L10 4.5h4l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM15.5 12.5a3.5 3.5 0 1 1-7 0a3.5 3.5 0 1 1 7 0',
 } as const;
 
 export type IconName = keyof typeof strokeIcons;
