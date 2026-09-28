@@ -7,7 +7,7 @@ on it. Hester stores it; Lee draws it.
     .hester/desk/boards/<bd-id>/
       card.json        {id, kind: 'board', title, origin, created_at, updated_at, last_touched_at}
       board.json       {version, items}: the whole document, versioned like page.md (1 MB cap)
-      answers.jsonl    Asks and hand-offs (deep.py's rows; anchor kind 'board')
+      answers.jsonl    Asks, hand-offs and Visualizes (deep.py's rows; anchor kind 'board')
       assets.jsonl     one row per asset: {name, mime, bytes, created_at, source?}
       assets/          img-<hex>.png|jpg (images), sel-<hex>.png (selections Lee flattened)
       preview.png      the Board as a picture, written by Lee
@@ -57,7 +57,7 @@ from .tasks import atomic_write, iso_s
 
 BOARD_FILE = "board.json"
 PREVIEW_FILE = "preview.png"
-BOARD_ITEM_KINDS = ("image", "note", "highlight", "stroke", "ask", "handoff", "link")
+BOARD_ITEM_KINDS = ("image", "note", "highlight", "stroke", "ask", "handoff", "link", "visual")
 MAX_BOARD_BYTES = 1_000_000
 MAX_BOARD_ITEMS = 2000
 ITEM_ID_RE = re.compile(r"^it-[0-9a-f]{8}$")
@@ -149,12 +149,15 @@ def check_item(item: Any, i: int) -> None:
                 raise DeskError(f"{where}.points must be [x, y] pairs of numbers")
         if not _is_num(item.get("width")) or not 0 < item["width"] <= MAX_STROKE_WIDTH:
             raise DeskError(f"{where}.width must be above 0 and at most {MAX_STROKE_WIDTH}")
-    elif kind in ("ask", "handoff"):
+    elif kind in ("ask", "handoff", "visual"):
         if not isinstance(item.get("answer_id"), str) or not deep.ANSWER_ID_RE.match(item["answer_id"]):
             raise DeskError(f"{where}.answer_id must be an answer id")
         _target(item.get("target"), where)
         if item.get("open") is not None and not isinstance(item["open"], bool):
             raise DeskError(f"{where}.open must be true or false")
+        made = item.get("result_item_id")
+        if kind == "visual" and made is not None and (not isinstance(made, str) or not ITEM_ID_RE.match(made)):
+            raise DeskError(f"{where}.result_item_id must be an item id or null")
     elif kind == "link":
         if not is_card_id(item.get("card_id")):
             raise DeskError(f"{where}.card_id must be a card id (pg-… or bd-…)")

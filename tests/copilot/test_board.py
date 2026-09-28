@@ -142,7 +142,7 @@ def test_board_json_is_versioned_and_checked(cockpit_env):
     for body in bad:
         r = c.put(base, headers=h, json=dict(body, version=board_version(items[:2])) if "version" in body and body["version"] is None else body)
         assert r.status_code == 400, (json.dumps(body)[:300], r.text)
-    assert set(BOARD_ITEM_KINDS) == {"image", "note", "highlight", "stroke", "ask", "handoff", "link"}
+    assert set(BOARD_ITEM_KINDS) == {"image", "note", "highlight", "stroke", "ask", "handoff", "link", "visual"}
     ask = item("ask", 9, answer_id="ans-0000000a", target={"item_ids": ["it-00000001"], "rect": {"x": 0, "y": 0, "w": 10, "h": 10}}, open=True)
     r = c.put(base, headers=h, json={"version": board_version(items[:2]), "items": items[:2] + [ask]})
     assert r.status_code == 200, r.text

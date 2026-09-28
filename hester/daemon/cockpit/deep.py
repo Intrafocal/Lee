@@ -65,6 +65,8 @@ HANDOFF_KINDS = ("spike", "docs", "research")
 HANDOFF_PROVIDERS = ("claude", "pi")
 HANDOFF_STATES = ("launching", "running", "waiting", "review", "done", "error")
 HANDOFF_SURFACE = "deep-handoff"
+# Boards B6: a Visualize is an answer record too (``kind: 'visualize'``), run like an Ask.
+VISUALIZE_SURFACE = "deep-visualize"
 PENDING = ("queued", "running")
 ANSWER_FLAGS = {"read": "read_at", "dismissed": "dismissed_at", "inserted": "inserted_at", "kept": "kept_at"}
 QUESTION_SOURCES = ("page", "ask")
@@ -554,6 +556,36 @@ def new_handoff(store: ExplorationStore, exp_id: str, body: Dict[str, Any], now:
     return record
 
 
+def is_visualize(row: Optional[Dict[str, Any]]) -> bool:
+    return bool(row) and row.get("kind") == "visualize"
+
+
+def new_visualize(store: Any, exp_id: str, body: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    POST /desk/boards/{id}/visualize ``{brief, anchor}`` (Boards B6): an answer
+    record with ``kind: 'visualize'``, queued like an Ask (deep_ask runs it
+    through Hester's diagram agent) and ``visual: null`` until it's done. Only
+    on a Board, with a ``board`` anchor: the selection's picture is the material.
+    """
+    now = now or utc_now()
+    if not is_board_store(store):
+        raise ExplorationError("Visualize works on a Board")
+    brief = body.get("brief")
+    if not isinstance(brief, str) or not brief.strip():
+        raise ExplorationError("brief must be a non-empty string")
+    if len(brief) > MAX_QUESTION:
+        raise ExplorationError(f"brief is longer than {MAX_QUESTION} characters")
+    anchor = norm_anchor(body.get("anchor"), store, exp_id)
+    if anchor.get("kind") != "board":
+        raise ExplorationError("anchor must be the Board selection (kind board)")
+    record: Dict[str, Any] = {
+        "id": _new_id("ans"), "kind": "visualize", "anchor": anchor, "question": _clip(first_line(brief), MAX_QUESTION),
+        "brief": brief.strip(), "status": "queued", "visual": None, "surface": VISUALIZE_SURFACE, "asked_at": iso_s(now),
+    }
+    append_jsonl(_dir(store, exp_id) / ANSWERS_FILE, record)
+    return record
+
+
 def update_answer(store: ExplorationStore, exp_id: str, answer_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Merge ``fields`` into an answer (``None`` values remove keys). For the runner."""
     def apply(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -636,6 +668,8 @@ def requeue_answer(store: ExplorationStore, exp_id: str, answer_id: str) -> Dict
     if current.get("status") not in ("error", "interrupted"):
         raise ExplorationError(f"only an errored or interrupted answer can be retried (this one is {current.get('status')})")
     row = update_answer(store, exp_id, answer_id, {"status": "queued", "error": None, "answered_at": None})
+    if is_visualize(row):
+        row = update_jsonl(store.exp_dir(exp_id) / ANSWERS_FILE, answer_id, lambda r: {**r, "visual": None}) or row
     return row or current
 
 

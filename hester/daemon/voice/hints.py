@@ -5,6 +5,7 @@ Deterministic, at most 40 terms and 1500 characters, most specific first:
 
 1. ``purpose=reply``: the attention item's title and text (Lee ``GET /attention/:id``);
    an ``item_id`` that is a Page card (any purpose, and ``send``'s target): its title and headings;
+   a Board card (``bd-``): its title and its annotations' text (short ones whole, else the names);
 2. Lee's live context: tab labels and open file basenames;
 3. the workspace's name.
 
@@ -97,6 +98,39 @@ def page_terms(workspace: Optional[Path], card_id: str) -> List[str]:
         return []
 
 
+MAX_NOTE_TERM_WORDS = 4
+_LINK_RE = re.compile(r"\[\[(?:pg|bd)-[0-9a-f]{8}(?:\|([^\]]*))?\]\]")
+
+
+def board_terms(workspace: Optional[Path], card_id: str) -> List[str]:
+    """
+    A Board card's title, then its annotations: a short one (a few words) whole,
+    the linked cards' titles and the name-like words of the rest. Nothing when it isn't there.
+    """
+    if workspace is None:
+        return []
+    try:
+        from ..cockpit.board import note_texts
+        from ..cockpit.desk import DeskStore, is_board_id
+
+        if not is_board_id(card_id):
+            return []
+        boards = DeskStore(workspace).boards
+        card = boards.get(card_id)
+        if card is None:
+            return []
+        out = [str(card.get("title") or "")]
+        for note in note_texts(boards.items(card_id)):
+            out.extend(t for t in _LINK_RE.findall(note) if t)
+            text = _LINK_RE.sub(" ", note)
+            if 0 < len(text.split()) <= MAX_NOTE_TERM_WORDS:
+                out.append(text)
+            out.extend(name_words(text))
+        return out
+    except Exception:
+        return []
+
+
 def item_terms(item: Optional[Dict[str, Any]]) -> List[str]:
     if not isinstance(item, dict):
         return []
@@ -157,7 +191,7 @@ async def hint_for(
     """The hint for one transcription (the route's inputs; ``fetch_item`` is replaceable in tests)."""
     first: List[str] = []
     if item_id:
-        first = page_terms(workspace, item_id)
+        first = page_terms(workspace, item_id) or board_terms(workspace, item_id)
         if not first and purpose == "reply":
             first = item_terms(await fetch_item(item_id))
     return build_hint(first, context_terms(lee_context), [workspace.name] if workspace else [])
