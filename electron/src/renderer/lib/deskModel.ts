@@ -4,7 +4,8 @@
  * with esbuild.
  *
  * - Camera maths: fit a rect, screen ↔ Desk, zoom about a point, pan (§7.2:
- *   CSS transforms, no canvas library).
+ *   CSS transforms, no canvas library). They live in lib/canvas/ (shared
+ *   with a Board) and are re-exported here under the Desk's names.
  * - Layout: a card's rect on the Desk, the Goals corner in every Area, the
  *   empty-spot hit test and a new card's placement.
  * - Landing (decision 2): DeskLast to a card and line, and the cursor there.
@@ -21,92 +22,28 @@ import { cardIdForOrigin, pageIdForExploration, IDEAS_DRAWER, MAX_STROKE_POINTS,
 import type { Desk, DeskArea, DeskCard, DeskCardSummary, DeskLast, DeskRect, DeskStroke, DeskStrokeCreate } from '../../shared/desk';
 import type { IconName } from '../icons/iconData.generated';
 import type { TaskOrigin, TaskStatus } from '../../shared/cockpit';
+import { boundsOf, clamp, inside, overlaps, round, type Point, type Size } from './canvas/camera';
+import { STROKE_WIDTH, isLine, simplifyStroke } from './canvas/stroke';
 
 // ---------------------------------------------------------------------------
-// Camera
+// Camera (lib/canvas/camera.ts, shared with a Board; Desk names kept here)
 // ---------------------------------------------------------------------------
 
-/** screen = desk × scale + (x, y). */
-export interface Camera {
-  scale: number;
-  x: number;
-  y: number;
-}
-
-export interface Size {
-  w: number;
-  h: number;
-}
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export const MIN_SCALE = 0.05;
-export const MAX_SCALE = 2;
-export const IDENTITY: Camera = { scale: 1, x: 0, y: 0 };
-
-export function clampScale(s: number, min = MIN_SCALE, max = MAX_SCALE): number {
-  return Math.min(max, Math.max(min, s));
-}
-
-/** The camera that shows `rect` whole and centred in `view`, `pad` px clear on every side. */
-export function fitRect(view: Size, rect: DeskRect, pad = 48, max = MAX_SCALE): Camera {
-  const w = Math.max(1, view.w - 2 * pad);
-  const h = Math.max(1, view.h - 2 * pad);
-  const scale = clampScale(Math.min(w / Math.max(1, rect.w), h / Math.max(1, rect.h)), MIN_SCALE, max);
-  return {
-    scale,
-    x: view.w / 2 - (rect.x + rect.w / 2) * scale,
-    y: view.h / 2 - (rect.y + rect.h / 2) * scale,
-  };
-}
-
-export function screenToDesk(cam: Camera, p: Point): Point {
-  return { x: (p.x - cam.x) / cam.scale, y: (p.y - cam.y) / cam.scale };
-}
-
-export function deskToScreen(cam: Camera, p: Point): Point {
-  return { x: p.x * cam.scale + cam.x, y: p.y * cam.scale + cam.y };
-}
-
-/** Zoom by `factor` keeping the Desk point under `at` (screen) where it is. */
-export function zoomAt(cam: Camera, at: Point, factor: number): Camera {
-  const scale = clampScale(cam.scale * factor);
-  const d = screenToDesk(cam, at);
-  return { scale, x: at.x - d.x * scale, y: at.y - d.y * scale };
-}
-
-export function panBy(cam: Camera, dx: number, dy: number): Camera {
-  return { ...cam, x: cam.x + dx, y: cam.y + dy };
-}
-
-/** The CSS transform for the Desk layer. */
-export function cameraTransform(cam: Camera): string {
-  return `translate(${round(cam.x)}px, ${round(cam.y)}px) scale(${round(cam.scale, 4)})`;
-}
-
-function round(n: number, places = 2): number {
-  const f = 10 ** places;
-  return Math.round(n * f) / f;
-}
-
-/** The smallest rect holding every rect; null for none. */
-export function boundsOf(rects: readonly DeskRect[]): DeskRect | null {
-  if (!rects.length) return null;
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (const r of rects) {
-    x0 = Math.min(x0, r.x);
-    y0 = Math.min(y0, r.y);
-    x1 = Math.max(x1, r.x + r.w);
-    y1 = Math.max(y1, r.y + r.h);
-  }
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
+export {
+  IDENTITY,
+  MAX_SCALE,
+  MIN_SCALE,
+  boundsOf,
+  cameraTransform,
+  clampScale,
+  fitRect,
+  panBy,
+  screenToWorld as screenToDesk,
+  wheelCamera,
+  worldToScreen as deskToScreen,
+  zoomAt,
+} from './canvas/camera';
+export type { Camera, Point, Size } from './canvas/camera';
 
 // ---------------------------------------------------------------------------
 // Layout
@@ -144,14 +81,6 @@ export function cardRectOnDesk(card: Pick<DeskCard, 'x' | 'y' | 'w' | 'h' | 'pin
     return { x: area.x + g.x, y: area.y + g.y, w: g.w, h: g.h };
   }
   return { x: area.x + card.x, y: area.y + card.y, w: card.w || CARD_W, h: card.h || CARD_H };
-}
-
-function overlaps(a: DeskRect, b: DeskRect, gap = 0): boolean {
-  return a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
-}
-
-function inside(p: Point, r: DeskRect): boolean {
-  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
 /** The Area under a Desk point (the last drawn wins, as on screen). */
@@ -352,21 +281,7 @@ export function rectFromDrag(a: Point, b: Point): DeskRect {
   };
 }
 
-/** Screen px a press may wander and still be a click. */
-export const DRAG_SLOP = 4;
-
-export function movedEnough(from: Point, to: Point): boolean {
-  return Math.hypot(to.x - from.x, to.y - from.y) >= DRAG_SLOP;
-}
-
-/** A drag in screen px as Desk px. */
-export function dragDelta(from: Point, to: Point, scale: number): Point {
-  return { x: (to.x - from.x) / scale, y: (to.y - from.y) / scale };
-}
-
-function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(Math.max(n, lo), Math.max(lo, hi));
-}
+export { DRAG_SLOP, dragDelta, movedEnough } from './canvas/camera';
 
 /**
  * Where a dragged card lands: in the Area under the pointer (`pointer`, a
@@ -488,45 +403,7 @@ export function dropEdit(e: DeskEdits, what: { card?: string; area?: string; add
 
 // ---- strokes ----
 
-/** Screen px: the line's width, and how far apart the points you draw are kept. */
-export const STROKE_WIDTH = 2;
-export const STROKE_STEP_PX = 2;
-/** Screen px a simplified line may stray from what you drew. */
-export const STROKE_TOLERANCE_PX = 0.75;
-
-/** Ramer–Douglas–Peucker: the fewest points within `tolerance` of the line. Endpoints are kept. */
-export function simplifyPoints(points: readonly Point[], tolerance: number): Point[] {
-  if (points.length < 3) return points.slice();
-  const keep = new Uint8Array(points.length);
-  keep[0] = keep[points.length - 1] = 1;
-  const stack: Array<[number, number]> = [[0, points.length - 1]];
-  while (stack.length) {
-    const [a, b] = stack.pop() as [number, number];
-    let far = -1;
-    let dist = tolerance;
-    for (let i = a + 1; i < b; i++) {
-      const d = segmentDistance(points[i], points[a], points[b]);
-      if (d > dist) {
-        dist = d;
-        far = i;
-      }
-    }
-    if (far >= 0) {
-      keep[far] = 1;
-      stack.push([a, far], [far, b]);
-    }
-  }
-  return points.filter((_, i) => keep[i]);
-}
-
-/** The distance from `p` to the segment a–b. */
-export function segmentDistance(p: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = dx * dx + dy * dy;
-  const t = len ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len, 0, 1) : 0;
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-}
+export { STROKE_STEP_PX, STROKE_TOLERANCE_PX, STROKE_WIDTH, segmentDistance, simplifyPoints, strokePath } from './canvas/stroke';
 
 /**
  * A drawn line (Desk points, at camera `scale`) as a stroke to save:
@@ -535,10 +412,8 @@ export function segmentDistance(p: Point, a: Point, b: Point): number {
  * a click, which isn't a line.
  */
 export function strokeFromDrag(points: readonly Point[], scale: number, areas: readonly DeskArea[]): DeskStrokeCreate | null {
-  if (points.length < 2 || !points.some((p) => p.x !== points[0].x || p.y !== points[0].y)) return null;
-  let tol = STROKE_TOLERANCE_PX / scale;
-  let pts = simplifyPoints(points, tol);
-  while (pts.length > MAX_STROKE_POINTS) pts = simplifyPoints(points, (tol *= 2));
+  if (!isLine(points)) return null;
+  const pts = simplifyStroke(points, scale, MAX_STROKE_POINTS);
   const area = areaAt(areas, points[0]);
   const ox = area?.x ?? 0;
   const oy = area?.y ?? 0;
@@ -556,19 +431,6 @@ export function strokeOnDesk(stroke: Pick<DeskStroke, 'area_id' | 'points'>, are
     oy = a.y;
   }
   return stroke.points.map(([x, y]) => ({ x: x + ox, y: y + oy }));
-}
-
-/** A smoothed SVG path through the points: quadratic curves between midpoints. */
-export function strokePath(points: ReadonlyArray<Point>): string {
-  if (!points.length) return '';
-  const f = (p: Point) => `${round(p.x)} ${round(p.y)}`;
-  if (points.length < 3) return `M${f(points[0])}` + (points[1] ? `L${f(points[1])}` : '');
-  let d = `M${f(points[0])}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const mid = { x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 };
-    d += `Q${f(points[i])} ${f(mid)}`;
-  }
-  return `${d}L${f(points[points.length - 1])}`;
 }
 
 // ---------------------------------------------------------------------------

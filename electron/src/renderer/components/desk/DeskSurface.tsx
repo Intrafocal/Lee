@@ -4,7 +4,7 @@
  * the view), the Goals card pinned once to its corner, and the Drawers.
  *
  * - Pan and zoom are CSS transforms on one layer; the maths is pure in
- *   lib/deskModel.ts. Wheel pans, pinch (or ⌘/ctrl + wheel) zooms about the
+ *   lib/canvas/ (shared with a Board) and lib/deskModel.ts. Wheel pans, pinch (or ⌘/ctrl + wheel) zooms about the
  *   pointer, a drag on bare Desk pans. Changing zoom level refits.
  * - Cards show their title in Newsreader (your words), a quiet count line,
  *   and an ember dot only when a hand-off in them is waiting on you. Hover
@@ -37,7 +37,7 @@
  *   reinstall and nothing else (§10).
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IDEAS_DRAWER, type DeskArea, type DeskCard, type DeskRect, type DeskStroke, type DeskStrokeCreate } from '../../../shared/desk';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { LeeMode } from '../../../shared/cockpit';
@@ -100,7 +100,7 @@ import {
   toolCursor,
   toolForKey,
   withEdits,
-  zoomAt,
+  wheelCamera,
   type AreaHandle,
   type Camera,
   type DeskEdits,
@@ -108,6 +108,8 @@ import {
   type EscLayer,
   type Point,
 } from '../../lib/deskModel';
+import { pushCapped } from '../../lib/canvas/history';
+import { useViewportSize } from '../../lib/canvas/useViewportSize';
 import { useDeskContext } from './useDesk';
 import './desk.css';
 
@@ -122,7 +124,6 @@ interface DeskSurfaceProps {
 const HOVER_MS = 300;
 const GOALS_SHOWN = 5;
 const IDEA_MIME = 'application/x-lee-idea';
-const UNDO_MAX = 50;
 /** Screen px either side of a line that still picks it. */
 const STROKE_HIT_PX = 6;
 const TOOL_HINT: Record<DeskTool, string> = {
@@ -160,19 +161,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
 
   // ---- the viewport and the camera ----
   const viewRef = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState({ w: 800, h: 600 });
-  useLayoutEffect(() => {
-    const el = viewRef.current;
-    if (!el) return;
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      if (r.width && r.height) setSize((s) => (s.w === r.width && s.h === r.height ? s : { w: r.width, h: r.height }));
-    };
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
-    ro?.observe(el);
-    return () => ro?.disconnect();
-  }, [visible]);
+  const size = useViewportSize(viewRef, [visible]);
 
   const onDesk = useMemo(() => (desk ? areasOnDesk(desk) : []), [desk]);
   const fitted = useMemo<Camera>(() => {
@@ -190,10 +179,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     return { x: clientX - (r?.left ?? 0), y: clientY - (r?.top ?? 0) };
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) setOwn(zoomAt(cam, localPoint(e.clientX, e.clientY), Math.exp(-e.deltaY * 0.01)));
-    else setOwn(panBy(cam, -e.deltaX, -e.deltaY));
-  };
+  const onWheel = (e: React.WheelEvent) => setOwn(wheelCamera(cam, e, localPoint(e.clientX, e.clientY)));
 
   // ---- tools ----
   const [tool, setTool] = useState<DeskTool>('cursor');
@@ -205,7 +191,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const [strokeMenu, setStrokeMenu] = useState<{ stroke: DeskStroke; x: number; y: number } | null>(null);
   const undoStack = useRef<StrokeUndo[]>([]);
   const remember = (u: StrokeUndo) => {
-    undoStack.current = [...undoStack.current, u].slice(-UNDO_MAX);
+    undoStack.current = pushCapped(undoStack.current, u);
   };
 
   // A press on bare Desk pans; a click (no drag) on an empty spot starts a Page. Move drags
