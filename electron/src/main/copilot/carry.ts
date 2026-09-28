@@ -1,8 +1,8 @@
 /**
- * Carry for devices (docs/14-Deep-Work.md §8.1; cockpit design contract §8;
- * Desk D2 §9.3): Lee main routes that read and write a workspace's carried
- * thinking through Hester, so a phone or T-Deck needs only its Lee token.
- * Carry's pick-up is your last Desk card.
+ * Tether for devices (Carry in the code and routes; docs/14-Deep-Work.md
+ * §8.1; cockpit design contract §8; Desk D2 §9.3): Lee main routes that read
+ * and write a workspace's tethered thinking through Hester, so a phone or
+ * T-Deck needs only its Lee token. Tether's pick-up is your last Desk card.
  *
  *   GET  /carry?workspace=<ws>   pick_up, open questions, counts, open_next, spooled
  *                                (Hester GET /copilot/opener + /copilot/open-next)
@@ -263,7 +263,7 @@ export function registerCarryRoutes(app: Application, deps: CarryRoutesDeps = {}
       res.json({ success: true, data: buildCarry(opener as unknown as Opener, openNext, ws.workspace, spooledCount()) });
     } catch (err) {
       deps.log?.('ERROR', 'Carry read failed', { error: String(err) });
-      res.status(500).json({ success: false, error: 'Carry failed' });
+      res.status(500).json({ success: false, error: 'Tether failed' });
     }
   });
 
