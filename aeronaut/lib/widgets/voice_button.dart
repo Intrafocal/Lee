@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/voice.dart';
 import '../providers/voice_provider.dart';
 import '../theme/aeronaut_theme.dart';
-import '../theme/pending_icons.dart';
+import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
 import 'phosphor_icon.dart';
 
@@ -111,7 +111,7 @@ class _VoiceButtonState extends ConsumerState<VoiceButton> {
         (session.state == VoiceState.recording || session.state == VoiceState.transcribing || session.state == VoiceState.arming);
 
     Widget icon = PhosphorIcon(
-      PendingIcons.mic,
+      PhosphorIcons.mic,
       size: widget.size,
       color: elsewhere ? Phosphor.text3 : (recording ? Phosphor.text1 : Phosphor.text2),
     );

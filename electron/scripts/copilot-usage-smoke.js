@@ -890,6 +890,7 @@ test('POST /tether/send: IPC tether:send to the window, answered by tether:send-
         assert.strictEqual(channel, 'tether:send');
         assert.deepStrictEqual(delivery, {
           send_id: data.send_id,
+          compose: false,
           target: targets.focus,
           items: [{ kind: 'text', text: 'run the tests\nthen push', input: 'voice' }],
           submit: true,

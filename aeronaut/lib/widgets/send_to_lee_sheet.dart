@@ -7,7 +7,6 @@ import '../providers/tether_provider.dart';
 import '../providers/voice_provider.dart';
 import '../providers/windows_provider.dart';
 import '../theme/aeronaut_theme.dart';
-import '../theme/pending_icons.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
 import 'composer.dart';
@@ -176,13 +175,13 @@ class _SendToLeeSheetState extends ConsumerState<SendToLeeSheet> {
                     if (voiceAvailable)
                       _Choice(
                         key: const ValueKey('choice-voice'),
-                        icon: PendingIcons.mic,
+                        icon: PhosphorIcons.mic,
                         label: 'Voice note',
                         onTap: () => _composer.currentState?.startVoice(),
                       ),
                     _Choice(
                       key: const ValueKey('choice-photo'),
-                      icon: PendingIcons.camera,
+                      icon: PhosphorIcons.camera,
                       label: 'Photo',
                       onTap: () => _composer.currentState?.attach(ImageSourceKind.photo),
                     ),

@@ -313,7 +313,7 @@ static void test_send()
     char* json = cJSON_PrintUnformatted(body);
     expect("send body", json,
            R"({"workspace":"/ws","target":{"kind":"tab","pty_id":7,"label":"Claude","tab_kind":"agent","provider":null},)"
-           R"("items":[{"kind":"text","text":"line one\nline two"}],"submit":true})");
+           R"("items":[{"kind":"text","text":"line one\nline two"}],"submit":true,"compose":true})");
     cJSON_free(json);
     cJSON_Delete(body);
 
@@ -321,7 +321,7 @@ static void test_send()
     json = cJSON_PrintUnformatted(body);
     expect("deliver, from voice, no workspace", json,
            R"({"target":{"kind":"tab","pty_id":3,"label":"zsh","tab_kind":"terminal","provider":null},)"
-           R"("items":[{"kind":"text","text":"ls","input":"voice"}],"submit":false})");
+           R"("items":[{"kind":"text","text":"ls","input":"voice"}],"submit":false,"compose":true})");
     cJSON_free(json);
     cJSON_Delete(body);
 

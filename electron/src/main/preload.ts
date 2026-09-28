@@ -537,6 +537,7 @@ const api: LeeAPI = {
     },
     sendResult: (outcome) => ipcRenderer.send(TETHER_IPC.sendResult, outcome),
     setPaletteOpen: (open) => ipcRenderer.send(TETHER_IPC.palette, { open: !!open }),
+    saveInboxImage: (image) => ipcRenderer.invoke(TETHER_IPC.inboxImage, image),
   },
 
   voice: {

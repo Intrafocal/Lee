@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/speech_provider.dart';
 import '../providers/voice_provider.dart';
 import '../theme/pending_icons.dart';
+import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
 import 'phosphor_icon.dart';
 
@@ -21,7 +22,7 @@ class SpeakerToggle extends ConsumerWidget {
     return IconButton(
       key: const ValueKey('speak-replies'),
       tooltip: on ? 'Speak replies: on' : 'Speak replies: off',
-      icon: PhosphorIcon(on ? PendingIcons.speaker : PendingIcons.speakerOff, size: 20, color: on ? Phosphor.text1 : Phosphor.text3),
+      icon: PhosphorIcon(on ? PhosphorIcons.speaker : PendingIcons.speakerOff, size: 20, color: on ? Phosphor.text1 : Phosphor.text3),
       onPressed: () => ref.read(speechProvider.notifier).setEnabled(!on),
     );
   }

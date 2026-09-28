@@ -120,6 +120,8 @@ export const TETHER_IPC = {
   sendResult: 'tether:send-result',
   /** send, renderer to main: { open: boolean } when the Command Palette opens or closes (the `hester` focus target). */
   palette: 'tether:palette',
+  /** invoke, renderer to main: TetherInboxImage -> absolute path | null. */
+  inboxImage: 'tether:inbox-image',
 } as const;
 
 /** Where a send came from, for the status bar chip ("From your phone", "From the T-Deck"). */
@@ -138,6 +140,16 @@ export interface TetherSendDelivery {
   /** Send (true: Enter in a tab, ask in Hester) or Deliver (false). Never true for a page. */
   submit: boolean;
   from: TetherSendFrom;
+  /** From a device's compose in that tab's view: no chip. */
+  compose: boolean;
+}
+
+/** An image for a tab target, saved by main to ~/.lee/inbox/<send_id>-<n>.<ext> (0600) so its path can be typed. */
+export interface TetherInboxImage {
+  send_id: string;
+  n: number;
+  mime: string;
+  data_b64: string;
 }
 
 /** The renderer's answer on TETHER_IPC.sendResult. `error` is a short code, e.g. 'no_target', 'tab_gone', 'upload_failed'. */
@@ -153,6 +165,8 @@ export interface TetherAPI {
   sendResult: (outcome: TetherSendOutcome) => void;
   /** Tell main whether the Command Palette is open, so it counts as the focus target. */
   setPaletteOpen: (open: boolean) => void;
+  /** Save an image for a tab target; resolves to its absolute path, or null. */
+  saveInboxImage: (image: TetherInboxImage) => Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------

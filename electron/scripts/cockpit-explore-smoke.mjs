@@ -60,7 +60,7 @@ const {
   getExploration,
   patchExploration,
   openExploration,
-  triageSomeday,
+  triageIdea,
   addExploreNode,
   patchExploreNode,
   pruneExploreNode,
@@ -151,12 +151,12 @@ await test('errors: Hester error text, 404 and offline', async () => {
   globalThis.fetch = saved;
 });
 
-await test('Someday Promote → Explore: triage explore with to: explore', async () => {
-  reply = { status: 200, body: { success: true, data: { item: { id: 'sd_1', status: 'explored' }, exploration: exp } } };
-  const r = await triageSomeday(WS, 'sd_1', { action: 'explore', to: 'explore' });
+await test('Ideas: triage explore with to: explore', async () => {
+  reply = { status: 200, body: { success: true, data: { item: { id: 'idea_1', status: 'explored' }, exploration: exp } } };
+  const r = await triageIdea(WS, 'idea_1', { action: 'explore', to: 'explore' });
   assert.equal(r.ok, true);
   assert.equal(r.data.exploration.id, exp.id);
-  assert.equal(scoped(calls[0]).pathname, '/someday/sd_1/triage');
+  assert.equal(scoped(calls[0]).pathname, '/ideas/idea_1/triage');
   assert.deepEqual(calls[0].body, { action: 'explore', to: 'explore', workspace: WS });
 });
 
@@ -358,19 +358,19 @@ await test('deep questions and sessions', async () => {
   assert.deepEqual(calls[3].body, record);
 });
 
-await test('deep explore, create with page, Someday capture, opener', async () => {
+await test('deep explore, create with page, idea capture, opener', async () => {
   reply = { status: 201, body: { success: true, data: { ...exp, id: 'exp-99999999', title: 'Tangent' } } };
   const child = await deep.exploreFrom(WS, exp.id, { seed: 'a tangent', anchor });
   assert.equal(child.data.title, 'Tangent');
   await deep.createDeepExploration(WS, { seed: 'Mesh sync', page: 'Mesh sync\n\n', origin: { kind: 'opener' } });
-  await deep.captureSomeday(WS, 'try CRDTs', { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' });
+  await deep.captureIdea(WS, 'try CRDTs', { surface: 'lee', exploration_id: exp.id, section: 'Mesh', context: 'later: try CRDTs' });
   reply = { status: 200, body: { success: true, data: { generated_at: 't', workspace: WS, pick_up: null, surfaces: [{ kind: 'blank' }] } } };
   const op = await deep.fetchOpener(WS);
   assert.deepEqual(op.data.surfaces, [{ kind: 'blank' }]);
   assert.deepEqual(calls.map((c) => [c.method, scoped(c).pathname]), [
     ['POST', `${EXP}/explore`],
     ['POST', '/cockpit/explorations'],
-    ['POST', '/someday'],
+    ['POST', '/ideas'],
     ['GET', '/copilot/opener'],
   ]);
   assert.deepEqual(calls[0].body, { seed: 'a tangent', anchor });

@@ -407,7 +407,7 @@ export function buildTargets(inp: TargetInputs): SendTargets {
 // ---------------------------------------------------------------------------
 
 export type SendCheck =
-  | { ok: true; target: SendTarget | 'focus'; items: SendItem[]; submit: boolean; bytes: number[] }
+  | { ok: true; target: SendTarget | 'focus'; items: SendItem[]; submit: boolean; compose: boolean; bytes: number[] }
   | { ok: false; status: number; error: string };
 
 const B64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -483,7 +483,8 @@ export function checkSendRequest(body: unknown): SendCheck {
     if (target !== 'focus' && target.kind === 'page') return bad('submit is not allowed for a Page');
     if (!items.some((i) => i.kind === 'text')) return bad('submit needs a text item');
   }
-  return { ok: true, target, items, submit, bytes };
+  if (body.compose !== undefined && typeof body.compose !== 'boolean') return bad('compose must be a boolean');
+  return { ok: true, target, items, submit, compose: body.compose === true, bytes };
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +553,38 @@ export function installTetherIpc(): void {
     if (isRecord(payload) && payload.open === true) paletteOpen.set(id, true);
     else paletteOpen.delete(id);
   });
+  ipcMain.handle(TETHER_IPC.inboxImage, (_e, image: unknown) => saveInboxImage(image));
+}
+
+/** ~/.lee/inbox/: images sent to a tab, typed as a path (§4.3). 0600, pruned after 7 days. */
+export const INBOX_DIR = path.join(os.homedir(), '.lee', 'inbox');
+const INBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const INBOX_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg' };
+
+/** Write one image for a tab target; its absolute path, or null for a bad request. Never throws. */
+export function saveInboxImage(image: unknown, dir: string = INBOX_DIR, now: number = Date.now()): string | null {
+  try {
+    if (!isRecord(image)) return null;
+    const { send_id, n, mime, data_b64 } = image;
+    const ext = typeof mime === 'string' ? INBOX_EXT[mime] : undefined;
+    if (typeof send_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(send_id) || !Number.isInteger(n) || (n as number) < 0 || (n as number) > 16 || !ext || typeof data_b64 !== 'string') return null;
+    const bytes = Buffer.from(data_b64, 'base64');
+    if (!bytes.length || bytes.length > 10 * 1024 * 1024) return null;
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const name of fs.readdirSync(dir)) {
+      const f = path.join(dir, name);
+      try {
+        if (now - fs.statSync(f).mtimeMs > INBOX_TTL_MS) fs.rmSync(f, { force: true });
+      } catch {
+        /* gone already */
+      }
+    }
+    const file = path.join(dir, `${send_id}-${n}.${ext}`);
+    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    return file;
+  } catch {
+    return null;
+  }
 }
 
 function windowIdForSender(sender: unknown): number | null {
@@ -954,7 +987,7 @@ export function registerTetherRoutes(app: Application, deps: TetherRoutesDeps = 
       const from = tetherFrom(p);
       const outcome = await broker.deliver(
         win.state.browserWindow,
-        { send_id, target, items: check.items, submit: check.submit, from },
+        { send_id, target, items: check.items, submit: check.submit, compose: check.compose, from },
         deps.sendTimeoutMs ?? TETHER_SEND_TIMEOUT_MS,
       );
       // Kinds and sizes only, never content (§4.2).

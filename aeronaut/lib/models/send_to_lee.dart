@@ -237,17 +237,21 @@ class SendRequest extends Equatable {
   final List<SendItem> items;
   final bool submit;
 
-  const SendRequest({this.workspace, this.target, required this.items, this.submit = false});
+  /// From a tab's own compose bar: Lee shows no chip, since you're watching that tab.
+  final bool compose;
+
+  const SendRequest({this.workspace, this.target, required this.items, this.submit = false, this.compose = false});
 
   Map<String, dynamic> toJson() => {
         if (workspace != null) 'workspace': workspace,
         'target': target?.toJson() ?? 'focus',
         'items': [for (final i in items) i.toJson()],
         if (submit) 'submit': true,
+        if (compose) 'compose': true,
       };
 
   @override
-  List<Object?> get props => [workspace, target, items, submit];
+  List<Object?> get props => [workspace, target, items, submit, compose];
 }
 
 /// The outcome of a send: where it went, or why it didn't.

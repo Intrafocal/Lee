@@ -61,5 +61,7 @@ export interface SendRequest {
   items: SendItem[];
   /** Send (true) or Deliver (false, the default). Tabs: Enter after the text; Hester: ask the question. Refused for Pages. Only from an explicit Send tap, never from voice. */
   submit?: boolean;
+  /** A compose send from a device's view of that same tab: Lee shows no chip (you're watching it). */
+  compose?: boolean;
 }
 export interface SendResult { send_id: string; delivered_to: SendTarget }

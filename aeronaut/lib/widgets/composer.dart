@@ -9,7 +9,6 @@ import '../providers/tether_provider.dart';
 import '../providers/voice_provider.dart';
 import '../providers/windows_provider.dart';
 import '../theme/aeronaut_theme.dart';
-import '../theme/pending_icons.dart';
 import '../theme/phosphor_icons.generated.dart';
 import '../theme/phosphor_tokens.dart';
 import 'phosphor_icon.dart';
@@ -127,7 +126,7 @@ class ComposerState extends ConsumerState<Composer> {
           children: [
             ListTile(
               key: const ValueKey('attach-photo'),
-              leading: const PhosphorIcon(PendingIcons.camera, size: 20, color: Phosphor.text2),
+              leading: const PhosphorIcon(PhosphorIcons.camera, size: 20, color: Phosphor.text2),
               title: const Text('Photo'),
               onTap: () => Navigator.pop(ctx, ImageSourceKind.photo),
             ),
@@ -169,7 +168,7 @@ class ComposerState extends ConsumerState<Composer> {
     final api = ref.read(tetherApiFactoryProvider)(machine);
     final SendResult result;
     try {
-      result = await api.send(SendRequest(workspace: workspace, target: widget.target, items: items, submit: submit));
+      result = await api.send(SendRequest(workspace: workspace, target: widget.target, items: items, submit: submit, compose: widget.compact));
     } finally {
       api.dispose();
     }

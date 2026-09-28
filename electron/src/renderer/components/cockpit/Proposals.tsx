@@ -18,8 +18,8 @@ import type { OperationInfo, Proposal } from '../../../shared/cockpit';
 import { PAGE_ID_RE, pageIdForExploration } from '../../../shared/desk';
 import { mergeServes, proposalPlan, proposalTaskId, type ProposalPlan } from '../../lib/cockpitModel';
 import { openDesk } from './cockpitMode';
+import { createDeskPage } from '../../lib/hesterDesk';
 import {
-  createExploration,
   createTask,
   fetchWorkstreams,
   patchTask,
@@ -117,10 +117,10 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
       return { ok: false, error: r.error || 'Run failed' };
     }
     case 'explore': {
-      // Hester's migration puts it on the Desk as a Page on the next read (Desk D2 §6.1).
-      const r = await createExploration(ws, { seed: plan.seed, origin: { kind: 'hester' } });
+      // A Page on the Desk, in the first Area (the pre-Desk exploration routes are gone).
+      const r = await createDeskPage(ws, { text: `${plan.seed.trim()}\n\n` });
       if (!r.ok) return { ok: false, error: r.error };
-      return { ok: true, message: `On your Desk: ${r.data.title}` };
+      return { ok: true, message: `On your Desk: ${r.data.card.title}` };
     }
   }
 }

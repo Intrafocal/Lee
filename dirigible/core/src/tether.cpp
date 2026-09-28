@@ -174,6 +174,7 @@ cJSON* tether_send_body(int pty_id, const std::string& label, const char* tab_ki
     cJSON_AddItemToArray(items, item);
 
     cJSON_AddBoolToObject(body, "submit", submit);
+    cJSON_AddBoolToObject(body, "compose", true);  // always the tab view's compose line: no chip in Lee
     return body;
 }
 
