@@ -9,8 +9,8 @@ struct cJSON;
 namespace dirigible {
 
 // ---------------------------------------------------------------------------
-// Carry (docs/14-Deep-Work.md §8.1; Cockpit design §8.2; Desk D2 §9.3):
-// what to take away from the last Deep session, from Lee's
+// Tether (Carry in the code and routes; docs/14-Deep-Work.md §8.1; Cockpit
+// design §8.2; Desk D2 §9.3): where the last Deep session stopped, from Lee's
 // GET /carry?workspace=<ws>.  The pick-up is your last Desk card:
 //
 //   { workspace,
@@ -50,7 +50,7 @@ struct CarryState {
     std::string open_next_exploration_id;
     std::string open_next_someday_id;
 
-    /// The explorations there is something to carry for, in order: the
+    /// The explorations Tether has something for, in order: the
     /// pick-up first, then each other exploration an open question names.
     std::vector<std::string> explorations() const;
     /// The first open question about `exploration_id`, or null.

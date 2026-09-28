@@ -519,7 +519,7 @@ void LeeConnection::capture(const std::string& text,
 }
 
 // ---------------------------------------------------------------------------
-// Carry and check-in
+// Tether (Carry in the routes) and check-in
 // ---------------------------------------------------------------------------
 
 std::string LeeConnection::followedWorkspace() const {

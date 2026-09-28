@@ -73,7 +73,7 @@ inline lv_color_t info()  { return c(DG_INFO); }    // neutral notices
 // ---------------------------------------------------------------------------
 //   One italic: ui_font_italic, Montserrat Medium Italic 14 (ASCII, generated
 //   into dg_montserrat_italic_14.c; falls back to ui_font for symbols) for
-//   your own words on Carry ("You stopped at"), where Lee and Aeronaut use
+//   your own words on Tether ("You stopped at"), where Lee and Aeronaut use
 //   Newsreader.  The T-Deck stays Montserrat only (Cockpit design §8.2).
 inline const lv_font_t* ui_font_small() { return &lv_font_montserrat_12; }
 inline const lv_font_t* ui_font()       { return &lv_font_montserrat_14; }

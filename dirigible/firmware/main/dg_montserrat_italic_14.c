@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 14 px
  * Bpp: 4
- * Montserrat Medium Italic (SIL OFL 1.1), for Carry's "You stopped at" (Cockpit
+ * Montserrat Medium Italic (SIL OFL 1.1), for Tether's "You stopped at" (Cockpit
  * design §8.2).  Generated with lv_font_conv from @fontsource/montserrat 5.3.0:
  * Opts: --font montserrat-latin-500-italic.woff -r 0x20-0x7E --size 14 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h -o dg_montserrat_italic_14.c
  ******************************************************************************/

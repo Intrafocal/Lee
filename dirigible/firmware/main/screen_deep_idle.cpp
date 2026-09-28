@@ -1,7 +1,7 @@
 /*
  * screen_deep_idle.cpp — "Still thinking?" (Desk D2 §9.2, §9.4): the one
  * push Lee sends when a Deep session at the Mac has been idle for 40 of its
- * 45 minutes.  A Carry-style page of its own, so its keys don't clash with
+ * 45 minutes.  A Tether-style page of its own, so its keys don't clash with
  * Work's pager (d is Dismiss there, a rating here).
  *
  * Data: the snapshot's open deep_idle item (AttentionSnapshot::deep_idle()):

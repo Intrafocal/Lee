@@ -216,7 +216,7 @@ bool ball_list(lv_obj_t* list, int dy, bool click);
 // from each other and from Tabs.
 //   w  Work       the waiting pager (screen_waiting.cpp, View::Waiting)
 //   i  In flight  the running agents (screen_inflight.cpp)
-//   l  Library    Carry: what to take away from the last Deep session
+//   l  Library    Tether: where the last Deep session stopped, away from it
 //                 (screen_carry.cpp)
 //   x  Still thinking?  the idle-end push, while one is open
 //                 (screen_deep_idle.cpp)
@@ -259,7 +259,7 @@ bool inflight_back();                      // close an opened agent; false at th
 bool inflight_key(uint8_t ascii);
 void inflight_ball(int dx, int dy, bool click);
 
-// Library (Carry): GET /carry, your last Desk card first, one card per page
+// Library (Tether): GET /carry, your last Desk card first, one card per page
 // (j/k): "You stopped at" in italic, one open question, Add a thought (C),
 // Open next (O).  State lives in screen_carry.cpp.
 void library_build(lv_obj_t* parent);

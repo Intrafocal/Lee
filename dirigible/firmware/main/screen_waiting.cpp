@@ -1679,7 +1679,7 @@ void demo_fill()
         a.pty_id = 7; a.label = "lee copilot"; a.provider = "claude";
         a.state = AgentState::Busy; a.busy_ms = 18 * 60000;
         a.has_now = true; a.now.tool = "Bash"; a.now.preview = "cd electron && npm test";
-        a.last_summary = "Wiring the carry routes into the device snapshot; the smokes are next.";
+        a.last_summary = "Wiring Tether into the device snapshot; the smokes are next.";
         a.recent.push_back({ "Edit", "/ws/electron/src/main/copilot/queue.ts",
                              { "/ws/electron/src/main/copilot/queue.ts" }, false, true, 4 * 60000 });
         a.recent.push_back({ "Grep", "open_next", {}, false, true, 2 * 60000 });
@@ -1882,7 +1882,7 @@ bool waiting_key(uint8_t k)
         if (k == 'z') {   // demo: a Deep session starts or ends at the machine
             auto& d = demo_snap();
             d.deep_active = !d.deep_active;
-            d.deep_title = d.deep_active ? "Carry on the T-Deck" : "";
+            d.deep_title = d.deep_active ? "Tether the T-Deck" : "";
             d.focus_active = d.deep_active;
             render();
         }

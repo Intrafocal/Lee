@@ -164,8 +164,9 @@ public:
     void capture(const std::string& text,
                  std::function<void(const CaptureOutcome&)> cb);
 
-    // Carry (Cockpit design §8.2; 14 §8.1), for the followed window's
-    // workspace (Lee's default, the focused window's, until /windows answers).
+    // Tether (Carry in the code and routes; Cockpit design §8.2; 14 §8.1), for
+    // the followed window's workspace (Lee's default, the focused window's,
+    // until /windows answers).
 
     /// GET /carry.  `carry` is null unless it parsed; 503 means Hester is
     /// offline.  Valid only for the callback.

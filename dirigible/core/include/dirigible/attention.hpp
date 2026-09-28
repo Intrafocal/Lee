@@ -26,7 +26,7 @@ enum class AttentionKind : uint8_t {
     Approval, Waiting, Blocker, Decision, Failure, Review, Summary, Question,
     /// Desk D2 §9.2: "Still thinking?", the one push before an idle Deep
     /// session ends.  Answered with POST /deep/idle-end (extend, end_rate)
-    /// or a Carry capture into its card; never an agent's item.
+    /// or a Tether capture (POST /carry/capture) into its card; never an agent's item.
     DeepIdle,
     Other,
 };
