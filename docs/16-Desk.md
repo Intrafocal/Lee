@@ -24,19 +24,20 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 
 - **One Desk per workspace.** Deep mode is *being at the Desk*.
 - **Areas** are named regions of the one Desk surface: zoom out to see them all, zoom in to work in one. They replace explorations as the way thinking is grouped by topic.
-- **Drawers** hold whole Areas you've put away (archived or parked). Cards always travel with their Area. You can take an Area back out.
+- **Drawers** hold whole Areas you've **stashed** (archived or parked; *renamed from "put away" 2026-09-28*, the ids and routes keep `put-away`). Cards always travel with their Area. You can take an Area back out.
 - **Goals** are one card, pinned to the Desk's top-right corner at every zoom, so it's there whichever Area you're in (*revised 2026-09-27*: first drawn once per Area, which read as separate goals). It lists GOALS.md's goals; zooming it opens the Goals Page. A project without goals shows the "What is this project for?" prompt there (Deep next R12).
-- **An Area's menu** (its ⋯, or a right-click on the Area): Rename, New Page here, Put away in a Drawer.
+- **An Area's menu** (its ⋯, or a right-click on the Area): Rename, New Page here, Stash.
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything, and never reads the lines you draw. Revisit when there's a reason.
 - **You arrange it yourself** (*added 2026-09-27*) with three tools in a small bar at the bottom of the Desk:
   - **Cursor** (`V`, the default): everything above, as before (click to preview and open, click an empty spot to start a Page, drag bare Desk to pan, right-click menus).
   - **Move** (`M`): drag a Page card within its Area or into another, or drag an Area from anywhere inside it (not on a card) and its cards and lines come with it. Bare Desk still pans. The pinned Goals card doesn't move.
   - **Rectangle** (`R`): drag out a new Area (a click makes the smallest size), then name it; `Esc` or an empty name cancels.
-  - **Draw** (`D`): freehand lines in one quiet colour, the same width at any zoom. A line started inside an Area belongs to it: it moves with the Area, is put away with it and is deleted with it. A line started on bare Desk belongs to the Desk.
+  - **Draw** (`D`): freehand lines in one quiet colour, the same width at any zoom. A line started inside an Area belongs to it: it moves with the Area, is stashed with it and is deleted with it. A line started on bare Desk belongs to the Desk.
   - The tools live in the **taskbar** along the bottom, with the Drawer at its left (opening upward like a start menu) and New Area after the tools; the right end says what the current tool does.
   - In Cursor, click a line to select it; `Delete` (or its right-click menu) deletes it with no confirm, and `⌘Z` undoes the last draw or delete this session. `Esc` goes back to Cursor once nothing smaller is open. Positions and lines are kept by Hester (`desk.json`).
 - **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
-- **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Put away** (Areas). An Area's cards go with it.
+- **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Stashed** (Areas). An Area's cards go with it.
+- **The Drawer is a start menu** (*2026-09-28*): the taskbar's Drawer button opens it upward. It lists folders (Ideas, Stashed, then your own Drawers); hovering or → flies a folder out to the right, its entries grouped **Today / This week / Older** (by when they were stashed or captured). Search sits at the bottom by the button, focused on open: every word, any order, results grouped by folder. ↑↓ move, → and ← go in and out of a folder, Enter acts, Esc closes.
 
 **D2 foundations scope** (*decided 2026-09-27*):
 - Hester's `.hester/desk/` store (§5) and the migration from explorations;

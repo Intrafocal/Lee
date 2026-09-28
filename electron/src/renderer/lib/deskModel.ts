@@ -662,3 +662,91 @@ export function mirrorKeyMoves(keys: readonly string[], workspace: string): Arra
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// The Drawer: a start menu of folders, date groups and search
+// ---------------------------------------------------------------------------
+
+export type DateBucket = 'today' | 'week' | 'older';
+
+export const DATE_BUCKETS: ReadonlyArray<{ bucket: DateBucket; label: string }> = [
+  { bucket: 'today', label: 'Today' },
+  { bucket: 'week', label: 'This week' },
+  { bucket: 'older', label: 'Older' },
+];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** By the local calendar: today, the six days before, or anything earlier (and anything undated). */
+export function dateBucket(iso: string | null | undefined, now: Date): DateBucket {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return 'older';
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (t >= midnight) return 'today';
+  return t >= midnight - 6 * DAY_MS ? 'week' : 'older';
+}
+
+export interface DrawerEntry {
+  kind: 'area' | 'idea';
+  id: string;
+  text: string;
+  /** When it went in the Drawer: stashed, or captured. */
+  at: string | null;
+  /** '3 cards' for an Area; where an idea came from. */
+  meta: string;
+}
+
+export interface DrawerFolder {
+  id: string;
+  name: string;
+  entries: DrawerEntry[];
+}
+
+/** What people call the Put away Drawer. */
+export const STASHED = 'Stashed';
+
+const newestFirst = (a: DrawerEntry, b: DrawerEntry) => String(b.at ?? '').localeCompare(String(a.at ?? ''));
+
+/**
+ * The Drawer's folders: Ideas, Stashed, then your own Drawers by name. Each
+ * holds its entries newest first; an empty folder of your own is still shown.
+ */
+export function drawerFolders(
+  desk: Pick<Desk, 'drawers' | 'areas' | 'cards'>,
+  ideas: ReadonlyArray<{ id: string; text: string; created_at: string; source?: { surface?: string } }>,
+): DrawerFolder[] {
+  const areaEntry = (a: DeskArea): DrawerEntry => {
+    const n = desk.cards.filter((c) => c.area_id === a.id).length;
+    return { kind: 'area', id: a.id, text: a.name, at: a.put_away_at ?? a.updated_at ?? null, meta: `${n} ${n === 1 ? 'card' : 'cards'}` };
+  };
+  const inDrawer = (id: string) => desk.areas.filter((a) => a.drawer_id === id).map(areaEntry).sort(newestFirst);
+  const folders: DrawerFolder[] = [
+    {
+      id: IDEAS_DRAWER,
+      name: 'Ideas',
+      entries: ideas
+        .map((i) => ({ kind: 'idea' as const, id: i.id, text: i.text, at: i.created_at, meta: i.source?.surface && i.source.surface !== 'lee' ? `from ${i.source.surface}` : '' }))
+        .sort(newestFirst),
+    },
+    { id: PUT_AWAY_DRAWER, name: STASHED, entries: inDrawer(PUT_AWAY_DRAWER) },
+  ];
+  const own = desk.drawers.filter((d) => d.kind === 'areas' && d.id !== PUT_AWAY_DRAWER).sort((a, b) => a.name.localeCompare(b.name));
+  for (const d of own) folders.push({ id: d.id, name: d.name, entries: inDrawer(d.id) });
+  return folders;
+}
+
+/** A folder's entries as Today / This week / Older, leaving out empty groups. */
+export function byDate(entries: readonly DrawerEntry[], now: Date): Array<{ bucket: DateBucket; label: string; entries: DrawerEntry[] }> {
+  return DATE_BUCKETS.map((b) => ({ ...b, entries: entries.filter((e) => dateBucket(e.at, now) === b.bucket) })).filter((g) => g.entries.length > 0);
+}
+
+/** Search: every word of the query, in any order, ignoring case; folders with no match drop out. */
+export function searchDrawer(folders: readonly DrawerFolder[], query: string): DrawerFolder[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [...folders];
+  const hit = (e: DrawerEntry) => {
+    const hay = `${e.text} ${e.meta}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
+  };
+  return folders.map((f) => ({ ...f, entries: f.entries.filter(hit) })).filter((f) => f.entries.length > 0);
+}

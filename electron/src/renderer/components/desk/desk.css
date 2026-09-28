@@ -380,17 +380,65 @@
   position: relative;
 }
 
-.desk-drawer-menu {
+.desk-drawer-pop {
   position: absolute;
-  /* Upward, like a start menu: undo .deep-popover's top/right (below and right-aligned). */
-  top: auto;
-  right: auto;
-  bottom: calc(100% + var(--space-2));
   left: 0;
-  width: 340px;
+  bottom: calc(100% + var(--space-2));
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+
+/* Upward, like a start menu: the pop holds it, so undo .deep-popover's own placement. */
+.desk-drawer-menu,
+.desk-drawer-flyout {
+  position: static;
+  width: 300px;
   max-height: min(60vh, 520px);
-  overflow: auto;
   padding: var(--space-2) 0;
+}
+
+.desk-drawer-menu {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.desk-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.desk-drawer-flyout {
+  width: 340px;
+  overflow: auto;
+}
+
+.desk-drawer-folder.is-open {
+  background: var(--ground-3);
+}
+
+.desk-drawer-chevron {
+  color: var(--text-3);
+}
+
+/* Search at the bottom, by the Drawer button, as in a start menu. */
+.desk-drawer-search {
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  outline: none;
+  caret-color: var(--caret);
+}
+
+.desk-drawer-search:focus {
+  border-color: var(--text-3);
 }
 
 .desk-drawer-group {

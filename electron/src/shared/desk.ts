@@ -27,6 +27,8 @@ export interface DeskArea extends DeskRect {
   name: string;
   /** null: on the Desk. Else the Drawer it's put away in (x/y are kept for taking it back out). */
   drawer_id: string | null;
+  /** When it was stashed (put away), else null. Older Hesters omit it. */
+  put_away_at?: string | null;
   created_at: string;
   updated_at: string;
   /** The exploration it was migrated from, else null. */

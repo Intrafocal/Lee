@@ -203,6 +203,39 @@ await test('placement: at the click, inside the Area, nudged clear of cards and 
 // deskModel: tools (Cursor, Move, Draw)
 // ---------------------------------------------------------------------------
 
+await test('the Drawer: folders (Ideas, Stashed, your own), newest first, by date, and search', () => {
+  const now = new Date(2026, 8, 28, 12, 0);
+  const at = (d, h = 9) => new Date(2026, 8, d, h, 0).toISOString();
+  assert.equal(model.dateBucket(at(28, 1), now), 'today');
+  assert.equal(model.dateBucket(at(22), now), 'week', 'six days back is this week');
+  assert.equal(model.dateBucket(at(21), now), 'older');
+  assert.equal(model.dateBucket(null, now), 'older');
+  const area = (id, name, drawer_id, put_away_at) => ({ id, name, drawer_id, put_away_at, x: 0, y: 0, w: 1, h: 1, created_at: at(1), updated_at: at(1), migrated_from: null });
+  const desk = {
+    drawers: [
+      { id: 'ideas', name: 'Ideas', kind: 'ideas', area_ids: [], count: 2 },
+      { id: 'put-away', name: 'Put away', kind: 'areas', area_ids: [], count: 2 },
+      { id: 'drw-00000001', name: 'Archive', kind: 'areas', area_ids: [], count: 0 },
+    ],
+    areas: [area('area-1', 'Mesh sync', 'put-away', at(20)), area('area-2', 'Taxonomy', 'put-away', at(28)), area('area-3', 'On the Desk', null, null)],
+    cards: [{ id: 'pg-1', area_id: 'area-2' }, { id: 'pg-2', area_id: 'area-2' }],
+  };
+  const ideas = [
+    { id: 'sd_1', text: 'Try a CRDT', created_at: at(27), source: { surface: 'aeronaut' } },
+    { id: 'sd_2', text: 'Voice notes on a walk', created_at: at(28), source: { surface: 'lee' } },
+  ];
+  const f = model.drawerFolders(desk, ideas);
+  assert.deepEqual(f.map((x) => x.name), ['Ideas', 'Stashed', 'Archive'], 'Put away reads Stashed; an empty folder of your own still shows');
+  assert.deepEqual(f[0].entries.map((e) => [e.id, e.meta]), [['sd_2', ''], ['sd_1', 'from aeronaut']]);
+  assert.deepEqual(f[1].entries.map((e) => [e.text, e.meta]), [['Taxonomy', '2 cards'], ['Mesh sync', '0 cards']]);
+  assert.deepEqual(model.byDate(f[1].entries, now).map((g) => [g.label, g.entries.length]), [['Today', 1], ['Older', 1]]);
+  const hits = model.searchDrawer(f, 'crdt TRY');
+  assert.deepEqual(hits.map((x) => [x.name, x.entries.map((e) => e.id)]), [['Ideas', ['sd_1']]], 'every word, any order, any case');
+  assert.deepEqual(model.searchDrawer(f, 'aeronaut').map((x) => x.entries[0].id), ['sd_1'], 'where it came from counts');
+  assert.equal(model.searchDrawer(f, '  ').length, 3, 'no query: everything');
+  assert.deepEqual(model.searchDrawer(f, 'nothing like this'), []);
+});
+
 await test('Rectangle: a drag outlines the Area whichever way it went; a click or a small drag grows to the smallest Area', () => {
   assert.deepEqual(model.rectFromDrag({ x: 900, y: 700 }, { x: 100, y: 200 }), { x: 100, y: 200, w: 800, h: 500 });
   assert.deepEqual(model.rectFromDrag({ x: 10.4, y: 20.6 }, { x: 10.4, y: 20.6 }), { x: 10, y: 21, ...model.MIN_DRAWN_AREA });

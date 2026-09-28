@@ -509,7 +509,7 @@ class DeskStore:
 
     @staticmethod
     def area_api(a: Dict[str, Any]) -> Dict[str, Any]:
-        return {k: a.get(k) for k in ("id", "name", "x", "y", "w", "h", "drawer_id", "created_at", "updated_at", "migrated_from")}
+        return {k: a.get(k) for k in ("id", "name", "x", "y", "w", "h", "drawer_id", "put_away_at", "created_at", "updated_at", "migrated_from")}
 
     @staticmethod
     def stroke_api(s: Dict[str, Any]) -> Dict[str, Any]:

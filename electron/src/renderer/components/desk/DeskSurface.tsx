@@ -15,7 +15,7 @@
  * - The Goals card is pinned once to the Desk's top-right corner, the same
  *   at every zoom: GOALS.md's goals, else the Goals Page's first line, else
  *   "What is this project for?", where typing creates it.
- * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Put away.
+ * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Stash.
  * - The Drawer is a button in the strip along the bottom of the overview: a
  *   menu of put-away Areas (click to take one out) and Ideas (Someday; click
  *   to start a Page, or drag one onto an Area).
@@ -35,7 +35,7 @@
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DeskArea, DeskCard, DeskRect, DeskStroke, DeskStrokeCreate } from '../../../shared/desk';
+import { IDEAS_DRAWER, type DeskArea, type DeskCard, type DeskRect, type DeskStroke, type DeskStrokeCreate } from '../../../shared/desk';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
@@ -79,8 +79,11 @@ import {
   movedEnough,
   panBy,
   placeNewCard,
+  drawerFolders,
+  searchDrawer,
+  byDate,
+  type DrawerEntry,
   rectFromDrag,
-  putAwayAreas,
   screenToDesk,
   deskToScreen,
   strokeFromDrag,
@@ -476,7 +479,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     const r = await putAwayArea(workspace, a.id);
     if (!r.ok) return say(r.error);
     if (nav.area_id === a.id) zoomOut('overview', 'click');
-    say(`Put away: ${a.name}`);
+    say(`Stashed: ${a.name}`);
     void ctx?.refresh();
   };
 
@@ -512,6 +515,87 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     await ctx?.refresh();
     zoomToArea(a.id, 'click');
   };
+  // ---- the Drawer as a start menu: folders, a fly-out by date, search ----
+  const [drawerQuery, setDrawerQuery] = useState('');
+  const [flyout, setFlyout] = useState<string | null>(null);
+  useEffect(() => {
+    if (drawer) return;
+    setDrawerQuery('');
+    setFlyout(null);
+  }, [drawer]);
+  const folders = useMemo(() => (desk ? drawerFolders(desk, ideas ?? []) : []), [desk, ideas]);
+  const found = useMemo(() => searchDrawer(folders, drawerQuery), [folders, drawerQuery]);
+  const openFolder = folders.find((f) => f.id === flyout) ?? null;
+  const drawerRow = (e: DrawerEntry) => {
+    if (e.kind === 'area') {
+      const a = desk?.areas.find((x) => x.id === e.id);
+      if (!a) return null;
+      return (
+        <button key={e.id} className="deep-pop-row desk-drawer-row" role="menuitem" data-drawer-row="" onClick={() => void takeOut(a)} title="Take it out onto the Desk">
+          <span className="desk-drawer-text">{e.text}</span>
+          <span className="deep-muted">{e.meta}</span>
+          <span className="desk-idea-actions" onClick={(ev) => ev.stopPropagation()}>
+            <IconAction icon="trash" label="Delete…" tone="danger" onClick={() => askDeleteArea(a)} />
+          </span>
+        </button>
+      );
+    }
+    return (
+      <div
+        key={e.id}
+        className="deep-pop-row desk-drawer-row desk-idea"
+        role="menuitem"
+        tabIndex={0}
+        data-drawer-row=""
+        draggable
+        onDragStart={(ev) => {
+          ev.dataTransfer.setData(IDEA_MIME, e.id);
+          ev.dataTransfer.effectAllowed = 'copy';
+        }}
+        onClick={() => void ideaPage(e.id)}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            void ideaPage(e.id);
+          }
+        }}
+        title="Start a Page from it, or drag it onto an Area"
+      >
+        <span className="desk-drawer-text">{e.text}</span>
+        {e.meta && <span className="deep-muted">{e.meta}</span>}
+        <span className="desk-idea-actions" onClick={(ev) => ev.stopPropagation()}>
+          <IconAction icon="check" label="Keep" onClick={() => void triage(e.id, 'keep')} />
+          <IconAction icon="trash" label="Drop" onClick={() => void triage(e.id, 'drop')} />
+        </span>
+      </div>
+    );
+  };
+  /** ↑↓ through the rows, → into a folder's fly-out, ← back to the folder, Enter from search opens the first match. */
+  const onDrawerKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const pop = e.currentTarget;
+    const target = e.target as HTMLElement;
+    const inFly = !!target.closest('.desk-drawer-flyout');
+    const rows = (scope: string) => Array.from(pop.querySelectorAll<HTMLElement>(`${scope} [data-drawer-row]`));
+    const list = rows(inFly ? '.desk-drawer-flyout' : '.desk-drawer-menu');
+    const i = list.indexOf(target);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!list.length) return;
+      const next = i < 0 ? (e.key === 'ArrowUp' ? list.length - 1 : 0) : (i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+      list[next].focus();
+    } else if (e.key === 'ArrowRight' && target.dataset.folder) {
+      e.preventDefault();
+      setFlyout(target.dataset.folder);
+      requestAnimationFrame(() => rows('.desk-drawer-flyout')[0]?.focus());
+    } else if (e.key === 'ArrowLeft' && inFly) {
+      e.preventDefault();
+      pop.querySelector<HTMLElement>(`[data-folder="${flyout}"]`)?.focus();
+    } else if (e.key === 'Enter' && target.classList.contains('desk-drawer-search')) {
+      e.preventDefault();
+      pop.querySelector<HTMLElement>('.desk-drawer-body [data-drawer-row]')?.click();
+    }
+  };
+
   // ---- delete (confirmed; not undoable) ----
   const [confirm, setConfirm] = useState<{ kind: 'area'; area: DeskArea; cards: number } | { kind: 'page'; card: DeskCard } | null>(null);
   const [cardMenu, setCardMenu] = useState<{ card: DeskCard; x: number; y: number } | null>(null);
@@ -763,8 +847,8 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           >
                             New Page here
                           </button>
-                          <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)} title="Into the Put away Drawer; take it out from there">
-                            Put away in a Drawer
+                          <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)} title="Into the Drawer’s Stashed; take it out from there">
+                            Stash
                           </button>
                           <button className="deep-pop-row desk-danger" role="menuitem" onClick={() => askDeleteArea(area)}>
                             Delete…
@@ -914,48 +998,81 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               Drawer {counts.ideas + counts.putAway > 0 && <span className="deep-muted">{counts.ideas + counts.putAway}</span>}
             </button>
             {drawer && desk && (
-              <div className="deep-popover desk-drawer-menu" role="menu" aria-label="Drawer">
-                <div className="desk-drawer-group">Put away</div>
-                {putAwayAreas(desk).length === 0 && <div className="desk-drawer-empty deep-muted">Nothing put away. An Area’s ⋯ has Put away.</div>}
-                {putAwayAreas(desk).map((a) => (
-                  <button key={a.id} className="deep-pop-row desk-drawer-row" role="menuitem" onClick={() => void takeOut(a)} title="Take it out onto the Desk">
-                    <span className="desk-drawer-text">{a.name}</span>
-                    <span className="deep-muted">{cardsIn(desk, a.id).length} cards</span>
-                    <span className="desk-idea-actions" onClick={(e) => e.stopPropagation()}>
-                      <IconAction icon="trash" label="Delete…" tone="danger" onClick={() => askDeleteArea(a)} />
-                    </span>
-                  </button>
-                ))}
-                <div className="desk-drawer-group">Ideas</div>
-                {ideas == null && <div className="desk-drawer-empty deep-muted">Opening…</div>}
-                {ideas != null && ideas.length === 0 && <div className="desk-drawer-empty deep-muted">No ideas waiting. Captures from the phone and the T-Deck land here.</div>}
-                {ideas?.map((i) => (
-                  <div
-                    key={i.id}
-                    className="deep-pop-row desk-drawer-row desk-idea"
-                    role="menuitem"
-                    tabIndex={0}
-                    draggable
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(IDEA_MIME, i.id);
-                      e.dataTransfer.effectAllowed = 'copy';
-                    }}
-                    onClick={() => void ideaPage(i.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        void ideaPage(i.id);
-                      }
-                    }}
-                    title="Start a Page from it, or drag it onto an Area"
-                  >
-                    <span className="desk-drawer-text">{i.text}</span>
-                    <span className="desk-idea-actions" onClick={(e) => e.stopPropagation()}>
-                      <IconAction icon="check" label="Keep" onClick={() => void triage(i.id, 'keep')} />
-                      <IconAction icon="trash" label="Drop" onClick={() => void triage(i.id, 'drop')} />
-                    </span>
+              // A start menu: folders fly out to the right, grouped by date; search sits by the button.
+              <div className="desk-drawer-pop" onKeyDown={onDrawerKey}>
+                <div className="deep-popover desk-drawer-menu" role="menu" aria-label="Drawer">
+                  <div className="desk-drawer-body">
+                    {drawerQuery.trim() ? (
+                      found.length === 0 ? (
+                        <div className="desk-drawer-empty deep-muted">Nothing in the Drawer matches “{drawerQuery.trim()}”.</div>
+                      ) : (
+                        found.map((f) => (
+                          <React.Fragment key={f.id}>
+                            <div className="desk-drawer-group">{f.name}</div>
+                            {f.entries.map(drawerRow)}
+                          </React.Fragment>
+                        ))
+                      )
+                    ) : (
+                      folders.map((f) => (
+                        <button
+                          key={f.id}
+                          className={`deep-pop-row desk-drawer-row desk-drawer-folder${flyout === f.id ? ' is-open' : ''}`}
+                          role="menuitem"
+                          aria-haspopup="menu"
+                          aria-expanded={flyout === f.id}
+                          data-drawer-row=""
+                          data-folder={f.id}
+                          onMouseEnter={() => setFlyout(f.id)}
+                          onFocus={() => setFlyout(f.id)}
+                          onClick={() => setFlyout(f.id)}
+                        >
+                          <span className="desk-drawer-text">{f.name}</span>
+                          <span className="deep-muted">{f.id === IDEAS_DRAWER && ideas == null ? '…' : f.entries.length}</span>
+                          <span className="desk-drawer-chevron" aria-hidden="true">›</span>
+                        </button>
+                      ))
+                    )}
                   </div>
-                ))}
+                  <input
+                    className="desk-drawer-search"
+                    autoFocus
+                    value={drawerQuery}
+                    placeholder="Search the Drawer"
+                    aria-label="Search the Drawer"
+                    onChange={(e) => {
+                      setDrawerQuery(e.target.value);
+                      setFlyout(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Escape') return;
+                      // One Esc closes the Drawer (clearing a query first, if there is one).
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (drawerQuery) setDrawerQuery('');
+                      else setDrawer(false);
+                    }}
+                  />
+                </div>
+                {!drawerQuery.trim() && openFolder && (
+                  <div className="deep-popover desk-drawer-flyout" role="menu" aria-label={openFolder.name}>
+                    {openFolder.entries.length === 0 && (
+                      <div className="desk-drawer-empty deep-muted">
+                        {openFolder.id === IDEAS_DRAWER
+                          ? ideas == null
+                            ? 'Opening…'
+                            : 'No ideas waiting. Captures from the phone and the T-Deck land here.'
+                          : 'Nothing stashed. An Area’s ⋯ has Stash.'}
+                      </div>
+                    )}
+                    {byDate(openFolder.entries, new Date()).map((g) => (
+                      <React.Fragment key={g.bucket}>
+                        <div className="desk-drawer-group">{g.label}</div>
+                        {g.entries.map(drawerRow)}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </span>
@@ -1003,7 +1120,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               ? `Delete ${confirm.area.name}${confirm.cards ? ` and its ${confirm.cards} ${confirm.cards === 1 ? 'card' : 'cards'}` : ''}?`
               : `Delete ${confirm.card.title || 'Untitled'}?`}
           </div>
-          <div className="deep-muted">This can’t be undone. Put away keeps it instead.</div>
+          <div className="deep-muted">This can’t be undone. Stash keeps it instead.</div>
           <div className="desk-confirm-actions">
             <button className="deep-quiet" onClick={() => setConfirm(null)} autoFocus>
               Cancel
