@@ -86,7 +86,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | Library › Explorations | The Desk: its cards by Area, and Drawers (Library is gone, §6) |
 | Hand-off origin `exp#answer` | `page#answer` |
 | The Goals Page (`purpose: goals`) | The pinned Goals card (§2) |
-| Carry on devices | Your last card and its stopped-at line (*decided 2026-09-27*; Carry only, no Desk view on devices this round) |
+| Tether on devices | Your last card and its stopped-at line (*decided 2026-09-27*; Tether only, no Desk view on devices this round; renamed from Carry, 2026-09-28; the routes keep `/carry`) |
 
 **Migration** (*decided 2026-09-27*):
 - It **copies**. Each existing exploration becomes a Page card in an Area named after it, with its Page, answers, references, questions and sessions.
@@ -114,13 +114,13 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 
 **The Cockpit becomes Home, Work, Goals and Ops** (`⌘1`–`⌘4`; *decided 2026-09-27* that this restructure happens now, with D2 foundations). Library is gone: explorations go to Desk Areas and Drawers, ideas to the Ideas Drawer, and files to Manual (and later Workbench). Usage moves to Ops. **Home** is one reassuring sentence ("Everything's handled. Two agents working, one needs you."), the one or two things that need you (answerable there), what shipped, and one big door, **Back to your Desk**, showing your last card and your stopped-at line. You check the Cockpit and then leave it; the Desk is where you stay.
 
-**Devices** (*decided 2026-09-27*; 13 v6, second pass) get Cockpit and Carry, never Deep. This round:
+**Devices** (*decided 2026-09-27*; 13 v6, second pass) get Cockpit and Tether, never Deep. This round:
 - the idle-end push (§4);
 - Dirigible's key for the fourth quick reply, "Show me the diff";
 - Dirigible's In flight folds agents older than 2h;
 - Aeronaut's one-agent screen gets Check in, Rename, Accept and Assign;
 - "Snoozed · Undo" collapses on the phone;
-- Carry becomes your last Desk card and its stopped-at line;
+- Tether becomes your last Desk card and its stopped-at line;
 - `/carry/capture` spools offline instead of returning 503.
 
 ## 7. Still open
@@ -128,4 +128,4 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 - **The action row's vocabulary** (Capture vs Explore vs Keep), to settle after the current Deep round ships. The working proposal: drop Capture from the Page row; "New Page from this"; "Keep as reference".
 - **Workbook:** which languages (the project's Python, JS/TS, shell, SQL through the configured `sql:` connections)? Can its output become a Board card?
 - **Browser and Hester:** only watching (pages as context for Asks), or also acting (navigating, filling in forms) when asked?
-- **Devices:** a read-only view of the Desk on the phone or T-Deck, or Carry only? (This round is Carry only.)
+- **Devices:** a read-only view of the Desk on the phone or T-Deck, or Tether only? (This round is Tether only.)

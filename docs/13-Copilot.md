@@ -871,12 +871,12 @@ Ordered so the top-priority goals (G1, G4) move first, and so every phase is use
 6. **v5: Copilot mode**, as specified in §11.
    - *Parked 2026-09-26* by `14-Deep-Work.md`. Its deterministic jobs already run elsewhere: lint evaluates on a timer in Lee main (`lint-main.ts`), and Evaluate builds its evidence packet on demand (v4). What's left is local-model work while Lee is open and you're away, and 14 moves that thinking into the session (Ask, 14 §5.3), prepares the next session by deterministic assembly (14 §8), and makes **Close Lee** the default at the end of a session (14 §7). *2026-09-27:* the daemon stays a child of Lee main and stops when Lee closes, so v5 stays parked; 14 §5.3 and §8 supersede it.
 7. **v6: Anywhere, complete.** Aeronaut and Dirigible render the full Cockpit model (reply and capture already shipped in v0).
-   - *Sequenced after 14's D1 (2026-09-26):* D1 replaces device Focus with "In deep work" and adds "Captured away" (14 §3.2, §6), so device surfaces are built against the D1 attention model. Devices get a Cockpit and a **Carry** slice (stopped-at note, open questions, captures into an exploration, **Open next** replacing Dirigible's `f` focus toggle), never a Deep mode (14 §8.1). The Lee-main Feed stays in memory (v2 decision 24): its sources persist their own state, so the `.hester/cockpit/` feed log is not planned.
+   - *Sequenced after 14's D1 (2026-09-26):* D1 replaces device Focus with "In deep work" and adds "Captured away" (14 §3.2, §6), so device surfaces are built against the D1 attention model. Devices get a Cockpit and a **Tether** slice (stopped-at note, open questions, captures into an exploration, **Open next** replacing Dirigible's `f` focus toggle), never a Deep mode (14 §8.1). The Lee-main Feed stays in memory (v2 decision 24): its sources persist their own state, so the `.hester/cockpit/` feed log is not planned.
    - *Status 2026-09-27:* the second pass is package V of [`plans/2026-09-27-desk-foundation-contract.md`](plans/2026-09-27-desk-foundation-contract.md). It includes:
      - the idle-end push (Extend / End and rate / Capture);
      - Dirigible's "Show me the diff" key and In flight folding;
      - Aeronaut's one-agent Check in / Rename / Accept / Assign and "Snoozed · Undo";
-     - Carry as your last Desk card and its stopped-at line (`16-Desk.md`);
+     - Tether as your last Desk card and its stopped-at line (`16-Desk.md`);
      - `/carry/capture` spooling offline.
 8. **Later:** PR checks against goals.
 

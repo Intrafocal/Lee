@@ -304,7 +304,7 @@ Work lint lives in Ops as its own group (it was in Copilot).
 
 ## 8. The phone and the T-Deck (design only, 13 v6)
 
-This records the canvas's device row as the plan for 13's v6 device work. **Nothing here is built in this contract.** The same model runs on every surface: needs-you first, the agent's words, big actions, quick replies, tap to drill in, and Carry for your own thinking.
+This records the canvas's device row as the plan for 13's v6 device work. **Nothing here is built in this contract.** The same model runs on every surface: needs-you first, the agent's words, big actions, quick replies, tap to drill in, and Tether for your own thinking.
 
 ### 8.1 Aeronaut
 
@@ -314,16 +314,16 @@ This records the canvas's device row as the plan for 13's v6 device work. **Noth
   - In flight as grouped rows with the "doing now" sub-line.
   - Capture as the header's + button.
 - **One agent:** "It asked" as prose; the four quick replies as a 2×2 grid of 48px buttons; "Along the way"; a reply bar pinned to the bottom with a round phosphor Send.
-- **Library:** tabs **Carry** (first), Explorations and Ideas.
-  - Carry: "You stopped at" (Newsreader italic), open questions (Newsreader), `Btn next` "Capture a thought into this", "Open this first on the Mac" (14 §8.1 Open next), and "`n` things to read".
+- **Library:** tabs **Tether** (first), Explorations and Ideas.
+  - Tether: "You stopped at" (Newsreader italic), open questions (Newsreader), `Btn next` "Capture a thought into this", "Open this first on the Mac" (14 §8.1 Open next), and "`n` things to read".
 - **Fonts:** Newsreader is bundled by S (§1.2), ready for v6.
 
 ### 8.2 Dirigible (320×240, Montserrat only)
 
-- **Views:** **Work** (the waiting pager), **In flight**, **Library** (Carry), plus today's Tabs, Terminal, Hester and Files. Keys: `w` Work, `i` In flight, `l` Library; every key a plain letter.
+- **Views:** **Work** (the waiting pager), **In flight**, **Library** (Tether), plus today's Tabs, Terminal, Hester and Files. Keys: `w` Work, `i` In flight, `l` Library; every key a plain letter.
 - **Work pager:** one item per page, as now. Questions get the quick replies as letter buttons: **Go (G)**, **Wait (W)**, **Why (E)**, **Reply (R)**; approvals keep Approve (Y) and Deny (N).
 - **In flight:** a trackball list; press opens the agent; `c` checks in.
-- **Library (Carry):** one exploration per page (j/k): "You stopped at" in Montserrat italic, one open question, **Add a thought (C)** and **Open next (O)**. `O` replaces the old `f` Focus key (14 §8.1).
+- **Library (Tether):** one exploration per page (j/k): "You stopped at" in Montserrat italic, one open question, **Add a thought (C)** and **Open next (O)**. `O` replaces the old `f` Focus key (14 §8.1).
 - The 14 §8.1 idle-end push (Extend, End and rate, Capture) uses the same page layout.
 
 ## 9. Shared types and seams (S writes these first)
