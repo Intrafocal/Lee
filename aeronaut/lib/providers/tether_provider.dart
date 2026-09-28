@@ -14,7 +14,7 @@ import 'windows_provider.dart';
 /// client. Like every `*_api.dart`, it's constructed per call and disposed.
 final tetherApiFactoryProvider = Provider<TetherApi Function(Machine machine)>((ref) => (m) => TetherApi(machine: m));
 
-/// Where a Page opened from Work's Pick up goes: Review listens and opens
+/// Where a card (a Page or a Board) opened from Work's Pick up goes: Review listens and opens
 /// it on its own stack (docs/plans/2026-09-28-tether-review-voice.md §3.1).
 class PageRequest {
   final String cardId;

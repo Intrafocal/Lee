@@ -15,7 +15,7 @@ import '../widgets/machine_switcher.dart';
 import '../widgets/phosphor_icon.dart';
 import '../widgets/work_ui.dart';
 import 'files_screen.dart';
-import 'page_screen.dart';
+import 'board_screen.dart';
 
 /// Review's three views (docs/plans/2026-09-28-tether-review-voice.md §3.1).
 enum ReviewSection { desk, drawer, files }
@@ -41,9 +41,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     ref.listenManual<PageRequest?>(reviewPageRequestProvider, (_, request) {
       if (request == null) return;
       ref.read(reviewPageRequestProvider.notifier).state = null;
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => PageScreen(cardId: request.cardId, title: request.title)),
-      );
+      openDeskCard(context, request.cardId, request.title);
     });
   }
 
@@ -181,11 +179,7 @@ Future<TetherRead<T>> _withApi<T>(WidgetRef ref, Future<TetherRead<T>> Function(
   }
 }
 
-void _openPage(BuildContext context, TetherCard card) {
-  Navigator.of(context).push(
-    MaterialPageRoute<void>(builder: (_) => PageScreen(cardId: card.id, title: card.displayTitle)),
-  );
-}
+void _openPage(BuildContext context, TetherCard card) => openDeskCard(context, card.id, card.displayTitle);
 
 void _openArea(BuildContext context, TetherArea area, {bool stashed = false}) {
   Navigator.of(context).push(
@@ -266,7 +260,7 @@ class DrawerView extends StatelessWidget {
   }
 }
 
-/// An Area's Pages, newest first.
+/// An Area's cards (Pages and Boards), newest first.
 class AreaScreen extends StatelessWidget {
   final TetherArea area;
   final bool stashed;
@@ -292,7 +286,7 @@ class AreaScreen extends StatelessWidget {
               padding: EdgeInsets.fromLTRB(AeronautTheme.spacingMd, AeronautTheme.spacingMd, AeronautTheme.spacingMd, 0),
               child: QuietText('Stashed in the Drawer.'),
             ),
-          const Eyebrow('Pages'),
+          Eyebrow(cards.any((c) => c.isBoard) ? 'Cards' : 'Pages'),
           if (cards.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
@@ -314,8 +308,13 @@ class _AreaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final n = area.cards.length;
-    final line = [n == 1 ? '1 Page' : '$n Pages', if (subtitle != null) subtitle!].join(' · ');
+    final boards = area.cards.where((c) => c.isBoard).length;
+    final pages = area.cards.length - boards;
+    final line = [
+      if (pages > 0 || boards == 0) pages == 1 ? '1 Page' : '$pages Pages',
+      if (boards > 0) boards == 1 ? '1 Board' : '$boards Boards',
+      if (subtitle != null) subtitle!,
+    ].join(' · ');
     return ListTile(
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
@@ -347,8 +346,9 @@ class _CardRow extends StatelessWidget {
       key: ValueKey('card-${card.id}'),
       onTap: () => _openPage(context, card),
       contentPadding: const EdgeInsets.symmetric(horizontal: AeronautTheme.spacingMd),
-      leading: const PhosphorIcon(PhosphorIcons.document, size: 20, color: Phosphor.text2),
-      // A Page's title is your words.
+      // A Board wears Lee's Board glyph (the image one).
+      leading: PhosphorIcon(card.isBoard ? PhosphorIcons.image : PhosphorIcons.document, size: 20, color: Phosphor.text2),
+      // A card's title is your words.
       title: Text(card.displayTitle, style: writingStyle(size: 17)),
       subtitle: bits.isEmpty ? null : Text(bits.join(' · '), style: AeronautTheme.caption1.copyWith(color: Phosphor.text3)),
       trailing: const PhosphorIcon(PhosphorIcons.chevronRight, size: 16, color: Phosphor.text3),

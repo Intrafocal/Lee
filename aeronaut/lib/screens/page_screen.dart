@@ -130,13 +130,13 @@ class _PageBody extends ConsumerWidget {
             imageBuilder: (uri, title, alt) => _PageImage(cardId: card.id, src: uri.toString(), alt: alt),
           ),
         if (page.answers.isNotEmpty)
-          _Fold(
+          ReviewFold(
             key: const ValueKey('page-answers'),
             label: 'Answers',
             count: page.answers.length,
             children: [
               for (final a in page.answers)
-                _Entry(
+                ReviewEntry(
                   head: a.question,
                   headIsYours: true,
                   body: a.answer ?? (a.status.isEmpty ? 'No answer yet.' : a.status),
@@ -144,20 +144,20 @@ class _PageBody extends ConsumerWidget {
             ],
           ),
         if (page.handoffs.isNotEmpty)
-          _Fold(
+          ReviewFold(
             key: const ValueKey('page-handoffs'),
             label: 'Hand-offs',
             count: page.handoffs.length,
             children: [
               for (final h in page.handoffs)
-                _Entry(
+                ReviewEntry(
                   head: [h.kind, if (h.provider != null) h.provider!, h.status].where((s) => s.isNotEmpty).join(' · '),
                   body: h.result ?? 'No result yet.',
                 ),
             ],
           ),
         if (page.openQuestions.isNotEmpty)
-          _Fold(
+          ReviewFold(
             key: const ValueKey('page-questions'),
             label: 'Open questions',
             count: page.openQuestions.length,
@@ -170,13 +170,13 @@ class _PageBody extends ConsumerWidget {
             ],
           ),
         if (page.references.isNotEmpty)
-          _Fold(
+          ReviewFold(
             key: const ValueKey('page-references'),
             label: 'References',
             count: page.references.length,
             children: [
               for (final r in page.references)
-                _Entry(
+                ReviewEntry(
                   head: r.title.isEmpty ? (r.where ?? 'Reference') : r.title,
                   body: [if (r.where != null && r.title.isNotEmpty) r.where!, if (r.quote != null) '“${r.quote!}”'].join('\n'),
                 ),
@@ -256,13 +256,13 @@ class _PageImageState extends ConsumerState<_PageImage> {
   }
 }
 
-/// A collapsed group under the Page: "ANSWERS · 3".
-class _Fold extends StatelessWidget {
+/// A collapsed group under a Page or a Board: "ANSWERS · 3".
+class ReviewFold extends StatelessWidget {
   final String label;
   final int count;
   final List<Widget> children;
 
-  const _Fold({required this.label, required this.count, required this.children, super.key});
+  const ReviewFold({required this.label, required this.count, required this.children, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -284,14 +284,14 @@ class _Fold extends StatelessWidget {
   }
 }
 
-class _Entry extends StatelessWidget {
+class ReviewEntry extends StatelessWidget {
   final String head;
   final String body;
 
   /// The head is your words (a question you asked).
   final bool headIsYours;
 
-  const _Entry({required this.head, required this.body, this.headIsYours = false});
+  const ReviewEntry({required this.head, required this.body, this.headIsYours = false, super.key});
 
   @override
   Widget build(BuildContext context) {
