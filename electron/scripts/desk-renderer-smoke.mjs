@@ -203,8 +203,16 @@ await test('placement: at the click, inside the Area, nudged clear of cards and 
 // deskModel: tools (Cursor, Move, Draw)
 // ---------------------------------------------------------------------------
 
-await test('tools: V, M, D pick one; never with a modifier or while typing; Esc goes back to Cursor after closing things', () => {
-  assert.deepEqual(model.DESK_TOOLS.map((t) => [t.tool, t.key, t.icon]), [['cursor', 'V', 'pointer'], ['move', 'M', 'move'], ['draw', 'D', 'draw']]);
+await test('Rectangle: a drag outlines the Area whichever way it went; a click or a small drag grows to the smallest Area', () => {
+  assert.deepEqual(model.rectFromDrag({ x: 900, y: 700 }, { x: 100, y: 200 }), { x: 100, y: 200, w: 800, h: 500 });
+  assert.deepEqual(model.rectFromDrag({ x: 10.4, y: 20.6 }, { x: 10.4, y: 20.6 }), { x: 10, y: 21, ...model.MIN_DRAWN_AREA });
+  assert.deepEqual(model.rectFromDrag({ x: 0, y: 0 }, { x: 1000, y: 50 }), { x: 0, y: 0, w: 1000, h: model.MIN_DRAWN_AREA.h });
+});
+
+await test('tools: V, M, D, R pick one; never with a modifier or while typing; Esc goes back to Cursor after closing things', () => {
+  assert.deepEqual(model.DESK_TOOLS.map((t) => [t.tool, t.key, t.icon]), [['cursor', 'V', 'pointer'], ['move', 'M', 'move'], ['draw', 'D', 'draw'], ['area', 'R', 'area']]);
+  assert.equal(model.toolForKey({ key: 'r' }, false), 'area');
+  assert.equal(model.toolCursor('area', false), 'crosshair');
   assert.equal(model.toolForKey({ key: 'v' }, false), 'cursor');
   assert.equal(model.toolForKey({ key: 'M' }, false), 'move');
   assert.equal(model.toolForKey({ key: 'd' }, false), 'draw');

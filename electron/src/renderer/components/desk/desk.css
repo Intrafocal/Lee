@@ -550,30 +550,57 @@
 
 /* ---- tools: Cursor, Move, Draw ---- */
 
-/* A small floating bar at the bottom centre, above the Drawer strip. Quiet:
-   the current tool is a fill, never phosphor (there's no next step here). */
-.desk-tools {
-  position: absolute;
-  left: 50%;
-  bottom: var(--space-3);
-  z-index: 3;
-  transform: translateX(-50%);
+/* The taskbar (the Drawer strip): Drawer at the left, the tools and New in the
+   middle, the tool's hint at the right. Quiet: the current tool is a fill,
+   never phosphor (there's no next step here). */
+.desk-taskbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+}
+
+.desk-taskbar-mid {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 2px;
-  background: var(--ground-1);
-  border: 1px solid var(--ground-3);
-  border-radius: var(--radius-control);
 }
 
-.desk-tools .desk-tool {
+.desk-taskbar-right {
+  justify-self: end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-taskbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-2);
+  background: var(--ground-3);
+}
+
+.desk-taskbar .desk-tool {
   color: var(--text-3);
 }
 
-.desk-tools .desk-tool.is-current {
+.desk-taskbar .desk-tool.is-current {
   background: var(--ground-3);
   color: var(--text-1);
+}
+
+/* Rectangle: the Area being outlined, and the name field over its corner. */
+.desk-area-sketch {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--text-3);
+  border-radius: var(--radius-card);
+  pointer-events: none;
+}
+
+.desk-drawn-name {
+  position: absolute;
+  z-index: 4;
+  width: 220px;
+  background: var(--ground-1);
 }
 
 /* Move: cards and Area names grab; nothing opens or zooms from them. */

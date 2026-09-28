@@ -295,15 +295,16 @@ export function escapeStep(open: ReadonlySet<EscLayer> | readonly EscLayer[], zo
 }
 
 // ---------------------------------------------------------------------------
-// Tools: Cursor, Move, Draw
+// Tools: Cursor, Move, Draw, Rectangle
 // ---------------------------------------------------------------------------
 
-export type DeskTool = 'cursor' | 'move' | 'draw';
+export type DeskTool = 'cursor' | 'move' | 'draw' | 'area';
 
 export const DESK_TOOLS: ReadonlyArray<{ tool: DeskTool; key: string; label: string; icon: IconName }> = [
   { tool: 'cursor', key: 'V', label: 'Cursor', icon: 'pointer' },
   { tool: 'move', key: 'M', label: 'Move', icon: 'move' },
   { tool: 'draw', key: 'D', label: 'Draw', icon: 'draw' },
+  { tool: 'area', key: 'R', label: 'Rectangle: a new Area', icon: 'area' },
 ];
 
 export interface KeyLike {
@@ -314,7 +315,7 @@ export interface KeyLike {
   isComposing?: boolean;
 }
 
-/** V, M or D picks a tool; never with ⌘, ctrl or ⌥, and never while you type into something. */
+/** V, M, D or R picks a tool; never with ⌘, ctrl or ⌥, and never while you type into something. */
 export function toolForKey(e: KeyLike, typing: boolean): DeskTool | null {
   if (typing || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return null;
   const k = e.key.toLowerCase();
@@ -330,10 +331,25 @@ export function deskEscapeStep(open: ReadonlySet<EscLayer> | readonly EscLayer[]
   return tool !== 'cursor' ? { kind: 'tool', to: 'cursor' } : step;
 }
 
-/** The pointer's shape: grab (grabbing while dragging) in Move, a crosshair in Draw. */
+/** The pointer's shape: grab (grabbing while dragging) in Move, a crosshair in Draw and Rectangle. */
 export function toolCursor(tool: DeskTool, dragging: boolean): 'default' | 'grab' | 'grabbing' | 'crosshair' {
   if (tool === 'move') return dragging ? 'grabbing' : 'grab';
-  return tool === 'draw' ? 'crosshair' : 'default';
+  return tool === 'draw' || tool === 'area' ? 'crosshair' : 'default';
+}
+
+/** The smallest Area the Rectangle tool makes (Desk units): a drag smaller than this grows to it. */
+export const MIN_DRAWN_AREA = { w: 320, h: 220 } as const;
+
+/** Rectangle: the Area a drag from `a` to `b` (Desk points) outlines, whichever way it went, at least MIN_DRAWN_AREA. */
+export function rectFromDrag(a: Point, b: Point): DeskRect {
+  const x = Math.round(Math.min(a.x, b.x));
+  const y = Math.round(Math.min(a.y, b.y));
+  return {
+    x,
+    y,
+    w: Math.max(MIN_DRAWN_AREA.w, Math.round(Math.abs(b.x - a.x))),
+    h: Math.max(MIN_DRAWN_AREA.h, Math.round(Math.abs(b.y - a.y))),
+  };
 }
 
 /** Screen px a press may wander and still be a click. */

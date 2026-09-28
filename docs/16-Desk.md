@@ -30,8 +30,10 @@ That's where the vocabulary gets stuck: Capture, Explore and "Dive in" all read 
 - **Lines and arrangement mean nothing yet.** Hester doesn't place or connect anything, and never reads the lines you draw. Revisit when there's a reason.
 - **You arrange it yourself** (*added 2026-09-27*) with three tools in a small bar at the bottom of the Desk:
   - **Cursor** (`V`, the default): everything above, as before (click to preview and open, click an empty spot to start a Page, drag bare Desk to pan, right-click menus).
-  - **Move** (`M`): drag a Page card within its Area or into another, or drag an Area by its name strip and its cards and lines come with it. The pinned Goals card doesn't move.
+  - **Move** (`M`): drag a Page card within its Area or into another, or drag an Area from anywhere inside it (not on a card) and its cards and lines come with it. Bare Desk still pans. The pinned Goals card doesn't move.
+  - **Rectangle** (`R`): drag out a new Area (a click makes the smallest size), then name it; `Esc` or an empty name cancels.
   - **Draw** (`D`): freehand lines in one quiet colour, the same width at any zoom. A line started inside an Area belongs to it: it moves with the Area, is put away with it and is deleted with it. A line started on bare Desk belongs to the Desk.
+  - The tools live in the **taskbar** along the bottom, with the Drawer at its left (opening upward like a start menu) and New Area after the tools; the right end says what the current tool does.
   - In Cursor, click a line to select it; `Delete` (or its right-click menu) deletes it with no confirm, and `⌘Z` undoes the last draw or delete this session. `Esc` goes back to Cursor once nothing smaller is open. Positions and lines are kept by Hester (`desk.json`).
 - **Opening Deep** (*decided 2026-09-27*) lands you zoomed into your last card at the stopped-at line. One key (`Esc` from a zoomed card, once nothing smaller is open) takes you to the Desk overview.
 - **Drawers this round:** the **Ideas** Drawer (Someday, §6) and **Put away** (Areas). An Area's cards go with it.

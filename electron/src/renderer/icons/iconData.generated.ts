@@ -71,6 +71,7 @@ export const strokeIcons = {
   'pointer': 'M5 3l13 7.5-5.5 2-2.5 5.5zM12.5 12.5L18 18',
   'move': 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
   'draw': 'M3 17c3-6 5-8 7-6s-1 6 2 6 5-8 9-9',
+  'area': 'M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z',
 } as const;
 
 export type IconName = keyof typeof strokeIcons;

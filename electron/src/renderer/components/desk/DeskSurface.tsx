@@ -35,7 +35,7 @@
  */
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DeskArea, DeskCard, DeskStroke, DeskStrokeCreate } from '../../../shared/desk';
+import type { DeskArea, DeskCard, DeskRect, DeskStroke, DeskStrokeCreate } from '../../../shared/desk';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
@@ -79,8 +79,10 @@ import {
   movedEnough,
   panBy,
   placeNewCard,
+  rectFromDrag,
   putAwayAreas,
   screenToDesk,
+  deskToScreen,
   strokeFromDrag,
   strokePath,
   toolCursor,
@@ -112,8 +114,9 @@ const UNDO_MAX = 50;
 const STROKE_HIT_PX = 6;
 const TOOL_HINT: Record<DeskTool, string> = {
   cursor: 'Click an empty spot in an Area to start a Page',
-  move: 'Drag a card, or an Area by its name',
+  move: 'Drag a Page, or an Area from anywhere inside it',
   draw: 'Draw anywhere. Lines are yours; Hester doesn’t read them',
+  area: 'Drag out a new Area, then name it',
 };
 
 /** A press on the Desk, by what it started. */
@@ -121,7 +124,8 @@ type Gesture =
   | { kind: 'pan'; id: number; x: number; y: number; cam: Camera; moved: boolean }
   | { kind: 'card'; id: number; x: number; y: number; moved: boolean; card: DeskCard; from: DeskArea }
   | { kind: 'area'; id: number; x: number; y: number; moved: boolean; area: DeskArea }
-  | { kind: 'draw'; id: number; points: Point[]; last: Point };
+  | { kind: 'draw'; id: number; points: Point[]; last: Point }
+  | { kind: 'rect'; id: number; a: Point; b: Point };
 
 /** ⌘Z: the last line drawn goes; the last one deleted comes back. */
 type StrokeUndo = { kind: 'drew'; id: string } | { kind: 'deleted'; stroke: DeskStroke };
@@ -204,7 +208,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       setStrokeMenu(null);
       return;
     }
-    if (t.closest('.desk-tools, .desk-goals')) return;
+    if (t.closest('.desk-goals')) return;
     const capture = () => (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
     const base = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
     if (tool === 'draw') {
@@ -212,6 +216,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       drag.current = { kind: 'draw', id: e.pointerId, points: [p], last: { x: e.clientX, y: e.clientY } };
       setOwn(cam);
       setInk([p]);
+      return capture();
+    }
+    if (tool === 'area') {
+      if (t.closest('button, input, textarea, .desk-area-menu')) return;
+      const p = screenToDesk(cam, localPoint(e.clientX, e.clientY));
+      drag.current = { kind: 'rect', id: e.pointerId, a: p, b: p };
+      setOwn(cam);
+      setPendingArea(null);
       return capture();
     }
     if (tool === 'move' && desk) {
@@ -222,7 +234,8 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
         drag.current = { kind: 'card', ...base, card, from };
         return capture();
       }
-      const areaId = !t.closest('.desk-area-menu, input') ? (t.closest('.desk-area-head') as HTMLElement | null)?.dataset.areaId : undefined;
+      // An Area moves from anywhere inside it that isn't a card (a card moves itself).
+      const areaId = !t.closest('.desk-area-menu, input') ? (t.closest('.desk-area') as HTMLElement | null)?.dataset.areaId : undefined;
       const area = areaId ? onDesk.find((a) => a.id === areaId) : null;
       if (area) {
         drag.current = { kind: 'area', ...base, area };
@@ -246,6 +259,11 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     const d = drag.current;
     if (!d || d.id !== e.pointerId) return;
     const now = { x: e.clientX, y: e.clientY };
+    if (d.kind === 'rect') {
+      d.b = screenToDesk(cam, localPoint(now.x, now.y));
+      setSketch(rectFromDrag(d.a, d.b));
+      return;
+    }
     if (d.kind === 'draw') {
       if (Math.hypot(now.x - d.last.x, now.y - d.last.y) < STROKE_STEP_PX) return;
       d.last = now;
@@ -271,6 +289,12 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     drag.current = null;
     if (!d || d.id !== e.pointerId) return;
     const now = { x: e.clientX, y: e.clientY };
+    if (d.kind === 'rect') {
+      // A drag outlines the Area; a click places one of the smallest size there. Then it's named.
+      setSketch(null);
+      setPendingArea({ rect: rectFromDrag(d.a, screenToDesk(cam, localPoint(now.x, now.y))), name: '' });
+      return;
+    }
     if (d.kind === 'draw') {
       setInk(null);
       const body = strokeFromDrag(d.points, cam.scale, onDesk);
@@ -291,6 +315,21 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     drag.current = null;
     setLift(null);
     setInk(null);
+    setSketch(null);
+  };
+
+  // ---- Rectangle: outline an Area, then name it ----
+  const [sketch, setSketch] = useState<DeskRect | null>(null);
+  const [pendingArea, setPendingArea] = useState<{ rect: DeskRect; name: string } | null>(null);
+  const makeDrawnArea = async () => {
+    const p = pendingArea;
+    setPendingArea(null);
+    const name = (p?.name ?? '').trim();
+    if (!p || !name) return;
+    const r = await createArea(workspace, { name, ...p.rect });
+    if (!r.ok) return say(oldHester(r.status) ?? r.error);
+    pickTool('cursor');
+    await ctx?.refresh();
   };
 
   // ---- moving and drawing: shown at once, settled when Hester has it ----
@@ -631,28 +670,6 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             {woken.title}
           </button>
         )}
-        {status === 'ok' &&
-          zoom === 'overview' &&
-          (newArea != null ? (
-            <input
-              className="deep-title-input desk-new-area"
-              autoFocus
-              value={newArea}
-              placeholder="Name the Area"
-              aria-label="New Area name"
-              maxLength={120}
-              onChange={(e) => setNewArea(e.target.value)}
-              onBlur={() => void makeArea()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void makeArea();
-                }
-              }}
-            />
-          ) : (
-            <IconAction icon="plus" label="New Area" onClick={() => setNewArea('')} />
-          ))}
         <span className="deep-window-actions">
           <IconAction icon="minimize" label="Back to Cockpit" kbd="⇧⌘0" onClick={() => onHop('cockpit')} />
           <IconAction icon="close" label="End session…" onClick={() => cockpitModeStore.requestEndSession()} />
@@ -685,6 +702,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               return (
                 <section
                   key={area.id}
+                  data-area-id={area.id}
                   className={`desk-area${area.id === nav.area_id && zoom !== 'overview' ? ' is-current' : ''}${lifted || lifting ? ' is-lifted' : ''}${dropHere ? ' is-drop' : ''}`}
                   style={{ left: area.x, top: area.y, width: area.w, height: area.h, transform: lifted ? `translate(${lift.dx}px, ${lift.dy}px)` : undefined }}
                   aria-label={area.name}
@@ -792,6 +810,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             })}
 
             <StrokeLayer strokes={deskStrokes} scale={cam.scale} selected={selected} onMenu={strokeMenuAt} />
+            {(sketch ?? pendingArea?.rect) && (
+              <div className="desk-area-sketch" style={{ left: (sketch ?? pendingArea!.rect).x, top: (sketch ?? pendingArea!.rect).y, width: (sketch ?? pendingArea!.rect).w, height: (sketch ?? pendingArea!.rect).h }} aria-hidden="true" />
+            )}
             {ink && ink.length > 1 && (
               <svg className="desk-strokes" aria-hidden="true">
                 <path className="desk-stroke-line" d={strokePath(ink)} strokeWidth={2 / cam.scale} />
@@ -799,18 +820,32 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
             )}
           </div>
 
-          <div className="desk-tools" role="toolbar" aria-label="Desk tools">
-            {DESK_TOOLS.map((t) => (
-              <IconAction
-                key={t.tool}
-                icon={t.icon}
-                label={t.label}
-                kbd={t.key}
-                className={`desk-tool${tool === t.tool ? ' is-current' : ''}`}
-                onClick={() => pickTool(t.tool)}
-              />
-            ))}
-          </div>
+          {pendingArea && (
+            <input
+              className="deep-title-input desk-new-area desk-drawn-name"
+              autoFocus
+              value={pendingArea.name}
+              placeholder="Name the Area"
+              aria-label="New Area name"
+              maxLength={120}
+              style={(() => {
+                const at = deskToScreen(cam, { x: pendingArea.rect.x, y: pendingArea.rect.y });
+                return { left: Math.max(8, at.x), top: Math.max(8, at.y) };
+              })()}
+              onChange={(e) => setPendingArea({ ...pendingArea, name: e.target.value })}
+              onBlur={() => void makeDrawnArea()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void makeDrawnArea();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPendingArea(null);
+                }
+              }}
+            />
+          )}
 
           {strokeMenu && (
             <div className="deep-popover desk-card-menu" role="menu" style={{ left: strokeMenu.x, top: strokeMenu.y }}>
@@ -871,8 +906,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
         </div>
       )}
 
-      {desk && status !== 'old' && zoom === 'overview' && (
-        <footer className="desk-drawers">
+      {/* The taskbar: the Drawer at the left (opening upward), the tools and New docked in the middle. */}
+      {desk && status !== 'old' && (
+        <footer className="desk-drawers desk-taskbar">
           <span className="desk-drawer-anchor">
             <button className={`desk-drawer-btn${drawer ? ' is-open' : ''}`} onClick={() => setDrawer((d) => !d)} aria-expanded={drawer} aria-haspopup="menu">
               Drawer {counts.ideas + counts.putAway > 0 && <span className="deep-muted">{counts.ideas + counts.putAway}</span>}
@@ -923,8 +959,40 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
               </div>
             )}
           </span>
-          <span className="deep-spacer" />
-          <span className="deep-muted desk-hint">{TOOL_HINT[tool]}</span>
+          <span className="desk-taskbar-mid" role="toolbar" aria-label="Desk tools">
+            {DESK_TOOLS.map((t) => (
+              <IconAction
+                key={t.tool}
+                icon={t.icon}
+                label={t.label}
+                kbd={t.key}
+                className={`desk-tool${tool === t.tool ? ' is-current' : ''}`}
+                onClick={() => pickTool(t.tool)}
+              />
+            ))}
+            <span className="desk-taskbar-sep" aria-hidden="true" />
+            {newArea != null ? (
+              <input
+                className="deep-title-input desk-new-area"
+                autoFocus
+                value={newArea}
+                placeholder="Name the Area"
+                aria-label="New Area name"
+                maxLength={120}
+                onChange={(e) => setNewArea(e.target.value)}
+                onBlur={() => void makeArea()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void makeArea();
+                  }
+                }}
+              />
+            ) : (
+              <IconAction icon="plus" label="New Area" onClick={() => setNewArea('')} disabled={status !== 'ok'} />
+            )}
+          </span>
+          <span className="deep-muted desk-hint desk-taskbar-right">{TOOL_HINT[tool]}</span>
         </footer>
       )}
 
