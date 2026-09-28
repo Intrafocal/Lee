@@ -1688,9 +1688,9 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
             </div>
           )}
         </div>
+        {/* Back to Cockpit and End session live on the Desk; a Page only closes back to it. */}
         <span className="deep-window-actions">
-          <IconAction icon="minimize" label="Back to Cockpit" kbd="⇧⌘0" onClick={() => onHop('cockpit')} />
-          <IconAction icon="close" label="End session…" onClick={openSheet} />
+          <IconAction icon="close" label="Close" kbd="Esc" onClick={() => zoomOut('overview', 'click')} />
         </span>
       </header>
 
