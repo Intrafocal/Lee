@@ -1,6 +1,7 @@
 # Tether, Review and voice: plan and contract
 
 > **Status:** Plan, 2026-09-28. Built by one workflow in parallel packages (§1), so the seams below are exact.
+> **Built:** 2026-09-28, merged on `copilot-spec` (`6c7af14` and follow-ups): readback made one-shot per voice message (`0b853a4`), an iOS share extension (`cebc934`), image-only Send for tabs (`0bb1a35`), the T-Deck mic verified on a device and on by default (`c574649`: TDM, mics on slots 0 and 1). **Next phase:** Hester's voice (§8), planned, not built.
 > **Supersedes:** `hester/docs/Multimodal.md` (RFC) and `hester/docs/VoicePlan.md`. Every VoicePlan decision is carried into §5; the RFC's parts not built are listed in §5.8.
 > **Reads with:** `docs/16-Desk.md`, `docs/14-Deep-Work.md` §8.1 (Tether), `docs/13-Copilot.md` §15 (v6), and the Taxonomy Page on the Desk (`hester desk page taxonomy`).
 
@@ -287,6 +288,8 @@ Direct tab input streams each keystroke, which is slow and awkward for anything 
 
 ### 5.8 The RFC's parts not built (from Multimodal.md)
 
+*Server TTS and the T-Deck's speaker are now planned as the next phase: §8.*
+
 Kept for later, not this round: native `audio` in `ContextRequest` and the ReAct loop (audio + image fused in one question, tone); a `transcript` SSE event; server TTS (`POST /tts`, a pluggable engine: macOS `say` / AVFoundation, Kokoro or Piper locally, Gemini audio modality, cloud providers); `tts: true` on `/context/stream` with `spoken_summary` and `audio` events; spoken alerts (attention items, task completion) through Lee or headphones; a Lee dictation hotkey beyond the mic button; T-Deck speaker output. Open questions it raised stay open: whether audio is ever kept (the default here: never), and single clips vs streamed audio (clips here).
 
 ## 6. Checks
@@ -311,3 +314,34 @@ Nobody runs `dist:mac`, reinstalls Hester, flashes the T-Deck or installs Aerona
 - Images on Pages live with the card (`pages/<id>/assets/`) and go when it's deleted.
 - New idea ids use `idea_`; old `sd_` files are gone.
 - The T-Deck's Review key is `v`.
+
+## 8. Next phase: Hester's voice (TTS)
+
+*Planned 2026-09-28, not built.* Readback today is the phone's own iOS voice (§5.5), and the T-Deck's speaker is unused: its amp has its own I2S pins the firmware never opens. An ESP32 can't produce a good voice on its own, so the T-Deck needs Hester to make the audio. This phase adds that, and gives Hester one voice every device can use.
+
+### 8.1 Hester: `POST /voice/speak` (H)
+
+- `POST /voice/speak` `{text, purpose?: 'answer' | 'item'}` → `audio/wav` (16-bit mono PCM at the model's rate, e.g. 24 kHz), streamed as it arrives so a device can start playing before the whole clip exists.
+- **Gemini's text-to-speech model**, through the same `genai` client and key as transcription (`hester/daemon/voice/providers/gemini.py`). A prebuilt voice, **Kore** by default (firm, no-nonsense, Hester's persona), set in config.
+- **Spoken, not read:** the server cleans text for speech with the rules Aeronaut's `speech_sanitizer.dart` already has (a code fence becomes "a 12-line TypeScript snippet", a table "a table with N rows", links their text, a bare URL "a link to \<host\>", paths their basenames, camelCase and snake_case split, markdown stripped, cut at a sentence around 600 chars ending "More on screen."), ported to Python with the same test vectors, so every device says the same thing.
+- **Config:** `hester.voice.tts: {enabled: false, provider: gemini, model, voice: Kore, max_chars: 600}`; off unless enabled. `GET /voice` reports `tts: {available, voice}` so clients show readback only when it can work.
+- **Logged** like every model call (`model.call`, `trigger=user`: it only runs after you spoke) plus a text-free `voice.speak` event `{purpose, chars, audio_ms, latency_ms, ok}`. Audio and text are never stored.
+- **Cost:** one more Gemini call per spoken reply, and about 1-3 s before the speaker starts.
+
+### 8.2 T-Deck: readback on the speaker (D)
+
+- **Speaker driver** in `tdeck-bsp` (`tdeck_speaker.cpp`): the MAX98357A amp on I2S port 0, pins from LilyGO's `utilities.h` (likely BCK 7, WS 5, DOUT 6), **verified on a device with the user** the way the mic was (§5.6: log what the driver sees, listen, adjust).
+- **Streaming playback:** the WAV comes from `POST /voice/speak` in chunks straight to I2S (a small ring buffer in PSRAM), so a long answer needn't fit in memory first; the volume is set in software.
+- **The same rule as the phone:** a spoken question gets its **next reply** read, once (Hester's answer; an agent's next item after a spoken reply to it); typing disarms it; starting to record stops playback; a key stops it (the agent picks a plain letter free on those screens). Foreground only in the sense that it never speaks while the screen is asleep.
+- Behind `CONFIG_DIRIGIBLE_SPEAKER` (default off until checked on a device, then on).
+
+### 8.3 Aeronaut (A)
+
+- Keeps iOS's own voice by default (the one chosen in Spoken Content), with an option **Hester's voice** that plays `POST /voice/speak` instead, so the phone and the T-Deck can sound the same.
+
+### 8.4 Checks and risks
+
+- Hester: pytest with a fake TTS provider (the route, streaming, the sanitizer vectors, 503 when off, the events carry no text).
+- T-Deck: a host test for the WAV stream parser; on the device, the first check is a test tone, then a short phrase.
+- Risks: Gemini TTS latency and a preview model changing; the T-Deck amp's power draw on battery; mic and speaker sharing I2S resources (they're on different ports, 1 and 0).
+
