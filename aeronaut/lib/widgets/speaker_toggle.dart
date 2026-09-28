@@ -21,7 +21,7 @@ class SpeakerToggle extends ConsumerWidget {
     if (!on && !available) return const SizedBox.shrink();
     return IconButton(
       key: const ValueKey('speak-replies'),
-      tooltip: on ? 'Speak replies: on' : 'Speak replies: off',
+      tooltip: on ? 'Speak replies: every Hester answer' : 'Speak replies: off (a voice message still gets its reply read)',
       icon: PhosphorIcon(on ? PhosphorIcons.speaker : PendingIcons.speakerOff, size: 20, color: on ? Phosphor.text1 : Phosphor.text3),
       onPressed: () => ref.read(speechProvider.notifier).setEnabled(!on),
     );

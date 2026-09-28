@@ -489,11 +489,12 @@ class _AttentionTileState extends ConsumerState<AttentionTile> {
     final item = widget.item;
     final voice = _replyVoice;
     _replyVoice = false;
+    // A spoken reply gets this agent's next item read to you, once; a typed one doesn't.
+    final speech = ref.read(speechProvider.notifier);
     if (voice) {
-      // Readback comes on, and this agent's next items are read to you.
-      final speech = ref.read(speechProvider.notifier);
-      speech.autoEnableFromVoice();
       speech.noteVoiceReply(item.source.ptyId);
+    } else {
+      speech.noteTypedReply(item.source.ptyId);
     }
     _run(() => ref
         .read(attentionProvider.notifier)

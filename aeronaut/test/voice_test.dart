@@ -321,7 +321,7 @@ void main() {
       expect(readbackLine(item), 'Claude, in api: Tests pass. I changed foo bar.dart. See a link to github.com.');
     });
 
-    test('only agents you replied to by voice, only with the toggle on, only in front', () async {
+    test('a spoken reply gets the next item read once; typing never arms it; only in front', () async {
       final speaker = _FakeSpeaker();
       var front = true;
       final container = ProviderContainer(overrides: [
@@ -338,20 +338,52 @@ void main() {
             'actions': ['reply'],
           });
 
-      speech.noteVoiceReply(3);
       speech.readAttentionItem(item(3));
-      expect(speaker.said, isEmpty, reason: 'toggle off');
-
-      speech.autoEnableFromVoice();
-      await Future<void>.delayed(Duration.zero);
+      expect(speaker.said, isEmpty, reason: 'no spoken reply yet');
+      speech.noteVoiceReply(3);
       speech.readAttentionItem(item(4));
-      expect(speaker.said, isEmpty, reason: 'not replied to by voice');
+      expect(speaker.said, isEmpty, reason: 'a different agent');
       speech.readAttentionItem(item(3));
       expect(speaker.said, ['Claude: Done.']);
+      speech.readAttentionItem(item(3));
+      expect(speaker.said.length, 1, reason: 'once: only the first reply after the voice message');
 
+      speech.noteVoiceReply(3);
+      speech.noteTypedReply(3);
+      speech.readAttentionItem(item(3));
+      expect(speaker.said.length, 1, reason: 'a typed reply disarms it');
+
+      speech.noteVoiceReply(3);
       front = false;
       speech.readAttentionItem(item(3));
       expect(speaker.said.length, 1, reason: 'never from the background');
+    });
+
+    test("Hester: a spoken question's answer is read once; the switch reads every answer and never turns itself on", () async {
+      final speaker = _FakeSpeaker();
+      final container = ProviderContainer(overrides: [
+        speakerFactoryProvider.overrideWithValue(() => speaker),
+        isForegroundProvider.overrideWithValue(() => true),
+      ]);
+      addTearDown(container.dispose);
+      final speech = container.read(speechProvider.notifier);
+
+      speech.readHesterAnswer('Typed question, typed answer.');
+      expect(speaker.said, isEmpty);
+      speech.armHesterAnswer();
+      speech.readHesterAnswer('First answer.');
+      speech.readHesterAnswer('Second answer.');
+      expect(speaker.said, ['First answer.'], reason: 'only the first reply after the voice message');
+      expect(container.read(speechProvider).enabled, isFalse, reason: 'the switch never turns itself on');
+
+      speech.armHesterAnswer();
+      speech.noteTypedQuestion();
+      speech.readHesterAnswer('After a typed follow-up.');
+      expect(speaker.said.length, 1, reason: 'a typed question disarms it');
+
+      await speech.setEnabled(true);
+      speech.readHesterAnswer('Always.');
+      expect(speaker.said.last, 'Always.');
     });
   });
 }

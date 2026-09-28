@@ -47,7 +47,12 @@ class _HesterScreenState extends ConsumerState<HesterScreen> {
     final text = _inputController.text;
     if (text.trim().isEmpty) return;
     _inputController.clear();
-    if (_voice) ref.read(speechProvider.notifier).autoEnableFromVoice();
+    final speech = ref.read(speechProvider.notifier);
+    if (_voice) {
+      speech.armHesterAnswer();
+    } else {
+      speech.noteTypedQuestion();
+    }
     _voice = false;
     ref.read(hesterChatProvider.notifier).sendMessage(text);
     // Scroll to bottom after message is added

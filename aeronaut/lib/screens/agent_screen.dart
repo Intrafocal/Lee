@@ -148,10 +148,11 @@ class _AgentScreenState extends ConsumerState<AgentScreen> {
     _replyController.clear();
     final voice = _replyVoice;
     _replyVoice = false;
+    final speech = ref.read(speechProvider.notifier);
     if (voice) {
-      final speech = ref.read(speechProvider.notifier);
-      speech.autoEnableFromVoice();
       speech.noteVoiceReply(item.source.ptyId);
+    } else {
+      speech.noteTypedReply(item.source.ptyId);
     }
     unawaited(_run(
       () => ref

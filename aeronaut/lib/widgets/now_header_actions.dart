@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/voice.dart';
 import '../providers/attention_provider.dart';
-import '../providers/speech_provider.dart';
 import '../providers/windows_provider.dart';
 import '../screens/review_screen.dart' show ReviewSection, reviewSectionProvider;
 import '../screens/root_shell.dart' show RootTab, rootTabProvider;
@@ -199,7 +198,6 @@ class _CaptureSheetState extends ConsumerState<CaptureSheet> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (result.success) {
-      if (voice) ref.read(speechProvider.notifier).autoEnableFromVoice();
       navigator.pop();
       messenger.showSnackBar(
         SnackBar(content: Text(result.spooled ? 'Saved; will sync when Hester is back' : 'Captured')),

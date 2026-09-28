@@ -190,11 +190,14 @@ class ComposerState extends ConsumerState<Composer> {
       _voice = false;
     });
     _controller.clear();
-    if (usedVoice) {
+    final to = result.deliveredTo ?? widget.target;
+    if (submit && to?.kind == SendTargetKind.tab) {
       final speech = ref.read(speechProvider.notifier);
-      speech.autoEnableFromVoice();
-      final to = result.deliveredTo ?? widget.target;
-      if (submit && to?.kind == SendTargetKind.tab) speech.noteVoiceReply(to!.ptyId);
+      if (usedVoice) {
+        speech.noteVoiceReply(to!.ptyId);
+      } else {
+        speech.noteTypedReply(to!.ptyId);
+      }
     }
     widget.onSent?.call(result, message);
   }
