@@ -55,7 +55,7 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 | Card | What it is | Notes |
 |---|---|---|
 | **Page** | Writing: requirements, reasoning, the blank page | Today's Page, with its Asks, hand-offs, references, open questions and margin marks. A Page owns its answers and hand-offs |
-| **Board** | Figma-like: explore and mark up visual information (renders, screenshots, mockups, text boxes) | 14 §4.2 and §9 carry over |
+| **Board** | Thinking visually: screenshots, images, renders and mockups, marked up | §3.1 (*decided 2026-09-28*); 14 §9's renders feed it later |
 | **Browser** | Research, testing web apps: a browser inside the Lee window | The point is to keep you from alt-tabbing out of Lee, since Hester loses context outside it. Hester's existing CDP control applies |
 | **Workbench** | Writing code and managing config: a lightweight IDE (VS Code / JetBrains-inspired) | 14 §4.4's vision |
 | **Workbook** | Jupyter-like: cells of code, output and notes | New; separate from Workbench |
@@ -64,6 +64,28 @@ Every card has a **hover preview** (read-only) and a **zoom to full screen** but
 **Starting something:** on an empty part of an Area, typing starts a Page, pasting an image starts a Board, and choosing a file starts a Workbench (from the origin notes). While Page is the only kind (D2 foundations), typing always starts a Page.
 
 **Hand-off results** (*decided 2026-09-27*) stay in the Page's margin and in Work for now, not as separate cards. A hand-off's origin is `page#answer`; old `exp#answer` refs are still accepted.
+
+### 3.1 Board
+
+*Decided 2026-09-28* (the Boards Page in the Desk Items Area, pg-fd4ee522; replaces 14 §4.2). Build plan: [`plans/2026-09-28-boards.md`](plans/2026-09-28-boards.md).
+
+A Board is where the Operator thinks visually: a canvas of screenshots, images, renders and mockups, marked up with annotations, highlights and drawing. It holds what words handle badly: comparing layouts, circling what's wrong in a render, gathering visual references.
+
+- **Items on a Board:**
+  - **Images**: pasted, dropped, chosen from a file, or sent from a device (Send to Lee with a Board focused).
+  - **Annotations**: a text box, standalone or **pinned** to a point on an image or highlight, with a leader line to the pin.
+  - **Highlights**: a selected region of an image, shown as a quiet translucent box. A highlight can carry annotations.
+  - **Freehand drawing**: the Desk's Draw, one quiet colour at a fixed width.
+  - **Ask cards** and **hand-off cards** (below).
+  - **Links** to Pages.
+- **Asks and hand-offs are their own cards on the Board**, not a margin. Asking about a selection drops a **sticky note** beside it, with a thin leader to what was selected; it shows the question, and clicking it expands it to the answer (and a follow-up field). A hand-off drops a **clipboard** that shows its kind and state, and expands to the result. Like a Page's, they're `answers.jsonl` rows that belong to the Board; the card on the canvas is where they sit.
+- **What a selection sends:** Lee flattens the selection (the images with their markup) into one PNG kept in the Board's assets, and sends it with the text of the selected annotations. An Ask on a Board needs a model that reads images; a hand-off gets the image's path (Claude Code reads image paths).
+- **Every asset has an optional `source`**: where it came from, pointing at another Desk item (a Browser's screenshot, a Workbench's output, a hand-off's result) or a file or URL, with when it was taken. Page images get the same field. It's what "refresh from source" (the snapshot-references spec) will use; this round only records it.
+- **Links, not embeds.** A Page can't embed a Board, but it can link one with `[[`, and a Board can link Pages (a link item, or `[[` in an annotation). The `[[` picker lists Desk cards as well as files; clicking a link opens the card.
+- **Starting one:** "New Board here" in an Area's menu, or pasting an image on an empty part of an Area.
+- **On the Desk** a Board card's hover preview is a picture of the Board, which Lee saves (`preview.png`) as you work. The phone's Review shows the same picture; the T-Deck stays Pages only.
+- **Hester stores it; Lee draws it.** The canvas is Lee's own, built on the Desk surface's camera and tools, not tldraw or Excalidraw: the vocabulary is small, it should look like the Desk, tldraw needs a paid licence, and Excalidraw's look, size and remote fonts fit Lee's CSP and style badly. Revisit Excalidraw if Boards ever need shapes and connectors.
+- **Later:** the **Visualize** hand-off (an agent makes a diagram, mockup or render, and it lands on the Board as an image whose source is the hand-off); Renders (14 §9); refreshing assets from their source.
 
 ## 4. Sessions
 
