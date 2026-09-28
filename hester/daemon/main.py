@@ -55,6 +55,7 @@ from .copilot.model_log import install_model_call_logging, reset_trigger, set_tr
 from .copilot.routes import create_copilot_router
 from .workspaces.registry import WorkspaceError, get_registry, init_registry, run_sync_loop, validate_workspace
 from .workspaces.routes import create_workspaces_router
+from .voice.routes import create_voice_router
 
 # Optional imports for knowledge management (graceful degradation if unavailable)
 try:
@@ -813,6 +814,10 @@ configure_explore_sessions(lambda: getattr(app_state, "session_manager", None))
 # Steward endpoints (copilot v4) answer through the daemon's agent.
 configure_steward_agent(lambda: getattr(app_state, "agent", None))
 app.include_router(create_workspaces_router())
+# Voice (Tether plan §5.2): transcription for the mic in Lee, Aeronaut and the T-Deck; the hint reads Lee's live context.
+app.include_router(create_voice_router(
+    lambda: getattr(getattr(app_state, "lee_client", None), "context", None),
+))
 
 
 def _current_ws_store():

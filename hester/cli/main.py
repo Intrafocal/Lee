@@ -74,6 +74,7 @@ def _register_commands():
     from .slack import slack
     from .ideas import ideas
     from .desk import desk
+    from .voice import voice
     from .goals import goals
     from .brief import brief
     from .docs import docs
@@ -95,6 +96,7 @@ def _register_commands():
     cli.add_command(slack)
     cli.add_command(ideas)
     cli.add_command(desk)
+    cli.add_command(voice)
     cli.add_command(goals)
     cli.add_command(brief)
     cli.add_command(docs)

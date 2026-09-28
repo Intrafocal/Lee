@@ -46,6 +46,8 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
 ]
+# Local voice transcription (hester.voice.provider: whisper); then `hester voice setup`.
+voice-local = ["faster-whisper>=1.1"]
 
 [project.scripts]
 hester = "hester.cli:main"
