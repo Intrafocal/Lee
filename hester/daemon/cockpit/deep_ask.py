@@ -9,6 +9,12 @@ proposals and no steer. The answer lands in ``answers.jsonl``; Lee hears about
 it through the ingested ``deep.answer`` event and nothing else happens: no
 notification, no toast, no attention item.
 
+An Ask on a Board (a ``bd-`` card) is the exception to the routing: it sends
+the selection Lee flattened (the anchor's snapshot PNG) with the annotations
+in it straight to Gemini, which reads images, with the voice package's key
+and model. It never goes to a local model; with no Gemini key it ends in
+``error`` saying so.
+
 C2: a run only ever starts from a user action (Ask, Follow up or Retry in the
 renderer). The trigger captured from that request is re-entered in the task,
 so logged model calls carry ``trigger {kind: 'user', surface: 'deep-ask'}``.
@@ -23,11 +29,11 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Set
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from ..copilot import lee_events, model_log
 from . import deep, steward
-from .explorations import ExplorationStore, _clip, utc_now
+from .explorations import ExplorationError, ExplorationStore, _clip, utc_now
 from .tasks import iso_s
 
 logger = logging.getLogger("hester.daemon.cockpit.deep_ask")
@@ -165,6 +171,113 @@ def context_for(store: ExplorationStore, exp_id: str, answer: Dict[str, Any]) ->
 
 
 # ---------------------------------------------------------------------------
+# Asks on a Board (plan docs/plans/2026-09-28-boards.md §3): the selection as an image
+# ---------------------------------------------------------------------------
+
+BOARD_INSTRUCTION = (
+    "You're answering a question the user asked about part of their Board, a canvas of images they mark up "
+    "while thinking. The image is what they selected: the images with their highlights and drawing. Answer "
+    "the question directly and concisely, in markdown. Don't offer to do more, don't ask questions back, and "
+    "don't propose actions."
+)
+BOARD_TIMEOUT_S = 120
+NO_GEMINI = (
+    "Asks on a Board need Gemini, which reads images: set hester.google_api_key in ~/.lee/config.yaml "
+    "or export GOOGLE_API_KEY"
+)
+
+
+class BoardAskError(Exception):
+    """A Board Ask that can't run; the message is the answer's error."""
+
+
+def build_board_prompt(
+    card: Dict[str, Any],
+    answer: Dict[str, Any],
+    all_notes: List[str],
+    follow_up: Optional[Dict[str, Any]] = None,
+    cap: int = CONTEXT_CAP,
+) -> str:
+    """
+    The instruction; the Board's title; the annotations in the selection (every
+    annotation on the Board when the Ask has no selection); the followed-up
+    question and answer; then the question. The image goes beside it.
+    """
+    anchor = answer.get("anchor") or {"kind": "none"}
+    parts = [BOARD_INSTRUCTION, f"### Board\n\nTitle: {card.get('title') or ''}"]
+    if anchor.get("kind") == "board":
+        notes = [n for n in anchor.get("notes") or [] if isinstance(n, str) and n.strip()]
+        if notes:
+            parts.append("### The annotations in the selection\n\n" + "\n".join(f"- {' '.join(n.split())}" for n in notes))
+    elif all_notes:
+        parts.append("### The Board's annotations (nothing was selected; there's no image)\n\n"
+                     + "\n".join(f"- {' '.join(n.split())}" for n in all_notes))
+    if follow_up:
+        parts.append(
+            "### This follows up an earlier question\n\n"
+            f"Question: {follow_up.get('question') or ''}\n\nAnswer: {follow_up.get('answer') or '(none)'}"
+        )
+    parts.append(f"### The question\n\n{answer.get('question') or ''}")
+    text = "\n\n".join(parts)
+    return text if len(text) <= cap else text[: cap - 1] + "…"
+
+
+def board_prompt_for(store, card_id: str, answer: Dict[str, Any]) -> Tuple[str, Optional[bytes]]:
+    """(the prompt, the selection's PNG or None) for a Board Ask."""
+    from .board import note_texts
+
+    card = store.require(card_id)
+    follow = deep.get_answer(store, card_id, answer["follow_up_of"]) if answer.get("follow_up_of") else None
+    anchor = answer.get("anchor") or {}
+    image = None
+    if anchor.get("kind") == "board":
+        try:
+            image = store.snapshot_path(card_id, anchor.get("snapshot")).read_bytes()
+        except (OSError, ExplorationError):
+            raise BoardAskError("the selection's image is gone; ask again from the Board")
+    return build_board_prompt(card, answer, note_texts(store.items(card_id)), follow), image
+
+
+def _gemini_client(api_key: str):
+    from google import genai
+
+    return genai.Client(api_key=api_key)
+
+
+async def ask_with_image(workspace: Path, prompt: str, image: Optional[bytes]) -> Tuple[str, str]:
+    """
+    One Gemini call with the image as a part: the voice package's key and
+    Gemini model (``hester.google_api_key``, ``hester.voice.gemini_model``).
+    Never a local model. The daemon's class-level wrap logs it as a
+    ``model.call`` with the job's trigger. Returns (answer, model).
+    """
+    from ..voice.config import google_api_key, load_voice_config
+
+    key = google_api_key(workspace)
+    if not key:
+        raise BoardAskError(NO_GEMINI)
+    model = load_voice_config(workspace).gemini_model
+    contents: List[Any] = [prompt]
+    if image is not None:
+        from google.genai import types
+
+        contents.append(types.Part.from_bytes(data=image, mime_type="image/png"))
+    client = _gemini_client(key)
+    try:
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(model=model, contents=contents), BOARD_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise BoardAskError("Gemini took too long; try again")
+    except Exception as e:
+        raise BoardAskError(f"Gemini couldn't answer ({type(e).__name__}); try again")
+    text = getattr(response, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        raise BoardAskError("Gemini gave an empty answer; try again")
+    return text, model
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -209,9 +322,12 @@ class DeepAskRunner:
         if (key, which) in self._recovered:
             return 0
         self._recovered.add((key, which))
-        store = ctx.desk().pages if which == "desk" else ctx.explorations()
+        stores = [ctx.desk().pages, ctx.desk().boards] if which == "desk" else [ctx.explorations()]
+        keep = set(self._tracked.get(key, ()))
+        n = 0
         async with ctx.lock:
-            n = await asyncio.to_thread(deep.interrupt_pending, store, set(self._tracked.get(key, ())))
+            for store in stores:
+                n += await asyncio.to_thread(deep.interrupt_pending, store, keep)
         if n:
             logger.info(f"deep-ask: marked {n} unfinished answer(s) interrupted in {key} ({which})")
         return n
@@ -252,25 +368,42 @@ class DeepAskRunner:
 
 
 async def run_job(job: Job) -> Optional[Dict[str, Any]]:
-    from .desk import is_page_id, store_for
+    from .desk import is_board_id, is_card_id, store_for
 
     ctx, exp_id, aid = job.ctx, job.exp_id, job.answer_id
     store = store_for(ctx, exp_id)
+    board = is_board_id(exp_id)  # a Board's Ask goes to Gemini with the selection's image
+    image: Optional[bytes] = None
+    prep_error: Optional[str] = None
     async with ctx.lock:
         answer = await asyncio.to_thread(deep.update_answer, store, exp_id, aid, {"status": "running"})
         if answer is None:
             return None
-        context = await asyncio.to_thread(context_for, store, exp_id, answer)
-    steward_context = INSTRUCTION + "\n\n" + context
+        if board:
+            try:
+                context, image = await asyncio.to_thread(board_prompt_for, store, exp_id, answer)
+            except BoardAskError as e:
+                context, prep_error = "", str(e)
+        else:
+            context = await asyncio.to_thread(context_for, store, exp_id, answer)
     token = model_log.current_trigger.set(dict(job.trigger) if job.trigger else {"kind": "unknown", "surface": SURFACE})
     fields: Dict[str, Any]
     try:
+        if prep_error:
+            raise BoardAskError(prep_error)
+        model_name = None
         with model_log.collect_calls() as calls:
-            text = await steward.call_model(Path(ctx.path), SURFACE, answer["question"], steward_context, steward.new_request_id())
+            if board:
+                text, model_name = await ask_with_image(Path(ctx.path), context, image)
+            else:
+                steward_context = INSTRUCTION + "\n\n" + context
+                text = await steward.call_model(Path(ctx.path), SURFACE, answer["question"], steward_context, steward.new_request_id())
         fields = {"status": "done", "answer": text.strip(), "answered_at": iso_s(utc_now()), "error": None}
         last = next((c for c in reversed(calls) if c.get("ok")), calls[-1] if calls else None)
         if last is not None:
             fields["model"] = {"location": "local" if last.get("location") == "local" else "cloud", "name": last.get("name") or ""}
+        elif model_name:
+            fields["model"] = {"location": "cloud", "name": model_name}
     except Exception as e:
         logger.warning(f"deep-ask {aid} in {exp_id}: {e}")
         fields = {"status": "error", "error": _clip(str(e) or type(e).__name__, deep.MAX_ERROR)}
@@ -280,7 +413,7 @@ async def run_job(job: Job) -> Optional[Dict[str, Any]]:
         answer = await asyncio.to_thread(deep.update_answer, store, exp_id, aid, fields)
     try:
         data = {"workspace": str(ctx.path), "exploration_id": exp_id, "answer_id": aid, "status": fields["status"]}
-        if is_page_id(exp_id):
+        if is_card_id(exp_id):
             data["card_id"] = exp_id  # Desk D2 §5.3: both, so a Lee main from before the Desk still forwards it
         lee_events.ingest("deep.answer", data, workspace=str(ctx.path), actor={"kind": "hester"})
     except Exception as e:  # never fail a run over telemetry

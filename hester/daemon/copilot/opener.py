@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..cockpit import deep
-from ..cockpit.desk import DeskStore, is_page_id, page_id_for_exploration
+from ..cockpit.desk import DeskStore, is_card_id, page_id_for_exploration
 from ..cockpit.goal_status import QUIET_DAYS
 from .digest import q2_candidates_safe
 from .event_reader import iso, parse_ts, read_events
@@ -103,10 +103,10 @@ def session_cards(desk: DeskStore, items: List[Any]) -> List[str]:
     """The session's card ids in first-touched order (exploration refs through the migration); unknown ones dropped."""
     out: List[str] = []
     for kind, ref in items:
-        card = ref if kind == "card" and is_page_id(ref) else None
+        card = ref if kind == "card" and is_card_id(ref) else None
         if kind == "exploration":
             card = desk.card_for_exploration(ref) or page_id_for_exploration(ref)
-        if card and card not in out and desk.pages.exists(card):
+        if card and card not in out and desk.card_exists(card):
             out.append(card)
     return out
 
@@ -199,7 +199,7 @@ def build_opener(
 
     questions = []
     for card in cards:
-        for q in deep.list_questions(desk.pages, card["id"]):
+        for q in deep.list_questions(desk.store(card["id"]), card["id"]):
             if q.get("status") == "open":
                 questions.append({
                     "card_id": card["id"], "card_title": card["title"],
@@ -224,7 +224,7 @@ def build_opener(
 
     reading = []
     for card in cards:
-        for r in deep.list_references(desk.pages, card["id"]):
+        for r in deep.list_references(desk.store(card["id"]), card["id"]):
             if r.get("kind") == "link" and not r.get("opened_at") and r.get("url"):
                 reading.append({"card_id": card["id"], "exploration_id": card["id"], "reference_id": r["id"],
                                 "title": r.get("title") or r["url"], "url": r["url"], "_at": str(r.get("at") or "")})

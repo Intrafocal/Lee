@@ -10,6 +10,11 @@ Every route runs the migration first when it's due (``DeskStore.load``).
 
 A Page card's records use deep.py's functions (the rules a pre-Desk
 exploration's Page had) on the card's store, so the Page's rules hold exactly. Nothing here deletes a card with content or an Area with cards.
+
+A Board card (``/desk/boards/…``, board.py; plan docs/plans/2026-09-28-boards.md
+§3) has its own document (``board.json``, 409 ``version_conflict`` with the
+current items), assets with their source, a preview, and the Page's answer
+routes over its own store.
 """
 
 import asyncio
@@ -19,7 +24,16 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import deep, deep_ask, handoffs
-from .desk import DEFAULT_SESSIONS, MAX_ASSET_BYTES, MAX_SESSIONS, AssetTypeError, DeskConflict
+from .board import BoardConflict
+from .desk import (
+    DEFAULT_SESSIONS,
+    MAX_ASSET_BYTES,
+    MAX_SESSIONS,
+    AssetTypeError,
+    DeskConflict,
+    is_board_id,
+    parse_asset_source,
+)
 from .explorations import ExplorationError, ExplorationNotFound
 from .tasks import TaskError, TaskNotFound
 
@@ -46,6 +60,9 @@ def create_desk_router() -> APIRouter:
             return _err(e.code, 409)
         except deep.PageConflict as e:
             conflict = {"error": "version_conflict", "version": e.version, "text": e.text}
+            return JSONResponse(status_code=409, content={"success": False, **conflict, "data": conflict})
+        except BoardConflict as e:
+            conflict = {"error": "version_conflict", "version": e.version, "items": e.items}
             return JSONResponse(status_code=409, content={"success": False, **conflict, "data": conflict})
         except (ExplorationError, TaskError) as e:
             return _err(str(e))
@@ -162,9 +179,8 @@ def create_desk_router() -> APIRouter:
 
     # ------------------------------------------------------------ images on a Page
 
-    @router.post("/desk/pages/{card_id}/assets")
-    async def desk_asset_add(card_id: str, request: Request):
-        """Raw body, ``Content-Type: image/png|image/jpeg``, <= 10 MB -> 201 ``{name, path}``."""
+    async def _upload(request: Request, fn, status: int = 201):
+        """A raw image body (<= 10 MB, 413 above; 415 for a type that isn't PNG or JPEG) -> ``fn(desk, content_type, data)``."""
         try:
             ctx = context_for()
             length = request.headers.get("content-length")
@@ -176,27 +192,105 @@ def create_desk_router() -> APIRouter:
             async with ctx.lock:
                 desk = ctx.desk()
                 await asyncio.to_thread(desk.load)
-                made = await asyncio.to_thread(desk.pages.add_asset, card_id, request.headers.get("content-type") or "", data)
+                made = await asyncio.to_thread(fn, desk, request.headers.get("content-type") or "", data)
         except BadRequest as e:
             return _err(str(e), e.status)
         except ExplorationError as e:
             return _err(str(e), 415 if isinstance(e, AssetTypeError) else 400)
         except ExplorationNotFound:
             return _err("not found", 404)
-        return _ok(ctx, made, 201)
+        return _ok(ctx, made, status)
 
-    @router.get("/desk/pages/{card_id}/assets/{name}")
-    async def desk_asset_get(card_id: str, name: str):
+    def _file(fn, cache: str = "private, max-age=86400"):
+        """``fn(desk) -> (path, content type)`` served privately."""
         try:
             ctx = context_for()
-            path, content_type = ctx.desk().pages.asset_path(card_id, name)
+            path, content_type = fn(ctx.desk())
         except BadRequest as e:
             return _err(str(e), e.status)
         except ExplorationError as e:
             return _err(str(e))
         except ExplorationNotFound:
             return _err("not found", 404)
-        return FileResponse(path, media_type=content_type, headers={"Cache-Control": "private, max-age=86400"})
+        return FileResponse(path, media_type=content_type, headers={"Cache-Control": cache})
+
+    @router.post("/desk/pages/{card_id}/assets")
+    async def desk_asset_add(card_id: str, request: Request, source: Optional[str] = None):
+        """Raw body, ``Content-Type: image/png|image/jpeg``, <= 10 MB, optional ``?source=`` JSON -> 201 ``{name, path}``."""
+        return await _upload(request, lambda desk, ct, data: desk.pages.add_asset(card_id, ct, data, parse_asset_source(source)))
+
+    @router.get("/desk/pages/{card_id}/assets/{name}")
+    async def desk_asset_get(card_id: str, name: str):
+        return _file(lambda desk: desk.pages.asset_path(card_id, name))
+
+    # ------------------------------------------------------------ Boards (board.py)
+
+    def _board(desk, card_id: str):
+        if not is_board_id(card_id):
+            raise ExplorationError("invalid card id")
+        desk.boards.require(card_id)  # 404 for an unknown one
+        return desk.boards
+
+    @router.post("/desk/boards")
+    async def desk_board_create(request: Request):
+        """``{area_id?, title?, x?, y?}`` -> 201 ``{card, board: {version, items}}``; no Area: the first on the Desk."""
+        def op(ctx, desk, b):
+            card, board = desk.create_board(b)
+            return {"card": card, "board": board}, 201
+        return await _op(request, op)
+
+    @router.get("/desk/boards/{card_id}")
+    async def desk_board_get(card_id: str, request: Request):
+        def op(ctx, desk, b):
+            _board(desk, card_id)
+            return desk.get_card(card_id)
+        return await _op(request, op, recover=True)
+
+    @router.patch("/desk/boards/{card_id}")
+    async def desk_board_patch(card_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: desk.patch_board(card_id, b))
+
+    @router.delete("/desk/boards/{card_id}")
+    async def desk_board_delete(card_id: str, request: Request):
+        """Only an empty, still-Untitled Board; else 409 not_empty. ``{"force": true}`` deletes it anyway (the user confirmed)."""
+        return await _op(request, lambda ctx, desk, b: desk.delete_board(card_id, force=b.get("force") is True))
+
+    @router.get("/desk/boards/{card_id}/board")
+    async def desk_board_doc(card_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: _board(desk, card_id).read(card_id))
+
+    @router.put("/desk/boards/{card_id}/board")
+    async def desk_board_doc_put(card_id: str, request: Request):
+        """``{version, items}``; 409 ``version_conflict`` with the current items when ``version`` is stale."""
+        return await _op(request, lambda ctx, desk, b: _board(desk, card_id).write(card_id, b))
+
+    @router.post("/desk/boards/{card_id}/assets")
+    async def desk_board_asset_add(card_id: str, request: Request, source: Optional[str] = None, kind: Optional[str] = None):
+        """
+        Raw PNG or JPEG <= 10 MB -> 201 the ``assets.jsonl`` row plus ``path``.
+        ``?kind=selection`` for a flattened selection (``sel-<hex>.png``); ``?source=`` JSON (AssetSource).
+        """
+        return await _upload(request, lambda desk, ct, data: _board(desk, card_id).add_asset(
+            card_id, ct, data, kind=kind or "image",
+            source=parse_asset_source(source),
+        ))
+
+    @router.get("/desk/boards/{card_id}/assets")
+    async def desk_board_assets(card_id: str, request: Request):
+        return await _op(request, lambda ctx, desk, b: _board(desk, card_id).list_assets(card_id))
+
+    @router.get("/desk/boards/{card_id}/assets/{name}")
+    async def desk_board_asset_get(card_id: str, name: str):
+        return _file(lambda desk: _board(desk, card_id).asset_path(card_id, name))
+
+    @router.put("/desk/boards/{card_id}/preview")
+    async def desk_board_preview_put(card_id: str, request: Request):
+        """The Board as a PNG (Lee draws it after a save) -> ``{bytes}``."""
+        return await _upload(request, lambda desk, ct, data: _board(desk, card_id).put_preview(card_id, ct, data), 200)
+
+    @router.get("/desk/boards/{card_id}/preview")
+    async def desk_board_preview_get(card_id: str):
+        return _file(lambda desk: (_board(desk, card_id).preview_path(card_id), "image/png"), "no-cache")
 
     # ------------------------------------------------------------ a Page card's records (deep.py)
 
@@ -225,50 +319,62 @@ def create_desk_router() -> APIRouter:
     async def desk_reference_patch(card_id: str, ref_id: str, request: Request):
         return await _op(request, lambda ctx, desk, b: deep.patch_reference(_card(desk, card_id), card_id, ref_id, b))
 
-    @router.get("/desk/pages/{card_id}/answers")
-    async def desk_answers(card_id: str, request: Request):
-        return await _op(request, lambda ctx, desk, b: deep.list_answers(_card(desk, card_id), card_id), recover=True)
+    # ------------------------------------------------------------ Asks and hand-offs, a Page's or a Board's
 
-    @router.post("/desk/pages/{card_id}/asks")
-    async def desk_ask(card_id: str, request: Request):
-        """deep-ask on a card: recorded queued and run in the background; 202."""
-        trigger = deep_ask.request_trigger()
+    def _answer_routes(prefix: str, store_of) -> None:
+        """``/desk/<prefix>/{id}/answers|asks|handoffs``: deep.py's rows on ``store_of(desk, id)``."""
 
-        def op(ctx, desk, b):
-            answer = deep.new_answer(_card(desk, card_id), card_id, b)
-            _log_deep_request(ctx, request)
-            deep_ask.get_runner().schedule(deep_ask.Job(ctx, card_id, answer["id"], trigger))
-            return answer
-        return await _op(request, op, 202, recover=True)
+        @router.get(f"/desk/{prefix}/{{card_id}}/answers", name=f"desk_{prefix}_answers")
+        async def desk_answers(card_id: str, request: Request):
+            return await _op(request, lambda ctx, desk, b: deep.list_answers(store_of(desk, card_id), card_id), recover=True)
 
-    @router.patch("/desk/pages/{card_id}/answers/{answer_id}")
-    async def desk_answer_patch(card_id: str, answer_id: str, request: Request):
-        def op(ctx, desk, b):
-            row = deep.patch_answer(_card(desk, card_id), card_id, answer_id, b)
-            if "task_id" in b or "status" in b:
-                # The task may already be ahead of the record (the relay beats this PATCH).
-                task_id = (row.get("handoff") or {}).get("task_id")
-                task = ctx.tasks().get(task_id) if task_id else None
-                if task is not None:
-                    row = handoffs.sync(ctx, task) or row
-            return row
-        return await _op(request, op)
+        @router.post(f"/desk/{prefix}/{{card_id}}/asks", name=f"desk_{prefix}_ask")
+        async def desk_ask(card_id: str, request: Request):
+            """deep-ask on a card: recorded queued and run in the background; 202."""
+            trigger = deep_ask.request_trigger()
 
-    @router.post("/desk/pages/{card_id}/answers/{answer_id}/retry")
-    async def desk_answer_retry(card_id: str, answer_id: str, request: Request):
-        trigger = deep_ask.request_trigger()
+            def op(ctx, desk, b):
+                answer = deep.new_answer(store_of(desk, card_id), card_id, b)
+                _log_deep_request(ctx, request)
+                deep_ask.get_runner().schedule(deep_ask.Job(ctx, card_id, answer["id"], trigger))
+                return answer
+            return await _op(request, op, 202, recover=True)
 
-        def op(ctx, desk, b):
-            answer = deep.requeue_answer(_card(desk, card_id), card_id, answer_id)
-            _log_deep_request(ctx, request)
-            deep_ask.get_runner().schedule(deep_ask.Job(ctx, card_id, answer_id, trigger))
-            return answer
-        return await _op(request, op, 202, recover=True)
+        @router.patch(f"/desk/{prefix}/{{card_id}}/answers/{{answer_id}}", name=f"desk_{prefix}_answer_patch")
+        async def desk_answer_patch(card_id: str, answer_id: str, request: Request):
+            def op(ctx, desk, b):
+                row = deep.patch_answer(store_of(desk, card_id), card_id, answer_id, b)
+                if "task_id" in b or "status" in b:
+                    # The task may already be ahead of the record (the relay beats this PATCH).
+                    task_id = (row.get("handoff") or {}).get("task_id")
+                    task = ctx.tasks().get(task_id) if task_id else None
+                    if task is not None:
+                        row = handoffs.sync(ctx, task) or row
+                return row
+            return await _op(request, op)
 
-    @router.post("/desk/pages/{card_id}/handoffs")
-    async def desk_handoff(card_id: str, request: Request):
-        """A hand-off record in state 'launching'; the renderer launches the task with origin {kind: 'page', ref}."""
-        return await _op(request, lambda ctx, desk, b: deep.new_handoff(_card(desk, card_id), card_id, b), 201)
+        @router.post(f"/desk/{prefix}/{{card_id}}/answers/{{answer_id}}/retry", name=f"desk_{prefix}_answer_retry")
+        async def desk_answer_retry(card_id: str, answer_id: str, request: Request):
+            trigger = deep_ask.request_trigger()
+
+            def op(ctx, desk, b):
+                answer = deep.requeue_answer(store_of(desk, card_id), card_id, answer_id)
+                _log_deep_request(ctx, request)
+                deep_ask.get_runner().schedule(deep_ask.Job(ctx, card_id, answer_id, trigger))
+                return answer
+            return await _op(request, op, 202, recover=True)
+
+        @router.post(f"/desk/{prefix}/{{card_id}}/handoffs", name=f"desk_{prefix}_handoff")
+        async def desk_handoff(card_id: str, request: Request):
+            """
+            A hand-off record in state 'launching'; the renderer launches the task with
+            origin {kind: 'page' | 'board', ref: '<card>#<answer>'}. A Board's brief gets
+            the selection's image path and annotations (the returned ``handoff.brief``).
+            """
+            return await _op(request, lambda ctx, desk, b: deep.new_handoff(store_of(desk, card_id), card_id, b), 201)
+
+    _answer_routes("pages", _card)
+    _answer_routes("boards", _board)
 
     @router.get("/desk/pages/{card_id}/questions")
     async def desk_questions(card_id: str, request: Request):

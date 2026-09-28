@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from ..cockpit.desk import PAGE_ID_RE
+from ..cockpit.desk import CARD_ID_RE
 from ..cockpit.explorations import EXP_ID_RE
 from ..hester_dir import ensure_gitignored
 
@@ -96,8 +96,8 @@ def normalize_source(source: Any) -> Dict[str, Any]:
     exp_id = src.get("exploration_id")
     if isinstance(exp_id, str) and EXP_ID_RE.match(exp_id):
         out["exploration_id"] = exp_id
-    card_id = src.get("card_id")  # Desk D2: the Page card a capture is about
-    if isinstance(card_id, str) and PAGE_ID_RE.match(card_id):
+    card_id = src.get("card_id")  # Desk D2: the card (a Page or a Board) a capture is about
+    if isinstance(card_id, str) and CARD_ID_RE.match(card_id):
         out["card_id"] = card_id
     section = _clip_str(src.get("section"), MAX_SOURCE_SECTION)
     if section:

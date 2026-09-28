@@ -323,9 +323,18 @@ def create_steward_router() -> APIRouter:
                 # Desk D2: a Page card, read like an exploration (its card and its Page).
                 desk = ctx.desk()
                 card = await asyncio.to_thread(desk.get_card, str(about_id))
-                sections.append(context_json("Page card", {k: v for k, v in card.items() if k != "summary"}))
-                page = await asyncio.to_thread(desk.pages.page_text, card["id"])
-                sections.append("### The Page\n\n" + page[: steward.MAX_CONTEXT])
+                if card.get("kind") == "board":
+                    # A Board: its card and the text of its annotations (the images aren't sent here).
+                    from .board import note_texts
+
+                    sections.append(context_json("Board card", {k: v for k, v in card.items() if k != "summary"}))
+                    notes = await asyncio.to_thread(desk.boards.items, card["id"])
+                    text = "\n\n".join(note_texts(notes)) or "(no annotations)"
+                    sections.append("### The Board's annotations\n\n" + text[: steward.MAX_CONTEXT])
+                else:
+                    sections.append(context_json("Page card", {k: v for k, v in card.items() if k != "summary"}))
+                    page = await asyncio.to_thread(desk.pages.page_text, card["id"])
+                    sections.append("### The Page\n\n" + page[: steward.MAX_CONTEXT])
             elif kind == "goal":
                 goal_id = str(about_id or "")
                 status = await asyncio.to_thread(goal_status.build_status, Path(ctx.path), 7)
