@@ -342,11 +342,11 @@ export function areaContent(cards: ReadonlyArray<Pick<DeskRect, 'x' | 'y' | 'w' 
   return { right, bottom };
 }
 
-/** The taskbar's New menu: what you can start on the Desk. Board and the rest come later (§3). */
+/** The taskbar's New menu: what you can start on the Desk. The rest come later (§3). */
 export type NewKind = 'page' | 'board';
 export const NEW_KINDS: ReadonlyArray<{ kind: NewKind; label: string; ready: boolean }> = [
   { kind: 'page', label: 'Page', ready: true },
-  { kind: 'board', label: 'Board', ready: false },
+  { kind: 'board', label: 'Board', ready: true },
 ];
 
 /** Where New puts a card: the Area you're in, else the one under the middle of the view, else the first. */
@@ -519,6 +519,11 @@ export function waitingCardIds(tasks: ReadonlyArray<{ status: TaskStatus; origin
 
 export function isPageId(id: string | null | undefined): id is string {
   return !!id && /^pg-[0-9a-f]{8}$/.test(id);
+}
+
+/** A Board card's id (docs/16-Desk.md §3.1): `bd-` and 8 hex. */
+export function isBoardId(id: string | null | undefined): id is string {
+  return !!id && /^bd-[0-9a-f]{8}$/.test(id);
 }
 
 // ---------------------------------------------------------------------------

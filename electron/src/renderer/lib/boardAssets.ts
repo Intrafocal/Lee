@@ -72,7 +72,7 @@ export function primeBoardAsset(workspace: string, id: string, name: string, blo
 // ---- the card's picture ----
 
 const previews = new Map<string, Promise<string | null>>();
-const local = new Map<string, string>();
+const local = new Map<string, { url: string; at: number }>();
 const listeners = new Set<() => void>();
 
 /** preview.png for the card as of `stamp` (its updated_at): a blob: URL, or null. */
@@ -95,12 +95,13 @@ export function boardPreviewUrl(workspace: string, id: string, stamp: string): P
 export function setLocalPreview(workspace: string, id: string, png: Blob): void {
   const k = key(workspace, id, '');
   const old = local.get(k);
-  local.set(k, URL.createObjectURL(png));
-  if (old) URL.revokeObjectURL(old);
+  local.set(k, { url: URL.createObjectURL(png), at: Date.now() });
+  if (old) URL.revokeObjectURL(old.url);
   listeners.forEach((f) => f());
 }
 
-export function localPreview(workspace: string, id: string): string | null {
+/** The preview this window drew last, and when (ms). */
+export function localPreview(workspace: string, id: string): { url: string; at: number } | null {
   return local.get(key(workspace, id, '')) ?? null;
 }
 
