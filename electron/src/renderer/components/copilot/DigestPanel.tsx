@@ -1,6 +1,6 @@
 /**
  * DigestPanel - session-start digest: wins, agent claims, waiting items,
- * Someday counts, retro (contracts §8.4, §9.1). Opens on return, and on a
+ * Ideas counts, retro (contracts §8.4, §9.1). Opens on return, and on a
  * manual focus start; "Hester offline" if the fetch fails.
  */
 
@@ -91,7 +91,7 @@ export const DigestPanel: React.FC<DigestPanelProps> = ({ api, workspace, since,
               )}
 
               <div className="copilot-digest-section">
-                <div className="copilot-digest-section-title">Someday</div>
+                <div className="copilot-digest-section-title">Ideas</div>
                 <div className="copilot-digest-someday">
                   {digest.someday.open} open
                   {digest.someday.untriaged_over_7d > 0 && `, ${digest.someday.untriaged_over_7d} untriaged over 7 days`}

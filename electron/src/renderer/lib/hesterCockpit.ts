@@ -21,7 +21,7 @@ import {
   type TaskStatus,
   type TaskWorktree,
 } from '../../shared/cockpit';
-import type { DeskLast } from '../../shared/desk';
+import type { DeskArea, DeskCard, DeskLast } from '../../shared/desk';
 import type { HesterTaskEvent } from './cockpitModel';
 import type { DigestWin } from './hesterCopilot';
 
@@ -91,7 +91,8 @@ export interface HistoryResponse {
   readings: Array<Reading & { goal_id?: string | null; delta?: number | null }>;
 }
 
-export interface SomedayItem {
+/** An idea (Hester's IdeasStore; captured from Lee, the phone or the T-Deck). */
+export interface Idea {
   id: string;
   created_at: string;
   text: string;
@@ -259,22 +260,22 @@ export function fetchUsage(workspace: string, range: 'today' | 'week' | 'month')
   return call<unknown>(workspace, 'GET', `/cockpit/usage?range=${range}`);
 }
 
-export function listSomeday(workspace: string, status: 'open' | 'all'): Promise<HesterResult<SomedayItem[]>> {
-  return call<SomedayItem[]>(workspace, 'GET', `/someday?status=${status}`);
+export function listIdeas(workspace: string, status: 'open' | 'all'): Promise<HesterResult<Idea[]>> {
+  return call<Idea[]>(workspace, 'GET', `/ideas?status=${status}`);
 }
 
-export type SomedayTriage =
+export type IdeaTriage =
   | { action: 'explore'; to?: 'explore' }
   | { action: 'keep' }
   | { action: 'drop' }
   | { action: 'promote'; to?: 'task' };
 
-export function triageSomeday(
+export function triageIdea(
   workspace: string,
   id: string,
-  triage: SomedayTriage,
-): Promise<HesterResult<SomedayItem | { item: SomedayItem; task: CockpitTask } | { item: SomedayItem; exploration: Exploration }>> {
-  return call(workspace, 'POST', `/someday/${encodeURIComponent(id)}/triage`, { ...triage, workspace });
+  triage: IdeaTriage,
+): Promise<HesterResult<Idea | { item: Idea; task: CockpitTask } | { item: Idea; exploration: Exploration }>> {
+  return call(workspace, 'POST', `/ideas/${encodeURIComponent(id)}/triage`, { ...triage, workspace });
 }
 
 // ---------------------------------------------------------------------------
@@ -633,8 +634,8 @@ export function archiveExploration(
   return call(workspace, 'POST', expPath(expId, '/archive'), asKnowledge ? { as_knowledge: true } : {});
 }
 
-/** Escalate a task to an exploration (the task stays open). */
-export function escalateTask(workspace: string, taskId: string): Promise<HesterResult<{ task: CockpitTask; exploration: Exploration }>> {
+/** Escalate a task to a Page card (origin the task, in the first Area); the task stays open. */
+export function escalateTask(workspace: string, taskId: string): Promise<HesterResult<{ card: DeskCard; area: DeskArea }>> {
   return call(workspace, 'POST', `/cockpit/tasks/${encodeURIComponent(taskId)}/escalate`, {});
 }
 

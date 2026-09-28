@@ -17,7 +17,7 @@
  *   "What is this project for?", where typing creates it.
  * - An Area's ⋯ (or a right-click on it): Rename, New Page here, Stash.
  * - The Drawer is a button in the strip along the bottom of the overview: a
- *   menu of put-away Areas (click to take one out) and Ideas (Someday; click
+ *   menu of stashed Areas (click to unstash one) and Ideas (click
  *   to start a Page, or drag one onto an Area).
  * - Tools, in a small bar at the bottom: Cursor (V; all of the above),
  *   Move (M; drag a card within or between Areas, or an Area by its name
@@ -41,7 +41,7 @@ import type { LeeMode } from '../../../shared/cockpit';
 import { cockpitModeStore, openDesk, useCockpitModeState, zoomIntoCard, zoomOut, zoomToArea } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
-import { fetchGoalsStatus, listSomeday, triageSomeday, type SomedayItem } from '../../lib/hesterCockpit';
+import { fetchGoalsStatus, listIdeas, triageIdea, type Idea } from '../../lib/hesterCockpit';
 import {
   createArea,
   createStroke,
@@ -51,10 +51,10 @@ import {
   ideaToPage,
   patchArea,
   patchCard,
-  putAwayArea,
-  takeOutArea,
+  stashArea,
+  unstashArea,
 } from '../../lib/hesterDesk';
-import { captureSomeday, newDraft } from '../../lib/hesterDeep';
+import { captureIdea as postIdea, newDraft } from '../../lib/hesterDeep';
 import { untitledTitle, wokenItem } from '../../lib/deepModel';
 import {
   AREA_HEAD,
@@ -453,7 +453,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     flashTimer.current = setTimeout(() => setFlash(null), 6000);
   }, []);
 
-  // ---- Areas: new, rename, put away ----
+  // ---- Areas: new, rename, stash ----
   const [newArea, setNewArea] = useState<string | null>(null);
   const makeArea = async () => {
     const name = (newArea ?? '').trim();
@@ -474,9 +474,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     if (!r.ok) return say(r.error);
     void ctx?.refresh();
   };
-  const putAway = async (a: DeskArea) => {
+  const stash = async (a: DeskArea) => {
     setMenuFor(null);
-    const r = await putAwayArea(workspace, a.id);
+    const r = await stashArea(workspace, a.id);
     if (!r.ok) return say(r.error);
     if (nav.area_id === a.id) zoomOut('overview', 'click');
     say(`Stashed: ${a.name}`);
@@ -485,9 +485,9 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
 
   // ---- Drawers ----
   const [drawer, setDrawer] = useState(false);
-  const [ideas, setIdeas] = useState<SomedayItem[] | null>(null);
+  const [ideas, setIdeas] = useState<Idea[] | null>(null);
   const loadIdeas = useCallback(async () => {
-    const r = await listSomeday(workspace, 'open');
+    const r = await listIdeas(workspace, 'open');
     setIdeas(r.ok && Array.isArray(r.data) ? r.data : []);
   }, [workspace]);
   useEffect(() => {
@@ -503,14 +503,14 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
     void zoomIntoCard({ card_id: r.data.card.id, title: r.data.card.title, area_id: r.data.area.id }, 'click');
   };
   const triage = async (id: string, action: 'keep' | 'drop') => {
-    const r = await triageSomeday(workspace, id, { action });
+    const r = await triageIdea(workspace, id, { action });
     if (!r.ok) return say(r.error);
     setIdeas((l) => (l ? l.filter((i) => i.id !== id) : l));
     void ctx?.refresh();
   };
-  const takeOut = async (a: DeskArea) => {
+  const unstash = async (a: DeskArea) => {
     setDrawer(false);
-    const r = await takeOutArea(workspace, a.id);
+    const r = await unstashArea(workspace, a.id);
     if (!r.ok) return say(r.error);
     await ctx?.refresh();
     zoomToArea(a.id, 'click');
@@ -529,7 +529,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   const captureIdea = async (raw: string) => {
     const text = raw.trim();
     if (!text) return;
-    const r = await captureSomeday(workspace, text, { surface: 'lee' });
+    const r = await postIdea(workspace, text, { surface: 'lee' });
     if (!r.ok) return say(r.error);
     setDrawerQuery('');
     setCapturing(false);
@@ -546,7 +546,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
       const a = desk?.areas.find((x) => x.id === e.id);
       if (!a) return null;
       return (
-        <button key={e.id} className="deep-pop-row desk-drawer-row" role="menuitem" data-drawer-row="" onClick={() => void takeOut(a)} title="Take it out onto the Desk">
+        <button key={e.id} className="deep-pop-row desk-drawer-row" role="menuitem" data-drawer-row="" onClick={() => void unstash(a)} title="Unstash it onto the Desk">
           <span className="desk-drawer-text">{e.text}</span>
           <span className="deep-muted">{e.meta}</span>
           <span className="desk-idea-actions" onClick={(ev) => ev.stopPropagation()}>
@@ -720,7 +720,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
   }, [visible]);
 
   const woken = wokenItem(copilot.snapshot);
-  const counts = desk ? drawerCounts(desk) : { ideas: 0, putAway: 0 };
+  const counts = desk ? drawerCounts(desk) : { ideas: 0, stashed: 0 };
   const areaInView = zoom !== 'overview' ? onDesk.find((a) => a.id === nav.area_id) ?? null : null;
   const goalsCard = desk?.goals_card_id ? desk.cards.find((c) => c.id === desk.goals_card_id) ?? null : null;
   const strokes = desk?.strokes ?? [];
@@ -862,7 +862,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
                           >
                             New Page here
                           </button>
-                          <button className="deep-pop-row" role="menuitem" onClick={() => void putAway(area)} title="Into the Drawer’s Stashed; take it out from there">
+                          <button className="deep-pop-row" role="menuitem" onClick={() => void stash(area)} title="Into the Drawer’s Stashed; unstash it from there">
                             Stash
                           </button>
                           <button className="deep-pop-row desk-danger" role="menuitem" onClick={() => askDeleteArea(area)}>
@@ -1010,7 +1010,7 @@ export function DeskSurface({ workspace, visible, copilot, onHop }: DeskSurfaceP
         <footer className="desk-drawers desk-taskbar">
           <span className="desk-drawer-anchor">
             <button className={`desk-drawer-btn${drawer ? ' is-open' : ''}`} onClick={() => setDrawer((d) => !d)} aria-expanded={drawer} aria-haspopup="menu">
-              Drawer {counts.ideas + counts.putAway > 0 && <span className="deep-muted">{counts.ideas + counts.putAway}</span>}
+              Drawer {counts.ideas + counts.stashed > 0 && <span className="deep-muted">{counts.ideas + counts.stashed}</span>}
             </button>
             {drawer && desk && (
               // A start menu: folders fly out to the right, grouped by date; search sits by the button.

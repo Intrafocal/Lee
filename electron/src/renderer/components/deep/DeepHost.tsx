@@ -59,7 +59,7 @@ import {
   addReference,
   askDeep,
   autoTitle,
-  captureSomeday,
+  captureIdea,
   deleteExploration,
   deskCreateBody,
   draftFromReadme,
@@ -1270,7 +1270,7 @@ function DeepSurface({ workspace, visible, explorationId: propId, title, copilot
     const doc = text.current;
     const eid = await ensureId();
     if (!eid) return say('Hester offline: capture needs Hester', 'warn');
-    const r = await captureSomeday(workspace, t, {
+    const r = await captureIdea(workspace, t, {
       surface: 'lee',
       ...(isCardId(eid) ? { card_id: eid } : { exploration_id: eid }),
       section: sectionAt(doc, from),

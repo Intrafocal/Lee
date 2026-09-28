@@ -584,7 +584,7 @@ export interface DetailActionsInput {
  * Which actions the detail offers, in order: `icons` as IconActions, `more`
  * in the ⋯ menu. Check in (or Cancel check-in), Rename, Open terminal,
  * Confirm, Accept / Discard, Close agent; then Link to a goal…, Priority…,
- * Promote…, Escalate → Explore, Hester's view (an open task) and Assign…
+ * Promote…, Escalate → Page, Hester's view (an open task) and Assign…
  * (an agent with no task). A not-open task with a Claude session leads
  * with Resume.
  */

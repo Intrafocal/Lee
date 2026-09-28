@@ -94,11 +94,11 @@ async function execute(ctx: CockpitCtx, plan: ProposalPlan): Promise<ExecResult>
       return { ok: true, message: 'serves' in plan.body ? `Linked to ${plan.body.serves.join(', ')}` : `Lead: ${plan.body.lead}` };
     }
     case 'park': {
-      if (!ctx.copilotApi) return { ok: false, error: 'Someday is not available here' };
+      if (!ctx.copilotApi) return { ok: false, error: 'Ideas is not available here' };
       const r = await ctx.copilotApi.capture({ text: plan.text, workspace: ws, as: 'someday' });
       if (!r.success) return { ok: false, error: 'Could not park it' };
       ctx.hester.refresh();
-      return { ok: true, message: r.spooled ? 'Parked (queued for Hester)' : 'Parked in Someday' };
+      return { ok: true, message: r.spooled ? 'Parked (queued for Hester)' : 'Parked in Ideas' };
     }
     case 'open':
       await openItem(ctx, plan.target, plan.id);

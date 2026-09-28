@@ -726,7 +726,7 @@ test('render: a task in review shows Accept and Discard as icons; its rarer acti
   const task = { id: 't1', title: 'Fix login', name: null, status: 'review', confirmed: false, serves: [], workstream: null, created_at: ago(30), overrides: null, urgency: null };
   const html = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task, tile: tile(3, { task }) }));
   for (const label of ['Confirm task', 'Accept', 'Discard', 'More actions']) assert.match(html, new RegExp(`aria-label="${label}"`), label);
-  for (const label of ['Promote…', 'Escalate → Explore', 'Priority…', 'Link to a goal…']) assert.ok(!html.includes(label), `${label} is in the closed menu`);
+  for (const label of ['Promote…', 'Escalate → Page', 'Priority…', 'Link to a goal…']) assert.ok(!html.includes(label), `${label} is in the closed menu`);
   const closed = render.detail(fixtureCtx(), subject({ id: 'work:task:t1', task: { ...task, status: 'done' }, tile: null, ptyId: null }));
   assert.ok(!closed.includes('More actions'), 'a closed task has no ⋯');
   assert.equal(nextCount(closed), 0);

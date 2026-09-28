@@ -150,7 +150,7 @@ const DESK = {
 };
 
 await test('focusRect: the overview fits the Areas on the Desk; an Area; a card; the Goals card in the Area you are in', () => {
-  assert.deepEqual(model.focusRect(DESK, 'overview', null, null), { x: 0, y: 0, w: 2600, h: 800 }, 'put-away Areas are not on the Desk');
+  assert.deepEqual(model.focusRect(DESK, 'overview', null, null), { x: 0, y: 0, w: 2600, h: 800 }, 'stashed Areas are not on the Desk');
   assert.deepEqual(model.focusRect(DESK, 'area', A2.id, null), A2);
   assert.deepEqual(model.focusRect(DESK, 'card', A1.id, C2.id), { x: 1448, y: 96, w: 360, h: 240 }, "a card's own Area, whatever is in view");
   const g = model.goalsCorner(A2);
@@ -279,7 +279,7 @@ await test('move: a drag in screen px is Desk px; a card lands in the Area under
   assert.deepEqual(model.dropCard(C1, A1, { x: 5000, y: -500 }, on, { x: 700, y: 10 }), { area_id: A1.id, x: A1.w - 360, y: model.AREA_HEAD });
   // Dropped on bare Desk: back in its own Area.
   assert.equal(model.dropCard(C1, A1, { x: 1200, y: 0 }, on, { x: 1300, y: 300 }).area_id, A1.id, 'the gap between Areas');
-  // Onto a put-away Area's old spot: not on the Desk, so its own.
+  // Onto a stashed Area's old spot: not on the Desk, so its own.
   assert.equal(model.dropCard(C1, A1, { x: 0, y: 1000 }, on, { x: 100, y: 1200 }).area_id, A1.id);
   assert.deepEqual(model.dropArea(A2, { x: -100.4, y: 30.6 }), { x: 1300, y: 31 });
 });
@@ -411,12 +411,12 @@ await test('touched cards: first-touched order, no repeats, a new session starts
 // deskModel: drawers, cards, local memory
 // ---------------------------------------------------------------------------
 
-await test('drawer counts and the Put away order', () => {
-  assert.deepEqual(model.drawerCounts(DESK), { ideas: 3, putAway: 2 });
-  assert.deepEqual(model.drawerCounts({ drawers: [], areas: [A1, A3] }), { ideas: 0, putAway: 1 }, 'no Drawer rows: counted from the Areas');
-  assert.deepEqual(model.putAwayAreas(DESK).map((a) => a.id), [A4.id, A3.id], "the Drawer's order");
+await test('drawer counts and the Stashed order', () => {
+  assert.deepEqual(model.drawerCounts(DESK), { ideas: 3, stashed: 2 });
+  assert.deepEqual(model.drawerCounts({ drawers: [], areas: [A1, A3] }), { ideas: 0, stashed: 1 }, 'no Drawer rows: counted from the Areas');
+  assert.deepEqual(model.stashedAreas(DESK).map((a) => a.id), [A4.id, A3.id], "the Drawer's order");
   assert.deepEqual(
-    model.putAwayAreas({ drawers: [], areas: [A3, A4, A1] }).map((a) => a.id),
+    model.stashedAreas({ drawers: [], areas: [A3, A4, A1] }).map((a) => a.id),
     [A4.id, A3.id],
     'unlisted: most recently changed first',
   );
@@ -476,10 +476,10 @@ await test('hesterDesk: every route, method, path, body; workspace and token on 
     [() => desk.createArea(WS, { name: 'Mesh' }), 'POST', '/desk/areas', { name: 'Mesh' }],
     [() => desk.patchArea(WS, A, { name: 'Mesh 2', x: 10 }), 'PATCH', `/desk/areas/${A}`, { name: 'Mesh 2', x: 10 }],
     [() => desk.deleteArea(WS, A), 'DELETE', `/desk/areas/${A}`, undefined],
-    [() => desk.putAwayArea(WS, A), 'POST', `/desk/areas/${A}/put-away`, {}],
-    [() => desk.putAwayArea(WS, A, 'drw-00000001'), 'POST', `/desk/areas/${A}/put-away`, { drawer_id: 'drw-00000001' }],
-    [() => desk.takeOutArea(WS, A), 'POST', `/desk/areas/${A}/take-out`, {}],
-    [() => desk.takeOutArea(WS, A, { x: 1, y: 2 }), 'POST', `/desk/areas/${A}/take-out`, { x: 1, y: 2 }],
+    [() => desk.stashArea(WS, A), 'POST', `/desk/areas/${A}/stash`, {}],
+    [() => desk.stashArea(WS, A, 'drw-00000001'), 'POST', `/desk/areas/${A}/stash`, { drawer_id: 'drw-00000001' }],
+    [() => desk.unstashArea(WS, A), 'POST', `/desk/areas/${A}/unstash`, {}],
+    [() => desk.unstashArea(WS, A, { x: 1, y: 2 }), 'POST', `/desk/areas/${A}/unstash`, { x: 1, y: 2 }],
     [() => desk.createDrawer(WS, 'Later'), 'POST', '/desk/drawers', { name: 'Later' }],
     [() => desk.patchDrawer(WS, 'drw-00000001', 'Soon'), 'PATCH', '/desk/drawers/drw-00000001', { name: 'Soon' }],
     [() => desk.patchCard(WS, P, { x: 5, y: 6 }), 'PATCH', `/desk/cards/${P}`, { x: 5, y: 6 }],

@@ -9,8 +9,8 @@
  * from its activity (§7.1, folded) and the actions: icons for Resume (a
  * not-open task's Claude session), Check in, Rename, Open terminal in
  * Manual, Confirm, Accept / Discard and Close agent; a ⋯ menu for Link to a goal…, Priority…, Promote… (to a
- * workstream), Escalate → Explore (an exploration seeded from it, a Page
- * on the Desk), Hester's view (/suggest, answered inline with its
+ * workstream), Escalate → Page (a Page card made from it, in the Desk's
+ * first Area), Hester's view (/suggest, answered inline with its
  * proposals) and Assign…, plus Open its Page for a hand-off's task (its
  * origin's card at the Desk, Desk D2 §8).
  *
@@ -252,8 +252,8 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
         return false;
       }
       ctx.hester.refresh();
-      // The task stays open; its exploration becomes a Page on the Desk (Desk D2 §6.1).
-      ctx.notify(`On your Desk: ${r.data.exploration.title}`);
+      // The task stays open; the Page card is in the first Area, with the task as its origin.
+      ctx.notify(`On your Desk: ${r.data.card.title}`);
       return true;
     });
   };
@@ -358,7 +358,7 @@ export const WorkDetail: React.FC<WorkDetailProps> = ({ ctx, subject, focusReply
       disabled: busy,
       onClick: () => task && taskAct(() => promoteTask(ctx.workspace, task.id, task.name || undefined), 'Promoted to a workstream'),
     },
-    escalate: { label: 'Escalate → Explore', disabled: busy, onClick: escalate },
+    escalate: { label: 'Escalate → Page', disabled: busy, onClick: escalate },
     'hester-view': { label: view.phase === 'loading' ? 'Asking Hester…' : "Hester's view", disabled: view.phase === 'loading', onClick: hesterView },
     assign: { label: 'Assign…', onClick: () => togglePanel('assign') },
   };

@@ -121,7 +121,7 @@ export const GOALS_H = 132;
 export const GOALS_INSET = 24;
 const GAP = 24;
 
-/** Areas on the Desk (not put away). */
+/** Areas on the Desk (not stashed). */
 export function areasOnDesk(desk: Pick<Desk, 'areas'>): DeskArea[] {
   return desk.areas.filter((a) => !a.drawer_id);
 }
@@ -494,7 +494,7 @@ export function strokeFromDrag(points: readonly Point[], scale: number, areas: r
   return { area_id: area?.id ?? null, points: pts.map((p): [number, number] => [round(p.x - ox), round(p.y - oy)]), width: STROKE_WIDTH };
 }
 
-/** A stroke's points on the Desk; null when its Area isn't on the Desk (put away, or gone). */
+/** A stroke's points on the Desk; null when its Area isn't on the Desk (stashed, or gone). */
 export function strokeOnDesk(stroke: Pick<DeskStroke, 'area_id' | 'points'>, areas: ReadonlyArray<Pick<DeskArea, 'id' | 'x' | 'y'>>): Point[] | null {
   let ox = 0;
   let oy = 0;
@@ -559,16 +559,16 @@ export function parseTouched(raw: unknown): Touched {
 // Drawers and cards
 // ---------------------------------------------------------------------------
 
-/** The strip's counts: open ideas (the Ideas Drawer's count), and put-away Areas. */
-export function drawerCounts(desk: Pick<Desk, 'drawers' | 'areas'>): { ideas: number; putAway: number } {
+/** The strip's counts: open ideas (the Ideas Drawer's count), and stashed Areas. */
+export function drawerCounts(desk: Pick<Desk, 'drawers' | 'areas'>): { ideas: number; stashed: number } {
   const ideas = desk.drawers.find((d) => d.id === IDEAS_DRAWER)?.count ?? 0;
   const pa = desk.drawers.find((d) => d.id === STASHED_DRAWER);
-  const putAway = pa ? Math.max(pa.count, pa.area_ids.length) : desk.areas.filter((a) => a.drawer_id === STASHED_DRAWER).length;
-  return { ideas, putAway };
+  const stashed = pa ? Math.max(pa.count, pa.area_ids.length) : desk.areas.filter((a) => a.drawer_id === STASHED_DRAWER).length;
+  return { ideas, stashed };
 }
 
-/** Put-away Areas, most recently put away first (the Drawer's order, then any it doesn't list). */
-export function putAwayAreas(desk: Pick<Desk, 'drawers' | 'areas'>): DeskArea[] {
+/** Stashed Areas, most recently stashed first (the Drawer's order, then any it doesn't list). */
+export function stashedAreas(desk: Pick<Desk, 'drawers' | 'areas'>): DeskArea[] {
   const order = desk.drawers.find((d) => d.id === STASHED_DRAWER)?.area_ids ?? [];
   const away = desk.areas.filter((a) => !!a.drawer_id);
   const rank = (a: DeskArea) => {
@@ -702,7 +702,7 @@ export interface DrawerFolder {
   entries: DrawerEntry[];
 }
 
-/** What people call the Put away Drawer. */
+/** What people call the stashed Areas' Drawer. */
 export const STASHED = 'Stashed';
 
 const newestFirst = (a: DrawerEntry, b: DrawerEntry) => String(b.at ?? '').localeCompare(String(a.at ?? ''));

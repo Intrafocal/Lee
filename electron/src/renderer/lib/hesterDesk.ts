@@ -72,12 +72,12 @@ export function deleteArea(workspace: string, id: string, withCards = false): Pr
   return call<{ deleted: true; cards: number }>(workspace, 'DELETE', `/desk/areas/${seg(id)}`, withCards ? { with_cards: true } : undefined);
 }
 
-export function putAwayArea(workspace: string, id: string, drawerId?: string): Promise<DeepResult<DeskArea>> {
-  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/put-away`, drawerId ? { drawer_id: drawerId } : {});
+export function stashArea(workspace: string, id: string, drawerId?: string): Promise<DeepResult<DeskArea>> {
+  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/stash`, drawerId ? { drawer_id: drawerId } : {});
 }
 
-export function takeOutArea(workspace: string, id: string, at?: { x: number; y: number }): Promise<DeepResult<DeskArea>> {
-  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/take-out`, at ?? {});
+export function unstashArea(workspace: string, id: string, at?: { x: number; y: number }): Promise<DeepResult<DeskArea>> {
+  return call<DeskArea>(workspace, 'POST', `/desk/areas/${seg(id)}/unstash`, at ?? {});
 }
 
 // ---- Drawers ----
@@ -137,8 +137,8 @@ export function postDeskSession(workspace: string, record: DeskSessionCreate): P
 // ---- the Ideas Drawer ----
 
 /** A Page from an idea: in `area_id` at x/y, or without one in a new Area named after it. 409 `not_open`. */
-export function ideaToPage(workspace: string, somedayId: string, body: IdeaToPage = {}): Promise<DeepResult<IdeaToPageResult>> {
-  return call<IdeaToPageResult>(workspace, 'POST', `/desk/ideas/${seg(somedayId)}/page`, body);
+export function ideaToPage(workspace: string, ideaId: string, body: IdeaToPage = {}): Promise<DeepResult<IdeaToPageResult>> {
+  return call<IdeaToPageResult>(workspace, 'POST', `/desk/ideas/${seg(ideaId)}/page`, body);
 }
 
 // ---- a Page card's own routes (hesterDeep's, by card id) ----
