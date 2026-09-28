@@ -8,8 +8,9 @@ Stashed too). Plain text by default, for people
 and for Claude Code (the ``lee:desk`` and ``lee:drawer`` skills), or --json.
 
 Usage:
-    hester desk overview            # Areas and their Page cards, the Goals card, the Drawer's counts, your last card
+    hester desk overview            # Areas and their cards (Pages and Boards), the Goals card, the Drawer's counts, your last card
     hester desk page <id or title>  # one Page: its text, then answers, hand-offs, open questions, references, images
+    hester desk board <id or title> # one Board: annotations, highlights, links, images (paths, sources), asks, hand-offs
     hester desk last                # your last card and where you stopped
     hester desk drawer [words...]   # Stashed Areas and Ideas, newest first; words filter (every word, any order)
 """
@@ -23,6 +24,10 @@ import click
 
 STASHED = ("stashed", "put-away")  # the Stashed Drawer; 'put-away' until the daemon's next Desk read rewrites it
 PAGE_FILES = ("answers.jsonl", "references.jsonl", "questions.jsonl")
+
+
+def _is_board(card_id: Any) -> bool:
+    return isinstance(card_id, str) and card_id.startswith("bd-")
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +82,17 @@ class Desk:
     # ---- cards ----
 
     def page_dir(self, card_id: str) -> Path:
-        return self.root / "pages" / card_id
+        """The card's folder: ``pages/<pg-id>`` or ``boards/<bd-id>``."""
+        return self.root / ("boards" if _is_board(card_id) else "pages") / card_id
 
     def meta(self, card_id: str) -> Dict[str, Any]:
         return _json(self.page_dir(card_id) / "card.json") or {}
+
+    def items(self, card_id: str) -> List[Dict[str, Any]]:
+        """A Board's items (board.json); [] for a Page."""
+        doc = _json(self.page_dir(card_id) / "board.json") if _is_board(card_id) else None
+        items = (doc or {}).get("items") if isinstance(doc, dict) else None
+        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
     def title(self, card_id: str) -> str:
         return str(self.meta(card_id).get("title") or "Untitled")
@@ -96,6 +108,8 @@ class Desk:
         return [f"assets/{f.name}" for f in files]
 
     def text(self, card_id: str) -> str:
+        if _is_board(card_id):
+            return ""
         try:
             return (self.page_dir(card_id) / "page.md").read_text(encoding="utf-8")
         except OSError:
@@ -120,9 +134,9 @@ class Desk:
     def brief(self, card: Dict[str, Any]) -> Dict[str, Any]:
         m = self.meta(card["id"])
         area = self.area(card.get("area_id"))
-        return {
+        out = {
             "id": card["id"],
-            "kind": card.get("kind") or m.get("kind") or "page",
+            "kind": card.get("kind") or m.get("kind") or ("board" if _is_board(card["id"]) else "page"),
             "title": m.get("title") or "Untitled",
             "area": (area or {}).get("name"),
             "area_id": card.get("area_id"),
@@ -131,6 +145,14 @@ class Desk:
             "chars": len(self.text(card["id"])),
             "updated_at": m.get("updated_at"),
         }
+        if _is_board(card["id"]):
+            out["items"] = len(self.items(card["id"]))
+        return out
+
+    @staticmethod
+    def size(b: Dict[str, Any]) -> str:
+        """``page · 120 chars`` or ``board · 7 items``."""
+        return f"board · {b.get('items', 0)} items" if b["kind"] == "board" else f"page · {b['chars']} chars"
 
 
 def _last_line(text: str) -> Optional[str]:
@@ -188,7 +210,7 @@ def desk():
 @_dir
 @_as_json
 def desk_overview(directory: str, as_json: bool):
-    """Areas on the Desk and their Page cards, the Goals card, the Drawer's counts and your last card."""
+    """Areas on the Desk and their cards (Pages and Boards), the Goals card, the Drawer's counts and your last card."""
     d = _open(directory)
     on_desk = [a for a in d.areas if not a.get("drawer_id")]
     data = {
@@ -206,7 +228,7 @@ def desk_overview(directory: str, as_json: bool):
         if not a["cards"]:
             out.append("  (no cards)")
         for c in a["cards"]:
-            out.append(f"  - {c['title']} ({c['id']}) · {c['chars']} chars · updated {c['updated_at'] or '?'}")
+            out.append(f"  - {c['title']} ({c['id']}) · {d.size(c)} · updated {c['updated_at'] or '?'}")
     if data["goals_card"]:
         g = data["goals_card"]
         out.append(f"\nGoals card: {g['title']} ({g['id']}) · {g['chars']} chars (pinned; GOALS.md is the source of truth)")
@@ -217,6 +239,136 @@ def desk_overview(directory: str, as_json: bool):
     _emit(data, as_json, "\n".join(out))
 
 
+def _one(d: Desk, ref: tuple, kind: Optional[str] = None) -> Dict[str, Any]:
+    """The one card ``ref`` names (of ``kind`` when given); exits 1 for none, 2 for several."""
+    hits = [c for c in d.find(" ".join(ref)) if kind is None or d.brief(c)["kind"] == kind]
+    if not hits:
+        what = {"board": "Board", "page": "Page"}.get(kind or "", "card")
+        click.echo(f"No {what} matches {' '.join(ref)!r}. Try: hester desk overview", err=True)
+        sys.exit(1)
+    if len(hits) > 1:
+        click.echo("Several cards match; use an id:", err=True)
+        for c in hits:
+            click.echo(f"  {c['id']}  {d.title(c['id'])}", err=True)
+        sys.exit(2)
+    return hits[0]
+
+
+def _source_text(src: Any) -> str:
+    """`` (from url: https://…)`` for an asset's source, else ''."""
+    if not isinstance(src, dict) or not src.get("kind"):
+        return ""
+    kind = src["kind"]
+    if kind == "url":
+        where = src.get("url")
+    elif kind == "file":
+        where = src.get("path")
+    elif kind == "answer":
+        where = f"{src.get('card_id')}#{src.get('answer_id')}"
+    else:
+        where = str(src.get("card_id")) + (f" item {src['item_id']}" if src.get("item_id") else "")
+    taken = f", taken {src['taken_at']}" if src.get("taken_at") else ""
+    return f" (from {kind}: {where}{taken})"
+
+
+def _answer_lines(a: Dict[str, Any], d: Desk, cid: str) -> List[str]:
+    """What a Board's Ask or hand-off was about: the selection's image and its annotations."""
+    anchor = a.get("anchor") or {}
+    out = []
+    if anchor.get("kind") == "board":
+        if anchor.get("snapshot"):
+            out.append(f"Selection (image): {d.page_dir(cid) / anchor['snapshot']}")
+        for n in anchor.get("notes") or []:
+            out.append(f"Annotation: \"{' '.join(str(n).split())[:200]}\"")
+    return out
+
+
+def _print_board(d: Desk, card: Dict[str, Any], as_json: bool) -> None:
+    cid = card["id"]
+    b = d.brief(card)
+    items = d.items(cid)
+    by_id = {i.get("id"): i for i in items}
+    assets = {r.get("name"): r for r in _jsonl(d.page_dir(cid) / "assets.jsonl")}
+    rows = _jsonl(d.page_dir(cid) / "answers.jsonl")
+    answers = {a.get("id"): a for a in rows}
+    asks = [a for a in rows if a.get("kind") != "handoff" and not a.get("dismissed_at")]
+    handoffs = [a for a in rows if a.get("kind") == "handoff" and not a.get("dismissed_at")]
+
+    def of(kind: str) -> List[Dict[str, Any]]:
+        return sorted((i for i in items if i.get("kind") == kind), key=lambda i: (i.get("y", 0), i.get("x", 0)))
+
+    def label(item_id: Any) -> str:
+        it = by_id.get(item_id)
+        if not it:
+            return str(item_id)
+        return f"image {it.get('asset')}" if it.get("kind") == "image" else f"{it.get('kind')} {item_id}"
+
+    images = [{"id": i.get("id"), "path": str(d.page_dir(cid) / "assets" / str(i.get("asset"))),
+               "source": (assets.get(i.get("asset")) or {}).get("source")} for i in of("image")]
+    notes = [{"id": i.get("id"), "text": i.get("text") or "", "pinned_to": (i.get("pin") or {}).get("item_id")} for i in of("note")]
+    highlights = [{"id": i.get("id"), "on": i.get("item_id"),
+                   "notes": [n["text"] for n in notes if n["pinned_to"] == i.get("id")]} for i in of("highlight")]
+    links = [{"id": i.get("id"), "card_id": i.get("card_id"), "title": d.title(i["card_id"]) if i.get("card_id") else None} for i in of("link")]
+    data = {**b, "dir": str(d.page_dir(cid)), "images": images, "notes": notes, "highlights": highlights, "links": links,
+            "strokes": len(of("stroke")), "asks": asks, "handoffs": handoffs,
+            "preview": str(d.page_dir(cid) / "preview.png") if (d.page_dir(cid) / "preview.png").is_file() else None}
+
+    out = [f"# {b['title']} ({cid}), a Board", f"Area: {b['area'] or '-'}{' (stashed)' if b['stashed'] else ''} · updated {b['updated_at'] or '?'}"]
+    out.append(f"Folder: {data['dir']}")
+    if data["preview"]:
+        out.append(f"Picture of the whole Board: {data['preview']}")
+    if not items:
+        out.append("\n(empty)")
+    if images:
+        out.append(f"\n## Images ({len(images)})")
+        out.extend(f"- {i['path']}{_source_text(i['source'])}" for i in images)
+    if notes:
+        out.append(f"\n## Annotations ({len(notes)})")
+        for n in notes:
+            on = f" [pinned to {label(n['pinned_to'])}]" if n["pinned_to"] else ""
+            out.append(f"- {' '.join(n['text'].split()) or '(empty)'}{on}")
+    if highlights:
+        out.append(f"\n## Highlights ({len(highlights)})")
+        for h in highlights:
+            out.append(f"- on {label(h['on']) if h['on'] else 'the Board'}" + (f": {'; '.join(h['notes'])}" if h["notes"] else ""))
+    if links:
+        out.append(f"\n## Links ({len(links)})")
+        out.extend(f"- {ln['title'] or '?'} ({ln['card_id']})" for ln in links)
+    if data["strokes"]:
+        out.append(f"\nDrawing: {data['strokes']} lines")
+    if asks:
+        out.append(f"\n## Asks ({len(asks)}), sticky notes on the Board")
+        for a in asks:
+            out.append(f"\n### Q: {a.get('question')}")
+            out.extend(_answer_lines(a, d, cid))
+            follow = answers.get(a.get("follow_up_of"))
+            if follow:
+                out.append(f"Follows up: {follow.get('question')}")
+            out.append(f"Status: {a.get('status')}" + (f" ({a['error']})" if a.get("error") else ""))
+            if a.get("answer"):
+                out.append(str(a["answer"]).rstrip())
+    if handoffs:
+        out.append(f"\n## Hand-offs ({len(handoffs)}), clipboards on the Board")
+        for h in handoffs:
+            info = h.get("handoff") or {}
+            out.append(f"\n### {str(info.get('kind') or 'hand-off').title()} to {info.get('provider') or '?'}: {h.get('status')}")
+            out.append(f"Brief: {h.get('question')}")
+            out.extend(_answer_lines(h, d, cid))
+            if h.get("answer"):
+                out.append(str(h["answer"]).rstrip())
+    _emit(data, as_json, "\n".join(out))
+
+
+@desk.command("board")
+@click.argument("ref", nargs=-1, required=True)
+@_dir
+@_as_json
+def desk_board(ref: tuple, directory: str, as_json: bool):
+    """One Board by id (bd-…) or title: images (paths and sources), annotations, highlights, links, asks and hand-offs."""
+    d = _open(directory)
+    _print_board(d, _one(d, ref, "board"), as_json)
+
+
 @desk.command("page")
 @click.argument("ref", nargs=-1, required=True)
 @_dir
@@ -225,17 +377,10 @@ def desk_overview(directory: str, as_json: bool):
 def desk_page(ref: tuple, directory: str, as_json: bool, text_only: bool):
     """One Page by id (pg-…) or title: its text, then answers, hand-offs, open questions, references and images."""
     d = _open(directory)
-    hits = d.find(" ".join(ref))
-    if not hits:
-        click.echo(f"No card matches {' '.join(ref)!r}. Try: hester desk overview", err=True)
-        sys.exit(1)
-    if len(hits) > 1:
-        click.echo("Several cards match; use an id:", err=True)
-        for c in hits:
-            click.echo(f"  {c['id']}  {d.title(c['id'])}", err=True)
-        sys.exit(2)
-    card = hits[0]
+    card = _one(d, ref)
     cid = card["id"]
+    if _is_board(cid):
+        return _print_board(d, card, as_json)
     text = d.text(cid)
     rows = {f: _jsonl(d.page_dir(cid) / f) for f in PAGE_FILES}
     answers = [a for a in rows["answers.jsonl"] if a.get("kind") != "handoff" and not a.get("dismissed_at")]
@@ -302,7 +447,7 @@ def desk_last(directory: str, as_json: bool):
     card = next(c for c in d.cards if c["id"] == cid)
     stopped = _last_line(d.text(cid))
     data = {**d.brief(card), "stopped_at": stopped, "at": (d.last or {}).get("at")}
-    _emit(data, as_json, f"Last card: {data['title']} ({cid}) in {data['area'] or '-'}\nStopped at: {stopped or '(empty)'}\nRead it: hester desk page {cid}")
+    _emit(data, as_json, f"Last card: {data['title']} ({cid}) in {data['area'] or '-'}\nStopped at: {stopped or '(empty)'}\nRead it: hester desk {data['kind']} {cid}")
 
 
 @desk.command("drawer")
@@ -332,7 +477,7 @@ def desk_drawer(words: tuple, directory: str, as_json: bool):
     out.append(f"\n## Stashed Areas ({len(stashed)})")
     for a in stashed:
         out.append(f"- {a['name']} ({a['id']}) · {a['folder']} · stashed {a['at'] or '?'}")
-        out.extend(f"    - {c['title']} ({c['id']}) · {c['chars']} chars" for c in a["cards"])
+        out.extend(f"    - {c['title']} ({c['id']}) · {d.size(c)}" for c in a["cards"])
     out.append(f"\n## Ideas ({len(ideas)})")
     for i in ideas:
         src = f" · from {i['surface']}" if i["surface"] and i["surface"] != "lee" else ""

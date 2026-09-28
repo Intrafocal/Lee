@@ -22,25 +22,27 @@ const HESTER_NOTE = `If \`hester\` isn't on PATH, use \`~/.lee/venv/bin/hester\`
 
 export const DESK_SKILL = `---
 name: desk
-description: Read the Operator's Desk in Lee (Deep mode): Areas, Page cards, a Page's text with its answers, hand-offs, open questions and references, and their last card and where they stopped. Use when they mention a Page, the Desk, an Area, "my notes", "what I was writing", "the Goals card", or ask you to build on or review something they wrote in Lee.
+description: Read the Operator's Desk in Lee (Deep mode): Areas, Page and Board cards, a Page's text with its answers, hand-offs, open questions and references, a Board's images, annotations and highlights, and their last card and where they stopped. Use when they mention a Page, a Board, the Desk, an Area, "my notes", "what I was writing", "the Goals card", a screenshot or mockup they marked up, or ask you to build on or review something they wrote or drew in Lee.
 ---
 
 # Reading the Desk
 
-The Desk is where the Operator does deep work in Lee: one per workspace, in \`.hester/desk/\`. **Areas** are named regions; each holds **Page** cards (markdown writing). A Page's margin holds **answers** (Hester's replies to their Asks), **hand-offs** (Spike, Docs or Research tasks given to an agent, with results), **open questions** and **references** (quotes, files, links). The pinned **Goals** card is their thinking about GOALS.md; GOALS.md itself is the source of truth.
+The Desk is where the Operator does deep work in Lee: one per workspace, in \`.hester/desk/\`. **Areas** are named regions; each holds cards. A **Page** card is markdown writing; its margin holds **answers** (Hester's replies to their Asks), **hand-offs** (Spike, Docs or Research tasks given to an agent, with results), **open questions** and **references** (quotes, files, links). A **Board** card is for thinking visually: images (screenshots, renders, mockups) marked up with **annotations** (text boxes, sometimes pinned to a spot), **highlights** (regions of an image) and drawing, with **links** to other cards and its Asks and hand-offs as sticky notes and clipboards on the canvas. The pinned **Goals** card is their thinking about GOALS.md; GOALS.md itself is the source of truth.
 
 ## Commands (read-only)
 
-- \`hester desk overview\`: the Areas on the Desk and their cards (id, title, size, last change), the Goals card, the Drawer's counts and the last card. Start here.
+- \`hester desk overview\`: the Areas on the Desk and their cards (id, title, kind, size, last change), the Goals card, the Drawer's counts and the last card. Start here.
 - \`hester desk page <id or title>\`: one Page's text, then its answers, hand-offs, open questions and references. A title can be part of one; if several match it lists them, so rerun with the id (\`pg-…\`). \`--text-only\` gives just the Page.
+- \`hester desk board <id or title>\`: one Board (\`bd-…\`): its images as absolute paths (with where each came from), annotations, highlights, links, and its Asks and hand-offs with the image of what was selected. Read the image files to see the Board; \`preview.png\` in its folder is a picture of the whole Board.
 - \`hester desk last\`: the card they were last in and the last line they wrote ("where they stopped").
+- Cards link each other as \`[[pg-…|Title]]\` or \`[[bd-…|Title]]\`: read the linked card with \`page\` or \`board\`.
 
 ${HESTER_NOTE}
 
 ## How to use what you read
 
-- Quote the Page when you rely on it, and say which Page (title and id).
-- A Page is the Operator's own words and still in progress: treat it as their intent and open thinking, not as a spec, unless they say it is.
+- Quote the Page or annotation when you rely on it, and say which card (title and id).
+- A Page or a Board is the Operator's own thinking and still in progress: treat it as their intent and open thinking, not as a spec, unless they say it is.
 - Answers and hand-off results are Hester's or an agent's words, not the Operator's.
 - **Don't write to \`.hester/desk/\`.** Lee and Hester own those files (versions, the migration, what's open in a window). If they want something on a Page, give them the text to paste, or ask them to use Lee.
 - Stashed Areas and ideas are in the Drawer: see the \`lee:drawer\` skill.
