@@ -72,9 +72,18 @@ export function isCardId(id: string | null | undefined): boolean {
   return !!id && /^pg-[0-9a-f]{8}$/.test(id);
 }
 
-/** Where a Page's calls go: its card's `/desk/pages/{id}…` (the pre-Desk exploration routes are gone). */
+/** A Board card's id (Boards B3): `bd-` and 8 hex. */
+export function isBoardId(id: string | null | undefined): boolean {
+  return !!id && /^bd-[0-9a-f]{8}$/.test(id);
+}
+
+/**
+ * Where a Page's calls go: its card's `/desk/pages/{id}…` (the pre-Desk
+ * exploration routes are gone). A Board's answers, asks and hand-offs are the
+ * same routes under `/desk/boards/{id}…`, so HandoffSheet works on a Board too.
+ */
 export function pageRoute(id: string, rest = ''): string {
-  return `/desk/pages/${encodeURIComponent(id)}${rest}`;
+  return `/desk/${isBoardId(id) ? 'boards' : 'pages'}/${encodeURIComponent(id)}${rest}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +296,7 @@ export const HANDOFF_LAUNCH: Readonly<
 
 /** The line that closes every brief: where it came from (a Page card, or a pre-Desk exploration). */
 export function handoffFromLine(title: string, id: string): string {
+  if (isBoardId(id)) return `From the Board '${title}' (${id})`;
   return isCardId(id) ? `From the Page '${title}' (${id})` : `From the exploration '${title}' (${id})`;
 }
 
@@ -320,8 +330,9 @@ export function handoffLaunchRequest(input: {
 }): HandoffLaunchRequest {
   const how = HANDOFF_LAUNCH[input.kind];
   const label = HANDOFF_KINDS.find((k) => k.kind === input.kind)?.label ?? input.kind;
-  // Desk D2 §6.2: a card's hand-off is origin 'page'; an exploration's keeps 'exploration'.
-  const origin: TaskOrigin = { kind: isCardId(input.explorationId) ? 'page' : 'exploration', ref: `${input.explorationId}#${input.answerId}` };
+  // Desk D2 §6.2: a card's hand-off is origin 'page' (a Board's 'board'); an exploration's keeps 'exploration'.
+  const originKind = isBoardId(input.explorationId) ? 'board' : isCardId(input.explorationId) ? 'page' : 'exploration';
+  const origin: TaskOrigin = { kind: originKind, ref: `${input.explorationId}#${input.answerId}` };
   return {
     workspace: input.workspace,
     title: `${label}: ${input.title}`.slice(0, 120),
