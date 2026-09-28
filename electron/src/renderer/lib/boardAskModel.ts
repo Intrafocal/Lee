@@ -64,11 +64,11 @@ const round = (r: Rect): Rect => ({ x: Math.round(r.x), y: Math.round(r.y), w: M
 
 /**
  * What an Ask or hand-off is about: the selected items (only ones on the
- * Board, never a sticky or clipboard) and the marquee, else the selection's
+ * Board, never a sticky, clipboard or Visualize card) and the marquee, else the selection's
  * bounds. Null when there's nothing to ask about.
  */
 export function selectionTarget(items: readonly BoardItem[], ids: readonly string[], marquee?: Rect | null): BoardTarget | null {
-  const chosen = items.filter((it) => ids.includes(it.id) && it.kind !== 'ask' && it.kind !== 'handoff');
+  const chosen = items.filter((it) => ids.includes(it.id) && !isAnswerCard(it));
   const rect = marquee && marquee.w > 0 && marquee.h > 0 ? marquee : unionRect(chosen.map(rectOf));
   if (!rect) return null;
   return { item_ids: chosen.map((it) => it.id), rect: round(rect) };
@@ -94,6 +94,11 @@ export function selectionNotes(items: readonly BoardItem[], ids: readonly string
     }
   }
   return out;
+}
+
+/** A card that stands for an answers.jsonl row (a sticky, a clipboard, a Visualize): never part of what's asked about. */
+export function isAnswerCard(it: Pick<BoardItem, 'kind'>): boolean {
+  return it.kind === 'ask' || it.kind === 'handoff' || it.kind === 'visual';
 }
 
 /** `sel-1a2b3c4d.png` or `assets/sel-1a2b3c4d.png` → `assets/sel-1a2b3c4d.png`. */
@@ -190,10 +195,10 @@ export function leaderLine(card: Rect, target: Rect): [number, number, number, n
   return [Math.round(sx), Math.round(sy), Math.round(tx), Math.round(ty)];
 }
 
-/** The answers the Board's sticky and clipboard items point at (for "which rows have no card yet"). */
+/** The answers the Board's sticky, clipboard and Visualize items point at (for "which rows have no card yet"). */
 export function answerIdsOnBoard(items: readonly BoardItem[]): Set<string> {
   const out = new Set<string>();
-  for (const it of items) if (it.kind === 'ask' || it.kind === 'handoff') out.add(it.answer_id);
+  for (const it of items) if (it.kind === 'ask' || it.kind === 'handoff' || it.kind === 'visual') out.add(it.answer_id);
   return out;
 }
 

@@ -28,7 +28,7 @@ import type { AttentionItem, AttentionSnapshot } from '../../shared/copilot';
 // Selection action row (§5)
 // ---------------------------------------------------------------------------
 
-export type DeepRowAction = 'capture' | 'keep' | 'ask' | 'explore' | 'handoff' | 'table';
+export type DeepRowAction = 'capture' | 'keep' | 'ask' | 'explore' | 'handoff' | 'table' | 'visualize';
 export type DeepRowKey = { kind: 'action'; action: DeepRowAction } | { kind: 'escape' } | { kind: 'move'; delta: 1 | -1 };
 
 export interface DeepRowKeyContext {
@@ -41,7 +41,8 @@ export interface DeepRowKeyContext {
  * The row's keys once ⌘. moved focus into it (the letters show, underlined,
  * only then: R1): a and h pick Ask and Hand off, the row's only buttons
  * since 2026-09-28 (a letter only acts when its button is in the row; k c e t
- * are older actions, kept for their handlers); Esc returns, arrows move.
+ * are older actions, kept for their handlers); v is a Board's Visualize (B6);
+ * Esc returns, arrows move.
  */
 export function deepRowKey(key: string, ctx: DeepRowKeyContext = {}): DeepRowKey | null {
   if (key === 'Escape') return { kind: 'escape' };
@@ -59,6 +60,8 @@ export function deepRowKey(key: string, ctx: DeepRowKeyContext = {}): DeepRowKey
       return { kind: 'action', action: 'handoff' };
     case 't':
       return { kind: 'action', action: 'table' };
+    case 'v':
+      return { kind: 'action', action: 'visualize' };
     case 'ArrowRight':
       return { kind: 'move', delta: 1 };
     case 'ArrowLeft':

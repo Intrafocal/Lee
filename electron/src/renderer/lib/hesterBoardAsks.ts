@@ -1,8 +1,8 @@
 /**
- * Typed client for a Board's Asks and hand-offs (Boards B3, plan §3): the
- * Page's routes over the Board's store, `/desk/boards/{id}/answers`,
- * `/asks`, `/handoffs`, `/answers/{aid}` and `/answers/{aid}/retry`, with a
- * `board` anchor. Same `call` as lib/hesterDeep.ts (workspace as
+ * Typed client for a Board's Asks, hand-offs and Visualizes (Boards B3, B6,
+ * plan §3, §5b): the Page's routes over the Board's store,
+ * `/desk/boards/{id}/answers`, `/asks`, `/handoffs`, `/visualize`,
+ * `/answers/{aid}` and `/answers/{aid}/retry`, with a `board` anchor. Same `call` as lib/hesterDeep.ts (workspace as
  * `?workspace=` and `X-Lee-Workspace`, the bearer token, the copilot
  * envelope, the error body kept) and the same rows (DeepAnswer).
  *
@@ -18,7 +18,7 @@
 import { hesterCall as call, handoffLaunchRequest, handoffInFlight, type DeepResult } from './hesterDeep';
 import { isPending } from './deepModel';
 import { boardAnchor, newAskItem, selectionNotes, selectionTarget, type Rect } from './boardAskModel';
-import type { BoardAnchor, BoardAsk, BoardItem } from '../../shared/board';
+import type { BoardAnchor, BoardAsk, BoardItem, VisualizeCreate } from '../../shared/board';
 import type { DeepAnswer, DeepAnswerEvent, HandoffKind } from '../../shared/cockpit';
 
 export type { DeepResult as BoardAskResult };
@@ -52,6 +52,15 @@ export function createBoardHandoff(
   return call<DeepAnswer>(workspace, 'POST', boardRoute(id, '/handoffs'), body);
 }
 
+/**
+ * Queues a Visualize (202): Hester's diagram agent makes a diagram, image
+ * or table from the selection and the brief. The row is `kind: 'visualize'`
+ * with `visual: null` until it's done (a model call the user asked for, C2).
+ */
+export function visualize(workspace: string, id: string, body: VisualizeCreate): Promise<DeepResult<DeepAnswer>> {
+  return call<DeepAnswer>(workspace, 'POST', boardRoute(id, '/visualize'), body);
+}
+
 export function patchBoardAnswer(
   workspace: string,
   id: string,
@@ -61,7 +70,7 @@ export function patchBoardAnswer(
   return call<DeepAnswer>(workspace, 'PATCH', boardRoute(id, aidRoute(aid)), body);
 }
 
-/** Re-queues an errored or interrupted Ask (a user's Retry click). */
+/** Re-queues an errored or interrupted Ask or Visualize (a user's Retry click). */
 export function retryBoardAnswer(workspace: string, id: string, aid: string): Promise<DeepResult<DeepAnswer>> {
   return call<DeepAnswer>(workspace, 'POST', boardRoute(id, aidRoute(aid, '/retry')), {});
 }
@@ -107,7 +116,7 @@ export function boardHandoffLaunchRequest(input: {
 /** As the Page's (DeepHost ANSWER_POLL_MS): a fallback for a missed deep:answer. */
 export const BOARD_ANSWER_POLL_MS = 20000;
 
-/** Anything still to come: an Ask being answered, or a hand-off out with an agent. */
+/** Anything still to come: an Ask being answered, a Visualize being made, or a hand-off out with an agent. */
 export function answersPending(answers: readonly DeepAnswer[]): boolean {
   return answers.some((a) => !a.dismissed_at && (isPending(a) || handoffInFlight(a)));
 }

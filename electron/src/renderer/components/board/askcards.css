@@ -1,6 +1,7 @@
 /*
- * Asks and hand-offs on a Board (Boards B3): the sticky note (AskCard) and
- * the clipboard (HandoffCard), and the thin leader to what they're about.
+ * Asks, hand-offs and Visualizes on a Board (Boards B3, B6): the sticky note
+ * (AskCard), the clipboard (HandoffCard), the frame (VisualCard), and the
+ * thin leader to what they're about.
  *
  * They sit in the Board's transformed layer, so boxes are Board px. Text is
  * counter-scaled with --board-scale (set on the layer, like the Desk's
@@ -121,6 +122,69 @@
 
 .bd-handoff .bd-card-body {
   overflow: auto;
+}
+
+/* ---- the frame (Visualize) ---- */
+
+.bd-visual {
+  background: var(--ground-1);
+  border: 1px solid var(--ground-5);
+  border-radius: 3px;
+  /* The mat: an inner line a few px in, like a picture frame. */
+  box-shadow: inset 0 0 0 4px var(--ground-1), inset 0 0 0 5px var(--ground-4), 0 2px 8px rgba(var(--ground-0-rgb), 0.35);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.bd-visual.is-selected {
+  box-shadow: inset 0 0 0 4px var(--ground-1), inset 0 0 0 5px var(--ground-4), 0 0 0 2px var(--focus-ring);
+}
+
+.bd-visual-brief {
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.bd-visual-brief.is-clamped {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.bd-visual-made {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* Progress while it's being made: a quiet sweep along the bottom of the mat. */
+.bd-visual-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  height: 2px;
+  overflow: hidden;
+  background: var(--ground-3);
+  border-radius: 1px;
+}
+
+.bd-visual-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: var(--text-3);
+  animation: bd-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes bd-sweep {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
 }
 
 /* ---- shared parts ---- */
@@ -277,7 +341,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bd-card-dot {
+  .bd-card-dot,
+  .bd-visual-bar::after {
     animation: none !important;
   }
 }

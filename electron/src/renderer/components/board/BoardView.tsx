@@ -11,12 +11,18 @@
  * - Hand off: the same picture, then the Page's HandoffSheet (kind,
  *   provider, brief with the notes and the picture's path); a clipboard
  *   goes beside the selection once the record exists.
+ * - Visualize (B6): a one-line brief, the same picture, POST /visualize;
+ *   a frame goes beside the selection (VisualCard). When its row is done
+ *   the result goes beside the frame once (boardVisualModel): Hester's
+ *   image as an image item, a Mermaid diagram drawn to PNG here
+ *   (mermaidPng) and uploaded with the answer as its source, markdown as a
+ *   note; then the frame's `result_item_id` is set.
  * - The rows are kept fresh like the Page's: deep:answer events, and a poll
  *   while anything is pending (hesterBoardAsks.watchBoardAnswers).
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import type { BoardAnchor, BoardAsk, BoardHandoff, BoardItem, BoardTarget } from '../../../shared/board';
+import type { BoardAnchor, BoardAsk, BoardHandoff, BoardItem, BoardTarget, BoardVisual } from '../../../shared/board';
 import type { DeepAnswer, LeeMode } from '../../../shared/cockpit';
 import type { UseCopilotResult } from '../../hooks/useCopilot';
 import { cockpitModeStore } from '../cockpit/cockpitMode';
@@ -30,7 +36,9 @@ import {
   boardHandoffSection,
   clipboardText,
   followUpsOf,
+  isAnswerCard,
   newAskItem,
+  newItemId,
   newHandoffItem,
   selectionNotes,
   selectionTarget,
@@ -38,9 +46,14 @@ import {
   stickyText,
   toggleCard,
 } from '../../lib/boardAskModel';
-import { askBoard, patchBoardAnswer, retryBoardAnswer, upsertAnswer, watchBoardAnswers } from '../../lib/hesterBoardAsks';
+import { askBoard, patchBoardAnswer, retryBoardAnswer, upsertAnswer, visualize, watchBoardAnswers } from '../../lib/hesterBoardAsks';
+import { listBoardAssets } from '../../lib/hesterBoard';
+import { boardAssetBitmap } from '../../lib/boardAssets';
+import { MERMAID_SCALE, assetsFromAnswer, findPlacedResult, frameLabel, needsResult, newVisualItem, resultImage, resultNote, toggleVisual, whatToPlace } from '../../lib/boardVisualModel';
+import { renderMermaidPng } from '../../lib/mermaidPng';
 import { AskCard, CardLeader } from './AskCard';
 import { HandoffCard } from './HandoffCard';
+import { VisualCard } from './VisualCard';
 import { BoardSurface, type BoardApi, type BoardSelection } from './BoardSurface';
 
 export interface BoardViewProps {
@@ -55,11 +68,15 @@ export interface BoardViewProps {
 /** A selection drawn and uploaded: what an Ask or hand-off carries. */
 type Snapshot = { target: BoardTarget; anchor: BoardAnchor };
 
-type RowAction = 'ask' | 'handoff';
+type RowAction = 'ask' | 'handoff' | 'visualize';
 const ROW: ReadonlyArray<{ action: RowAction; label: string; mnemonic: string; title: string }> = [
   { action: 'ask', label: 'Ask about this…', mnemonic: 'a', title: 'Ask Hester about this part of the Board; the answer comes back on a sticky note' },
   { action: 'handoff', label: 'Hand off', mnemonic: 'h', title: 'Hand this to an agent: Spike, Docs or Research' },
+  { action: 'visualize', label: 'Visualize', mnemonic: 'v', title: 'Have Hester make a diagram, picture or table of this; it lands beside the selection' },
 ];
+
+/** The one-line field under the row: an Ask's question or a Visualize's brief. */
+type FieldMode = 'ask' | 'visualize';
 
 /** Underline the mnemonic letter (shown only while the row has keyboard focus, as on a Page). */
 function mnemonicLabel(label: string, letter: string): React.ReactNode {
@@ -95,8 +112,8 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
   const refreshSoon = () => void watch.current?.refresh();
 
   // ---- the action row ----
-  // The Ask field belongs to the selection it was opened on (`key`); another selection hides it.
-  const [askingFor, setAskingFor] = useState<{ key: string; text: string } | null>(null);
+  // The field belongs to the selection it was opened on (`key`); another selection hides it.
+  const [askingFor, setAskingFor] = useState<{ key: string; mode: FieldMode; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const askRef = useRef<HTMLInputElement | null>(null);
@@ -113,10 +130,10 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
       say('Select something on the Board first');
       return null;
     }
-    // Everything the rect touches, but not the stickies and clipboards on it.
+    // Everything the rect touches, but not the stickies, clipboards and frames on it.
     const ids = itemsInRect(items, target.rect).filter((id) => {
       const it = items.find((x) => x.id === id);
-      return it && it.kind !== 'ask' && it.kind !== 'handoff';
+      return it && !isAnswerCard(it);
     });
     const png = await api.flatten(target.rect, ids);
     if (!png) {
@@ -146,6 +163,23 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     refreshSoon();
   };
 
+  // ---- Visualize: the brief, the picture, a frame beside it ----
+  const visualizeIt = async (brief: string) => {
+    const b = brief.trim();
+    if (!b) return;
+    setBusy(true);
+    const snap = await snapshot();
+    if (!snap) return setBusy(false);
+    const r = await visualize(workspace, boardId, { brief: b, anchor: snap.anchor });
+    setBusy(false);
+    if (!r.ok) return say(r.status === 404 || r.status === 405 ? 'Hester is older than this Lee. Reinstall it to Visualize.' : r.error);
+    const api = board.current;
+    if (api) api.addItems([newVisualItem(r.data.id, snap.target, api.items())]);
+    upsert(r.data);
+    setAskingFor(null);
+    refreshSoon();
+  };
+
   // ---- hand-offs: the Page's sheet, with the picture ----
   const [handoff, setHandoff] = useState<{ sectionText: string; anchor: BoardAnchor; target: BoardTarget } | null>(null);
   const handOff = async () => {
@@ -160,8 +194,8 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
 
   const run = (a: RowAction) => {
     if (busy) return;
-    if (a === 'ask') {
-      setAskingFor({ key: selKey(), text: '' });
+    if (a === 'ask' || a === 'visualize') {
+      setAskingFor({ key: selKey(), mode: a, text: '' });
       requestAnimationFrame(() => askRef.current?.focus());
     } else void handOff();
   };
@@ -175,7 +209,7 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     e.stopPropagation();
     if (k.kind === 'escape') backToBoard();
     else if (k.kind === 'action') {
-      if (k.action === 'ask' || k.action === 'handoff') run(k.action);
+      if (k.action === 'ask' || k.action === 'handoff' || k.action === 'visualize') run(k.action);
     } else if (k.kind === 'move') {
       const btns = Array.from(rowRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
       const i = btns.indexOf(document.activeElement as HTMLButtonElement);
@@ -184,8 +218,8 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
   };
 
   const selectionSlot = (sel: BoardSelection) => {
-    const asking = askingFor && askingFor.key === sel.item_ids.join(',') ? askingFor.text : null;
-    if (!sel.items.some((it) => it.kind !== 'ask' && it.kind !== 'handoff')) return null;
+    const field = askingFor && askingFor.key === sel.item_ids.join(',') ? askingFor : null;
+    if (!sel.items.some((it) => !isAnswerCard(it))) return null;
     return (
       <>
         <div className="deep-row" ref={rowRef} role="toolbar" aria-label="Actions (⌘.)" onKeyDown={onRowKey}>
@@ -208,18 +242,20 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
             ⌘.
           </kbd>
         </div>
-        {asking != null && (
+        {field && (
           <input
             ref={askRef}
             className="deep-ask-input"
-            value={asking}
+            value={field.text}
             disabled={busy}
-            placeholder="Ask about this… (Enter asks “Explain this.”)"
-            onChange={(e) => setAskingFor({ key: sel.item_ids.join(','), text: e.target.value })}
+            placeholder={field.mode === 'visualize' ? 'What should it show?' : 'Ask about this… (Enter asks “Explain this.”)'}
+            aria-label={field.mode === 'visualize' ? 'What should it show?' : 'Ask about this'}
+            onChange={(e) => setAskingFor({ key: sel.item_ids.join(','), mode: field.mode, text: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                void ask(asking);
+                if (field.mode === 'visualize') void visualizeIt(field.text);
+                else void ask(field.text);
               } else if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
@@ -245,8 +281,8 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     cockpitModeStore.select({ kind: 'row', id: `task:${taskId}` });
   };
 
-  const toggle = (item: BoardAsk | BoardHandoff, open: boolean, api: BoardApi) => {
-    api.updateItem(item.id, toggleCard(item, api.items(), open), false);
+  const toggle = (item: BoardAsk | BoardHandoff | BoardVisual, open: boolean, api: BoardApi) => {
+    api.updateItem(item.id, item.kind === 'visual' ? toggleVisual(item, api.items(), open) : toggleCard(item, api.items(), open), false);
     const row = rowsRef.current.find((a) => a.id === item.answer_id);
     // Opening an answer or a result you haven't read marks it read.
     if (open && row && !row.read_at && (row.status === 'done' || row.handoff?.state === 'review')) {
@@ -285,8 +321,89 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     return true;
   };
 
-  const renderAnswerItem = (item: BoardAsk | BoardHandoff, api: BoardApi, selected: boolean) => {
+  // ---- a Visualize's result, placed once beside its frame ----
+  const placing = useRef(new Set<string>());
+  const [placeErrors, setPlaceErrors] = useState<Record<string, string>>({});
+  const placeResult = async (frameId: string) => {
+    const api = board.current;
+    const first = api?.items().find((it) => it.id === frameId);
+    if (!api || !first || first.kind !== 'visual') return;
+    const row = rowsRef.current.find((a) => a.id === first.answer_id);
+    const v = row?.visual;
+    if (!row || !v || !needsResult(first, row) || placing.current.has(row.id)) return;
+    const plan = whatToPlace(v);
+    if (!plan) return;
+    placing.current.add(row.id);
+    const failed = (msg: string) => setPlaceErrors((p) => ({ ...p, [row.id]: msg }));
+    try {
+      // Placed already (another window, or before a reload)? Then only point at it.
+      const saved = plan.kind === 'note' ? [] : await listBoardAssets(workspace, boardId).then((r) => (r.ok && Array.isArray(r.data) ? assetsFromAnswer(r.data, row.id) : []));
+      const there = findPlacedResult(first, api.items(), v, saved);
+      if (there) return api.updateItem(frameId, { result_item_id: there }, false);
+
+      let add: BoardItem;
+      if (plan.kind === 'note') {
+        add = resultNote(first, api.items(), plan.text);
+      } else {
+        // Hester's image, or a diagram drawn here (or by another window: its PNG is already saved).
+        let asset = plan.kind === 'image' ? plan.asset : saved[0] ?? null;
+        let natural: { w: number; h: number } | null = null;
+        let dpr = 1;
+        if (!asset && plan.kind === 'mermaid') {
+          const png = await renderMermaidPng(plan.dsl);
+          if ('error' in png) return failed(png.error);
+          const up = await api.uploadAsset(png.blob, 'image/png', { kind: 'answer', card_id: boardId, answer_id: row.id, taken_at: new Date().toISOString() });
+          if ('error' in up) return failed(up.error);
+          asset = up.name;
+          natural = { w: png.w, h: png.h };
+          dpr = png.scale;
+        }
+        if (!asset) return;
+        if (!natural) {
+          const bmp = await boardAssetBitmap(workspace, boardId, asset);
+          if (!bmp) return failed('Couldn’t load what it made');
+          natural = { w: bmp.width, h: bmp.height };
+          // A diagram another window drew is at 2x, like ours.
+          dpr = plan.kind === 'mermaid' ? MERMAID_SCALE : 1;
+        }
+        add = resultImage(first, api.items(), asset, natural, dpr);
+      }
+      // The Board may have moved on while this drew or uploaded.
+      const now = api.items().find((it) => it.id === frameId);
+      if (!now || now.kind !== 'visual' || now.result_item_id) return;
+      const id = newItemId();
+      // Point the frame first (not undoable), so undoing the result doesn't place it again.
+      api.updateItem(frameId, { result_item_id: id }, false);
+      api.addItems([{ ...add, id }]);
+      setPlaceErrors((p) => {
+        if (!(row.id in p)) return p;
+        const rest = { ...p };
+        delete rest[row.id];
+        return rest;
+      });
+    } finally {
+      placing.current.delete(row.id);
+    }
+  };
+
+  const renderAnswerItem = (item: BoardAsk | BoardHandoff | BoardVisual, api: BoardApi, selected: boolean) => {
     const row = rows.find((a) => a.id === item.answer_id) ?? null;
+    if (item.kind === 'visual') {
+      return (
+        <>
+          <CardLeader item={item} />
+          <VisualCard
+            item={item}
+            answer={row}
+            selected={selected}
+            onToggle={(open) => toggle(item, open, api)}
+            onRetry={(aid) => void retry(aid)}
+            onPlace={() => void placeResult(item.id)}
+            placeError={row ? placeErrors[row.id] ?? null : null}
+          />
+        </>
+      );
+    }
     return (
       <>
         <CardLeader item={item} />
@@ -314,10 +431,11 @@ export function BoardView({ workspace, boardId, title, visible, copilot, onHop }
     );
   };
 
-  /** What a sticky or clipboard says in preview.png. */
+  /** What a sticky, clipboard or frame says in preview.png. */
   const answerLabel = (item: BoardItem) => {
-    if (item.kind !== 'ask' && item.kind !== 'handoff') return '';
+    if (item.kind !== 'ask' && item.kind !== 'handoff' && item.kind !== 'visual') return '';
     const row = rowsRef.current.find((a) => a.id === item.answer_id) ?? null;
+    if (item.kind === 'visual') return frameLabel(row);
     return item.kind === 'ask' ? stickyText(row).question || 'Ask' : clipboardText(row).label;
   };
 
