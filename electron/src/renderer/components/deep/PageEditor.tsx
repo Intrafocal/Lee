@@ -86,7 +86,7 @@ import {
 } from '../../lib/deepModel';
 import { onDeepActions } from './deepBridge';
 import { marginNoteLabel } from './deepView';
-import { pageMarkdown, liveFormatting, tableField } from './page/liveMarkdown';
+import { pageMarkdown, liveFormatting, tableField, type AssetUrl } from './page/liveMarkdown';
 import { formatCommand, formatKeymap, inTable, insertTable, type FormatId } from './page/format';
 import { PageToolbar, type ToolbarState } from './page/PageToolbar';
 import { mentionField, setMention, type ShownMention } from './page/mentionWidget';
@@ -201,6 +201,8 @@ export interface PageEditorHandle {
   replaceAll(text: string): void;
   /** Your own insert (Insert from the margin): an ordinary edit. */
   insert(from: number, text: string): void;
+  /** Delete a range as an ordinary edit (Send to Lee's Undo). */
+  remove(from: number, to: number): void;
   /** Scroll to a position and put the cursor there. */
   reveal(pos: number): void;
   cursor(): { anchor: number; head: number; scroll: number };
@@ -243,6 +245,8 @@ interface PageEditorProps {
   marginPrompts?: readonly string[];
   /** R5: a hand-off card's "Open in Work" (its task in the Cockpit). Hidden when absent. */
   onOpenInWork?: (answerId: string) => void;
+  /** Tether §4.4: the Page's `assets/<name>` as a showable URL; without it images stay markdown. */
+  assetUrl?: AssetUrl;
 }
 
 /** The action row slot's width (deep.css .deep-row-slot). */
@@ -629,6 +633,8 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
   };
 
   const openWikiRef = useRef<(link: WikiLink) => void>(() => {});
+  const assetUrlRef = useRef<AssetUrl | undefined>(props.assetUrl);
+  assetUrlRef.current = props.assetUrl;
   openWikiRef.current = (link: WikiLink) => {
     if (!cb.current.files) return;
     openSource(link.path, link.lines, null);
@@ -735,7 +741,8 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         history(),
         drawSelection(),
         highlightSpecialChars(),
-        liveFormatting((link) => openWikiRef.current(link)),
+        // Through a ref: an in-memory Page gets its resolver once it becomes a card.
+        liveFormatting((link) => openWikiRef.current(link), (name) => assetUrlRef.current?.(name) ?? Promise.resolve(null)),
         tableField,
         affordanceField((opt) => pickAffordance(opt)),
         mentionField(() => void sendMention()),
@@ -926,6 +933,13 @@ export const PageEditor = forwardRef<PageEditorHandle, PageEditorProps>(function
         if (!v) return;
         const at = Math.max(0, Math.min(from, v.state.doc.length));
         v.dispatch({ changes: { from: at, insert: text }, userEvent: 'input' });
+      },
+      remove: (from: number, to: number) => {
+        const v = viewRef.current;
+        if (!v) return;
+        const a = Math.max(0, Math.min(from, v.state.doc.length));
+        const b = Math.max(a, Math.min(to, v.state.doc.length));
+        v.dispatch({ changes: { from: a, to: b }, userEvent: 'delete' });
       },
       reveal: (pos: number) => {
         const v = viewRef.current;

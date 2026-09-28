@@ -600,6 +600,27 @@
 }
 
 /* A [[file]] link off the cursor's line: its label, quietly underlined. */
+/* Tether §4.4: a Page's own image off the cursor's line (its markdown shows on it). */
+.deep-image {
+  display: inline-block;
+  max-width: 100%;
+  margin: var(--space-2) 0;
+  vertical-align: top;
+}
+
+.deep-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: var(--radius-control);
+}
+
+.deep-image.is-missing {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
 .deep-wiki {
   color: var(--text-1);
   text-decoration: underline;

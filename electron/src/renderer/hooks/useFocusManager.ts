@@ -29,6 +29,11 @@ class FocusManager {
     this.terminals.set(id, terminal);
   }
 
+  /** A registered terminal (Send to Lee pastes through it), or undefined. */
+  get(id: number): Terminal | undefined {
+    return this.terminals.get(id);
+  }
+
   /**
    * Unregister a terminal instance
    */

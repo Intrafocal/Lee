@@ -11,7 +11,10 @@
  *   the cursor's line, the
  *   markdown marks hidden off the cursor's lines (deepModel.liveHidden), and
  *   `[[…]]` links shown as their label off the cursor's line, opening the
- *   source panel when clicked (R10).
+ *   source panel when clicked (R10). With `assetUrl`, the Page's own images
+ *   (`![…](assets/<file>)`, Tether §4.4) show as images off the cursor's
+ *   line, fetched with auth into blob URLs; on the cursor's line the
+ *   markdown shows, like every other mark.
  * - tableField: GFM tables rendered as tables while the cursor is outside
  *   them (block widgets must come from a state field).
  * - languageForPath: the same languages, by file extension, for the source panel.
@@ -23,6 +26,7 @@ import { HighlightStyle, LanguageDescription, syntaxHighlighting, syntaxTree } f
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { tags as t } from '@lezer/highlight';
 import { liveHidden, parseTable, parseWikiLinks, touchesActive, wikiDisplay, type WikiLink } from '../../../lib/deepModel';
+import { parsePageImages } from '../../../lib/tetherModel';
 
 // ---------------------------------------------------------------------------
 // Languages
@@ -123,6 +127,48 @@ class WikiWidget extends WidgetType {
 }
 
 // ---------------------------------------------------------------------------
+// The Page's images (Tether §4.4)
+// ---------------------------------------------------------------------------
+
+/** Resolves a Page's `assets/<name>` to a URL the renderer may show (a blob: URL), or null. */
+export type AssetUrl = (name: string) => Promise<string | null>;
+
+class ImageWidget extends WidgetType {
+  constructor(
+    readonly name: string,
+    readonly alt: string,
+    readonly resolve: AssetUrl,
+  ) {
+    super();
+  }
+  eq(other: ImageWidget): boolean {
+    return other.name === this.name && other.alt === this.alt;
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'deep-image';
+    wrap.title = this.alt || this.name;
+    const img = document.createElement('img');
+    img.alt = this.alt || this.name;
+    img.draggable = false;
+    // The widget measures again once the image has a size.
+    img.addEventListener('load', () => view.requestMeasure());
+    void this.resolve(this.name).then((url) => {
+      if (url) img.src = url;
+      else {
+        wrap.classList.add('is-missing');
+        wrap.textContent = this.alt ? `Image: ${this.alt}` : `Image missing: ${this.name}`;
+      }
+    });
+    wrap.appendChild(img);
+    return wrap;
+  }
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Task checkboxes and horizontal rules
 // ---------------------------------------------------------------------------
 
@@ -177,7 +223,7 @@ const ruleWidget = new RuleWidget();
 
 const hide = Decoration.replace({});
 
-function buildLive(view: EditorView, openWiki: (link: WikiLink) => void): DecorationSet {
+function buildLive(view: EditorView, openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl): DecorationSet {
   const { state } = view;
   const active = activeLines(state);
   const decos: Range<Decoration>[] = [];
@@ -193,6 +239,15 @@ function buildLive(view: EditorView, openWiki: (link: WikiLink) => void): Decora
     // [[links]] first, so marks inside them are left alone.
     for (let pos = from; pos <= to; ) {
       const line = state.doc.lineAt(pos);
+      if (assetUrl && line.text.includes('](assets/')) {
+        for (const im of parsePageImages(line.text)) {
+          const a = line.from + im.from;
+          const b = line.from + im.to;
+          if (touchesActive(a, b, active)) continue;
+          wikiRanges.push([a, b]); // its marks are the widget's now
+          decos.push(Decoration.replace({ widget: new ImageWidget(im.name, im.alt, assetUrl) }).range(a, b));
+        }
+      }
       if (line.text.includes('[[')) {
         for (const link of parseWikiLinks(line.text)) {
           const a = line.from + link.from;
@@ -267,17 +322,17 @@ function buildLive(view: EditorView, openWiki: (link: WikiLink) => void): Decora
   return Decoration.set(decos, true);
 }
 
-/** Line classes, hidden marks and `[[…]]` labels; `openWiki` opens the source panel. */
-export function liveFormatting(openWiki: (link: WikiLink) => void): Extension {
+/** Line classes, hidden marks and `[[…]]` labels; `openWiki` opens the source panel; `assetUrl` shows the Page's images. */
+export function liveFormatting(openWiki: (link: WikiLink) => void, assetUrl?: AssetUrl): Extension {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       constructor(view: EditorView) {
-        this.decorations = buildLive(view, openWiki);
+        this.decorations = buildLive(view, openWiki, assetUrl);
       }
       update(u: ViewUpdate) {
         if (u.docChanged || u.viewportChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) {
-          this.decorations = buildLive(u.view, openWiki);
+          this.decorations = buildLive(u.view, openWiki, assetUrl);
         }
       }
     },
