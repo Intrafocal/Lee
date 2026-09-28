@@ -13,7 +13,7 @@ Four parts, decided in conversation on 2026-09-28:
    - **Review** is read-only: the **Desk** (phone: Areas → Pages → a Page; T-Deck: Pages only, newest first), the **Drawer** (phone only: Stashed Areas and Ideas) and **Files**.
    - **Hester** is the chat, as today.
    - Capture stays a global action (phone: the capture button; T-Deck: `c`), landing in Ideas.
-2. **Send to Lee** (§4): the phone and the T-Deck are input devices for Lee. A voice note (as its transcript), a photo, a screenshot, a scribble or text goes straight to Lee's focus (the Page you're on, Hester, a tab) or to the tab you're looking at. It's also the **compose** way to type into a tab from a device (§4.6), replacing keystroke-by-keystroke input for anything but TUI control. It presses Enter only when you tap Send yourself.
+2. **Send to Lee** (§4): the phone and the T-Deck are input devices for Lee. A voice note (as its transcript), a photo, a screenshot, a scribble or text goes straight to Lee's focus (the Page you're on, Hester, a tab) or to the tab you're looking at. It's also the **compose** way to type into a tab from a device (§4.6), replacing keystroke-by-keystroke input for anything but TUI control, and the main way to steer a tab when you're away. Two modes: **Deliver** (into the input, not submitted) and **Send** (submitted).
 3. **Voice** (§5): `VoicePlan.md` as written (Hester transcribes; Lee, Aeronaut and the T-Deck record), adapted to the renames.
 4. **Renames and removals** (§2): Carry → Tether and Someday → Ideas in routes, types, stores, files and the CLI; Put away → Stashed in ids and routes; **Open next** and the pre-Desk routes are removed.
 
@@ -141,7 +141,13 @@ export interface TetherDrawer {
 
 ### 4.1 What it is
 
-While you're at the Machine, the phone is a second input: speak a note, take a photo, pick a screenshot, draw a scribble or type, and it lands where Lee's focus is. It's for input, not control: it never presses Enter, approves, denies or switches modes. It needs Lee running on the paired Machine; there's no queue.
+The phone and the T-Deck are inputs for Lee: speak a note, take a photo, pick a screenshot, draw a scribble or type, and it lands where Lee's focus is or in the tab you choose. Next to you at the Machine it's a second input; away from it, it's how you steer a tab.
+
+Two modes, chosen by the button you tap:
+- **Deliver:** into the target's input, not submitted. You finish it (at the Machine, or with another send).
+- **Send:** into the input, then submitted: Enter in a tab, the question asked in Hester's palette. A Page has only Deliver.
+
+Send only ever comes from an explicit tap (or Enter on the T-Deck's compose line); voice fills the field and never submits. It never approves, denies or switches modes: approvals stay on their own buttons. It needs Lee running on the paired Machine; there's no queue.
 
 ### 4.2 Wire (M, types in `shared/tether.ts`)
 
@@ -164,14 +170,14 @@ export interface SendRequest {
   workspace?: string;
   target: SendTarget | 'focus';
   items: SendItem[];
-  /** Tab targets only: press Enter after the text. Only from an explicit Send tap, never from voice or a default. */
+  /** Send (true) or Deliver (false, the default). Tabs: Enter after the text; Hester: ask the question. Refused for Pages. Only from an explicit Send tap, never from voice. */
   submit?: boolean;
 }
 export interface SendResult { send_id: string; delivered_to: SendTarget }
 ```
 
 - `POST /tether/send`: body ≤ 15 MB, ≤ 4 items, an image ≤ 10 MB decoded, text ≤ 20 000 chars. 400 on anything else; 409 `{error: 'no_target'}` when `focus` is asked for and nothing in front of you is a target; 503 `{error: 'no_window'}` when no Lee window has the workspace.
-- `submit` is refused (400) for non-tab targets and when the items hold no text.
+- `submit` is refused (400) for Page and Board targets and when the items hold no text.
 - M validates, then sends IPC `tether:send` `{send_id, target, items}` to that window; R delivers (§4.3) and answers `tether:send-result` `{send_id, ok, error?}`; M returns 200 after the renderer's answer (timeout 10 s → 504).
 - Event `tether.send` `{source_device, target_kind, items: [{kind, source?, input?, bytes}], ok}`: kinds and sizes only, never content.
 
@@ -180,10 +186,10 @@ export interface SendResult { send_id: string; delivered_to: SendTarget }
 | Target | Text | Image |
 |---|---|---|
 | **page** (zoomed or not) | Inserted as its own paragraph at the Page's cursor (the end when the Page isn't open), through the editor so it saves and undoes normally | Uploaded to the Page's assets (§4.4), then `![caption](assets/<file>)` inserted the same way |
-| **hester** | Opens the palette with the text as the question, not sent | Attached to the palette's question (the palette sends `images` in its `ContextRequest`; add the attach UI if it lacks it) |
+| **hester** | Opens the palette with the text as the question; with `submit`, asks it (the answer appears in the palette as usual) | Attached to the palette's question (the palette sends `images` in its `ContextRequest`; add the attach UI if it lacks it) |
 | **tab** (agent, terminal, TUI) | Pasted into the tab as one piece through xterm's `paste()`, which wraps it in bracketed paste when the program asked for it (Claude Code and zsh do), so a multi-line text doesn't submit line by line; then `\r` only when `submit` is true | Saved to `~/.lee/inbox/<send_id>-<n>.<ext>` (0600, pruned after 7 days), and its absolute path pasted the same way (Claude Code reads an image path) |
 
-A quiet chip in the status bar: "From your phone: photo → Taxonomy · Undo" (or "From the T-Deck"). Undo removes a Page insertion while it's unchanged (a CodeMirror transaction). Tab and Hester targets have no undo; without `submit`, nothing was sent. Compose sends to the tab you're viewing on the device (§4.6) don't show the chip, since you're watching that tab. The chip goes after 8 s.
+A quiet chip in the status bar: "From your phone: photo → Taxonomy · Undo" (or "From the T-Deck"). Undo removes a Page insertion while it's unchanged (a CodeMirror transaction). Tab and Hester targets have no undo; with Deliver, nothing was submitted. Compose sends to the tab you're viewing on the device (§4.6) don't show the chip, since you're watching that tab. The chip goes after 8 s.
 
 ### 4.4 Images on a Page (H, R)
 
@@ -198,9 +204,9 @@ A **Send to Lee** sheet: pick **Voice note** (records, transcribes via §5, show
 
 Direct tab input streams each keystroke, which is slow and awkward for anything longer than a few keys, and gets no autocorrect or dictation. It stays for driving TUIs; **compose** becomes the default for writing.
 
-- **Aeronaut:** the tab view (`terminal_screen.dart`) opens in **Compose**: a native multi-line text field (autocorrect, iOS dictation, paste), the mic (§5.5), and attach (photo, screenshot, scribble). Two actions: **Insert** (typed, no Enter) and **Send** (typed, then Enter). A **Keys** toggle switches to today's keystroke mode (arrows, Ctrl, Esc, Tab) for TUIs, and it's remembered per tab. The target is the tab itself (`{kind: 'tab', pty_id}`), through `POST /tether/send`.
-- **Dirigible:** the Tabs screen's tab view gets a **compose line**: typing fills a local buffer (edit with backspace, ball to move, `Shift+Enter` for a new line), Enter sends it as one piece with Enter after, `Alt+Enter` inserts without Enter; a key toggles to keystroke mode for TUIs (the agent picks a plain letter free on that screen, shown in the footer). Voice fills the buffer when `CONFIG_DIRIGIBLE_VOICE` is on.
-- **From Work** (both devices): the Send to Lee entry opens the same composer aimed at Lee's focus, with the target picker. Replies to attention items keep their own Reply field (which already submits) and gain the mic.
+- **Aeronaut:** the tab view (`terminal_screen.dart`) opens in **Compose**: a native multi-line text field (autocorrect, iOS dictation, paste), the mic (§5.5), and attach (photo, screenshot, scribble). Two actions: **Deliver** (typed, no Enter) and **Send** (typed, then Enter). A **Keys** toggle switches to today's keystroke mode (arrows, Ctrl, Esc, Tab) for TUIs, and it's remembered per tab. The target is the tab itself (`{kind: 'tab', pty_id}`), through `POST /tether/send`.
+- **Dirigible:** the Tabs screen's tab view gets a **compose line**: typing fills a local buffer (edit with backspace, ball to move, `Shift+Enter` for a new line), Enter sends it as one piece with Enter after (Send), `Alt+Enter` delivers it without Enter (Deliver); a key toggles to keystroke mode for TUIs (the agent picks a plain letter free on that screen, shown in the footer). Voice fills the buffer when `CONFIG_DIRIGIBLE_VOICE` is on.
+- **From Work** (both devices): the Send to Lee entry opens the same composer, with Deliver and Send, aimed at Lee's focus, with the target picker. Replies to attention items keep their own Reply field (which already submits) and gain the mic.
 - Voice never taps Send: a transcript fills the field, and you send it.
 
 ## 5. Voice (VoicePlan, carried over)
@@ -244,7 +250,7 @@ Direct tab input streams each keystroke, which is slow and awkward for anything 
 
 ### 5.4 GOALS.md check (two-sided; from VoicePlan)
 
-- **Moves:** device_creative_share ↑ (voice makes reply and capture cheap where typing is weak; Send to Lee makes the phone a creative input); attention_latency ↓ away from the desk; pull_usage ↑. C1, C2 and C3 hold by construction: every model call comes from a press and is logged `trigger=user`; nothing auto-sends, approves or presses Enter.
+- **Moves:** device_creative_share ↑ (voice makes reply and capture cheap where typing is weak; Send to Lee makes the phone a creative input); attention_latency ↓ away from the desk (steering a tab with Send); pull_usage ↑. C1, C2 and C3 hold by construction: every model call comes from a press and is logged `trigger=user`; nothing auto-sends or approves, and Enter comes only from an explicit Send.
 - **Costs:** tool_failures (permissions, bad transcripts: `voice.transcribe ok=false`, `tether.send ok=false`); toil_load (fixing transcripts: watch acceptance); capture_pickup may dilute if voice captures are low value. The readback guard: voice sessions only, foreground only.
 - **Proposal only** (a human edits GOALS.md): diagnostic readings `voice.share`, `voice.acceptance` and `tether.send_share` in `hester/daemon/copilot/metrics.py`.
 
@@ -300,7 +306,7 @@ Nobody runs `dist:mac`, reinstalls Hester, flashes the T-Deck or installs Aerona
 
 - Voice notes reach Lee as reviewed transcripts, never as audio (VoicePlan's "never persisted").
 - Send to Lee has no queue: it needs Lee running, and fails plainly otherwise.
-- Tab targets get text or an image path pasted in one piece; Enter only with `submit`, which only an explicit Send tap sets.
+- Two modes everywhere it makes sense: Deliver (not submitted) and Send (submitted: Enter in a tab, asked in Hester). `submit` comes only from an explicit Send tap or the T-Deck's Enter; voice never submits.
 - Compose is the default in a device's tab view; keystroke mode stays one toggle away for TUIs.
 - Images on Pages live with the card (`pages/<id>/assets/`) and go when it's deleted.
 - New idea ids use `idea_`; old `sd_` files are gone.
