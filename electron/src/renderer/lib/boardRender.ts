@@ -268,6 +268,22 @@ export function drawBoard(
         textBox(ctx, opts.answerLabel?.(it) || 'Hand-off', { x: it.x, y: it.y + 6, w: it.w, h: it.h - 6 }, c.text);
         break;
       }
+      case 'visual': {
+        // The frame: its edge, and the mat's inner line a few px in.
+        roundedRect(ctx, it.x, it.y, it.w, it.h, 3);
+        ctx.fillStyle = c.ground;
+        ctx.fill();
+        ctx.strokeStyle = c.muted;
+        ctx.lineWidth = unit;
+        ctx.stroke();
+        const m = Math.min(5, it.w / 8, it.h / 8);
+        ctx.beginPath();
+        ctx.rect(it.x + m, it.y + m, it.w - m * 2, it.h - m * 2);
+        ctx.strokeStyle = c.border;
+        ctx.stroke();
+        textBox(ctx, opts.answerLabel?.(it) || 'Visualize', { x: it.x + m, y: it.y + m, w: it.w - m * 2, h: it.h - m * 2 }, c.text);
+        break;
+      }
       case 'link':
         roundedRect(ctx, it.x, it.y, it.w, it.h, 6);
         ctx.fillStyle = c.card;

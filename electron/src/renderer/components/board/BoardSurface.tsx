@@ -23,7 +23,8 @@
  *   Desk card's picture) at most every few seconds, and when you leave.
  * - Ask and Hand off (B3) come from BoardView: `onSelectionAction` runs on
  *   ⌘. with something selected; `selectionSlot` draws the action row under
- *   the selection; `renderAnswerItem` draws the sticky and the clipboard;
+ *   the selection; `renderAnswerItem` draws the sticky, the clipboard and
+ *   (B6) the Visualize frame;
  *   the ref is a BoardApi (add items, flatten a rect to PNG, upload).
  * - Links (B4): `[[` in a note picks a Page or Board (lib/cardLinks); a
  *   note's links show under its text and open the card. Pasting a lone
@@ -31,7 +32,7 @@
  */
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { CARD_LINK_RE, type AssetSource, type BoardAsk, type BoardHandoff, type BoardImage, type BoardItem, type BoardNote } from '../../../shared/board';
+import { CARD_LINK_RE, type AssetSource, type BoardAsk, type BoardHandoff, type BoardImage, type BoardItem, type BoardNote, type BoardVisual } from '../../../shared/board';
 import { cockpitModeStore, zoomIntoCard, zoomOut } from '../cockpit/cockpitMode';
 import { AgentMarkdown } from '../cockpit/AgentMarkdown';
 import { IconAction } from '../cockpit/ui';
@@ -138,9 +139,9 @@ export interface BoardSurfaceProps {
   onSelectionAction?: (sel: BoardSelection, api: BoardApi) => void;
   /** Drawn just below the selection, in screen space. */
   selectionSlot?: (sel: BoardSelection, api: BoardApi) => React.ReactNode;
-  /** An ask or handoff item's card, placed by its own box in Board px; a placeholder when absent. */
-  renderAnswerItem?: (item: BoardAsk | BoardHandoff, api: BoardApi, selected: boolean) => React.ReactNode;
-  /** The words an ask or handoff shows in preview.png. */
+  /** An ask, handoff or visual item's card, placed by its own box in Board px; a placeholder when absent. */
+  renderAnswerItem?: (item: BoardAsk | BoardHandoff | BoardVisual, api: BoardApi, selected: boolean) => React.ReactNode;
+  /** The words an ask, handoff or visual shows in preview.png. */
   answerLabel?: (item: BoardItem) => string;
 }
 
@@ -1117,6 +1118,7 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
                 }
                 case 'ask':
                 case 'handoff':
+                case 'visual':
                   // The card places itself (Board px) in a layer at the world's origin, stacked like the rest.
                   return renderAnswerItem ? (
                     <div key={it.id} className="board-answer-layer" style={{ zIndex: z }}>
@@ -1124,7 +1126,7 @@ export const BoardSurface = forwardRef<BoardApi, BoardSurfaceProps>(function Boa
                     </div>
                   ) : (
                     <div key={it.id} className={`board-answer is-${it.kind}${isSel ? ' is-selected' : ''}`} style={box}>
-                      <span className="board-answer-label">{it.kind === 'ask' ? 'Ask' : 'Hand-off'}</span>
+                      <span className="board-answer-label">{it.kind === 'ask' ? 'Ask' : it.kind === 'visual' ? 'Visualize' : 'Hand-off'}</span>
                     </div>
                   );
                 case 'link':

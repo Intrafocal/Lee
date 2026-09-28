@@ -9,7 +9,7 @@
  * Only stable v0/v1 types are imported from ./copilot.
  */
 
-import type { BoardAnchor } from './board';
+import type { BoardAnchor, VisualResult } from './board';
 import type { AgentState, LeeStatusBlock } from './copilot';
 import type { DeskCardBrief, DeskCardKind } from './desk';
 
@@ -807,10 +807,12 @@ export interface DeepHandoff {
 }
 export interface DeepAnswer {
   id: string; anchor: Anchor; question: string; status: AnswerStatus; answer?: string; error?: string;
-  surface: 'deep-ask' | 'deep-handoff'; model?: { location: 'local' | 'cloud'; name: string };
-  /** Deep next R3/R5: 'handoff' records share the answers store and the margin; absent = 'ask'. */
-  kind?: 'ask' | 'handoff';
+  surface: 'deep-ask' | 'deep-handoff' | 'deep-visualize'; model?: { location: 'local' | 'cloud'; name: string };
+  /** Deep next R3/R5: 'handoff' records share the answers store and the margin; absent = 'ask'. Boards B6: 'visualize' (a Board's only). */
+  kind?: 'ask' | 'handoff' | 'visualize';
   handoff?: DeepHandoff;
+  /** A Visualize's result (Boards B6, shared/board.ts): null until it's done. The brief is `question`. */
+  visual?: VisualResult | null;
   asked_at: string; answered_at?: string; read_at?: string; dismissed_at?: string;
   inserted_at?: string; kept_at?: string; follow_up_of?: string;
 }
