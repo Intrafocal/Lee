@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as net from 'net';
 import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
+import * as yaml from 'js-yaml';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
 import { isClaude, withClaudeHooks } from './copilot/hook-install';
 import { dropStaleResume } from './copilot/claude-resume';
@@ -622,6 +623,7 @@ export class PTYManager extends EventEmitter {
             }
           });
         });
+        await this.installVoiceLocal(pip, hesterSrc);
 
         this.writeHesterSourceHash();
         this.hesterVenvReady = true;
@@ -692,6 +694,7 @@ export class PTYManager extends EventEmitter {
       if (!fs.existsSync(hesterBin)) {
         throw new Error('hester binary not found after install');
       }
+      await this.installVoiceLocal(pip, hesterSrc);
 
       // Write source hash so we can detect changes on next launch
       this.writeHesterSourceHash();
@@ -706,6 +709,49 @@ export class PTYManager extends EventEmitter {
       this.emit('hester-setup', { phase: 'error', message: msg });
       throw error;
     }
+  }
+
+  /**
+   * Voice (docs/plans/2026-09-28-tether-review-voice.md §5.3): local
+   * transcription needs faster-whisper, the `voice-local` extra, only when a
+   * config Lee reads says `hester.voice.provider: whisper` (the global files
+   * or an open window's workspace), or HESTER_VOICE_PROVIDER does.
+   */
+  private wantsVoiceLocal(): boolean {
+    if (process.env.HESTER_VOICE_PROVIDER) return process.env.HESTER_VOICE_PROVIDER === 'whisper';
+    const home = app.getPath('home');
+    const providerIn = (file: string): unknown => {
+      try {
+        return (yaml.load(fs.readFileSync(file, 'utf-8')) as any)?.hester?.voice?.provider;
+      } catch {
+        return undefined;
+      }
+    };
+    const files = [
+      path.join(home, '.config', 'lee', 'config.yaml'),
+      path.join(home, '.lee', 'config.yaml'),
+      ...[...this.windowConfigs.values()].map((w) => path.join(w.workspace, '.lee', 'config.yaml')),
+    ];
+    return files.some((f) => providerIn(f) === 'whisper');
+  }
+
+  /**
+   * Install the voice-local extra over the fresh Hester when it's wanted.
+   * Never fails the bootstrap: without it Hester runs and reports
+   * whisper_not_installed, and the mic stays hidden.
+   */
+  private async installVoiceLocal(pip: string, hesterSrc: string): Promise<void> {
+    if (!this.wantsVoiceLocal()) return;
+    const spec = `${hesterSrc}[voice-local]`;
+    const pipArgs = app.isPackaged ? ['install', spec] : ['install', '-e', spec];
+    this.emit('hester-setup', { phase: 'installing', message: 'Installing local voice (whisper)...' });
+    await new Promise<void>((resolve) => {
+      execFile(pip, pipArgs, { timeout: 600000, env: { ...process.env, PATH: this.extendedPath } }, (err, _stdout, stderr) => {
+        if (err) this.log('WARN', 'Voice extra install failed; Hester runs without local whisper', { stderr: String(stderr).slice(-2000), retry: `${pip} ${pipArgs.join(' ')}` });
+        else this.log('INFO', 'Voice extra (voice-local) installed');
+        resolve();
+      });
+    });
   }
 
   /**
@@ -763,6 +809,8 @@ export class PTYManager extends EventEmitter {
     };
     const pkgDir = path.join(hesterSrc, 'hester');
     if (fs.existsSync(pkgDir)) walk(pkgDir);
+    // Switching to whisper reinstalls once, with the voice-local extra.
+    if (this.wantsVoiceLocal()) hash.update('\0voice-local\0');
     for (const file of files.sort()) {
       hash.update(path.relative(hesterSrc, file)).update('\0').update(fs.readFileSync(file)).update('\0');
     }

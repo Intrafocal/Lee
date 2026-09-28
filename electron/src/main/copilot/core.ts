@@ -19,8 +19,9 @@ import { PresenceTracker } from './presence';
 import { InputTracker } from './input-tracker';
 import { DeviceTokenStore } from './device-tokens';
 import { configureAuth, flushDeviceViews, getDeviceStore, issueDeviceToken, revokeDevice } from './auth';
-import { CaptureRelay, getHesterPort, resolveCaptureWorkspace, setCaptureRelay } from './capture';
+import { CaptureRelay, getHesterPort, migrateSpool, resolveCaptureWorkspace, setCaptureRelay } from './capture';
 import { validateDeviceNameKind } from './core-routes';
+import { installTetherIpc } from './tether';
 
 const CEREMONY_ACTIONS = new Set<CeremonyAction>([
   'confirm',
@@ -98,8 +99,16 @@ export function initCopilotCore(deps: { apiServer: APIServer; ptyManager: PTYMan
   const store = new DeviceTokenStore(leeDir('devices'));
   configureAuth({ store, onDeviceActivity: (p) => presence.noteDevice(p.device_id) });
 
+  // §2.1: captures still spooled under the old name go out from the new one.
+  const spoolFile = leeDir('spool', 'ideas.jsonl');
+  try {
+    const moved = migrateSpool(leeDir('spool', 'someday.jsonl'), spoolFile);
+    if (moved > 0) log('INFO', 'Moved spooled captures to ideas.jsonl', { count: moved });
+  } catch (err) {
+    log('WARN', 'Capture spool migration failed', { error: String(err) });
+  }
   const capture = new CaptureRelay({
-    spoolFile: leeDir('spool', 'someday.jsonl'),
+    spoolFile,
     getHesterPort,
     getSharedToken: () => apiServer.getAuthToken(),
     log,
@@ -119,6 +128,7 @@ export function initCopilotCore(deps: { apiServer: APIServer; ptyManager: PTYMan
   copilotBus.onStreamConnect((send) => send({ type: 'presence', data: presence.get() }));
 
   registerIpc();
+  installTetherIpc();
 
   logEvent({ type: 'app.start', data: { version: app.getVersion(), pid: process.pid } });
 }
@@ -149,7 +159,7 @@ function registerIpc(): void {
     const ws = resolveCaptureWorkspace(req?.workspace, windowIdOf(event.sender));
     if (!ws.ok) return { success: false, error: ws.error };
     return core.capture.capture(
-      { text: req?.text, as: req?.as },
+      { text: req?.text, as: req?.as, ...(req?.input === 'voice' ? { input: 'voice' as const } : {}) },
       { actor: { kind: 'user', surface: 'lee' }, source: { surface: 'lee' }, workspace: ws.workspace, window_id: ws.window_id },
     );
   });

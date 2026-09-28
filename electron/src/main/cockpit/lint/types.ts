@@ -83,7 +83,7 @@ export interface LintEffects {
   sendInput?(ptyId: number, text: string, by: Principal): Promise<{ success: boolean; error?: string }>;
   checkin?(ptyId: number): Promise<{ success: boolean; error?: string }>;
   focusTab?(ptyId: number): Promise<{ success: boolean; error?: string }>;
-  /** Someday capture (source lee). */
+  /** Ideas capture (source lee). */
   capture?(workspace: string, text: string): Promise<{ success: boolean; error?: string }>;
   /** A Hester request (shared token, X-Lee-Workspace). Throws on failure. */
   hester?(workspace: string, method: 'GET' | 'POST' | 'PATCH', route: string, body?: unknown): Promise<unknown>;

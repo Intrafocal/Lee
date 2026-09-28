@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Smoke test for usage capture (docs/15-Usage.md §3.1-§3.3) and the Carry
- * routes (14 §8.1): transcript dedupe, model switches, subagent files, cost
- * deltas, basis, status line throttling, the status line script, snapshot
- * usage/limits, and /carry forwarding to a fake Hester (and 503 offline).
+ * Smoke test for usage capture (docs/15-Usage.md §3.1-§3.3) and the Tether
+ * routes (docs/plans/2026-09-28-tether-review-voice.md §3.3, §4.2): transcript
+ * dedupe, model switches, subagent files, cost deltas, basis, status line
+ * throttling, the status line script, snapshot usage/limits; /tether/*
+ * forwarding to a fake Hester (and 503 offline), the ideas spool, Send to Lee
+ * validation and its IPC round trip with a fake window.
  * No Electron, no real Claude, no real Hester.
  *
  *   cd electron && npm run build:main && node scripts/copilot-usage-smoke.js
@@ -40,8 +42,8 @@ const { CopilotQueue } = require(path.join(dist, 'copilot', 'queue.js'));
 const { copilotBus } = require(path.join(dist, 'copilot', 'bus.js'));
 const { windowRegistry } = require(path.join(dist, 'window-registry.js'));
 const { installClaudeHooks, STATUSLINE_SCRIPT } = require(path.join(dist, 'copilot', 'hook-install.js'));
-const { registerCarryRoutes, buildCarry, parseOpenNext } = require(path.join(dist, 'copilot', 'carry.js'));
-const { setHesterPortProvider } = require(path.join(dist, 'copilot', 'capture.js'));
+const { registerTetherRoutes, buildTether, buildTargets, checkSendRequest, cutText, tetherSendBroker, TETHER_SEND_MAX_BYTES } = require(path.join(dist, 'copilot', 'tether.js'));
+const { getHesterPort, setHesterPortProvider } = require(path.join(dist, 'copilot', 'capture.js'));
 const express = require('express');
 
 const projects = path.join(tmpHome, '.claude', 'projects', '-work-api');
@@ -417,16 +419,19 @@ test('statusLine: settings point at the relay; default line; the user line is ke
 });
 
 // ---------------------------------------------------------------------------
-// Carry routes with a fake Hester
+// Tether routes with a fake Hester (docs/plans/2026-09-28-tether-review-voice.md §3.3, §4.2)
 // ---------------------------------------------------------------------------
 
+const CARD = { id: 'pg-0000abcd', kind: 'page', title: 'Mesh sync', area_id: 'area-0000abcd', area_name: 'Mesh', purpose: null, last_touched_at: '2026-09-27T08:00:00Z' };
 const OPENER = {
   generated_at: '2026-09-27T10:00:00Z',
   workspace: '/work/api',
   pick_up: {
-    exploration: { id: 'exp-2', title: 'Sync engine', last_touched_at: '2026-09-26T18:00:00Z' },
-    stopped_at: 'Was weighing CRDT vs OT',
-    arrived: { answers: 1, open_questions: 2 },
+    card: CARD,
+    exploration: { id: 'pg-0000abcd', title: 'Mesh sync', last_touched_at: '2026-09-27T08:00:00Z' },
+    stopped_at: '…where the clocks disagree',
+    stopped_line: 12,
+    arrived: { answers: 0, open_questions: 1 },
   },
   surfaces: [
     { kind: 'blank' },
@@ -434,12 +439,12 @@ const OPENER = {
       kind: 'open_questions',
       count: 7,
       items: [
-        { exploration_id: 'exp-1', exploration_title: 'A', question_id: 'q1', text: 'one?' },
-        { exploration_id: 'exp-2', exploration_title: 'B', question_id: 'q2', text: 'two?' },
-        { exploration_id: 'exp-1', exploration_title: 'A', question_id: 'q3', text: 'three?' },
-        { exploration_id: 'exp-1', exploration_title: 'A', question_id: 'q4', text: 'four?' },
-        { exploration_id: 'exp-2', exploration_title: 'B', question_id: 'q5', text: 'five?' },
-        { exploration_id: 'exp-1', exploration_title: 'A', question_id: 'q6', text: 'six?' },
+        { card_id: 'pg-00000001', card_title: 'A', exploration_id: 'pg-00000001', exploration_title: 'A', question_id: 'q1', text: 'one?' },
+        { card_id: 'pg-0000abcd', card_title: 'Mesh sync', question_id: 'q2', text: 'two?' },
+        { card_id: 'pg-00000001', question_id: 'q3', text: 'three?' },
+        { card_id: 'pg-00000001', question_id: 'q4', text: 'four?' },
+        { card_id: 'pg-0000abcd', question_id: 'q5', text: 'five?' },
+        { card_id: 'pg-00000001', question_id: 'q6', text: 'six?' },
       ],
     },
     { kind: 'captured_away', count: 3, items: [] },
@@ -447,14 +452,66 @@ const OPENER = {
   ],
 };
 
-async function withCarryApp(principal, fn, deps = {}) {
+const summary = (chars, at, unread = 0, open = 0) => ({ page_chars: chars, page_updated_at: at, excerpt: 'x', answers_unread: unread, answers_pending: 0, handoffs_in_flight: 0, open_questions: open });
+const card = (id, area_id, title, at, extra = {}) => ({
+  id, kind: 'page', area_id, title, purpose: null, pinned: false, x: 0, y: 0, w: 1, h: 1,
+  created_at: '2026-09-01T00:00:00Z', updated_at: at, last_touched_at: at, migrated_from: null, summary: summary(100, at), ...extra,
+});
+const area = (id, name, drawer_id = null, stashed_at = null) => ({ id, name, drawer_id, stashed_at, x: 0, y: 0, w: 1, h: 1, created_at: 't', updated_at: 't', migrated_from: null });
+const DESK = {
+  version: 1,
+  workspace: '/work/api',
+  areas: [area('area-0000abcd', 'Mesh'), area('area-00000002', 'Old', 'stashed', '2026-09-20T00:00:00Z'), area('area-00000003', 'Older', 'stashed', '2026-09-10T00:00:00Z')],
+  cards: [
+    card('pg-00000002', 'area-0000abcd', 'Older page', '2026-09-26T00:00:00Z'),
+    card('pg-0000abcd', 'area-0000abcd', 'Mesh sync', '2026-09-27T00:00:00Z', { summary: summary(4321, '2026-09-27T00:00:00Z', 2, 1) }),
+    card('pg-00000003', 'area-00000002', 'Parked', '2026-09-25T00:00:00Z'),
+    card('pg-0000000a', null, 'Goals', '2026-09-24T00:00:00Z', { purpose: 'goals', pinned: true }),
+  ],
+  drawers: [],
+  goals_card_id: 'pg-0000000a',
+  last: { card_id: 'pg-0000abcd', at: '2026-09-27T09:00:00Z' },
+  migration: null,
+};
+const IDEAS = [
+  { id: 'idea_1', text: 'try CRDTs', created_at: '2026-09-26T00:00:00Z', status: 'open', source: { surface: 'aeronaut' } },
+  { id: 'idea_2', text: 'newer', created_at: '2026-09-27T00:00:00Z', status: 'open', source: { surface: 'lee' } },
+  { id: 'idea_3', text: 'dropped', created_at: '2026-09-28T00:00:00Z', status: 'dropped', source: {} },
+];
+const ANSWERS = [
+  { id: 'ans-1', question: 'why?', status: 'done', answer: 'because', kind: 'ask', asked_at: 't' },
+  { id: 'ans-2', question: 'gone', status: 'done', answer: 'x', dismissed_at: 't', asked_at: 't' },
+  { id: 'ans-3', question: 'spike it', status: 'done', answer: 'result', kind: 'handoff', handoff: { kind: 'spike', provider: 'claude', brief: 'b', task_id: null, state: 'review' }, asked_at: 't' },
+];
+const QUESTIONS = [{ id: 'q-1', text: 'open one?', status: 'open', source: 'page', at: 't' }, { id: 'q-2', text: 'closed', status: 'closed', source: 'page', at: 't' }];
+const REFERENCES = [
+  { id: 'r-1', kind: 'link', url: 'https://example.com/crdt', title: 'CRDTs', at: 't' },
+  { id: 'r-2', kind: 'quote', quote: 'Writes carry a clock.', file: 'docs/sync.md', lines: [3, 4], at: 't' },
+];
+
+/** A fake Hester that serves the Desk; everything else 404. */
+function deskHester(c, extra = {}) {
+  const u = c.url.split('?')[0];
+  if (extra[u]) return extra[u](c);
+  if (u === '/copilot/opener') return [200, { success: true, data: OPENER }];
+  if (u === '/desk') return [200, { success: true, data: DESK }];
+  if (u === '/ideas' && c.method === 'GET') return [200, { success: true, data: IDEAS }];
+  if (u === '/desk/pages/pg-0000abcd/page') return [200, { success: true, data: { text: '# Mesh sync\n\nWrites carry a clock.\n', version: 'v1' } }];
+  if (u === '/desk/pages/pg-0000abcd/answers') return [200, { success: true, data: ANSWERS }];
+  if (u === '/desk/pages/pg-0000abcd/questions') return [200, { success: true, data: QUESTIONS }];
+  if (u === '/desk/pages/pg-0000abcd/references') return [200, { success: true, data: REFERENCES }];
+  return [404, { success: false, error: 'not found' }];
+}
+
+async function withTetherApp(principal, fn, deps = {}) {
   const app = express();
+  app.use('/tether/send', express.json({ limit: TETHER_SEND_MAX_BYTES }));
   app.use(express.json());
   app.use((_req, res, next) => {
     res.locals.principal = principal;
     next();
   });
-  registerCarryRoutes(app, deps);
+  registerTetherRoutes(app, deps);
   const server = await new Promise((r) => {
     const s = app.listen(0, '127.0.0.1', () => r(s));
   });
@@ -488,216 +545,445 @@ async function withFakeHester(handler, fn) {
   }
 }
 
+/** A port nothing listens on. */
+async function deadPort() {
+  const dead = http.createServer();
+  await new Promise((r) => dead.listen(0, '127.0.0.1', r));
+  const port = dead.address().port;
+  await new Promise((r) => dead.close(r));
+  return port;
+}
+
 const device = { kind: 'device', device_id: 'dev-1', device_kind: 'aeronaut', name: 'Phone' };
+const post = (base, route, body) => fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-test('buildCarry: a pre-Desk opener (no card): its exploration stands in as the card; its questions first, at most 5', () => {
-  const c = buildCarry(OPENER, null, null);
-  assert.deepStrictEqual(c.pick_up, {
-    card_id: 'exp-2', card_kind: 'page', title: 'Sync engine', area_name: null,
-    stopped_at: 'Was weighing CRDT vs OT', stopped_line: null, last_touched_at: '2026-09-26T18:00:00Z', exploration_id: 'exp-2',
-  });
-  assert.deepStrictEqual(c.open_questions.map((q) => q.question_id), ['q2', 'q5', 'q1', 'q3', 'q4']);
-  assert.deepStrictEqual(c.open_questions[0], { card_id: 'exp-2', exploration_id: 'exp-2', question_id: 'q2', text: 'two?' });
-  assert.strictEqual(c.captured_count, 3);
-  assert.strictEqual(c.reading_count, 2);
-  assert.strictEqual(c.spooled, 0);
-  assert.strictEqual(buildCarry({ ...OPENER, pick_up: null, surfaces: [] }, null, '/w').pick_up, null);
-});
-
-test('buildCarry: the Desk opener picks up your last card, its area and stopped-at line; spooled counts', () => {
-  const card = { id: 'pg-0000abcd', kind: 'page', title: 'Mesh sync', area_id: 'area-0000abcd', area_name: 'Mesh', purpose: null, last_touched_at: '2026-09-27T08:00:00Z' };
-  const desk = {
-    ...OPENER,
-    pick_up: {
-      card,
-      exploration: { id: 'pg-0000abcd', title: 'Mesh sync', last_touched_at: '2026-09-27T08:00:00Z' },
-      open_next: null,
-      stopped_at: '…where the clocks disagree',
-      stopped_line: 12,
-      arrived: { answers: 0, open_questions: 1 },
-    },
-    surfaces: [
-      { kind: 'open_questions', count: 2, items: [
-        { exploration_id: 'pg-00000001', exploration_title: 'A', card_id: 'pg-00000001', card_title: 'A', question_id: 'q1', text: 'one?' },
-        { exploration_id: 'pg-0000abcd', exploration_title: 'Mesh sync', card_id: 'pg-0000abcd', card_title: 'Mesh sync', question_id: 'q2', text: 'two?' },
-      ] },
-    ],
-  };
-  const c = buildCarry(desk, { card_id: 'pg-0000abcd', exploration_id: 'pg-0000abcd', set_at: '2026-09-27T09:00:00Z' }, null, 2);
-  assert.deepStrictEqual(c.pick_up, {
+test('buildTether: the Desk opener picks up your last card, its area and stopped-at line; its questions first, at most 5', () => {
+  const t = buildTether(OPENER, null, 2);
+  assert.deepStrictEqual(t.pick_up, {
     card_id: 'pg-0000abcd', card_kind: 'page', title: 'Mesh sync', area_name: 'Mesh',
-    stopped_at: '…where the clocks disagree', stopped_line: 12, last_touched_at: '2026-09-27T08:00:00Z', exploration_id: 'pg-0000abcd',
+    stopped_at: '…where the clocks disagree', stopped_line: 12, last_touched_at: '2026-09-27T08:00:00Z',
   });
-  assert.deepStrictEqual(c.open_questions.map((q) => q.card_id), ['pg-0000abcd', 'pg-00000001']);
-  assert.strictEqual(c.spooled, 2);
-  assert.strictEqual(buildCarry({ ...desk, pick_up: { ...desk.pick_up, stopped_line: 0 } }, null, null).pick_up.stopped_line, null, 'lines are 1-based');
-  // Open next: card_id with exploration_id as its alias; a legacy record keeps its exploration_id.
-  assert.deepStrictEqual(parseOpenNext({ card_id: 'pg-0000abcd', set_at: 't' }), { card_id: 'pg-0000abcd', exploration_id: 'pg-0000abcd', set_at: 't' });
-  assert.deepStrictEqual(parseOpenNext({ exploration_id: 'exp-1', set_at: 't' }), { exploration_id: 'exp-1', set_at: 't' });
+  assert.deepStrictEqual(t.open_questions.map((q) => q.question_id), ['q2', 'q5', 'q1', 'q3', 'q4']);
+  assert.deepStrictEqual(t.open_questions[2], { card_id: 'pg-00000001', question_id: 'q1', text: 'one?' });
+  assert.strictEqual(t.captured_count, 3);
+  assert.strictEqual(t.spooled, 2);
+  assert.deepStrictEqual(Object.keys(t).sort(), ['captured_count', 'open_questions', 'pick_up', 'spooled', 'workspace'], 'no open_next, no reading_count');
+  assert.strictEqual(buildTether({ ...OPENER, pick_up: null, surfaces: [] }, '/w').pick_up, null);
+  assert.strictEqual(buildTether({ ...OPENER, pick_up: { ...OPENER.pick_up, card: undefined } }, null).pick_up, null, 'no card, no pick-up');
+  assert.strictEqual(buildTether({ ...OPENER, pick_up: { ...OPENER.pick_up, stopped_line: 0 } }, null).pick_up.stopped_line, null, 'lines are 1-based');
 });
 
-test('GET /carry forwards to opener + open-next with the workspace header', async () => {
+test('GET /tether forwards to the opener with the workspace header; /carry is gone', async () => {
   fs.mkdirSync(path.join(tmpHome, '.lee'), { recursive: true });
   fs.writeFileSync(path.join(tmpHome, '.lee', 'api-token'), 'tok-123\n');
   const unregister = withWindow([], 5, '/work/api');
   try {
-    await withFakeHester(
-      (c) => {
-        if (c.url.startsWith('/copilot/opener')) return [200, { success: true, data: OPENER }];
-        if (c.url.startsWith('/copilot/open-next')) return [200, { success: true, data: { exploration_id: 'exp-1', set_at: '2026-09-27T09:00:00Z', surface: 'aeronaut' } }];
-        return [404, { success: false, error: 'nope' }];
-      },
-      async (calls) => {
-        await withCarryApp(device, async (base) => {
-          const res = await fetch(`${base}/carry?workspace=${encodeURIComponent('/work/api')}`);
-          assert.strictEqual(res.status, 200);
-          const { data } = await res.json();
-          assert.strictEqual(data.workspace, '/work/api');
-          assert.strictEqual(data.pick_up.exploration_id, 'exp-2');
-          assert.strictEqual(data.open_questions.length, 5);
-          assert.deepStrictEqual(data.open_next, { exploration_id: 'exp-1', set_at: '2026-09-27T09:00:00Z' });
-          assert.strictEqual(calls.length, 2);
-          for (const c of calls) {
-            assert.strictEqual(c.headers.authorization, 'Bearer tok-123');
-            assert.ok(c.headers['x-lee-workspace'], 'workspace header');
-            assert.ok(c.url.includes('workspace=%2Fwork%2Fapi'));
-          }
-          // Default: the focused (else any) window's workspace.
-          const d = await fetch(`${base}/carry`);
-          assert.strictEqual((await d.json()).data.workspace, '/work/api');
-          // Not an open window's workspace.
-          assert.strictEqual((await fetch(`${base}/carry?workspace=/nope`)).status, 400);
-        });
-      },
-    );
-    // An older Hester without open-next still gives a Carry view.
-    await withFakeHester(
-      (c) => (c.url.startsWith('/copilot/opener') ? [200, { success: true, data: OPENER }] : [404, { detail: 'Not Found' }]),
-      async () => {
-        await withCarryApp(device, async (base) => {
-          const { data } = await (await fetch(`${base}/carry`)).json();
-          assert.strictEqual(data.open_next, null);
-        });
-      },
-    );
+    await withFakeHester((c) => deskHester(c), async (calls) => {
+      await withTetherApp(device, async (base) => {
+        const res = await fetch(`${base}/tether?workspace=${encodeURIComponent('/work/api')}`);
+        assert.strictEqual(res.status, 200);
+        const { data } = await res.json();
+        assert.strictEqual(data.workspace, '/work/api');
+        assert.strictEqual(data.pick_up.card_id, 'pg-0000abcd');
+        assert.strictEqual(data.open_questions.length, 5);
+        assert.strictEqual(calls.length, 1, 'the opener only (Open next is gone)');
+        assert.strictEqual(calls[0].headers.authorization, 'Bearer tok-123');
+        assert.ok(calls[0].headers['x-lee-workspace'], 'workspace header');
+        assert.ok(calls[0].url.includes('workspace=%2Fwork%2Fapi'));
+        // Default: the focused (else any) window's workspace.
+        assert.strictEqual((await (await fetch(`${base}/tether`)).json()).data.workspace, '/work/api');
+        assert.strictEqual((await fetch(`${base}/tether?workspace=/nope`)).status, 400);
+        for (const route of ['/carry', '/carry/capture', '/carry/open-next']) {
+          assert.strictEqual((await fetch(`${base}${route}`, { method: route === '/carry' ? 'GET' : 'POST' })).status, 404, route);
+        }
+      });
+    });
   } finally {
     unregister();
   }
 });
 
-test('POST /carry/capture and /carry/open-next forward with the device surface', async () => {
+test('POST /tether/capture forwards to Hester /ideas with the device surface, the card and input: voice', async () => {
   const unregister = withWindow([], 6, '/work/api');
+  const events = [];
+  const onEv = (e) => events.push(e);
+  copilotBus.on('event', onEv);
   try {
     await withFakeHester(
-      (c) => {
-        if (c.url === '/someday') return [201, { success: true, data: { id: 'sd-9', text: c.body.text } }];
-        if (c.url === '/copilot/open-next') return [200, { success: true, data: { someday_id: 'sd-9', set_at: '2026-09-27T11:00:00Z', surface: c.body.surface } }];
-        return [404, {}];
-      },
+      (c) => (c.url === '/ideas' ? [201, { success: true, data: { id: 'idea_9', text: c.body.text } }] : [404, {}]),
       async (calls) => {
-        await withCarryApp(device, async (base) => {
-          const post = (route, body) => fetch(`${base}${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          let res = await post('/carry/capture', { text: '  a thought on the walk ', exploration_id: 'exp-2' });
+        await withTetherApp(device, async (base) => {
+          let res = await post(base, '/tether/capture', { text: '  a thought on the walk ', card_id: 'pg-0000abcd', input: 'voice' });
           assert.strictEqual(res.status, 200);
-          assert.strictEqual((await res.json()).data.someday_id, 'sd-9');
-          const cap = calls.find((c) => c.url === '/someday');
-          assert.strictEqual(cap.body.as, 'someday');
+          assert.deepStrictEqual((await res.json()).data, { id: 'idea_9', spooled: false });
+          const cap = calls.pop();
           assert.strictEqual(cap.body.text, 'a thought on the walk');
-          assert.deepStrictEqual(cap.body.source, { surface: 'aeronaut', device_id: 'dev-1', exploration_id: 'exp-2' });
+          assert.strictEqual(cap.body.as, 'someday', 'the wire value stays');
+          assert.strictEqual(cap.body.input, 'voice');
+          assert.deepStrictEqual(cap.body.source, { surface: 'aeronaut', device_id: 'dev-1', card_id: 'pg-0000abcd' });
           assert.strictEqual(cap.body.workspace, '/work/api');
           assert.ok(cap.headers['x-lee-workspace']);
-          assert.strictEqual((await post('/carry/capture', { text: '' })).status, 400);
-          assert.strictEqual((await post('/carry/capture', { text: 'x', exploration_id: '../etc' })).status, 400);
-
-          res = await post('/carry/open-next', { someday_id: 'sd-9' });
-          assert.strictEqual(res.status, 200);
-          assert.deepStrictEqual((await res.json()).data.open_next, { someday_id: 'sd-9', set_at: '2026-09-27T11:00:00Z' });
-          const on = calls.find((c) => c.url === '/copilot/open-next');
-          assert.deepStrictEqual(on.body, { someday_id: 'sd-9', surface: 'aeronaut', workspace: '/work/api' });
-          assert.strictEqual((await post('/carry/open-next', {})).status, 400, 'one of the three');
-          assert.strictEqual((await post('/carry/open-next', { someday_id: 'a', exploration_id: 'b' })).status, 400, 'not both');
-          assert.strictEqual((await post('/carry/open-next', { someday_id: 'a', card_id: 'pg-00000001' })).status, 400, 'not both');
-
-          // Desk D2 §9.3: a card id goes to Hester as card_id; a pre-Desk id as exploration_id.
-          calls.length = 0;
-          assert.strictEqual((await post('/carry/open-next', { card_id: 'pg-0000abcd' })).status, 200);
-          assert.deepStrictEqual(calls.pop().body, { card_id: 'pg-0000abcd', surface: 'aeronaut', workspace: '/work/api' });
-          assert.strictEqual((await post('/carry/open-next', { card_id: 'exp-2' })).status, 200);
-          assert.deepStrictEqual(calls.pop().body, { exploration_id: 'exp-2', surface: 'aeronaut', workspace: '/work/api' });
-          assert.strictEqual((await post('/carry/open-next', { exploration_id: 'exp-2' })).status, 200);
-          assert.deepStrictEqual(calls.pop().body, { exploration_id: 'exp-2', surface: 'aeronaut', workspace: '/work/api' });
-          assert.strictEqual((await post('/carry/capture', { text: 'into the card', card_id: 'pg-0000abcd' })).status, 200);
-          assert.deepStrictEqual(calls.pop().body.source, { surface: 'aeronaut', device_id: 'dev-1', card_id: 'pg-0000abcd' });
-          assert.strictEqual((await post('/carry/capture', { text: 'x', card_id: '../etc' })).status, 400);
+          const ev = events.find((e) => e.type === 'capture');
+          assert.strictEqual(ev.data.input, 'voice');
+          assert.strictEqual(ev.data.via, 'tether');
+          assert.ok(!JSON.stringify(ev).includes('walk'), 'never the text');
+          res = await post(base, '/tether/capture', { text: 'typed' });
+          assert.strictEqual(calls.pop().body.input, undefined);
+          assert.strictEqual((await post(base, '/tether/capture', { text: '' })).status, 400);
+          assert.strictEqual((await post(base, '/tether/capture', { text: 'x', card_id: '../etc' })).status, 400);
+          assert.strictEqual((await post(base, '/tether/capture', { text: 'x', card_id: 'exp-2' })).status, 400, 'a card id only');
+          assert.strictEqual((await post(base, '/tether/capture', { text: 'x', input: 'typing' })).status, 400);
         });
         // The renderer (shared loopback) is 'lee'.
-        await withCarryApp({ kind: 'shared', loopback: true, ip: '127.0.0.1' }, async (base) => {
-          await fetch(`${base}/carry/capture`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'from Lee' }) });
-          assert.deepStrictEqual(calls.filter((c) => c.url === '/someday').pop().body.source, { surface: 'lee' });
+        await withTetherApp({ kind: 'shared', loopback: true, ip: '127.0.0.1' }, async (base) => {
+          await post(base, '/tether/capture', { text: 'from Lee' });
+          assert.deepStrictEqual(calls.pop().body.source, { surface: 'lee' });
         });
       },
     );
   } finally {
+    copilotBus.off('event', onEv);
     unregister();
   }
 });
 
-test('Hester offline: GET /carry and open-next answer 503 hester_offline; a capture spools (200 spooled: true)', async () => {
+test('Hester offline: the reads answer 503 hester_offline; a capture spools to ideas.jsonl (200 spooled: true)', async () => {
   const unregister = withWindow([], 8, '/work/api');
   try {
-    // A port nothing listens on.
-    const dead = http.createServer();
-    await new Promise((r) => dead.listen(0, '127.0.0.1', r));
-    const port = dead.address().port;
-    await new Promise((r) => dead.close(r));
+    const port = await deadPort();
     setHesterPortProvider(() => port);
     const spooled = [];
-    await withCarryApp(device, async (base) => {
-      for (const [method, route, body] of [
-        ['GET', '/carry', null],
-        ['POST', '/carry/open-next', { exploration_id: 'exp-1' }],
-      ]) {
-        const res = await fetch(`${base}${route}`, {
-          method,
-          ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-        });
+    await withTetherApp(device, async (base) => {
+      for (const route of ['/tether', '/tether/desk', '/tether/pages', '/tether/pages/pg-0000abcd', '/tether/drawer']) {
+        const res = await fetch(`${base}${route}`);
         assert.strictEqual(res.status, 503, route);
         assert.strictEqual((await res.json()).error, 'hester_offline');
       }
-      const events = [];
-      const onEv = (e) => events.push(e);
-      copilotBus.on('event', onEv);
-      const res = await fetch(`${base}/carry/capture`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: ' on the train ', card_id: 'pg-0000abcd' }),
-      });
-      copilotBus.off('event', onEv);
+      const res = await post(base, '/tether/capture', { text: ' on the train ', card_id: 'pg-0000abcd' });
       assert.strictEqual(res.status, 200);
-      assert.deepStrictEqual((await res.json()).data, { success: true, someday_id: null, spooled: true });
+      assert.deepStrictEqual((await res.json()).data, { id: null, spooled: true });
       assert.deepStrictEqual(spooled, [
         { text: 'on the train', as: 'someday', source: { surface: 'aeronaut', device_id: 'dev-1', card_id: 'pg-0000abcd' }, workspace: '/work/api' },
       ]);
-      const cap = events.find((e) => e.type === 'capture');
-      assert.strictEqual(cap.data.spooled, true);
-      assert.ok(!JSON.stringify(cap).includes('train'), 'never the text');
     }, { spool: (p) => (spooled.push(p), true), spooledCount: () => spooled.length });
     // No spool to write to: 503 rather than losing the thought silently.
-    await withCarryApp(device, async (base) => {
-      const res = await fetch(`${base}/carry/capture`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'x' }) });
-      assert.strictEqual(res.status, 503);
+    await withTetherApp(device, async (base) => {
+      assert.strictEqual((await post(base, '/tether/capture', { text: 'x' })).status, 503);
     }, { spool: () => false });
-    // The real capture relay's spool: the source (card) is kept for the retry.
-    const { CaptureRelay } = require(path.join(dist, 'copilot', 'capture.js'));
-    const spoolFile = path.join(tmpHome, '.lee', 'spool', 'carry-test.jsonl');
+
+    // The real relay: its spool keeps the source (card) and posts to /ideas.
+    const { CaptureRelay, migrateSpool } = require(path.join(dist, 'copilot', 'capture.js'));
+    const dir = path.join(tmpHome, '.lee', 'spool');
+    const spoolFile = path.join(dir, 'ideas.jsonl');
     const relay = new CaptureRelay({ spoolFile, getHesterPort: () => port, getSharedToken: () => 't' });
-    assert.strictEqual(relay.spool({ text: 'y', as: 'someday', source: { surface: 'tdeck', card_id: 'pg-0000abcd' } }), true);
+    assert.strictEqual(relay.spool({ text: 'y', as: 'someday', source: { surface: 'dirigible', card_id: 'pg-0000abcd' } }), true);
     assert.strictEqual(relay.pending(), 1);
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(spoolFile, 'utf8')).source, { surface: 'tdeck', card_id: 'pg-0000abcd' });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(spoolFile, 'utf8')).source, { surface: 'dirigible', card_id: 'pg-0000abcd' });
     relay.stop();
+    // The spool rename: someday.jsonl's waiting captures move to ideas.jsonl, once.
+    const old = path.join(dir, 'someday.jsonl');
+    fs.writeFileSync(old, JSON.stringify({ text: 'old one', as: 'someday', source: { surface: 'lee' } }) + '\n\n');
+    assert.strictEqual(migrateSpool(old, spoolFile), 1);
+    assert.ok(!fs.existsSync(old));
+    assert.deepStrictEqual(fs.readFileSync(spoolFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).text), ['y', 'old one']);
+    assert.strictEqual(migrateSpool(old, spoolFile), 0, 'nothing left to move');
+    await withFakeHester((c) => (c.url === '/ideas' ? [201, { success: true, data: { id: 'idea_x' } }] : [404, {}]), async (calls) => {
+      const r2 = new CaptureRelay({ spoolFile, getHesterPort, getSharedToken: () => 't' });
+      assert.strictEqual(await r2.drain(), 2);
+      assert.deepStrictEqual(calls.map((c) => [c.method, c.url]), [['POST', '/ideas'], ['POST', '/ideas']]);
+      r2.stop();
+    });
   } finally {
     unregister();
   }
+});
+
+test('Review: /tether/desk, /tether/pages, a Page (full and text_only) and the Drawer, trimmed for devices', async () => {
+  const unregister = withWindow([], 9, '/work/api');
+  try {
+    await withFakeHester((c) => deskHester(c), async () => {
+      await withTetherApp(device, async (base) => {
+        const desk = (await (await fetch(`${base}/tether/desk`)).json()).data;
+        assert.deepStrictEqual(desk.areas.map((a) => [a.name, a.cards.map((c) => c.id)]), [['Mesh', ['pg-0000abcd', 'pg-00000002']]], 'on the Desk only, newest first');
+        assert.deepStrictEqual(desk.areas[0].cards[0], {
+          id: 'pg-0000abcd', kind: 'page', title: 'Mesh sync', area_id: 'area-0000abcd', area_name: 'Mesh',
+          stashed: false, updated_at: '2026-09-27T00:00:00Z', chars: 4321, answers: 2, open_questions: 1,
+        });
+        assert.strictEqual(desk.goals_card.id, 'pg-0000000a');
+        assert.strictEqual(desk.last_card_id, 'pg-0000abcd');
+
+        const pages = (await (await fetch(`${base}/tether/pages`)).json()).data;
+        assert.deepStrictEqual(pages.map((c) => c.id), ['pg-0000abcd', 'pg-00000002', 'pg-00000003', 'pg-0000000a'], 'every Page, stashed too, newest first');
+        assert.strictEqual(pages[2].stashed, true);
+        assert.strictEqual((await (await fetch(`${base}/tether/pages?limit=2`)).json()).data.length, 2);
+        assert.strictEqual((await fetch(`${base}/tether/pages?limit=0`)).status, 400);
+
+        const page = (await (await fetch(`${base}/tether/pages/pg-0000abcd`)).json()).data;
+        assert.strictEqual(page.card.id, 'pg-0000abcd');
+        assert.strictEqual(page.text, '# Mesh sync\n\nWrites carry a clock.\n');
+        assert.deepStrictEqual(page.answers, [{ id: 'ans-1', question: 'why?', answer: 'because', status: 'done' }], 'dismissed and hand-offs left out');
+        assert.deepStrictEqual(page.handoffs, [{ id: 'ans-3', kind: 'spike', provider: 'claude', status: 'review', result: 'result' }]);
+        assert.deepStrictEqual(page.open_questions, [{ id: 'q-1', text: 'open one?' }]);
+        assert.deepStrictEqual(page.references, [
+          { title: 'CRDTs', where: 'https://example.com/crdt', quote: null },
+          { title: 'docs/sync.md', where: 'docs/sync.md:3-4', quote: 'Writes carry a clock.' },
+        ]);
+        const textOnly = (await (await fetch(`${base}/tether/pages/pg-0000abcd?text_only=1`)).json()).data;
+        assert.deepStrictEqual(Object.keys(textOnly).sort(), ['card', 'text']);
+        assert.strictEqual((await fetch(`${base}/tether/pages/pg-00000009`)).status, 404, 'Hester has no such Page');
+        assert.strictEqual((await fetch(`${base}/tether/pages/nope`)).status, 400);
+
+        const drawer = (await (await fetch(`${base}/tether/drawer`)).json()).data;
+        assert.deepStrictEqual(drawer.stashed.map((a) => [a.name, a.stashed_at, a.cards.map((c) => c.id)]), [
+          ['Old', '2026-09-20T00:00:00Z', ['pg-00000003']],
+          ['Older', '2026-09-10T00:00:00Z', []],
+        ]);
+        assert.deepStrictEqual(drawer.ideas, [
+          { id: 'idea_2', text: 'newer', created_at: '2026-09-27T00:00:00Z', surface: 'lee' },
+          { id: 'idea_1', text: 'try CRDTs', created_at: '2026-09-26T00:00:00Z', surface: 'aeronaut' },
+        ], 'open only, newest first');
+      });
+    });
+  } finally {
+    unregister();
+  }
+});
+
+test('Review: a long Page is cut at a line with …; Page images are proxied with auth, images only', async () => {
+  assert.strictEqual(cutText('short'), 'short');
+  const long = Array.from({ length: 100 }, (_, i) => `line ${i} ${'é'.repeat(20)}`).join('\n');
+  const cut = cutText(long, 500);
+  assert.ok(Buffer.byteLength(cut, 'utf8') <= 500 + 4);
+  assert.ok(cut.endsWith('\n…'));
+  assert.ok(long.startsWith(cut.slice(0, -2)), 'whole lines only');
+
+  const unregister = withWindow([], 10, '/work/api');
+  try {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const seen = [];
+    const hesterRaw = async (route, ws) => {
+      seen.push([route, ws]);
+      if (route.startsWith('/desk/pages/pg-0000abcd/assets/a1.png')) return { offline: false, status: 200, contentType: 'image/png', body: png };
+      if (route.startsWith('/desk/pages/pg-0000abcd/assets/evil.png')) return { offline: false, status: 200, contentType: 'text/html', body: Buffer.from('<x>') };
+      return { offline: false, status: 404, contentType: 'application/json', body: Buffer.from('{}') };
+    };
+    await withTetherApp(device, async (base) => {
+      const res = await fetch(`${base}/tether/pages/pg-0000abcd/assets/a1.png`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('content-type'), 'image/png');
+      assert.deepStrictEqual(Buffer.from(await res.arrayBuffer()), png);
+      assert.deepStrictEqual(seen[0], ['/desk/pages/pg-0000abcd/assets/a1.png?workspace=%2Fwork%2Fapi', '/work/api']);
+      assert.strictEqual((await fetch(`${base}/tether/pages/pg-0000abcd/assets/evil.png`)).status, 502, 'images only');
+      assert.strictEqual((await fetch(`${base}/tether/pages/pg-0000abcd/assets/none.jpg`)).status, 404);
+      assert.strictEqual((await fetch(`${base}/tether/pages/pg-0000abcd/assets/..%2Fpage.md`)).status, 400);
+      assert.strictEqual((await fetch(`${base}/tether/pages/pg-0000abcd/assets/x.svg`)).status, 400);
+    }, { hesterRaw });
+    await withTetherApp(device, async (base) => {
+      assert.strictEqual((await fetch(`${base}/tether/pages/pg-0000abcd/assets/a1.png`)).status, 503);
+    }, { hesterRaw: async () => ({ offline: true }) });
+  } finally {
+    unregister();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Send to Lee (§4.2): targets, validation, the IPC round trip with a fake window
+// ---------------------------------------------------------------------------
+
+const TABS = [
+  { id: 1, type: 'agent', label: 'Claude', ptyId: 11, provider: 'claude', dockPosition: 'center', state: 'active' },
+  { id: 2, type: 'terminal', label: 'zsh', ptyId: 12, dockPosition: 'center', state: 'background' },
+  { id: 3, type: 'git', label: 'lazygit', ptyId: 13, dockPosition: 'center', state: 'background' },
+  { id: 4, type: 'files', label: 'Files', ptyId: null, dockPosition: 'left', state: 'background' },
+];
+const PNG_B64 = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24, 7)]).toString('base64');
+const JPEG_B64 = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(20, 1)]).toString('base64');
+
+/** A window whose renderer answers tether:send with `answer(delivery)` (or never, when it returns undefined). */
+function withSendWindow(id, workspace, { tabs = TABS, activeTabId = 1, answer = () => ({ ok: true }) } = {}) {
+  const sent = [];
+  const bw = {
+    id,
+    isDestroyed: () => false,
+    webContents: {
+      send(channel, payload) {
+        sent.push([channel, payload]);
+        const out = answer(payload);
+        if (out) setImmediate(() => tetherSendBroker.settle({ send_id: payload.send_id, ...out }));
+      },
+    },
+  };
+  windowRegistry.register(bw, workspace, {
+    getContext: () => ({ workspace, tabs, panels: { center: { activeTabId, visible: true, size: 100 }, left: null, right: null, bottom: null }, focusedPanel: 'center' }),
+  });
+  return { sent, unregister: () => windowRegistry.unregister(id) };
+}
+
+test('buildTargets: the palette, else the zoomed Page, else the focused agent tab; the rest follow', () => {
+  const deep = { workspace: '/w', card: { card_id: 'pg-0000abcd', title: 'Mesh sync' }, touched: ['pg-00000001', 'pg-0000abcd', 'pg-00000002'] };
+  const titles = new Map([['pg-00000001', 'A'], ['pg-00000002', 'B']]);
+  let t = buildTargets({ tabs: TABS, activeTabId: 1, paletteOpen: false, deep, titles });
+  assert.deepStrictEqual(t.focus, { kind: 'page', card_id: 'pg-0000abcd', title: 'Mesh sync' });
+  assert.deepStrictEqual(t.targets.map((x) => x.kind === 'page' ? x.card_id : x.kind === 'tab' ? `${x.tab_kind}:${x.pty_id}` : x.kind), [
+    'pg-00000002', 'pg-00000001', 'hester', 'agent:11', 'terminal:12', 'tui:13',
+  ], 'touched Pages most recent first, Hester, then every PTY tab');
+  assert.deepStrictEqual(t.targets[3], { kind: 'tab', pty_id: 11, label: 'Claude', tab_kind: 'agent', provider: 'claude' });
+  t = buildTargets({ tabs: TABS, activeTabId: 1, paletteOpen: true, deep, titles });
+  assert.deepStrictEqual(t.focus, { kind: 'hester' });
+  assert.ok(!t.targets.some((x) => x.kind === 'hester'), 'focus is not repeated');
+  t = buildTargets({ tabs: TABS, activeTabId: 1, paletteOpen: false, deep: null, titles: new Map() });
+  assert.strictEqual(t.focus.pty_id, 11);
+  t = buildTargets({ tabs: TABS, activeTabId: 2, paletteOpen: false, deep: null, titles: new Map() });
+  assert.strictEqual(t.focus, null, 'a terminal in front is not the focus');
+});
+
+test('checkSendRequest: §4.2 limits, submit only with text and never for a Page', () => {
+  const ok = (body) => { const r = checkSendRequest(body); assert.ok(r.ok, JSON.stringify(r)); return r; };
+  const no = (body, re) => { const r = checkSendRequest(body); assert.ok(!r.ok && r.status === 400, JSON.stringify(body).slice(0, 80)); if (re) assert.ok(re.test(r.error), r.error); };
+  let r = ok({ target: 'focus', items: [{ kind: 'text', text: 'héllo', input: 'voice' }] });
+  assert.deepStrictEqual(r.bytes, [6]);
+  assert.strictEqual(r.submit, false, 'Deliver by default');
+  r = ok({ target: { kind: 'tab', pty_id: 11 }, items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'scribble', caption: ' a sketch ' }, { kind: 'text', text: 'see' }], submit: true });
+  assert.strictEqual(r.items[0].caption, 'a sketch');
+  assert.strictEqual(r.bytes[0], 32);
+  ok({ target: { kind: 'page', card_id: 'pg-0000abcd', title: 'Mesh' }, items: [{ kind: 'image', mime: 'image/jpeg', data_b64: JPEG_B64, source: 'photo' }] });
+  ok({ target: { kind: 'hester' }, items: [{ kind: 'text', text: 'why?' }], submit: true });
+  no({ target: 'focus', items: [] }, /non-empty/);
+  no({ target: 'focus', items: Array(5).fill({ kind: 'text', text: 'x' }) }, /at most 4/);
+  no({ target: 'focus', items: [{ kind: 'text', text: 'x'.repeat(20_001) }] }, /20000/);
+  no({ target: 'focus', items: [{ kind: 'text', text: '   ' }] });
+  no({ target: 'focus', items: [{ kind: 'text', text: 'x', input: 'keys' }] });
+  no({ target: 'focus', items: [{ kind: 'image', mime: 'image/gif', data_b64: PNG_B64, source: 'photo' }] });
+  no({ target: 'focus', items: [{ kind: 'image', mime: 'image/png', data_b64: JPEG_B64, source: 'photo' }] }, /not a PNG/);
+  no({ target: 'focus', items: [{ kind: 'image', mime: 'image/png', data_b64: 'not base64!', source: 'photo' }] }, /base64/);
+  no({ target: 'focus', items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'webcam' }] });
+  // Over 10 MB decoded is refused from the length alone.
+  no({ target: 'focus', items: [{ kind: 'image', mime: 'image/png', data_b64: Buffer.concat([Buffer.from(PNG_B64, 'base64'), Buffer.alloc(10 * 1024 * 1024)]).toString('base64'), source: 'photo' }] }, /10 MB/);
+  no({ target: { kind: 'page', card_id: 'pg-0000abcd' }, items: [{ kind: 'text', text: 'x' }], submit: true }, /Page/);
+  no({ target: { kind: 'hester' }, items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'photo' }], submit: true }, /text/);
+  no({ target: { kind: 'hester' }, items: [{ kind: 'text', text: 'x' }], submit: 'yes' });
+  no({ target: { kind: 'board', card_id: 'pg-0000abcd', title: 'B' }, items: [{ kind: 'text', text: 'x' }] }, /Board/);
+  no({ target: { kind: 'page', card_id: '../x' }, items: [{ kind: 'text', text: 'x' }] });
+  no({ target: { kind: 'tab', pty_id: 1.5 }, items: [{ kind: 'text', text: 'x' }] });
+  no({ target: 'there', items: [{ kind: 'text', text: 'x' }] });
+});
+
+test('POST /tether/send: IPC tether:send to the window, answered by tether:send-result; the event has sizes, never content', async () => {
+  const win = withSendWindow(21, '/work/send');
+  const events = [];
+  const onEv = (e) => events.push(e);
+  copilotBus.on('event', onEv);
+  try {
+    await withFakeHester((c) => deskHester(c), async () => {
+      await withTetherApp(device, async (base) => {
+        // Targets: the focused agent tab is in front (no Deep session here).
+        const targets = (await (await fetch(`${base}/tether/targets?workspace=${encodeURIComponent('/work/send')}`)).json()).data;
+        assert.deepStrictEqual(targets.focus, { kind: 'tab', pty_id: 11, label: 'Claude', tab_kind: 'agent', provider: 'claude' });
+        assert.strictEqual(targets.targets[0].kind, 'hester');
+
+        let res = await post(base, '/tether/send', { workspace: '/work/send', target: 'focus', items: [{ kind: 'text', text: 'run the tests\nthen push', input: 'voice' }], submit: true });
+        assert.strictEqual(res.status, 200);
+        const { data } = await res.json();
+        assert.match(data.send_id, /^snd_/);
+        assert.deepStrictEqual(data.delivered_to, targets.focus);
+        const [channel, delivery] = win.sent.pop();
+        assert.strictEqual(channel, 'tether:send');
+        assert.deepStrictEqual(delivery, {
+          send_id: data.send_id,
+          target: targets.focus,
+          items: [{ kind: 'text', text: 'run the tests\nthen push', input: 'voice' }],
+          submit: true,
+          from: { surface: 'aeronaut', device_name: 'Phone' },
+        });
+        const ev = events.filter((e) => e.type === 'tether.send').pop();
+        assert.deepStrictEqual(ev.data, {
+          source_device: 'aeronaut', target_kind: 'tab', submit: true,
+          items: [{ kind: 'text', input: 'voice', bytes: 23 }], ok: true,
+        });
+        assert.ok(!JSON.stringify(ev).includes('tests'), 'never the text');
+
+        // A tab by pty id: the window's own label and kind, whatever the device sent.
+        res = await post(base, '/tether/send', { workspace: '/work/send', target: { kind: 'tab', pty_id: 13, label: 'lies', tab_kind: 'agent' }, items: [{ kind: 'image', mime: 'image/png', data_b64: PNG_B64, source: 'screenshot' }] });
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual(win.sent.pop()[1].target, { kind: 'tab', pty_id: 13, label: 'lazygit', tab_kind: 'tui', provider: null });
+        assert.deepStrictEqual(events.filter((e) => e.type === 'tether.send').pop().data.items, [{ kind: 'image', source: 'screenshot', bytes: 32 }]);
+        assert.strictEqual((await post(base, '/tether/send', { workspace: '/work/send', target: { kind: 'tab', pty_id: 99 }, items: [{ kind: 'text', text: 'x' }] })).status, 400, 'not a tab there');
+        // A Page and Hester go as given.
+        res = await post(base, '/tether/send', { workspace: '/work/send', target: { kind: 'page', card_id: 'pg-0000abcd', title: 'Mesh sync' }, items: [{ kind: 'text', text: 'a thought' }] });
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual(win.sent.pop()[1].submit, false);
+        // No Lee window has that workspace.
+        const none = await post(base, '/tether/send', { workspace: '/elsewhere', target: { kind: 'hester' }, items: [{ kind: 'text', text: 'x' }] });
+        assert.strictEqual(none.status, 503);
+        assert.strictEqual((await none.json()).error, 'no_window');
+        assert.strictEqual((await fetch(`${base}/tether/targets?workspace=/elsewhere`)).status, 503);
+      });
+    });
+  } finally {
+    copilotBus.off('event', onEv);
+    win.unregister();
+  }
+});
+
+test('POST /tether/send: 409 no_target, a renderer error (502), and 504 when the renderer never answers', async () => {
+  const quiet = withSendWindow(22, '/work/quiet', { activeTabId: 2, answer: (d) => (d.target.kind === 'hester' ? { ok: false, error: 'palette_busy' } : d.target.kind === 'tab' ? undefined : { ok: true }) });
+  const events = [];
+  const onEv = (e) => events.push(e);
+  copilotBus.on('event', onEv);
+  try {
+    await withTetherApp({ kind: 'shared', loopback: true, ip: '127.0.0.1' }, async (base) => {
+      const ws = '/work/quiet';
+      // A terminal is in front and there's no Deep session or palette: nothing to aim 'focus' at.
+      let res = await post(base, '/tether/send', { workspace: ws, target: 'focus', items: [{ kind: 'text', text: 'x' }] });
+      assert.strictEqual(res.status, 409);
+      assert.strictEqual((await res.json()).error, 'no_target');
+      res = await post(base, '/tether/send', { workspace: ws, target: { kind: 'hester' }, items: [{ kind: 'text', text: 'x' }] });
+      assert.strictEqual(res.status, 502);
+      assert.strictEqual((await res.json()).error, 'palette_busy');
+      const t0 = Date.now();
+      res = await post(base, '/tether/send', { workspace: ws, target: { kind: 'tab', pty_id: 12 }, items: [{ kind: 'text', text: 'x' }] });
+      assert.strictEqual(res.status, 504);
+      assert.ok(Date.now() - t0 < 2000);
+      const evs = events.filter((e) => e.type === 'tether.send');
+      assert.deepStrictEqual(evs.map((e) => [e.data.ok, e.data.error, e.data.source_device]), [[false, 'palette_busy', 'lee'], [false, 'timeout', 'lee']]);
+      // A late answer for a timed-out send is ignored.
+      assert.strictEqual(tetherSendBroker.settle({ send_id: 'snd_gone', ok: true }), false);
+    }, { sendTimeoutMs: 100 });
+    // The Deep session's zoomed Page is the focus in its workspace.
+    await withFakeHester((c) => deskHester(c), async () => {
+      await withTetherApp(device, async (base) => {
+        const res = await post(base, '/tether/send', { workspace: '/work/quiet', target: 'focus', items: [{ kind: 'text', text: 'x' }] });
+        assert.strictEqual(res.status, 200);
+        assert.deepStrictEqual((await res.json()).data.delivered_to, { kind: 'page', card_id: 'pg-0000abcd', title: 'Mesh sync' });
+        const targets = (await (await fetch(`${base}/tether/targets?workspace=/work/quiet`)).json()).data;
+        assert.deepStrictEqual(targets.targets.filter((t) => t.kind === 'page'), [{ kind: 'page', card_id: 'pg-00000002', title: 'Older page' }], 'titles from the Desk');
+        const refused = await post(base, '/tether/send', { workspace: '/work/quiet', target: 'focus', items: [{ kind: 'text', text: 'x' }], submit: true });
+        assert.strictEqual(refused.status, 400, 'submit to a Page, via focus');
+      }, { deep: () => ({ workspace: '/work/quiet', card: { card_id: 'pg-0000abcd', title: 'Mesh sync' }, touched: ['pg-00000002', 'pg-0000abcd'] }) });
+    });
+  } finally {
+    copilotBus.off('event', onEv);
+    quiet.unregister();
+  }
+});
+
+test('voice: media is audio from Lee\'s own page only; every other permission as before', () => {
+  const { allowPermission, allowPermissionCheck } = require(path.join(dist, 'media-permissions.js'));
+  const app = 'file:///Applications/Lee.app/Contents/Resources/app.asar/dist/renderer/public/index.html';
+  assert.strictEqual(allowPermission('media', app, ['audio'], false, false), true);
+  assert.strictEqual(allowPermission('media', app, ['audio', 'video'], false, false), false, 'never the camera');
+  assert.strictEqual(allowPermission('media', app, [], false, false), false);
+  assert.strictEqual(allowPermission('media', 'https://example.com/', ['audio'], true, false), false, 'browser tabs never get the mic');
+  assert.strictEqual(allowPermission('media', app, ['audio'], true, false), false, 'nor a webview on a file');
+  assert.strictEqual(allowPermission('media', 'http://localhost:5173/', ['audio'], false, true), true, 'the dev server');
+  assert.strictEqual(allowPermission('media', 'http://localhost:5173/', ['audio'], false, false), false, 'only in dev');
+  for (const p of ['clipboard-read', 'notifications', 'fullscreen', 'geolocation']) {
+    assert.strictEqual(allowPermission(p, 'https://example.com/', undefined, true, false), true, p);
+    assert.strictEqual(allowPermissionCheck(p, 'https://example.com', undefined, true, false), true, p);
+  }
+  assert.strictEqual(allowPermissionCheck('media', 'file://', 'audio', false, false), true);
+  assert.strictEqual(allowPermissionCheck('media', 'file://', 'video', false, false), false);
+  assert.strictEqual(allowPermissionCheck('media', 'https://example.com', 'audio', true, false), false);
 });
 
 (async () => {

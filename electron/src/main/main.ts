@@ -26,6 +26,7 @@ import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
 import { UserNameResolver } from './user-name';
 import { fsWatcher } from './fs-watcher';
 import { initCockpitLint, shutdownCockpitLint } from './cockpit/lint-main';
+import { installMediaPermissions } from './media-permissions';
 import {
   SHORTCUTS,
   GLOBAL_FOCUS_ACTION,
@@ -1987,6 +1988,9 @@ app.whenReady().then(() => {
       icon: aboutIcon,
     } : {}),
   });
+
+  // Voice (§5.3): the mic for Lee's own page only; every other permission as before.
+  installMediaPermissions(isDev);
 
   // Initialize PTY manager (global singleton)
   ptyManager = new PTYManager();

@@ -1,8 +1,9 @@
 /**
- * Idea capture relay (contracts §10.A, decision 12).
+ * Idea capture relay (contracts §10.A, decision 12; Ideas since
+ * docs/plans/2026-09-28-tether-review-voice.md §2.2).
  *
- * Renderer and devices → Lee → Hester `POST /someday` with the shared token.
- * If Hester is unreachable the capture is appended to ~/.lee/spool/someday.jsonl
+ * Renderer and devices → Lee → Hester `POST /ideas` with the shared token.
+ * If Hester is unreachable the capture is appended to ~/.lee/spool/ideas.jsonl
  * and retried every 60 s while the spool is non-empty. Logs a `capture` event
  * with counts only (never the text).
  */
@@ -20,16 +21,18 @@ const REQUEST_TIMEOUT_MS = 5000;
 export interface CaptureSource {
   surface: string;
   device_id?: string;
-  /** Carry (Desk D2 §9.3): the card the thought is about; exploration_id for a pre-Desk Hester. */
+  /** Tether (Desk D2 §9.3): the card the thought is about. */
   card_id?: string;
-  exploration_id?: string;
 }
 
-export interface SomedayPayload {
+/** The body of Hester's POST /ideas (and one spool line). `as` keeps its wire values. */
+export interface IdeaPayload {
   text: string;
   workspace?: string;
   as: 'someday' | 'explore';
   source: CaptureSource;
+  /** 'voice' when the text came from a transcript (§5.2). */
+  input?: 'voice';
 }
 
 type PostOutcome = { ok: true; id: string | null } | { ok: false; retry: boolean; error: string };
@@ -59,11 +62,13 @@ export class CaptureRelay {
     if (!text) return { success: false, error: 'text is required' };
     if (text.length > CAPTURE_MAX_CHARS) return { success: false, error: `text must be at most ${CAPTURE_MAX_CHARS} characters` };
     const as: 'someday' | 'explore' = req.as === 'explore' ? 'explore' : 'someday';
-    const payload: SomedayPayload = {
+    const voice = req.input === 'voice';
+    const payload: IdeaPayload = {
       text,
       as,
       source: meta.source,
       ...(meta.workspace ? { workspace: meta.workspace } : {}),
+      ...(voice ? { input: 'voice' as const } : {}),
     };
 
     const outcome = await this.post(payload);
@@ -93,16 +98,17 @@ export class CaptureRelay {
         text_chars: text.length,
         as,
         spooled: !!result.spooled,
+        ...(voice ? { input: 'voice' } : {}),
       },
     });
     return result;
   }
 
   /**
-   * Spool a capture another route already failed to deliver (Carry, Desk D2
+   * Spool a capture another route already failed to deliver (Tether, Desk D2
    * §9.3); it goes out with the next retry. False when the spool can't be written.
    */
-  spool(payload: SomedayPayload): boolean {
+  spool(payload: IdeaPayload): boolean {
     try {
       this.appendSpool(payload);
     } catch (err) {
@@ -141,7 +147,7 @@ export class CaptureRelay {
           remaining.push(line);
           continue;
         }
-        let payload: SomedayPayload;
+        let payload: IdeaPayload;
         try {
           payload = JSON.parse(line);
         } catch {
@@ -169,8 +175,8 @@ export class CaptureRelay {
     this.stopRetry();
   }
 
-  private async post(payload: SomedayPayload): Promise<PostOutcome> {
-    const url = `http://127.0.0.1:${this.opts.getHesterPort()}/someday`;
+  private async post(payload: IdeaPayload): Promise<PostOutcome> {
+    const url = `http://127.0.0.1:${this.opts.getHesterPort()}/ideas`;
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -209,7 +215,7 @@ export class CaptureRelay {
     }
   }
 
-  private appendSpool(payload: SomedayPayload): void {
+  private appendSpool(payload: IdeaPayload): void {
     fs.mkdirSync(path.dirname(this.opts.spoolFile), { recursive: true, mode: 0o700 });
     fs.appendFileSync(this.opts.spoolFile, JSON.stringify(payload) + '\n', { mode: 0o600 });
   }
@@ -256,6 +262,26 @@ export class CaptureRelay {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
+}
+
+/**
+ * §2.1: the spool moved from someday.jsonl to ideas.jsonl. Captures still
+ * waiting in the old file are real thoughts, so they're appended to the new
+ * one (once) rather than dropped. Returns how many lines moved.
+ */
+export function migrateSpool(oldFile: string, newFile: string): number {
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(oldFile, 'utf8').split('\n').filter((l) => l.trim());
+  } catch {
+    return 0;
+  }
+  if (lines.length > 0) {
+    fs.mkdirSync(path.dirname(newFile), { recursive: true, mode: 0o700 });
+    fs.appendFileSync(newFile, lines.join('\n') + '\n', { mode: 0o600 });
+  }
+  fs.rmSync(oldFile, { force: true });
+  return lines.length;
 }
 
 let relay: CaptureRelay | null = null;

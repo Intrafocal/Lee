@@ -4,7 +4,7 @@
  * ~/.lee/claude-plugin/ at startup and every Claude it launches gets
  * `--plugin-dir <it>`; the project's .claude/ is never touched, and Claude
  * sessions Lee didn't launch don't see it. The skills are read-only: they
- * call `hester desk …`, which reads .hester/desk/ and .hester/someday/.
+ * call `hester desk …`, which reads .hester/desk/ and .hester/ideas/.
  */
 
 import * as fs from 'fs';
@@ -48,14 +48,14 @@ ${HESTER_NOTE}
 
 export const DRAWER_SKILL = `---
 name: drawer
-description: Read the Drawer on the Operator's Desk in Lee: Stashed Areas (Areas they put away, with their Page cards) and Ideas (captures from Lee, the phone or the T-Deck, a.k.a. Someday), newest first, with search. Use when they mention the Drawer, something they stashed or parked, an idea they captured, "Someday", or ask you to find an old Page that isn't on the Desk.
+description: Read the Drawer on the Operator's Desk in Lee: Stashed Areas (Areas they stashed, with their Page cards) and Ideas (captures from Lee, the phone or the T-Deck; older builds said Someday), newest first, with search. Use when they mention the Drawer, something they stashed or parked, an idea they captured, "Ideas" or "Someday", or ask you to find an old Page that isn't on the Desk.
 ---
 
 # Reading the Drawer
 
 The Drawer holds what's off the Desk:
-- **Stashed**: whole Areas the Operator put away, with their Page cards (older Lee builds called this "Put away"; ids still say \`put-away\`). Their own Drawers can hold Areas too.
-- **Ideas**: open captures, from Lee, Aeronaut (phone) or Dirigible (T-Deck). Stored in \`.hester/someday/\`.
+- **Stashed**: whole Areas the Operator stashed, with their Page cards (older Lee builds called this "Put away"). The Drawer's id is \`stashed\`. Their own Drawers can hold Areas too.
+- **Ideas**: open captures, from Lee, Aeronaut (phone) or Dirigible (T-Deck), voice notes included. Stored in \`.hester/ideas/\` (ids \`idea_…\`).
 
 ## Commands (read-only)
 
@@ -69,7 +69,7 @@ ${HESTER_NOTE}
 
 - A stashed Area is parked, not deleted or finished: mention it if it bears on the work, but don't assume it's current.
 - Ideas are raw one-liners, often typed on a phone: read generously, and ask before treating one as a decision.
-- **Don't write to \`.hester/\`.** To act on an idea (start a Page, keep, drop) or take an Area out, the Operator does it from the Drawer in Lee.
+- **Don't write to \`.hester/\`.** To act on an idea (start a Page, keep, drop) or unstash an Area, the Operator does it from the Drawer in Lee.
 `;
 
 export interface PluginPaths {

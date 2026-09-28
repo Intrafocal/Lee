@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!--
+      A custom plist replaces electron-builder's default, so its entitlements
+      are repeated here: Electron's V8 needs JIT and unsigned executable
+      memory under the hardened runtime, and native modules (node-pty) need
+      library validation off.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!--
+      Voice input (docs/plans/2026-09-28-tether-review-voice.md §5.3): without
+      it a signed build's getUserMedia fails silently, whatever TCC says.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

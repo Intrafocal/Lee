@@ -6,7 +6,7 @@
  *   GET    /devices         shared loopback: all; device: itself only
  *   DELETE /devices/:id     shared loopback: any; device: itself only
  *   POST   /pair/redeem     unauthenticated; single-use QR ticket → device token
- *   POST   /capture         any principal; relayed to Hester's Someday store
+ *   POST   /capture         any principal; relayed to Hester's Ideas store
  */
 
 import type { Application, Request, Response } from 'express';
@@ -30,6 +30,9 @@ const INGEST_MAX = 500;
 const INGEST_TYPES = new Set<LeeEventType>([
   'model.call',
   'someday.triage',
+  // Tether, Review and voice §2.2, §5.2: Ideas' triage under its new name; transcriptions (never text)
+  'idea.triage',
+  'voice.transcribe',
   'digest.shown',
   'retro.shown',
   'retro.answered',
@@ -312,7 +315,7 @@ export function registerCoreRoutes(app: Application, deps: CoreRoutesDeps): void
         return;
       }
       const result = await relay.capture(
-        { text: body.text as string, as: body.as },
+        { text: body.text as string, as: body.as, ...(body.input === 'voice' ? { input: 'voice' as const } : {}) },
         { actor: actorForPrincipal(p), source: captureSourceFor(p), workspace: ws.workspace, window_id: ws.window_id },
       );
       // Same {success, data} envelope as every other :9001 route; Aeronaut
