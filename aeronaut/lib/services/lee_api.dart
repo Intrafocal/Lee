@@ -116,12 +116,14 @@ class LeeApi {
     }
   }
 
-  /// Fetch a full context snapshot.
-  Future<LeeContext?> getContext() async {
+  /// Fetch a full context snapshot, for [windowId] or else the window
+  /// focused on the host.
+  Future<LeeContext?> getContext({int? windowId}) async {
     try {
+      final query = windowId != null ? '?window_id=$windowId' : '';
       final response = await _client
           .get(
-            Uri.parse('${machine.hostUrl}/context'),
+            Uri.parse('${machine.hostUrl}/context$query'),
             headers: _headers,
           )
           .timeout(const Duration(seconds: 5));

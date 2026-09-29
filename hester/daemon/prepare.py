@@ -25,6 +25,7 @@ import httpx
 if TYPE_CHECKING:
     from .registries import PromptRegistry
 
+from .copilot.model_log import ollama_usage, record_model_call
 from .thinking_depth import ThinkingDepth, DepthClassification, classify_complexity
 from .tools.base import HESTER_TOOLS, ToolDefinition, get_available_tools
 
@@ -703,6 +704,9 @@ class OllamaFunctionGemma:
         Returns:
             Dict with 'name' and 'arguments' keys, or None
         """
+        started = time.monotonic()
+        ok = False
+        usage: Dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 payload = {
@@ -722,7 +726,9 @@ class OllamaFunctionGemma:
                 )
 
                 if response.status_code == 200:
+                    ok = True
                     data = response.json()
+                    usage = ollama_usage(data)
                     msg = data.get("message", {})
                     tool_calls = msg.get("tool_calls", [])
                     if tool_calls:
@@ -744,6 +750,12 @@ class OllamaFunctionGemma:
             self._mark_failed(f"timed out after {self.timeout}s")
         except Exception as e:
             self._mark_failed(f"request failed: {e}")
+        finally:
+            record_model_call(
+                provider="ollama", model=self.model, op="generate", location="local",
+                ok=ok, duration_ms=(time.monotonic() - started) * 1000.0,
+                cost_basis="local", **usage,
+            )
 
         return None
 
@@ -2177,6 +2189,9 @@ class OllamaGemmaClient:
         timeout_s = (timeout_ms or self.default_timeout_ms) / 1000.0
         timeout_s = min(timeout_s, config["timeout"])  # Use model max as ceiling
 
+        started = time.monotonic()
+        ok = False
+        usage: Dict[str, Any] = {}
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 payload: Dict[str, Any] = {
@@ -2201,7 +2216,10 @@ class OllamaGemmaClient:
                 )
 
                 if response.status_code == 200:
-                    return response.json().get("response", "")
+                    ok = True
+                    data = response.json()
+                    usage = ollama_usage(data)
+                    return data.get("response", "")
 
         except (asyncio.TimeoutError, httpx.TimeoutException):
             # Treat a timeout as unavailability: the next call skips it instantly
@@ -2212,6 +2230,12 @@ class OllamaGemmaClient:
         except Exception as e:
             OLLAMA_AVAILABILITY.mark_unavailable(
                 self.ollama_url, ollama_name, f"request failed: {e}"
+            )
+        finally:
+            record_model_call(
+                provider="ollama", model=ollama_name, op="generate", location="local",
+                ok=ok, duration_ms=(time.monotonic() - started) * 1000.0,
+                cost_basis="local", **usage,
             )
 
         return None

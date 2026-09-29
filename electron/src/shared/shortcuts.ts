@@ -65,15 +65,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'prev_tab', defaultChord: 'ctrl+shift+tab', scope: 'renderer', group: 'Tabs', description: 'Previous center tab' },
   { action: 'toggle_watch', defaultChord: 'meta+w', scope: 'renderer', group: 'Tabs', description: 'Toggle idle-watching on the focused agent tab' },
   { action: 'cycle_idle', defaultChord: 'meta+i', scope: 'renderer', group: 'Tabs', description: 'Cycle through watched agent tabs that have gone idle' },
-  { action: 'tab_1', defaultChord: 'meta+1', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 1' },
-  { action: 'tab_2', defaultChord: 'meta+2', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 2' },
-  { action: 'tab_3', defaultChord: 'meta+3', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 3' },
-  { action: 'tab_4', defaultChord: 'meta+4', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 4' },
-  { action: 'tab_5', defaultChord: 'meta+5', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 5' },
-  { action: 'tab_6', defaultChord: 'meta+6', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 6' },
-  { action: 'tab_7', defaultChord: 'meta+7', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 7' },
-  { action: 'tab_8', defaultChord: 'meta+8', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 8' },
-  { action: 'tab_9', defaultChord: 'meta+9', scope: 'renderer', group: 'Tabs', description: 'Switch to center tab 9' },
+  { action: 'tab_1', defaultChord: 'meta+1', scope: 'renderer', group: 'Tabs', description: '⌘1: tab 1 in Manual, rail section 1 in the Cockpit, nothing in Deep' },
+  { action: 'tab_2', defaultChord: 'meta+2', scope: 'renderer', group: 'Tabs', description: '⌘2: tab 2 in Manual, rail section 2 in the Cockpit, nothing in Deep' },
+  { action: 'tab_3', defaultChord: 'meta+3', scope: 'renderer', group: 'Tabs', description: '⌘3: tab 3 in Manual, rail section 3 in the Cockpit, nothing in Deep' },
+  { action: 'tab_4', defaultChord: 'meta+4', scope: 'renderer', group: 'Tabs', description: '⌘4: tab 4 in Manual, rail section 4 in the Cockpit, nothing in Deep' },
+  { action: 'tab_5', defaultChord: 'meta+5', scope: 'renderer', group: 'Tabs', description: '⌘5: tab 5 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_6', defaultChord: 'meta+6', scope: 'renderer', group: 'Tabs', description: '⌘6: tab 6 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_7', defaultChord: 'meta+7', scope: 'renderer', group: 'Tabs', description: '⌘7: tab 7 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_8', defaultChord: 'meta+8', scope: 'renderer', group: 'Tabs', description: '⌘8: tab 8 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
+  { action: 'tab_9', defaultChord: 'meta+9', scope: 'renderer', group: 'Tabs', description: '⌘9: tab 9 in Manual, nothing in the Cockpit (it has four sections), nothing in Deep' },
 
   // --- Tools (tab launchers) ---
   { action: 'terminal', defaultChord: 'meta+shift+t', scope: 'renderer', group: 'Tools', description: 'New terminal tab' },
@@ -90,11 +90,17 @@ export const SHORTCUTS: ShortcutDef[] = [
   { action: 'k8s', defaultChord: 'meta+shift+k', scope: 'renderer', group: 'Tools', description: 'Kubernetes TUI (k9s)' },
   { action: 'sql', defaultChord: 'meta+shift+p', scope: 'renderer', group: 'Tools', description: 'SQL client (pgcli)' },
   { action: 'hester_qa', defaultChord: 'meta+shift+q', scope: 'renderer', group: 'Tools', description: 'Hester QA scene runner' },
-  { action: 'library', defaultChord: 'meta+shift+y', scope: 'renderer', group: 'Tools', description: 'Library pane' },
   { action: 'system', defaultChord: 'meta+shift+m', scope: 'renderer', group: 'Tools', description: 'System monitor (btop)' },
   { action: 'workstream', defaultChord: 'meta+shift+w', scope: 'renderer', group: 'Tools', description: 'Workstream picker' },
 
   // --- View ---
+  // Modes (Deep D1 §1.3). mode_switcher replaced cockpit_toggle; resolveChord
+  // still honours a `keybindings:` entry for the old name.
+  { action: 'mode_switcher', defaultChord: 'meta+0', scope: 'renderer', group: 'View', description: 'Mode switcher: tap for the last mode, hold for Cockpit / Deep / Manual' },
+  { action: 'mode_deep', defaultChord: 'meta+shift+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Deep' },
+  { action: 'mode_manual', defaultChord: 'meta+alt+0', scope: 'renderer', group: 'View', description: 'Cockpit ↔ Manual' },
+  // Desk D2 §7.2: implemented by the Desk (components/desk), listed for docs only.
+  { action: 'desk_overview', defaultChord: 'esc', scope: 'renderer', documentationOnly: true, group: 'View', description: 'Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first)' },
   { action: 'force_reload', defaultChord: 'meta+shift+r', scope: 'menu', group: 'View', description: 'Reload the Lee UI, discarding caches (prompts if terminals are open)' },
   {
     action: 'scroll_bottom',
@@ -108,7 +114,16 @@ export const SHORTCUTS: ShortcutDef[] = [
   // --- Editor (implemented inside EditorPanel / CodeMirror, listed for docs) ---
   { action: 'editor_markdown_preview', defaultChord: 'meta+e', scope: 'renderer', documentationOnly: true, group: 'Editor', description: 'Toggle markdown preview (markdown files only; handled inside the editor panel)' },
   { action: 'editor_find', defaultChord: 'meta+f', scope: 'renderer', documentationOnly: true, group: 'Editor', description: "Find in file (CodeMirror's search keymap)" },
+  { action: 'deep_actions', defaultChord: 'meta+.', scope: 'renderer', group: 'Editor', description: "Deep only: the selection's action row (Capture, Keep, Ask, Explore), or the visible typing affordance" },
 ];
+
+/**
+ * Renamed actions: a `keybindings:` entry under the old name still applies to
+ * the new action, unless the new name has its own entry.
+ */
+export const LEGACY_ACTIONS: Record<string, string> = {
+  mode_switcher: 'cockpit_toggle',
+};
 
 /**
  * System-wide hotkey to bring Lee forward from any other app.
@@ -144,7 +159,9 @@ export function resolveChord(
   action: string,
   keybindings?: Record<string, string> | null,
 ): string {
-  const override = keybindings?.[action];
+  const legacy = LEGACY_ACTIONS[action];
+  const own = keybindings?.[action];
+  const override = typeof own === 'string' && own.trim() ? own : legacy ? keybindings?.[legacy] : undefined;
   const def = SHORTCUTS.find((s) => s.action === action);
   if (typeof override === 'string' && override.trim()) return normalizeChord(override);
   return def ? def.defaultChord : '';

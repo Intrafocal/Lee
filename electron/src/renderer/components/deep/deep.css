@@ -1,0 +1,1395 @@
+/*
+ * deep.css - the Deep surface (Deep D1 §4, §5, §7, §8.2, §9): the overlay,
+ * header, Page column and margin, selection row, affordances, the ending
+ * ritual sheet and the opener card. Themed from the Phosphor tokens
+ * (styles/tokens.css); no new tokens.
+ *
+ * cockpit-design §6.1: Deep is a different room. --ground-0, your words in
+ * --font-write at 20/1.65, a quiet header with no fill, margin notes with no
+ * border or card, and no phosphor anywhere but the caret, the selection and
+ * the new-answer dot. Focus is the global rule (§1.4).
+ *
+ * Deep next (2026-09-27 contract §4): the margin's section marks add a
+ * running hand-off's small phosphor agent mark and a waiting hand-off's
+ * ember dot (R5: the one place ember shows in Deep); live formatting, the
+ * [[ / @ pickers and the source panel (R9–R11) use neutral grounds only.
+ */
+
+/* ---- overlay ---- */
+
+.deep-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 901;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground-0);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  overflow: hidden;
+  outline: none;
+}
+
+.deep-overlay ::selection {
+  background: var(--selection);
+}
+
+/* Hidden, not display:none: scroll, cursor, selection and undo survive a hop. */
+.deep-overlay.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.deep-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  position: relative; /* the reading panel sits against it */
+}
+
+.deep-overlay kbd,
+.deep-sheet kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--ground-5);
+  border-radius: var(--radius-tdeck);
+  color: var(--text-3);
+  background: var(--ground-2);
+}
+
+.deep-muted {
+  color: var(--text-3);
+}
+
+.deep-spacer {
+  flex: 1;
+}
+
+.deep-loading {
+  padding: var(--space-6);
+  text-align: center;
+}
+
+/* ---- controls ---- */
+
+.deep-btn,
+.deep-chip,
+.deep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  color: var(--text-2);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.deep-btn:hover:not(:disabled),
+.deep-chip:hover:not(:disabled),
+.deep-toggle:hover {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+}
+
+.deep-btn:disabled,
+.deep-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.deep-chip.is-on,
+.deep-toggle.is-on {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+  background: var(--ground-4);
+}
+
+/* A quiet button: text only (the header's counts, a note's actions). */
+.deep-quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.deep-quiet:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.deep-quiet:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.deep-link {
+  font: inherit;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 2px;
+}
+
+.deep-link:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.deep-icon-btn {
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+}
+
+.deep-icon-btn:hover {
+  color: var(--text-1);
+}
+
+.deep-ask-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: var(--space-1);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  outline: none;
+  caret-color: var(--caret);
+}
+
+.deep-ask-input:focus {
+  border-color: var(--ground-5);
+}
+
+/* The Ask field's mic (§5.3), inside the field's right end. */
+.deep-row-slot .voice-mic.deep-ask-mic {
+  position: absolute;
+  right: var(--space-1);
+  bottom: 0;
+}
+
+.deep-row-slot:has(.deep-ask-mic) .deep-ask-input {
+  padding-right: 34px;
+}
+
+/* ---- header ---- */
+
+.deep-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  background: none;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.deep-title {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  cursor: text;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-title:hover {
+  color: var(--text-1);
+}
+
+.deep-title-input {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-5);
+  border-radius: var(--radius-control);
+  padding: 2px var(--space-1);
+  outline: none;
+  width: 32ch;
+}
+
+.deep-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.deep-dirty.is-retrying {
+  background: var(--text-2);
+}
+
+.deep-view-name {
+  font-size: 13px;
+  color: var(--text-3);
+  margin-left: var(--space-1);
+}
+
+.deep-flash {
+  color: var(--text-2);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-flash.is-warn {
+  color: var(--text-1);
+}
+
+/* The wake line: something you asked to be woken for needs you (an ember dot). */
+.deep-wake {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  max-width: 36ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deep-wake-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--needs-you);
+  flex-shrink: 0;
+}
+
+.deep-wake:hover {
+  color: var(--text-1);
+}
+
+.deep-new-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-next);
+  flex-shrink: 0;
+}
+
+/* – Back to Cockpit and × End session…: icon actions, top right, in the
+   order of the macOS window buttons they echo. */
+.deep-window-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+}
+
+.deep-pop-anchor {
+  position: relative;
+}
+
+.deep-popover {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 5;
+  min-width: 260px;
+  max-width: 420px;
+  max-height: 50vh;
+  overflow: auto;
+  padding: var(--space-1);
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.6);
+}
+
+.deep-popover > .deep-muted {
+  padding: var(--space-2);
+}
+
+.deep-pop-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.deep-pop-row:hover:not(:disabled) {
+  background: var(--ground-3);
+}
+
+.deep-conflict {
+  padding: var(--space-1) var(--space-4);
+  color: var(--text-1);
+  background: var(--ground-2);
+  border-bottom: 1px solid var(--ground-4);
+  flex-shrink: 0;
+}
+
+/* ---- the Page ---- */
+
+/* The Page and, when a [[file]] is open, its source panel (≤ half width). */
+.deep-page-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.deep-page-scroller {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.deep-page-inner {
+  position: relative;
+  display: grid;
+  /* The text is centred on the window; the margin sits in the right gutter. */
+  grid-template-columns: minmax(var(--space-5), 1fr) minmax(0, 72ch) minmax(260px, 1fr);
+  align-items: start;
+  min-height: 100%;
+}
+
+.deep-page-column {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+/* ---- the formatting toolbar ---- */
+
+/* One slim row, sticky at the top of the text column. Quiet at rest (text-3
+   at half opacity), fuller on hover or keyboard focus. No phosphor: there's
+   no next step here. The slot's ground hides the text scrolling under it. */
+.deep-tb-slot {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--ground-0);
+  padding: var(--space-2) 0 var(--space-1);
+}
+
+.deep-tb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  opacity: 0.5;
+  transition: opacity 160ms ease;
+}
+
+.deep-tb:hover,
+.deep-tb:focus-within,
+.deep-tb.has-menu {
+  opacity: 1;
+}
+
+.deep-tb-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.deep-tb-group + .deep-tb-group {
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--ground-3);
+}
+
+.deep-tb-item {
+  position: relative;
+  display: inline-flex;
+}
+
+.deep-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 var(--space-1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.deep-tb-btn:hover,
+.deep-tb-btn:focus-visible,
+.deep-tb-btn[aria-expanded='true'] {
+  color: var(--text-1);
+  background: var(--ground-2);
+}
+
+.deep-tb-btn[aria-pressed='true'] {
+  color: var(--text-1);
+  background: var(--ground-1);
+}
+
+.deep-tb-glyph {
+  line-height: 1;
+}
+
+.deep-tb-glyph.is-bold {
+  font-weight: 700;
+}
+
+.deep-tb-glyph.is-italic {
+  font-family: var(--font-write);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.deep-tb-glyph.is-strike {
+  text-decoration: line-through;
+}
+
+.deep-tb-glyph.is-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* In a table: Add row / Add column. */
+.deep-tb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: var(--space-1);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+}
+
+.deep-tb-menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  text-align: left;
+  cursor: pointer;
+}
+
+.deep-tb-menu-item:hover,
+.deep-tb-menu-item:focus-visible {
+  color: var(--text-1);
+  background: var(--ground-3);
+}
+
+.deep-tb-kbd {
+  color: var(--text-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deep-tb {
+    transition: none;
+  }
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h1 {
+  font-size: 1.5em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h2 {
+  font-size: 1.25em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-h3 {
+  font-size: 1.1em;
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-quote,
+.deep-source-cm .cm-editor .cm-line.deep-quote {
+  color: var(--text-2);
+  border-left: 2px solid var(--ground-4);
+  padding-left: var(--space-3);
+}
+
+/* ---- live formatting (Deep next R9) ---- */
+
+.deep-source-cm .cm-editor .cm-line.deep-h {
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.deep-source-cm .cm-editor .cm-line.deep-h1 {
+  font-size: 1.4em;
+}
+
+.deep-source-cm .cm-editor .cm-line.deep-h2 {
+  font-size: 1.2em;
+}
+
+/* Fenced code: the machine's words in mono on a slightly raised ground. */
+.deep-page-cm .cm-editor .cm-line.deep-code,
+.deep-source-cm .cm-editor .cm-line.deep-code {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--ground-1);
+  padding: 0 var(--space-3);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-code-open,
+.deep-source-cm .cm-editor .cm-line.deep-code-open {
+  border-radius: 6px 6px 0 0;
+  color: var(--text-3);
+  padding-top: var(--space-1);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-code-close,
+.deep-source-cm .cm-editor .cm-line.deep-code-close {
+  border-radius: 0 0 6px 6px;
+  color: var(--text-3);
+  padding-bottom: var(--space-1);
+}
+
+/* A [[file]] link off the cursor's line: its label, quietly underlined. */
+/* Tether §4.4: a Page's own image off the cursor's line (its markdown shows on it). */
+.deep-image {
+  display: inline-block;
+  max-width: 100%;
+  margin: var(--space-2) 0;
+  vertical-align: top;
+}
+
+.deep-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: var(--radius-control);
+}
+
+.deep-image.is-missing {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.deep-wiki {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.deep-wiki:hover {
+  text-decoration-color: var(--text-1);
+}
+
+.deep-wiki-src {
+  color: var(--text-2);
+}
+
+/* A link to a Desk card (Boards B4): its glyph, then its label. */
+.deep-card-link {
+  white-space: nowrap;
+}
+
+.deep-card-link-glyph {
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.25em;
+  vertical-align: -0.05em;
+  color: var(--text-2);
+}
+
+/* A card that isn't on the Desk any more: muted, still clickable (it says so). */
+.deep-card-link.is-missing {
+  color: var(--text-3);
+  text-decoration-style: dotted;
+}
+
+/* A task's checkbox off the cursor's line; a done task reads quieter. */
+.deep-task-box {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: 0.1em;
+  vertical-align: -0.05em;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.deep-task-box:hover {
+  border-color: var(--text-1);
+}
+
+.deep-task-box.is-done {
+  background: var(--text-3);
+  box-shadow: inset 0 0 0 2px var(--ground-0);
+}
+
+.deep-page-cm .cm-editor .cm-line.deep-task-done {
+  color: var(--text-3);
+}
+
+/* `---` off the cursor's line: a thin rule across the column. */
+.deep-hr {
+  display: inline-block;
+  width: 100%;
+  height: 1px;
+  vertical-align: middle;
+  background: var(--ground-4);
+}
+
+/* A GFM table while the cursor is outside it. */
+.deep-table-wrap {
+  margin: var(--space-2) 0;
+  overflow-x: auto;
+  cursor: text;
+}
+
+.deep-table {
+  border-collapse: collapse;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+.deep-table th,
+.deep-table td {
+  border: 1px solid var(--ground-4);
+  padding: var(--space-1) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  min-width: 4ch;
+}
+
+.deep-table th {
+  font-weight: 500;
+  background: var(--ground-1);
+}
+
+/* ---- the margin ---- */
+
+.deep-margin {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  align-self: stretch;
+  margin-left: var(--space-5);
+  max-width: 340px;
+}
+
+.deep-marker-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+}
+
+.deep-marker-slot.is-open {
+  z-index: 3;
+}
+
+/* A note: no border, no card. Dot and label, then the question. */
+.deep-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 2px 0;
+  text-align: left;
+  font: inherit;
+  background: none;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.deep-note-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.deep-note-q {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.deep-note:hover .deep-note-q,
+.deep-marker-slot.is-open .deep-note-q {
+  color: var(--text-1);
+}
+
+/* The 6px dot: phosphor while unread (the new-answer dot), --text-3 once read. */
+.deep-marker {
+  display: inline-block;
+  position: relative;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.deep-marker.is-unread {
+  background: var(--accent-next);
+}
+
+.deep-marker.is-error {
+  background: none;
+  border: 1px solid var(--text-3);
+}
+
+.deep-marker.is-pending {
+  background: none;
+}
+
+.deep-marker-spin {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid rgba(var(--text-3-rgb), 0.35);
+  border-top-color: var(--text-2);
+  border-radius: 50%;
+  animation: deep-spin 0.9s linear infinite;
+}
+
+.deep-marker .deep-marker-spin {
+  position: absolute;
+  inset: -1px;
+}
+
+@keyframes deep-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Section marks (Deep next R5): answers are dots, hand-offs a small agent
+   mark (a diamond). Phosphor only for the new-answer dot and a running
+   agent; ember only for a hand-off waiting on you. */
+.deep-mark {
+  display: inline-block;
+  position: relative;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.deep-mark.is-unread {
+  background: var(--accent-next);
+}
+
+.deep-mark.is-read {
+  border: 1px solid var(--text-3);
+}
+
+.deep-mark.is-error {
+  border: 1px solid var(--text-2);
+}
+
+.deep-mark.is-waiting {
+  background: var(--needs-you);
+}
+
+.deep-mark.is-running,
+.deep-mark.is-done {
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.deep-mark.is-running {
+  background: var(--accent-next);
+}
+
+.deep-mark.is-done {
+  border: 1px solid var(--text-3);
+}
+
+.deep-mark .deep-marker-spin {
+  position: absolute;
+  inset: -1px;
+}
+
+.deep-mark-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.deep-mark-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0 var(--space-3);
+}
+
+.deep-handoff-result {
+  white-space: pre-wrap;
+}
+
+/* The Goals Page's prompts (R12): quiet, in the margin, never in your text. */
+.deep-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.deep-prompt {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-family: var(--font-write);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text-3);
+  max-height: 6em;
+  overflow: hidden;
+  transition:
+    opacity 0.6s ease,
+    max-height 0.6s ease;
+}
+
+.deep-prompt.is-faded {
+  opacity: 0;
+  max-height: 0;
+  pointer-events: none;
+}
+
+.deep-prompt-x {
+  font: inherit;
+  font-style: normal;
+  font-size: 13px;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.deep-prompt:hover .deep-prompt-x {
+  opacity: 1;
+}
+
+.deep-prompt-x:hover {
+  color: var(--text-1);
+}
+
+/* The expanded note: the answer in the system sans at 14px, quiet actions. */
+.deep-card {
+  margin-top: var(--space-1);
+  padding: 0 0 var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.deep-card-a {
+  color: var(--text-1);
+}
+
+/* A long answer in the margin: a clamped preview; Read opens the panel. */
+.deep-card-a.is-preview {
+  max-height: 9.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
+  mask-image: linear-gradient(to bottom, #000 60%, transparent);
+}
+
+.deep-read {
+  margin-top: var(--space-1);
+}
+
+/* The reading panel: long answers and hand-off results, beside the Page. */
+.deep-reader {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  bottom: 0;
+  width: min(50%, 720px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  overflow: auto;
+  background: var(--ground-1);
+  border-left: 1px solid var(--ground-3);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.6;
+  outline: none;
+}
+
+.deep-reader-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.deep-reader-q {
+  font-size: 15px;
+  color: var(--text-2);
+}
+
+.deep-reader-body {
+  color: var(--text-1);
+}
+
+.deep-reader-body table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.deep-reader-body th,
+.deep-reader-body td {
+  border: 1px solid var(--ground-4);
+  padding: 4px 8px;
+  vertical-align: top;
+}
+
+.deep-card-err {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.deep-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin-top: var(--space-2);
+  margin-left: calc(-1 * var(--space-1));
+}
+
+.deep-card-model {
+  margin-top: var(--space-1);
+  font-size: 10px;
+}
+
+/* ---- selection row (§5) ---- */
+
+.deep-row-slot {
+  position: absolute;
+  z-index: 4;
+  width: 500px; /* ROW_WIDTH in PageEditor */
+}
+
+/* The action row (Deep next R1): plain buttons with words only. No phosphor. */
+.deep-row {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--ground-0);
+  border-radius: 8px;
+}
+
+.deep-row-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+  background: var(--ground-4);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px var(--space-3);
+  cursor: pointer;
+}
+
+.deep-row-btn:hover,
+.deep-row-btn:focus {
+  background: var(--ground-5);
+  outline: none;
+}
+
+/* The letters are underlined only once the keyboard is in the row (⌘.),
+   like menu mnemonics; a mouse never focuses these buttons (tabIndex -1,
+   mousedown prevented), so clicking never shows them. */
+.deep-row:focus-within .deep-row-mn {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ⌘. at the row's end: how the keyboard gets in. Quiet, and gone once it has. */
+.deep-row-hint {
+  align-self: center;
+  margin: 0 var(--space-1);
+  cursor: help;
+}
+
+.deep-row:focus-within .deep-row-hint {
+  visibility: hidden;
+}
+
+/* ---- [[ and @ pickers (R10, R11) ---- */
+
+.deep-picker {
+  position: absolute;
+  z-index: 6;
+  width: 320px;
+  max-height: 280px;
+  overflow: auto;
+  padding: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(var(--ground-0-rgb), 0.6);
+}
+
+.deep-picker-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.deep-picker-row.is-on {
+  background: var(--ground-4);
+}
+
+.deep-picker-label {
+  white-space: nowrap;
+}
+
+.deep-picker-icon {
+  flex: none;
+  align-self: center;
+  color: var(--text-2);
+}
+
+.deep-picker-sub {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.deep-picker-empty {
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-3);
+}
+
+/* ---- the source panel (R10): read-only, beside the Page, ≤ half width ---- */
+
+.deep-source {
+  display: flex;
+  flex-direction: column;
+  width: min(50%, 720px);
+  flex-shrink: 0;
+  min-height: 0;
+  border-left: 1px solid var(--ground-3);
+  background: var(--ground-0);
+}
+
+.deep-source-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-4);
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+}
+
+.deep-source-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.deep-source-note {
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px;
+}
+
+.deep-source-cm {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.deep-source-cm .cm-editor {
+  height: 100%;
+}
+
+.deep-source-cm.is-code .cm-scroller {
+  font-family: var(--font-mono);
+}
+
+.deep-source-cm.is-code .cm-content {
+  font-size: 13px;
+}
+
+/* ---- typing affordances (§7): dim, inline, never a popup ---- */
+
+.deep-aff {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+  vertical-align: baseline;
+  animation: deep-aff-in 0.2s ease-out;
+}
+
+.deep-aff-btn {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  background: none;
+  border: 1px dashed var(--ground-5);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+
+.deep-aff-btn:hover {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+}
+
+@keyframes deep-aff-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- ending ritual (§9; restyled with the primitives, cockpit-design §6.1) ---- */
+
+.deep-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.deep-sheet {
+  width: min(520px, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-5));
+  overflow: auto;
+  padding: var(--space-5);
+  background: var(--ground-1);
+  border: 1px solid var(--ground-3);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(var(--ground-0-rgb), 0.7);
+}
+
+.deep-sheet-head {
+  display: flex;
+  align-items: baseline;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-1);
+  margin-bottom: var(--space-3);
+}
+
+.deep-sheet-label {
+  display: block;
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* Where did you stop? Your words: Newsreader, borderless, an underline. */
+.deep-sheet-field {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  font-family: var(--font-write);
+  font-size: 19px;
+  line-height: 1.45;
+  color: var(--text-1);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--ground-4);
+  border-radius: 0;
+  padding: var(--space-1) 0;
+  outline: none;
+  caret-color: var(--caret);
+}
+
+.deep-sheet-field::placeholder {
+  color: var(--text-3);
+}
+
+.deep-sheet-field:focus {
+  border-bottom-color: var(--ground-5);
+}
+
+.deep-sheet-questions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.deep-sheet-q {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.deep-sheet-q-text {
+  font-family: var(--font-write);
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
+.deep-sheet-q input {
+  accent-color: var(--text-2);
+}
+
+.deep-sheet-note {
+  margin-top: var(--space-2);
+  font-size: 12px;
+}
+
+.deep-sheet-ratings {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* A rating: the Chip's pill, pressed = one ground step up. */
+.deep-rating {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid var(--ground-4);
+  border-radius: 16px;
+  background: var(--ground-3);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.deep-rating:hover {
+  color: var(--text-1);
+}
+
+.deep-rating.is-on {
+  background: var(--ground-5);
+  border-color: var(--ground-5);
+  color: var(--text-1);
+}
+
+.deep-sheet-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.deep-sheet-actions .deep-muted {
+  font-size: 12px;
+}
+
+/* The sheet takes focus back after Hand off… closes; no ring for that. */
+.deep-sheet:focus {
+  outline: none;
+}

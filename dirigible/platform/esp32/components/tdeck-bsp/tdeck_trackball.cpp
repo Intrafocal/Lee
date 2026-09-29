@@ -1,31 +1,26 @@
 /*
- * tdeck_trackball.cpp — optical trackball as an LVGL pointer device.
+ * tdeck_trackball.cpp — optical trackball as a scroll wheel, not a pointer.
  *
  * Lifted from screenschema runtime/hal/drivers/input/ss_trackball_gpio.cpp
- *   (Intrafocal/screenschema @ 76b6ce9bb16521bd05d08f82b642014f390cf4cd),
- * with the SSTrackballGPIO class removed and a raw-delta hook added for
- * Dirigible's terminal mode.
+ *   (Intrafocal/screenschema @ 76b6ce9bb16521bd05d08f82b642014f390cf4cd).
  *
- * Fixes preserved from the B series:
- *   B12  the ball is an LVGL POINTER, not a keypad.  Each level transition on
- *        a direction pin advances a virtual cursor by step_px.  This is the
- *        input model LILYGO's factory firmware uses, and it means every LVGL
- *        touch UI handles the ball identically to touch, with no group
- *        binding.
- *   B13  a visible cursor object on the top layer, so the pointer is findable.
- *   B18  the step is a tunable (TDECK_TB_STEP_PX).
- *   87a87be  rolling against a screen edge scrolls the scrollable under the
- *        cursor, probing progressively inward past non-scrollable overlays.
+ * Until September 2026 the ball was an LVGL POINTER (B12) with a visible
+ * cursor (B13) and edge-scroll (87a87be), because that is what LILYGO's
+ * factory firmware does.  On the device it was the wrong tool: the ball is
+ * great at fast scrolling and poor at landing a cursor on a 17 px row
+ * (docs/13-Copilot.md §5.2), and touch already does every tap.  So there is
+ * no pointer indev and no cursor any more: an LVGL timer polls the five pins
+ * and hands quantised detents to the one hook the firmware installs, which
+ * turns them into scrolling, list highlight moves, or (in the terminal)
+ * arrow keys.
+ *
+ * Kept from the B series:
+ *   detents are one per level transition on a direction pin; how far a
+ *        detent moves anything is the consumer's business (B18's step
+ *        tunable went with the cursor).
  *   long-press  hold-without-roll fires a deferred callback (via lv_async_call,
- *        so the handler may safely tear down the widget tree) and cancels the
- *        in-flight press so no CLICKED event follows on release.  It is
- *        detected in BOTH modes: the firmware binds it to "back", and until
- *        E15 the d-pad branch below returned before the detector ran, so the
- *        one screen with no other way out — a full-screen PTY — was also the
- *        one screen where the gesture did nothing.
- *
- * Dirigible addition: while a delta hook is installed (terminal mode) the ball
- * stops moving the cursor and reports quantised detents to the hook instead.
+ *        so the handler may safely tear down the widget tree) and suppresses
+ *        the click that would otherwise follow on release.
  */
 
 #include "tdeck_internal.hpp"
@@ -36,26 +31,25 @@
 
 static const char *TAG = "tdeck.ball";
 
-static lv_indev_drv_t s_indev_drv;
-static lv_indev_t    *s_indev  = nullptr;
-static lv_obj_t      *s_cursor = nullptr;
+/// Poll cadence.  The optical sensor toggles a pin per detent; 10 ms catches
+/// a fast flick without dropping transitions and matches the LVGL loop tick.
+static constexpr uint32_t POLL_MS = 10;
 
-static int16_t s_cursor_x = TDECK_LCD_WIDTH / 2;
-static int16_t s_cursor_y = TDECK_LCD_HEIGHT / 2;
+static lv_timer_t *s_timer = nullptr;
 
 // Pull-ups → idle high.  Index order matches dir_pins below.
 static bool s_last_level[5] = { true, true, true, true, true };
 
 static bool     s_was_pressed  = false;
-static bool     s_press_moved  = false;  // rolled while held → drag, not long-press
+static bool     s_press_moved  = false;  // rolled while held: not a click, not a long-press
 static bool     s_long_fired   = false;
 static uint32_t s_press_start  = 0;
 static bool     s_first_logged = false;
 
-static tdeck_long_press_cb_t s_long_cb        = nullptr;
-static void                 *s_long_user      = nullptr;
-static tdeck_ball_hook_t     s_delta_hook     = nullptr;
-static void                 *s_delta_user     = nullptr;
+static tdeck_long_press_cb_t s_long_cb    = nullptr;
+static void                 *s_long_user  = nullptr;
+static tdeck_ball_hook_t     s_hook       = nullptr;
+static void                 *s_hook_user  = nullptr;
 
 void tdeck_bsp_set_long_press_cb(tdeck_long_press_cb_t cb, void *user)
 {
@@ -65,13 +59,8 @@ void tdeck_bsp_set_long_press_cb(tdeck_long_press_cb_t cb, void *user)
 
 void tdeck_bsp_set_ball_hook(tdeck_ball_hook_t hook, void *user)
 {
-    s_delta_hook = hook;
-    s_delta_user = user;
-    if (s_cursor) {
-        // Hide the pointer while the ball is being read as a d-pad.
-        if (hook) lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-        else      lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-    }
+    s_hook      = hook;
+    s_hook_user = user;
 }
 
 static void long_press_async(void *)
@@ -79,9 +68,8 @@ static void long_press_async(void *)
     if (s_long_cb) s_long_cb(s_long_user);
 }
 
-/// Press bookkeeping and the hold-without-roll detector, shared by both modes.
-/// `moved` is true when the ball turned during this poll, which downgrades the
-/// hold to a drag.
+/// Press bookkeeping and the hold-without-roll detector.  `moved` is true when
+/// the ball turned during this poll, which downgrades the hold to a roll.
 static void track_press(bool pressed, bool moved)
 {
     if (pressed && !s_was_pressed) {
@@ -89,19 +77,16 @@ static void track_press(bool pressed, bool moved)
         s_press_moved = false;
         s_long_fired  = false;
     }
-    if (pressed && moved) s_press_moved = true;  // drag intent, not long-press
+    if (pressed && moved) s_press_moved = true;
     if (pressed && !s_long_fired && !s_press_moved && s_long_cb &&
         lv_tick_elaps(s_press_start) >= (uint32_t)TDECK_TB_LONG_PRESS_MS) {
         s_long_fired = true;
-        // Cancel the in-flight press so the widget under the cursor doesn't
-        // also get CLICKED on release, and defer the action out of the indev
-        // read — it may delete the widget tree under us.
-        lv_indev_reset(s_indev, nullptr);
+        // Deferred: the action may delete the widget tree we are called from.
         lv_async_call(long_press_async, nullptr);
     }
 }
 
-static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
+static void poll_cb(lv_timer_t *)
 {
     // Pin order matches LILYGO's reference: right, up, left, down.  Each
     // transition (rising or falling) on a direction pin is one detent; the
@@ -110,13 +95,9 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
         TDECK_TB_PIN_RIGHT, TDECK_TB_PIN_UP, TDECK_TB_PIN_LEFT, TDECK_TB_PIN_DOWN,
     };
 
-    bool moved  = false;
-    int  step   = TDECK_TB_STEP_PX;
-    int  over_x = 0;   // movement swallowed by the screen-edge clamp this poll
-    int  over_y = 0;
-    int  det_x  = 0;   // raw detents, for the delta hook
-    int  det_y  = 0;
-
+    bool moved = false;
+    int  det_x = 0;
+    int  det_y = 0;
     for (int i = 0; i < 4; i++) {
         bool level = gpio_get_level((gpio_num_t)dir_pins[i]) != 0;
         if (level == s_last_level[i]) continue;
@@ -130,9 +111,8 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
         }
     }
 
-    // Click is level-based (active low, pull-up): holding the ball down keeps
-    // the pressed state asserted, so hold+roll works as an LVGL drag.
-    bool pressed = gpio_get_level((gpio_num_t)TDECK_TB_PIN_CLICK) == 0;
+    // Click is level-based (active low, pull-up).
+    const bool pressed = gpio_get_level((gpio_num_t)TDECK_TB_PIN_CLICK) == 0;
 
     if (!s_first_logged && (moved || pressed != s_was_pressed)) {
         ESP_LOGI(TAG, "First trackball event — driver alive (d=%d,%d click=%d)",
@@ -140,86 +120,13 @@ static void read_cb(lv_indev_drv_t *, lv_indev_data_t *data)
         s_first_logged = true;
     }
 
-    // ---- d-pad mode -------------------------------------------------------
-    if (s_delta_hook) {
-        track_press(pressed, moved);
-        // Click on *release*, and only for a plain press: a hold that became
-        // the long-press (back) or a roll-while-held must not also activate
-        // whatever the d-pad has selected.
-        const bool click = !pressed && s_was_pressed && !s_long_fired && !s_press_moved;
-        if (det_x || det_y || click) {
-            s_delta_hook(det_x, det_y, click, s_delta_user);
-        }
-        s_was_pressed = pressed;
-        data->point.x = s_cursor_x;
-        data->point.y = s_cursor_y;
-        data->state   = LV_INDEV_STATE_RELEASED;
-        return;
-    }
-
-    // ---- pointer mode -----------------------------------------------------
-    if (det_x > 0) {
-        s_cursor_x += step * det_x;
-        if (s_cursor_x >= TDECK_LCD_WIDTH) {
-            over_x += s_cursor_x - (TDECK_LCD_WIDTH - 1);
-            s_cursor_x = TDECK_LCD_WIDTH - 1;
-        }
-    } else if (det_x < 0) {
-        s_cursor_x += step * det_x;
-        if (s_cursor_x < 0) { over_x += s_cursor_x; s_cursor_x = 0; }
-    }
-    if (det_y > 0) {
-        s_cursor_y += step * det_y;
-        if (s_cursor_y >= TDECK_LCD_HEIGHT) {
-            over_y += s_cursor_y - (TDECK_LCD_HEIGHT - 1);
-            s_cursor_y = TDECK_LCD_HEIGHT - 1;
-        }
-    } else if (det_y < 0) {
-        s_cursor_y += step * det_y;
-        if (s_cursor_y < 0) { over_y += s_cursor_y; s_cursor_y = 0; }
-    }
-
     track_press(pressed, moved);
-
-    // Edge-scroll: rolling against a screen edge scrolls the scrollable under
-    // the cursor (only while not pressed — a held click is LVGL's own drag).
-    // The object pinned under the cursor may be a non-scrollable overlay
-    // (a header bar at the top edge), so probe progressively inward until
-    // something scrollable is hit.
-    if (!pressed && (over_x != 0 || over_y != 0)) {
-        // The SCROLLABLE flag alone isn't enough — LVGL screens carry it by
-        // default with no overflow — so require actual room in the direction
-        // being scrolled.
-        auto can_scroll = [&](lv_obj_t *o) {
-            if (!lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE)) return false;
-            return (over_y > 0 && lv_obj_get_scroll_bottom(o) > 0) ||
-                   (over_y < 0 && lv_obj_get_scroll_top(o)    > 0) ||
-                   (over_x > 0 && lv_obj_get_scroll_right(o)  > 0) ||
-                   (over_x < 0 && lv_obj_get_scroll_left(o)   > 0);
-        };
-        lv_obj_t *target = nullptr;
-        for (int inset = 0; inset <= 60 && !target; inset += 20) {
-            lv_point_t p = { s_cursor_x, s_cursor_y };
-            if (over_x > 0) p.x -= inset; else if (over_x < 0) p.x += inset;
-            if (over_y > 0) p.y -= inset; else if (over_y < 0) p.y += inset;
-            lv_obj_t *hit = lv_indev_search_obj(lv_scr_act(), &p);
-            while (hit && !can_scroll(hit)) hit = lv_obj_get_parent(hit);
-            target = hit;
-        }
-        if (target) {
-            // Rolling down at the bottom edge reveals content below → content
-            // moves up → negative delta (same convention as a touch drag).
-            lv_obj_scroll_by_bounded(target, -over_x, -over_y, LV_ANIM_OFF);
-        }
-    }
-
+    // Click on *release*, and only for a plain press: a hold that became the
+    // long-press (back) or a roll-while-held must not also activate anything.
+    const bool click = !pressed && s_was_pressed && !s_long_fired && !s_press_moved;
     s_was_pressed = pressed;
-    data->point.x = s_cursor_x;
-    data->point.y = s_cursor_y;
-    // After a long-press fires, suppress the press until physical release so
-    // LVGL sees the hold as cancelled rather than a fresh press.
-    data->state = (pressed && !s_long_fired) ? LV_INDEV_STATE_PRESSED
-                                             : LV_INDEV_STATE_RELEASED;
+
+    if (s_hook && (det_x || det_y || click)) s_hook(det_x, det_y, click, s_hook_user);
 }
 
 esp_err_t tdeck_trackball_init(void)
@@ -251,33 +158,17 @@ esp_err_t tdeck_trackball_init(void)
         s_last_level[i] = gpio_get_level((gpio_num_t)pins[i]) != 0;
     }
 
-    lv_indev_drv_init(&s_indev_drv);
-    s_indev_drv.type    = LV_INDEV_TYPE_POINTER;
-    s_indev_drv.read_cb = read_cb;
-    s_indev = lv_indev_drv_register(&s_indev_drv);
-    if (!s_indev) {
-        ESP_LOGE(TAG, "lv_indev_drv_register returned NULL");
+    // A plain LVGL timer rather than an indev: the hook runs on the LVGL task
+    // (so it may touch widgets) and nothing in LVGL treats the ball as a
+    // pointer or a keypad.
+    s_timer = lv_timer_create(poll_cb, POLL_MS, nullptr);
+    if (!s_timer) {
+        ESP_LOGE(TAG, "lv_timer_create returned NULL");
         return ESP_FAIL;
     }
 
-    // Visible cursor on the top layer, so it floats above every screen.  LVGL
-    // repositions it automatically on each pointer event from this indev.
-    s_cursor = lv_obj_create(lv_layer_top());
-    lv_obj_remove_style_all(s_cursor);
-    lv_obj_set_size(s_cursor, 14, 14);
-    lv_obj_set_style_radius(s_cursor, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_cursor, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(s_cursor, LV_OPA_70, 0);
-    lv_obj_set_style_border_color(s_cursor, lv_color_black(), 0);
-    lv_obj_set_style_border_width(s_cursor, 2, 0);
-    lv_obj_set_style_border_opa(s_cursor, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);  // don't eat its own clicks
-    lv_indev_set_cursor(s_indev, s_cursor);
-
-    ESP_LOGI(TAG, "Trackball ready as pointer (U=%d D=%d L=%d R=%d C=%d, step=%dpx)",
+    ESP_LOGI(TAG, "Trackball ready as scroll wheel (U=%d D=%d L=%d R=%d C=%d)",
              TDECK_TB_PIN_UP, TDECK_TB_PIN_DOWN, TDECK_TB_PIN_LEFT,
-             TDECK_TB_PIN_RIGHT, TDECK_TB_PIN_CLICK, TDECK_TB_STEP_PX);
+             TDECK_TB_PIN_RIGHT, TDECK_TB_PIN_CLICK);
     return ESP_OK;
 }
-
-lv_indev_t *tdeck_bsp_trackball_indev(void) { return s_indev; }

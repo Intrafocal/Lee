@@ -15,7 +15,13 @@ import * as path from 'path';
 import * as net from 'net';
 import { execSync, execFile } from 'child_process';
 import { app } from 'electron';
+import * as yaml from 'js-yaml';
 import { TUIDefinition, AgentDefinition } from '../shared/context';
+import { isClaude, withClaudeHooks } from './copilot/hook-install';
+import { dropStaleResume } from './copilot/claude-resume';
+import { withShellIntegration } from './cockpit/shell-integration';
+import { isPi, withPiExtension } from './cockpit/pi-extension';
+import { withClaudePermissionDefault } from './cockpit/cockpit-config';
 
 /**
  * Check if a port is available (not in use).
@@ -241,6 +247,10 @@ export interface PTYProcess {
   pty: pty.IPty;
   state: LeeState;
   windowId: number | null;  // null = daemon/background
+  /** Spawned as Claude Code (so with Lee's hook settings when they exist). */
+  claude?: boolean;
+  /** Spawned as Pi (with Lee's hook extension when it exists). */
+  pi?: boolean;
 }
 
 /**
@@ -253,6 +263,8 @@ export interface PTYProcess {
  */
 export class PTYManager extends EventEmitter {
   private processes: Map<number, PTYProcess> = new Map();
+  /** Lee's API port, set by the APIServer; exported to PTYs as LEE_API_URL. */
+  apiPort = 9001;
   private nextId = 1;
   private shell: string;
   private config: LeeConfig;
@@ -611,6 +623,7 @@ export class PTYManager extends EventEmitter {
             }
           });
         });
+        await this.installVoiceLocal(pip, hesterSrc);
 
         this.writeHesterSourceHash();
         this.hesterVenvReady = true;
@@ -681,6 +694,7 @@ export class PTYManager extends EventEmitter {
       if (!fs.existsSync(hesterBin)) {
         throw new Error('hester binary not found after install');
       }
+      await this.installVoiceLocal(pip, hesterSrc);
 
       // Write source hash so we can detect changes on next launch
       this.writeHesterSourceHash();
@@ -695,6 +709,49 @@ export class PTYManager extends EventEmitter {
       this.emit('hester-setup', { phase: 'error', message: msg });
       throw error;
     }
+  }
+
+  /**
+   * Voice (docs/plans/2026-09-28-tether-review-voice.md §5.3): local
+   * transcription needs faster-whisper, the `voice-local` extra, only when a
+   * config Lee reads says `hester.voice.provider: whisper` (the global files
+   * or an open window's workspace), or HESTER_VOICE_PROVIDER does.
+   */
+  private wantsVoiceLocal(): boolean {
+    if (process.env.HESTER_VOICE_PROVIDER) return process.env.HESTER_VOICE_PROVIDER === 'whisper';
+    const home = app.getPath('home');
+    const providerIn = (file: string): unknown => {
+      try {
+        return (yaml.load(fs.readFileSync(file, 'utf-8')) as any)?.hester?.voice?.provider;
+      } catch {
+        return undefined;
+      }
+    };
+    const files = [
+      path.join(home, '.config', 'lee', 'config.yaml'),
+      path.join(home, '.lee', 'config.yaml'),
+      ...[...this.windowConfigs.values()].map((w) => path.join(w.workspace, '.lee', 'config.yaml')),
+    ];
+    return files.some((f) => providerIn(f) === 'whisper');
+  }
+
+  /**
+   * Install the voice-local extra over the fresh Hester when it's wanted.
+   * Never fails the bootstrap: without it Hester runs and reports
+   * whisper_not_installed, and the mic stays hidden.
+   */
+  private async installVoiceLocal(pip: string, hesterSrc: string): Promise<void> {
+    if (!this.wantsVoiceLocal()) return;
+    const spec = `${hesterSrc}[voice-local]`;
+    const pipArgs = app.isPackaged ? ['install', spec] : ['install', '-e', spec];
+    this.emit('hester-setup', { phase: 'installing', message: 'Installing local voice (whisper)...' });
+    await new Promise<void>((resolve) => {
+      execFile(pip, pipArgs, { timeout: 600000, env: { ...process.env, PATH: this.extendedPath } }, (err, _stdout, stderr) => {
+        if (err) this.log('WARN', 'Voice extra install failed; Hester runs without local whisper', { stderr: String(stderr).slice(-2000), retry: `${pip} ${pipArgs.join(' ')}` });
+        else this.log('INFO', 'Voice extra (voice-local) installed');
+        resolve();
+      });
+    });
   }
 
   /**
@@ -730,19 +787,34 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
-   * Compute a fingerprint of the bundled hester source.
-   * Hashes pyproject.toml content — bump the version field to trigger a reinstall.
+   * Compute a fingerprint of the bundled hester source: pyproject.toml plus
+   * every file under hester/ (paths and contents). Hashing only
+   * pyproject.toml missed every code change that didn't bump the version, so
+   * the venv kept running an old Hester.
    */
   private computeHesterSourceHash(): string | null {
     const hesterSrc = this.getBundledHesterSource();
     const pyprojectPath = path.join(hesterSrc, 'pyproject.toml');
     if (!fs.existsSync(pyprojectPath)) return null;
 
-    return crypto
-      .createHash('sha256')
-      .update(fs.readFileSync(pyprojectPath))
-      .digest('hex')
-      .slice(0, 16);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(pyprojectPath));
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === '__pycache__' || entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) files.push(full);
+      }
+    };
+    const pkgDir = path.join(hesterSrc, 'hester');
+    if (fs.existsSync(pkgDir)) walk(pkgDir);
+    // Switching to whisper reinstalls once, with the voice-local extra.
+    if (this.wantsVoiceLocal()) hash.update('\0voice-local\0');
+    for (const file of files.sort()) {
+      hash.update(path.relative(hesterSrc, file)).update('\0').update(fs.readFileSync(file)).update('\0');
+    }
+    return hash.digest('hex').slice(0, 16);
   }
 
   /**
@@ -841,12 +913,20 @@ export class PTYManager extends EventEmitter {
         finalArgs = ['-l'];
       }
     }
+    finalArgs = withClaudeHooks(cmd, finalArgs);
+    finalArgs = withClaudePermissionDefault(cmd, finalArgs, this.workspaceFor(windowId) || cwd || null);
+    finalArgs = withPiExtension(cmd, finalArgs);
+    const claude = isClaude(cmd);
+    const pi = isPi(cmd) && finalArgs.includes('--extension');
 
+    // An agent tab's label can be a task title; keep labels of agent spawns out of lee.log.
+    const logName = claude || isPi(cmd) ? '[label]' : name || cmd;
     this.log('INFO', `Spawning PTY ${id}`, {
       command: cmd,
-      args: finalArgs,
+      // Claude argv can carry the user's prompt text (handoff launches); keep it out of lee.log.
+      args: claude || isPi(cmd) ? `[${finalArgs.length} args]` : finalArgs,
       cwd: cwd || process.cwd(),
-      name: name || cmd,
+      name: logName,
       loginShell: loginShell && !command,
       configuredShell: wsConfig?.terminal?.shell || null,
       windowId: windowId ?? null,
@@ -859,6 +939,12 @@ export class PTYManager extends EventEmitter {
     if (extraEnv) {
       Object.assign(env, extraEnv);
     }
+    env.LEE_PTY_ID = String(id);
+    if (windowId != null) env.LEE_WINDOW_ID = String(windowId);
+    // Always Lee's own loopback API: an inherited or workspace-sourced value
+    // would send hook payloads and the shared token elsewhere.
+    env.LEE_API_URL = `http://127.0.0.1:${this.apiPort}`;
+    finalArgs = withShellIntegration(cmd, finalArgs, env, !command);
 
     const ptyProcess = pty.spawn(cmd, finalArgs, {
       name: 'xterm-256color',
@@ -874,6 +960,8 @@ export class PTYManager extends EventEmitter {
       pty: ptyProcess,
       state: {},
       windowId: windowId ?? null,
+      claude,
+      pi,
     };
 
     this.processes.set(id, proc);
@@ -914,7 +1002,7 @@ export class PTYManager extends EventEmitter {
     // Handle exit
     ptyProcess.onExit(({ exitCode }) => {
       this.log(exitCode === 0 ? 'INFO' : 'WARN', `PTY ${id} exited`, {
-        name: name || cmd,
+        name: logName,
         exitCode,
       });
       this.processes.delete(id);
@@ -1803,12 +1891,14 @@ export class PTYManager extends EventEmitter {
   /**
    * Spawn an agent tab for the given provider key.
    */
-  spawnAgent(provider: string, cwd?: string, windowId?: number): number {
+  spawnAgent(provider: string, cwd?: string, windowId?: number, extraArgs: string[] = []): number {
     const def = this.getAgentDefinition(provider, windowId);
     if (!def) {
       throw new Error(`Unknown agent provider: ${provider}`);
     }
 
+    // extraArgs: a Cockpit launch's argv (session id, name, prompt). They go
+    // after the definition's own args; the prompt is always last (after `--`).
     const args = [...(def.args || [])];
     let spawnCwd = cwd;
 
@@ -1817,6 +1907,15 @@ export class PTYManager extends EventEmitter {
     } else if (def.path_arg === 'cwd' && cwd) {
       spawnCwd = cwd;
     }
+    // A Claude session that never had a message has no transcript to resume:
+    // start it fresh rather than leave a dead tab ("No conversation found").
+    let agentArgs = extraArgs;
+    if (isClaude(def.command)) {
+      const r = dropStaleResume(extraArgs, spawnCwd ?? cwd);
+      if (r.dropped) this.log('INFO', 'No transcript to resume; starting a new Claude session', { session: r.dropped, cwd: spawnCwd ?? cwd });
+      agentArgs = r.args;
+    }
+    args.push(...agentArgs);
 
     return this.spawnTUI(def.command, args, spawnCwd, def.name, def.env, windowId, def.shell === true);
   }
@@ -1971,6 +2070,28 @@ export class PTYManager extends EventEmitter {
     } else {
       this.log('WARN', `Write to non-existent PTY ${id}`, { dataLength: data.length });
     }
+  }
+
+  /**
+   * Note keyboard input a person typed into a PTY (the renderer's pty:write
+   * IPC or a paired device's PTY stream), after it was written. Emits
+   * 'user-input' so the Copilot queue can see a permission prompt answered in
+   * the tab. Reply writes from the queue itself do not come through here.
+   */
+  noteUserInput(id: number, data: string): void {
+    if (this.processes.has(id)) this.emit('user-input', id, data);
+  }
+
+  /** True when the PTY was spawned as a hooked agent: Claude Code, or Pi with Lee's extension. */
+  isClaudePty(id: number): boolean {
+    const proc = this.processes.get(id);
+    return proc?.claude === true || proc?.pi === true;
+  }
+
+  /** True while the PTY is a hidden prewarmed process no tab has adopted. */
+  isWarmPty(id: number): boolean {
+    const name = this.processes.get(id)?.name;
+    return !!name && name.endsWith(' (warm)');
   }
 
   /**

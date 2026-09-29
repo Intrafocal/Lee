@@ -18,12 +18,13 @@
     "pack": "electron-builder --dir",
     "fetch-python": "bash scripts/download-python.sh",
     "fetch-redis": "bash scripts/download-redis.sh",
-    "dist": "npm run fetch-python && npm run fetch-redis && electron-builder",
-    "dist:mac": "npm run fetch-python && npm run fetch-redis && electron-builder --mac",
-    "dist:win": "npm run fetch-python && npm run fetch-redis && electron-builder --win",
-    "dist:linux": "npm run fetch-python && npm run fetch-redis && electron-builder --linux",
+    "dist": "npm run build && npm run fetch-python && npm run fetch-redis && electron-builder",
+    "dist:mac": "npm run build && npm run fetch-python && npm run fetch-redis && electron-builder --mac",
+    "dist:win": "npm run build && npm run fetch-python && npm run fetch-redis && electron-builder --win",
+    "dist:linux": "npm run build && npm run fetch-python && npm run fetch-redis && electron-builder --linux",
     "clean": "rm -rf dist out node_modules/.vite",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "test:copilot-renderer": "node scripts/copilot-renderer-smoke.mjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "npx @electron/rebuild"
   },
@@ -108,6 +109,7 @@
           "hester/**/*.py",
           "hester/**/*.yaml",
           "hester/**/*.json",
+          "hester/**/*.md",
           "!hester/**/__pycache__/**"
         ]
       },
@@ -140,7 +142,12 @@
         "\\.exe$",
         "\\.dll$",
         "\\.pdb$"
-      ]
+      ],
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Lee uses the microphone only while you hold or tap the mic, to turn what you say into text you review before sending."
+      }
     },
     "win": {
       "icon": "resources/icon.png",

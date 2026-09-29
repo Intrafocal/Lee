@@ -6,6 +6,12 @@
 
 namespace dirigible {
 
+std::string LeeWindow::name() const {
+    if (workspace.empty()) return "Untitled";
+    const size_t slash = workspace.find_last_of('/');
+    return slash == std::string::npos ? workspace : workspace.substr(slash + 1);
+}
+
 LeeConnection::LeeConnection(ITransportFactory* factory,
                                const std::string& host, int port)
     : factory_(factory), host_(host), port_(port) {}
@@ -87,11 +93,31 @@ void LeeConnection::onContextUpdate(ContextCallback cb) {
 }
 
 void LeeConnection::onWsMessage(cJSON* msg) {
-    // Expect: { "type": "context_update", "data": { ... } }
+    // Expect: { "type": "context_update", "window_id": N, "data": { ... } }
     cJSON* type_item = cJSON_GetObjectItemCaseSensitive(msg, "type");
     if (!type_item || !cJSON_IsString(type_item)) return;
 
-    if (strcmp(type_item->valuestring, "context_update") != 0) return;
+    if (strcmp(type_item->valuestring, "context_update") != 0) {
+        // Copilot types share the socket (contracts §12 #2).
+        if (strcmp(type_item->valuestring, "attention_snapshot") == 0) {
+            AttentionSnapshot snap;
+            if (attention_snapshot_parse(
+                    cJSON_GetObjectItemCaseSensitive(msg, "data"), snap)) {
+                setAttention(std::move(snap));
+            }
+        }
+        if (on_copilot_message_) on_copilot_message_(msg);
+        return;
+    }
+
+    // Every Lee window broadcasts here.  Drop the ones we aren't showing; an
+    // untagged update (older Lee) is taken as-is, as Aeronaut does.
+    int window_id = -1;
+    cJSON* wid = cJSON_GetObjectItemCaseSensitive(msg, "window_id");
+    if (wid && cJSON_IsNumber(wid)) window_id = wid->valueint;
+    if (active_window_ >= 0 && window_id >= 0 && window_id != active_window_) {
+        return;
+    }
 
     cJSON* data = cJSON_GetObjectItemCaseSensitive(msg, "data");
     if (!data) return;
@@ -99,9 +125,14 @@ void LeeConnection::onWsMessage(cJSON* msg) {
     LeeContext* new_ctx = context_parse(data);
     if (!new_ctx) return;
 
+    setContext(new_ctx, window_id);
+}
+
+void LeeConnection::setContext(LeeContext* ctx, int window_id) {
     // Swap cached context
     context_free(context_);
-    context_ = new_ctx;
+    context_ = ctx;
+    context_window_ = window_id;
 
     // Notify
     if (on_context_update_) {
@@ -114,12 +145,113 @@ void LeeConnection::onWsConnected() {
     connected_ = true;
     reconnect_delay_ = RECONNECT_DELAY_INIT;
     EventBus::instance().emit(Event::ConnectionChanged);
+    // Windows may have opened or closed while we were away.
+    refreshWindows();
+    fetchAttention();
 }
 
 void LeeConnection::onWsDisconnected() {
     connected_ = false;
     EventBus::instance().emit(Event::ConnectionChanged);
     // Platform is responsible for reconnect (WS transport may auto-reconnect)
+}
+
+// ---------------------------------------------------------------------------
+// Windows
+// ---------------------------------------------------------------------------
+
+const LeeWindow* LeeConnection::activeWindow() const {
+    for (const auto& w : windows_) {
+        if (w.id == active_window_) return &w;
+    }
+    return nullptr;
+}
+
+void LeeConnection::refreshWindows() {
+    if (!http_) return;
+    std::weak_ptr<int> alive = alive_;
+    http_->get(buildHttpUrl("/windows"), [this, alive](int status, cJSON* resp) {
+        if (alive.expired()) return;
+        if (status < 200 || status >= 300 || !resp) return;   // keep what we had
+
+        // Lee wraps payloads as { success, data: [...] }.
+        cJSON* data = cJSON_GetObjectItemCaseSensitive(resp, "data");
+        if (!data) data = resp;
+        if (!cJSON_IsArray(data)) return;
+
+        std::vector<LeeWindow> list;
+        cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, data) {
+            cJSON* id = cJSON_GetObjectItemCaseSensitive(item, "id");
+            if (!id || !cJSON_IsNumber(id)) continue;
+            LeeWindow w;
+            w.id = id->valueint;
+            cJSON* ws = cJSON_GetObjectItemCaseSensitive(item, "workspace");
+            if (ws && cJSON_IsString(ws)) w.workspace = ws->valuestring;
+            w.focused = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "focused"));
+            list.push_back(std::move(w));
+        }
+
+        // Keep the selection while its window exists; otherwise fall back to
+        // the focused window, then the first.
+        int active = active_window_;
+        bool still_open = false;
+        for (const auto& w : list) still_open |= (w.id == active);
+        if (!still_open) {
+            active = list.empty() ? -1 : list.front().id;
+            for (const auto& w : list) {
+                if (w.focused) { active = w.id; break; }
+            }
+        }
+
+        bool changed = active != active_window_ || list.size() != windows_.size();
+        for (size_t i = 0; !changed && i < list.size(); i++) {
+            changed = list[i].id != windows_[i].id ||
+                      list[i].workspace != windows_[i].workspace ||
+                      list[i].focused != windows_[i].focused;
+        }
+        windows_ = std::move(list);
+        active_window_ = active;
+
+        // The cached context may belong to another window: the untagged
+        // snapshot sent on connect, or the one that just closed.
+        if (active_window_ >= 0 && context_window_ != active_window_) {
+            fetchContext(active_window_);
+        }
+        if (changed) EventBus::instance().emit(Event::WindowsChanged);
+    });
+}
+
+void LeeConnection::setActiveWindow(int id) {
+    if (id == active_window_) return;
+    active_window_ = id;
+    EventBus::instance().emit(Event::WindowsChanged);
+    fetchContext(id);
+}
+
+void LeeConnection::cycleWindow(int step) {
+    const int n = (int)windows_.size();
+    if (n < 2) return;
+    int i = 0;
+    for (int k = 0; k < n; k++) {
+        if (windows_[k].id == active_window_) { i = k; break; }
+    }
+    setActiveWindow(windows_[((i + step) % n + n) % n].id);
+}
+
+void LeeConnection::fetchContext(int window_id) {
+    if (!http_) return;
+    std::weak_ptr<int> alive = alive_;
+    http_->get(buildHttpUrl("/context") + "?window_id=" + std::to_string(window_id),
+               [this, alive, window_id](int status, cJSON* resp) {
+        if (alive.expired()) return;
+        // Switched again while this was in flight: the newer fetch wins.
+        if (window_id != active_window_) return;
+        if (status < 200 || status >= 300 || !resp) return;
+        cJSON* data = cJSON_GetObjectItemCaseSensitive(resp, "data");
+        LeeContext* ctx = context_parse(data ? data : resp);
+        if (ctx) setContext(ctx, window_id);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -137,12 +269,15 @@ void LeeConnection::sendCommand(const char* domain, const char* action,
     cJSON* body = cJSON_CreateObject();
     cJSON_AddStringToObject(body, "domain", domain);
     cJSON_AddStringToObject(body, "action", action);
-    if (params) {
-        // Detach params so body takes ownership
-        cJSON_AddItemToObject(body, "params", params);
-    } else {
-        cJSON_AddObjectToObject(body, "params");
+    if (!params) params = cJSON_CreateObject();
+    // Target the window we are showing, not whichever one has focus on the
+    // host (Lee's default when window_id is absent).
+    if (active_window_ >= 0 &&
+        !cJSON_GetObjectItemCaseSensitive(params, "window_id")) {
+        cJSON_AddNumberToObject(params, "window_id", active_window_);
     }
+    // body takes ownership of params
+    cJSON_AddItemToObject(body, "params", params);
 
     http_->post(buildHttpUrl("/command"), body,
                 [cb](int status, cJSON* resp) {
@@ -206,8 +341,13 @@ void LeeConnection::fsList(const std::string& path,
         if (cb) cb(r);
         return;
     }
+    // Lee's own default is the *focused* window; ask for ours instead.
+    std::string dir = path;
+    if (dir.empty()) {
+        if (const LeeWindow* w = activeWindow()) dir = w->workspace;
+    }
     std::string url = buildHttpUrl("/fs/list");
-    if (!path.empty()) url += "?path=" + url_encode(path);
+    if (!dir.empty()) url += "?path=" + url_encode(dir);
     http_->get(url, [cb](int status, cJSON* resp) {
         FsListResult r;
         fs_list_parse(status, resp, r);
@@ -230,6 +370,288 @@ void LeeConnection::fsRead(const std::string& path, bool stat_only,
         fs_read_parse(status, resp, r);
         if (cb) cb(r);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Copilot: attention queue, reply, capture
+// ---------------------------------------------------------------------------
+
+void LeeConnection::onCopilotMessage(std::function<void(cJSON*)> cb) {
+    on_copilot_message_ = std::move(cb);
+}
+
+void LeeConnection::setAttention(AttentionSnapshot&& snap) {
+    const bool rose = attention_ok_ && attention_notify_rose(attention_, snap);
+    attention_ = std::move(snap);
+    attention_ok_ = true;
+    attention_404_ = false;
+    EventBus::instance().emit(Event::AttentionChanged);
+    if (rose) EventBus::instance().emit(Event::AttentionAlert);
+}
+
+void LeeConnection::fetchAttention(std::function<void(bool ok)> cb) {
+    if (!http_) {
+        if (cb) cb(false);
+        return;
+    }
+    std::weak_ptr<int> alive = alive_;
+    http_->get(buildHttpUrl("/attention?compact=1"),
+               [this, alive, cb](int status, cJSON* resp) {
+        if (alive.expired()) return;
+        AttentionSnapshot snap;
+        const bool ok = status >= 200 && status < 300 &&
+                        attention_snapshot_parse(resp, snap);
+        if (ok) {
+            setAttention(std::move(snap));
+        } else if (status == 404 && !attention_ok_) {
+            attention_404_ = true;
+            EventBus::instance().emit(Event::AttentionChanged);
+        }
+        if (cb) cb(ok);
+    });
+}
+
+void LeeConnection::attentionReply(const std::string& id, const char* action,
+                                   const std::string& text, int version,
+                                   std::function<void(const ReplyResult&)> cb,
+                                   bool voice) {
+    if (!http_) {
+        ReplyResult r;
+        reply_result_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "action", action);
+    if (strcmp(action, "text") == 0) {
+        cJSON_AddStringToObject(body, "text", text.c_str());
+        if (voice) cJSON_AddStringToObject(body, "input", "voice");
+    }
+    cJSON_AddNumberToObject(body, "version", version);
+
+    const std::string url = buildHttpUrl("/attention/") + url_encode(id) + "/reply";
+    http_->post(url, body, [cb](int status, cJSON* resp) {
+        ReplyResult r;
+        reply_result_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::postAction(const std::string& path, cJSON* body,
+                               std::function<void(const ReplyResult&)> cb) {
+    if (!http_) {
+        cJSON_Delete(body);
+        ReplyResult r;
+        reply_result_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    http_->post(buildHttpUrl(path.c_str()), body, [cb](int status, cJSON* resp) {
+        ReplyResult r;
+        reply_result_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::attentionChoose(const std::string& id, int choice, int version,
+                                    std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "action", "choose");
+    cJSON_AddNumberToObject(body, "choice", choice);
+    cJSON_AddNumberToObject(body, "version", version);
+    postAction("/attention/" + url_encode(id) + "/reply", body, std::move(cb));
+}
+
+void LeeConnection::attentionOpen(const std::string& id,
+                                  std::function<void(const ReplyResult&)> cb) {
+    postAction("/attention/" + url_encode(id) + "/open", cJSON_CreateObject(), std::move(cb));
+}
+
+void LeeConnection::fetchAttentionItem(const std::string& id,
+                                       std::function<void(int, const AttentionItem*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    std::weak_ptr<int> alive = alive_;
+    // The transport owns and frees `resp` after the callback; only the parsed
+    // copy leaves it.
+    http_->get(buildHttpUrl("/attention/") + url_encode(id),
+               [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        AttentionItem item;
+        const bool ok = status >= 200 && status < 300 && attention_item_parse(resp, item);
+        cb(status, ok ? &item : nullptr);
+    });
+}
+
+void LeeConnection::attentionDismiss(const std::string& id,
+                                     std::function<void(const ReplyResult&)> cb) {
+    postAction("/attention/" + url_encode(id) + "/dismiss", cJSON_CreateObject(), std::move(cb));
+}
+
+void LeeConnection::attentionSnooze(const std::string& id, int minutes,
+                                    std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddNumberToObject(body, "minutes", minutes);
+    postAction("/attention/" + url_encode(id) + "/snooze", body, std::move(cb));
+}
+
+void LeeConnection::focusSet(bool on, std::function<void(const ReplyResult&)> cb) {
+    postAction(on ? "/focus/start" : "/focus/stop", cJSON_CreateObject(), std::move(cb));
+}
+
+void LeeConnection::capture(const std::string& text,
+                            std::function<void(const CaptureOutcome&)> cb,
+                            bool voice) {
+    if (!http_) {
+        CaptureOutcome r;
+        capture_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "text", text.c_str());
+    if (voice) cJSON_AddStringToObject(body, "input", "voice");
+    // Lee's default is the focused window; capture belongs to the one we follow.
+    if (const LeeWindow* w = activeWindow(); w && !w->workspace.empty()) {
+        cJSON_AddStringToObject(body, "workspace", w->workspace.c_str());
+    }
+    http_->post(buildHttpUrl("/capture"), body, [cb](int status, cJSON* resp) {
+        CaptureOutcome r;
+        capture_outcome_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tether, Review and Send to Lee
+// ---------------------------------------------------------------------------
+
+std::string LeeConnection::followedWorkspace() const {
+    const LeeWindow* w = activeWindow();
+    return w ? w->workspace : std::string();
+}
+
+/// `url` with ?workspace= (or &workspace=) for the followed window.
+static std::string with_workspace(std::string url, const std::string& ws) {
+    if (ws.empty()) return url;
+    url += url.find('?') == std::string::npos ? "?workspace=" : "&workspace=";
+    return url + url_encode(ws);
+}
+
+void LeeConnection::fetchTether(std::function<void(int, const TetherState*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    const std::string url = with_workspace(buildHttpUrl("/tether"), followedWorkspace());
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        TetherState tether;
+        const bool ok = status >= 200 && status < 300 && tether_parse(resp, tether);
+        cb(status, ok ? &tether : nullptr);
+    });
+}
+
+void LeeConnection::tetherCapture(const std::string& text, const std::string& card_id,
+                                  std::function<void(const CaptureOutcome&)> cb,
+                                  bool voice) {
+    if (!http_) {
+        CaptureOutcome r;
+        capture_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "text", text.c_str());
+    if (!card_id.empty()) cJSON_AddStringToObject(body, "card_id", card_id.c_str());
+    if (voice) cJSON_AddStringToObject(body, "input", "voice");
+    const std::string ws = followedWorkspace();
+    if (!ws.empty()) cJSON_AddStringToObject(body, "workspace", ws.c_str());
+    http_->post(buildHttpUrl("/tether/capture"), body, [cb](int status, cJSON* resp) {
+        CaptureOutcome r;
+        capture_outcome_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::fetchTetherPages(std::function<void(int, const std::vector<TetherCard>*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    const std::string url = with_workspace(buildHttpUrl("/tether/pages?limit=") +
+                                               std::to_string(TETHER_MAX_PAGES),
+                                           followedWorkspace());
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        std::vector<TetherCard> pages;
+        const bool ok = status >= 200 && status < 300 && tether_pages_parse(resp, pages);
+        cb(status, ok ? &pages : nullptr);
+    });
+}
+
+void LeeConnection::fetchTetherPage(const std::string& card_id,
+                                    std::function<void(int, const TetherPageText*)> cb) {
+    if (!http_) {
+        if (cb) cb(0, nullptr);
+        return;
+    }
+    const std::string url = with_workspace(buildHttpUrl("/tether/pages/") + url_encode(card_id) +
+                                               "?text_only=1",
+                                           followedWorkspace());
+    std::weak_ptr<int> alive = alive_;
+    http_->get(url, [alive, cb](int status, cJSON* resp) {
+        if (alive.expired() || !cb) return;
+        TetherPageText page;
+        const bool ok = status >= 200 && status < 300 && tether_page_text_parse(resp, page);
+        cb(status, ok ? &page : nullptr);
+    });
+}
+
+void LeeConnection::tetherSend(int pty_id, const std::string& label, const char* tab_type,
+                               const std::string& text, bool submit, bool voice,
+                               std::function<void(const SendOutcome&)> cb) {
+    if (!http_) {
+        SendOutcome r;
+        send_outcome_parse(0, nullptr, r);
+        if (cb) cb(r);
+        return;
+    }
+    cJSON* body = tether_send_body(pty_id, label, tether_tab_kind(tab_type), text, submit,
+                                   voice, followedWorkspace());
+    http_->post(buildHttpUrl("/tether/send"), body, [cb](int status, cJSON* resp) {
+        SendOutcome r;
+        send_outcome_parse(status, resp, r);
+        if (cb) cb(r);
+    });
+}
+
+void LeeConnection::deepIdleEnd(const std::string& item_id, int version, const char* action,
+                                const char* rating, const std::string& stopped_at,
+                                std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "item_id", item_id.c_str());
+    cJSON_AddNumberToObject(body, "version", version);
+    cJSON_AddStringToObject(body, "action", action);
+    if (strcmp(action, "end_rate") == 0) {
+        if (rating) cJSON_AddStringToObject(body, "rating", rating);
+        else cJSON_AddNullToObject(body, "rating");
+        if (!stopped_at.empty()) cJSON_AddStringToObject(body, "stopped_at", stopped_at.c_str());
+    }
+    postAction("/deep/idle-end", body, std::move(cb));
+}
+
+void LeeConnection::agentCheckin(int pty_id, std::function<void(const ReplyResult&)> cb) {
+    cJSON* body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "domain", "tab");
+    cJSON_AddStringToObject(body, "action", "checkin");
+    cJSON* params = cJSON_AddObjectToObject(body, "params");
+    cJSON_AddNumberToObject(params, "pty_id", pty_id);
+    postAction("/command", body, std::move(cb));
 }
 
 // ---------------------------------------------------------------------------

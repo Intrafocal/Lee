@@ -11,12 +11,12 @@
 #define DG_TEXT_1 0xe6f0eb  /* Primary text */
 #define DG_TEXT_2 0x9fbcb0  /* Secondary text, labels */
 #define DG_TEXT_3 0x6b8a7e  /* Muted text and hints */
-#define DG_PHOSPHOR 0x44aa99  /* Brand, primary action, online, active */
+#define DG_PHOSPHOR 0x44aa99  /* The one next step: at most one filled control per view, plus the caret, the selection and the new-answer dot */
 #define DG_PHOSPHOR_HI 0x56bba9  /* Hover and pressed primary */
 #define DG_PHOSPHOR_DEEP 0x2a7466  /* Shaded phosphor (illustration, muted fills) */
 #define DG_ON_PHOSPHOR 0x07110d  /* Text and icons on phosphor fills */
-#define DG_LIT 0x7fe0c0  /* Focus ring, cursor, selection, links */
-#define DG_EMBER 0xf0a04b  /* Needs you: warnings, approvals, acting */
+#define DG_LIT 0x7fe0c0  /* Reserved for the terminal's bright green; never UI */
+#define DG_EMBER 0xf0a04b  /* Needs you only: a dot, never a number, button or border */
 #define DG_ERROR 0xe5604c  /* Errors, offline, destructive */
 #define DG_INFO 0x6fb7d9  /* Neutral notices */
 

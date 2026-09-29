@@ -94,6 +94,9 @@ void PairingClient::poll(const std::string& nonce, PollCallback cb) {
             cJSON* n = cJSON_GetObjectItemCaseSensitive(resp, "name");
             if (n && cJSON_IsString(n)) grant.name = n->valuestring;
 
+            cJSON* d = cJSON_GetObjectItemCaseSensitive(resp, "device_id");
+            if (d && cJSON_IsString(d)) grant.device_id = std::string(d->valuestring).substr(0, 40);
+
             // An "approved" with no token is a protocol error, not a grant —
             // saying so beats writing an empty bearer into NVS.
             if (grant.token.empty()) {

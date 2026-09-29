@@ -1,0 +1,77 @@
+/* AgentMarkdown - compact markdown for agent words (Cockpit, Copilot panels). */
+.agent-md {
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: normal;
+}
+.agent-md > :first-child {
+  margin-top: 0;
+}
+.agent-md > :last-child {
+  margin-bottom: 0;
+}
+.agent-md p,
+.agent-md ul,
+.agent-md ol,
+.agent-md blockquote,
+.agent-md table {
+  margin: 0 0 6px;
+}
+.agent-md ul,
+.agent-md ol {
+  padding-left: 18px;
+}
+.agent-md li {
+  margin: 1px 0;
+}
+.agent-md blockquote {
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+}
+.agent-md .agent-md-h {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 6px 0 3px;
+}
+.agent-md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+.agent-md .agent-md-pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 16em;
+}
+.agent-md .agent-md-pre code {
+  padding: 0;
+  background: none;
+}
+.agent-md table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.agent-md th,
+.agent-md td {
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+}
+.agent-md .agent-md-link {
+  text-decoration: underline dotted;
+}
+.agent-md.is-inline,
+.agent-md.is-inline .agent-md-p {
+  display: inline;
+}
+.agent-md.is-inline .agent-md-p + .agent-md-p::before {
+  content: ' ';
+}

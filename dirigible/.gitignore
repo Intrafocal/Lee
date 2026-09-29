@@ -1,6 +1,7 @@
 # ESP-IDF build output
 build/
 firmware/build/
+firmware/build-demo/
 core/build/
 
 # ESP-IDF component manager + generated config

@@ -30,15 +30,32 @@ from .lee_client import LeeContextClient
 from .models import (
     ContextRequest, ContextResponse, ContinueRequest, LeeContext,
     TelemetryRequest, TelemetryResponse, AgentTelemetry, AgentSessionInfo,
-    AgentListRequest, AgentStatus, AgentType, EditorState
+    AgentListRequest, AgentStatus, AgentType,
 )
 from .redis_manager import ManagedRedis
-from .session import SessionManager, InMemorySessionManager, ExplorationSessionManager, InMemoryExplorationSessionManager
+from .session import SessionManager, InMemorySessionManager
 from .settings import HesterDaemonSettings
 from ..shared.gemini_tools import PhaseUpdate, ReActPhase
-from ..shared.auth import auth_disabled, lee_api_token
+from ..shared.auth import auth_disabled, device_for_token, lee_api_token
 from ..shared.config import load_merged_config
-from ..shared.workspace import get_current_workspace, set_current_workspace, workspace_id
+from ..shared.workspace import (
+    get_active_workspace,
+    get_current_workspace,
+    request_workspace,
+    set_current_workspace,
+    workspace_header_candidates,
+    workspace_id,
+)
+from .cockpit.follower import EventFollower
+from .cockpit.explorations import configure_sessions as configure_explore_sessions
+from .cockpit.steward import set_agent_provider as configure_steward_agent
+from .cockpit.routes import create_cockpit_router
+from .copilot import lee_events, presence as copilot_presence
+from .copilot.model_log import install_model_call_logging, reset_trigger, set_trigger
+from .copilot.routes import create_copilot_router
+from .workspaces.registry import WorkspaceError, get_registry, init_registry, run_sync_loop, validate_workspace
+from .workspaces.routes import create_workspaces_router
+from .voice.routes import create_voice_router
 
 # Optional imports for knowledge management (graceful degradation if unavailable)
 try:
@@ -156,14 +173,16 @@ class AppState:
     # Proactive config manager (extracts config from workspace config)
     proactive_config_manager: Optional["ProactiveConfigManager"] = None
 
-    # Exploration session manager (Library pane)
-    exploration_sessions: Optional["ExplorationSessionManager"] = None
-
     # Orchestration state (agent telemetry tracking)
     agent_sessions: Dict[str, AgentTelemetry] = {}
 
-    # Workstream system
-    ws_store: Optional[Any] = None  # WorkstreamStore
+    # Unused since v2: workstream stores are per workspace in the registry
+    ws_store: Optional[Any] = None
+
+    # Per-workspace state (Cockpit tasks, readings, workstreams); see workspaces/
+    workspaces: Optional[Any] = None  # WorkspaceRegistry
+    workspace_sync_task: Optional[asyncio.Task] = None
+    cockpit_follower: Optional[EventFollower] = None
 
     # Plugin loader
     plugin_loader: Optional["PluginLoader"] = None
@@ -267,23 +286,16 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
     app_state.settings.working_directory = str(resolved)
     changes: Dict[str, Any] = {
         "workspace": str(resolved),
-        "workspace_id": workspace_id(),
+        "workspace_id": workspace_id(resolved),
         "previous": previous,
     }
 
     # 1. Plugins (unregisters the previous workspace's tools first)
     changes["plugins_loaded"] = _load_plugins_for_workspace(resolved)
 
-    # 2. .hester/-backed stores
-    try:
-        from .workstream.store import WorkstreamStore
-        app_state.ws_store = WorkstreamStore(working_dir=resolved)
-        from .tools.workstream_tools import init_workstream_tools
-        init_workstream_tools(app_state.ws_store)
-        changes["workstreams"] = "rebound"
-    except Exception as e:
-        logger.warning(f"Workstream store rebind failed: {e}")
-        changes["workstreams"] = f"failed: {e}"
+    # 2. .hester/-backed stores. Workstreams are per request through the
+    # workspace registry and need no rebinding.
+    changes["workstreams"] = "per-workspace"
 
     if CONTEXT_BUNDLES_AVAILABLE and app_state.bundle_service is not None:
         try:
@@ -298,6 +310,13 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
         app_state.knowledge_store._working_dir = resolved
     if app_state.knowledge_engine is not None:
         app_state.knowledge_engine._working_dir = resolved
+        # knowledge_auto_match is a per-workspace opt-in (automatic cloud
+        # embeddings; C1/C2). The new workspace's ProactiveConfigManager starts
+        # from defaults and only fires its callback when the parsed config
+        # differs from them, so an opt-in from the previous workspace would
+        # otherwise stick. Reset here; the new workspace re-enables it via its
+        # own config if it opted in.
+        app_state.knowledge_engine.set_auto_match(False)
         changes["knowledge"] = "rebound"
 
     # 4. Watchers — stop, rebuild against the new dir, restart if they were running
@@ -334,6 +353,8 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
                 def on_proactive_config_change(config: "ProactiveConfig") -> None:
                     if app_state.proactive_watcher:
                         app_state.proactive_watcher.update_config(config)
+                    if app_state.knowledge_engine:
+                        app_state.knowledge_engine.set_auto_match(config.knowledge_auto_match)
                 app_state.proactive_config_manager = ProactiveConfigManager(
                     working_dir=resolved,
                     on_config_change=on_proactive_config_change,
@@ -343,7 +364,7 @@ async def _switch_workspace(new_dir: Path) -> Dict[str, Any]:
             logger.warning(f"Proactive watcher rebind failed: {e}")
             changes["watchers"] = f"failed: {e}"
 
-    logger.info(f"Workspace switched: {previous} -> {resolved} (id {workspace_id()})")
+    logger.info(f"Workspace switched: {previous} -> {resolved} (id {workspace_id(resolved)})")
     return changes
 
 
@@ -383,7 +404,8 @@ async def lifespan(app: FastAPI):
         app_state.settings.working_directory or os.getcwd()
     )
     app_state.settings.working_directory = str(boot_workspace)
-    logger.info(f"Workspace: {boot_workspace} (id {workspace_id()})")
+    logger.info(f"Workspace: {boot_workspace} (id {workspace_id(boot_workspace)})")
+    app_state.workspaces = init_registry(boot_workspace, lee_url=app_state.settings.lee_url)
 
     # Auth state — say it once, loudly, at boot.
     if _auth_is_disabled():
@@ -398,6 +420,11 @@ async def lifespan(app: FastAPI):
             "API auth: no ~/.lee/api-token found; requests are NOT authenticated. "
             "Start Lee once to generate the token."
         )
+
+    # Copilot: log every model call with its trigger into Lee's event log (C1/C2)
+    install_model_call_logging()
+    copilot_presence.configure(app_state.settings.lee_url)
+    lee_events.start_delivery(app_state.settings.lee_url)
 
     # Initialize Redis via ManagedRedis (tries external → existing managed → new managed)
     app_state.managed_redis = ManagedRedis(
@@ -415,12 +442,6 @@ async def lifespan(app: FastAPI):
             redis_client=app_state.redis_client,
             ttl_seconds=app_state.settings.session_ttl_seconds,
         )
-
-        # Initialize exploration session manager (Library pane)
-        app_state.exploration_sessions = ExplorationSessionManager(
-            redis_client=app_state.redis_client,
-            ttl_seconds=app_state.settings.session_ttl_seconds * 2,  # Longer TTL for explorations
-        )
     else:
         logger.warning("No Redis available, falling back to in-memory sessions")
         app_state.redis_available = False
@@ -428,11 +449,6 @@ async def lifespan(app: FastAPI):
         # Initialize in-memory session manager
         app_state.session_manager = InMemorySessionManager(
             ttl_seconds=app_state.settings.session_ttl_seconds,
-        )
-
-        # Initialize in-memory exploration session manager (Library pane)
-        app_state.exploration_sessions = InMemoryExplorationSessionManager(
-            ttl_seconds=app_state.settings.session_ttl_seconds * 2,
         )
 
     # Initialize Lee context client (connects to Lee WebSocket for real-time context)
@@ -531,6 +547,8 @@ async def lifespan(app: FastAPI):
                     if app_state.proactive_watcher:
                         app_state.proactive_watcher.update_config(config)
                         logger.info("Proactive watcher config updated via hot-reload")
+                    if app_state.knowledge_engine:
+                        app_state.knowledge_engine.set_auto_match(config.knowledge_auto_match)
 
                 app_state.proactive_config_manager = ProactiveConfigManager(
                     working_dir=working_dir,
@@ -597,34 +615,36 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(app_state.proactive_watcher.start())
             logger.info("Proactive watcher started")
 
-    # Initialize Workstream system
+    # Workstream tools resolve the request's workspace through the registry
+    # (the /workstream router is included at import time with the same provider).
     try:
-        from .workstream.store import WorkstreamStore
-        from .workstream.routes import create_workstream_router
-
-        working_dir = Path(app_state.settings.working_directory or os.getcwd())
-        app_state.ws_store = WorkstreamStore(working_dir=working_dir)
-
-        # Initialize workstream tools for agent use
         from .tools.workstream_tools import init_workstream_tools
-        init_workstream_tools(app_state.ws_store)
-
-        ws_router = create_workstream_router(
-            ws_store=app_state.ws_store,
-            task_store=None,
-            bundle_service=app_state.bundle_service,
-        )
-        app.include_router(ws_router)
-        logger.info("Workstream system initialized at /workstream")
+        init_workstream_tools(_current_ws_store)
+        logger.info("Workstream tools initialized (per workspace)")
     except Exception as e:
-        logger.warning(f"Failed to initialize workstream system: {e}")
-        app_state.ws_store = None
+        logger.warning(f"Failed to initialize workstream tools: {e}")
+
+    # Multi-workspace: keep the registry in step with Lee's open windows, and
+    # follow Lee's event log into Cockpit task records (deterministic, no model).
+    app_state.workspace_sync_task = asyncio.create_task(run_sync_loop(app_state.workspaces))
+    app_state.cockpit_follower = EventFollower(registry=app_state.workspaces)
+    app_state.cockpit_follower.start()
+    logger.info("Cockpit follower started")
 
     logger.info("Hester daemon ready")
     yield
 
     # Shutdown
     logger.info("Shutting down Hester daemon...")
+
+    if app_state.cockpit_follower:
+        await app_state.cockpit_follower.stop()
+    if app_state.workspace_sync_task:
+        app_state.workspace_sync_task.cancel()
+        try:
+            await app_state.workspace_sync_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Stop background watchers first
     if app_state.git_watcher:
@@ -658,6 +678,7 @@ async def lifespan(app: FastAPI):
 
     # Disconnect from Lee
     await app_state.lee_client.disconnect()
+    await lee_events.stop_delivery()
 
     # Shut down Redis (SHUTDOWN SAVE for managed, close for external)
     if app_state.managed_redis:
@@ -710,14 +731,48 @@ def _auth_is_disabled() -> bool:
     return auth_disabled()
 
 
+async def _call_as_user(request: Request, call_next, principal: Dict[str, Any]):
+    """Run the request with its principal, its workspace and a `user` model-call trigger (C2 telemetry)."""
+    request.state.principal = principal
+    query_ws = request.query_params.get("workspace")
+    header_ws = request.headers.get("x-lee-workspace")
+    # The header is percent-encoded for non-ASCII paths; the query is already decoded.
+    candidates = [query_ws] if query_ws else (workspace_header_candidates(header_ws) if header_ws else [])
+    scoped = None
+    if candidates:
+        for raw_ws in candidates:
+            try:
+                scoped = validate_workspace(raw_ws)
+                break
+            except WorkspaceError:
+                continue
+        if scoped is None:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "workspace must be an absolute directory"},
+            )
+        get_registry().get(scoped, source="request")
+    ws_token = request_workspace.set(scoped)
+    token = set_trigger(
+        "user",
+        surface=request.headers.get("x-lee-trigger") or "http",
+        request_path=request.url.path,
+    )
+    try:
+        return await call_next(request)
+    finally:
+        reset_trigger(token)
+        request_workspace.reset(ws_token)
+
+
 @app.middleware("http")
 async def require_bearer_token(request: Request, call_next):
-    """Require `Authorization: Bearer <~/.lee/api-token>` on every endpoint."""
+    """Require `Authorization: Bearer <token>`: the shared ~/.lee/api-token or a paired device's token."""
     if request.method == "OPTIONS" or request.url.path in _AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
     if _auth_is_disabled():
-        return await call_next(request)
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
     expected = lee_api_token()
     if not expected:
@@ -727,20 +782,78 @@ async def require_bearer_token(request: Request, call_next):
             "No ~/.lee/api-token found; daemon API is UNAUTHENTICATED. "
             "Start Lee once to generate the token."
         )
-        return await call_next(request)
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
     header = request.headers.get("authorization") or ""
     supplied = header[7:].strip() if header.lower().startswith("bearer ") else ""
     if not supplied:
         supplied = (request.query_params.get("token") or "").strip()
 
-    if not secrets.compare_digest(supplied, expected):
-        return JSONResponse(
-            status_code=401,
-            content={"error": "unauthorized", "detail": "Missing or invalid bearer token"},
-        )
+    if supplied and secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        return await _call_as_user(request, call_next, {"kind": "shared"})
 
-    return await call_next(request)
+    device = device_for_token(supplied)
+    if device is not None:
+        return await _call_as_user(request, call_next, {
+            "kind": "device",
+            "device_id": device.get("device_id"),
+            "device_kind": device.get("kind"),
+            "name": device.get("name"),
+        })
+
+    return JSONResponse(
+        status_code=401,
+        content={"error": "unauthorized", "detail": "Missing or invalid bearer token"},
+    )
+
+
+app.include_router(create_copilot_router())
+app.include_router(create_cockpit_router())
+# Explore deep dives seed and write back through the daemon's chat sessions.
+configure_explore_sessions(lambda: getattr(app_state, "session_manager", None))
+# Steward endpoints (copilot v4) answer through the daemon's agent.
+configure_steward_agent(lambda: getattr(app_state, "agent", None))
+app.include_router(create_workspaces_router())
+# Voice (Tether plan §5.2): transcription for the mic in Lee, Aeronaut and the T-Deck; the hint reads Lee's live context.
+app.include_router(create_voice_router(
+    lambda: getattr(getattr(app_state, "lee_client", None), "context", None),
+))
+
+
+def _current_ws_store():
+    """The WorkstreamStore of the workspace this request is about (else the active one)."""
+    return get_registry().get(get_current_workspace(), source="request").ws_store()
+
+
+def _ws_store_for(workstream_id: str):
+    """The store holding ``workstream_id``: the request's workspace first, then any open one."""
+    try:
+        current = _current_ws_store()
+        if current.get(workstream_id) is not None:
+            return current
+    except (WorkspaceError, OSError):
+        current = None
+    for ctx in get_registry().list():
+        store = ctx.ws_store()
+        if store is not current and store.get(workstream_id) is not None:
+            return store
+    return None
+
+
+def _bundle_service():
+    return app_state.bundle_service
+
+
+try:
+    from .workstream.routes import create_workstream_router
+
+    app.include_router(create_workstream_router(
+        ws_store_provider=_current_ws_store,
+        task_store=None,
+        bundle_service_provider=_bundle_service,
+    ))
+except Exception as e:  # pragma: no cover - import-time guard like the other optional systems
+    logger.warning(f"Failed to initialize workstream system: {e}")
 
 
 def get_agent() -> HesterDaemonAgent:
@@ -788,10 +901,6 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
                         redis_client=new_client,
                         ttl_seconds=app_state.settings.session_ttl_seconds,
                     )
-                    app_state.exploration_sessions = ExplorationSessionManager(
-                        redis_client=new_client,
-                        ttl_seconds=app_state.settings.session_ttl_seconds * 2,
-                    )
                     mode = "managed" if app_state.managed_redis.is_managed else "external"
                     redis_status = f"healthy ({mode}, reconnected)"
                     logger.info(f"Redis reconnected: {redis_status}")
@@ -801,9 +910,6 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
                     app_state.redis_client = None
                     app_state.session_manager = InMemorySessionManager(
                         ttl_seconds=app_state.settings.session_ttl_seconds,
-                    )
-                    app_state.exploration_sessions = InMemoryExplorationSessionManager(
-                        ttl_seconds=app_state.settings.session_ttl_seconds * 2,
                     )
                     redis_status = f"unavailable (was: {e}, now using in-memory sessions)"
             else:
@@ -863,13 +969,12 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
             "last_drift_check": status.last_drift_check.isoformat() if status.last_drift_check else None,
             "last_devops_check": status.last_devops_check.isoformat() if status.last_devops_check else None,
             "last_test_run": status.last_test_run.isoformat() if status.last_test_run else None,
-            "last_ideas_check": status.last_ideas_check.isoformat() if status.last_ideas_check else None,
             "last_bundle_refresh": status.last_bundle_refresh_check.isoformat() if status.last_bundle_refresh_check else None,
             "last_bundle_refresh_count": status.last_bundle_refresh_count,
             "total_failures": (
                 status.docs_index_failures + status.drift_failures +
                 status.devops_failures + status.test_failures +
-                status.ideas_failures + status.bundle_refresh_failures +
+                status.bundle_refresh_failures +
                 sum(status.custom_task_failures.values())
             ),
         }
@@ -883,8 +988,8 @@ async def health_check(deep: bool = False) -> Dict[str, Any]:
         "port": app_state.settings.port,
         "deep": deep,
         "auth": "disabled" if _auth_is_disabled() else "bearer",
-        "workspace": str(get_current_workspace()),
-        "workspace_id": workspace_id(),
+        "workspace": str(get_active_workspace()),
+        "workspace_id": workspace_id(get_active_workspace()),
         "session_backend": "redis" if app_state.redis_available else "in-memory",
         "components": {
             "redis": redis_status,
@@ -909,21 +1014,23 @@ async def health_check_deep() -> Dict[str, Any]:
 
 @app.get("/workspace")
 async def get_workspace() -> Dict[str, Any]:
-    """Which workspace is the daemon currently serving?"""
+    """Which workspace is active (the focused Lee window's)?"""
+    active = get_active_workspace()
     return {
-        "workspace": str(get_current_workspace()),
-        "workspace_id": workspace_id(),
+        "workspace": str(active),
+        "workspace_id": workspace_id(active),
     }
 
 
 @app.post("/workspace")
 async def post_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Re-point the daemon at a different workspace.
+    Set the active workspace (the focused window's).
 
     Lee calls this when the user switches workspace, and when focus moves to a
-    window whose workspace differs. Cheaper and less disruptive than restarting
-    the daemon: sessions and Redis connections survive.
+    window whose workspace differs. The follow-active singletons (plugins,
+    knowledge, watchers) are re-pointed; per-workspace state lives in the
+    registry and is untouched. Sessions and Redis connections survive.
     """
     raw = payload.get("path") or payload.get("workspace")
     if not raw:
@@ -937,16 +1044,34 @@ async def post_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {target}")
 
-    if target == get_current_workspace():
+    registry = get_registry()
+    unchanged = target == get_active_workspace()
+    registry.set_active(target)
+    sync = asyncio.create_task(registry.sync_from_lee())
+    _background_tasks.add(sync)
+    sync.add_done_callback(_background_tasks.discard)
+
+    if unchanged:
         return {
             "success": True,
             "changed": False,
             "workspace": str(target),
-            "workspace_id": workspace_id(),
+            "workspace_id": workspace_id(target),
+            "workspaces": _workspace_list(),
         }
 
     changes = await _switch_workspace(target)
-    return {"success": True, "changed": True, **changes}
+    return {"success": True, "changed": True, **changes, "workspaces": _workspace_list()}
+
+
+_background_tasks: set = set()
+
+
+def _workspace_list() -> list:
+    return [
+        {"path": e["path"], "id": e["id"], "active": e["active"]}
+        for e in get_registry().entries()
+    ]
 
 
 @app.post("/shutdown")
@@ -1062,9 +1187,9 @@ async def process_telemetry(request: TelemetryRequest) -> TelemetryResponse:
             agent_telemetry.last_updated = datetime.now()
 
             # Bridge to workstream telemetry if associated
-            if agent_telemetry.workstream_id and hasattr(app_state, 'ws_store') and app_state.ws_store:
+            if agent_telemetry.workstream_id:
                 try:
-                    app_state.ws_store.push_telemetry(agent_telemetry.workstream_id, {
+                    _ws_store_for(agent_telemetry.workstream_id).push_telemetry(agent_telemetry.workstream_id, {
                         "event_type": "agent_update",
                         "session_id": request.session_id,
                         "tool": request.tool,
@@ -1109,9 +1234,9 @@ async def process_telemetry(request: TelemetryRequest) -> TelemetryResponse:
             )
 
             # Bridge completion to workstream telemetry
-            if agent_telemetry.workstream_id and hasattr(app_state, 'ws_store') and app_state.ws_store:
+            if agent_telemetry.workstream_id:
                 try:
-                    app_state.ws_store.push_telemetry(agent_telemetry.workstream_id, {
+                    _ws_store_for(agent_telemetry.workstream_id).push_telemetry(agent_telemetry.workstream_id, {
                         "event_type": "agent_completed",
                         "session_id": request.session_id,
                         "status": agent_telemetry.status.value,
@@ -1783,875 +1908,6 @@ async def docs_save(body: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Doc save error: {e}")
         return {"success": False, "error": str(e)}
-
-
-# ========================================================================
-# Library Exploration Endpoints — Idea exploration workspace
-# ========================================================================
-
-
-def get_exploration_sessions():
-    """Dependency to get the exploration session manager (Redis or in-memory)."""
-    if not app_state.exploration_sessions:
-        raise HTTPException(status_code=503, detail="Exploration sessions not available")
-    return app_state.exploration_sessions
-
-
-@app.post("/library/sessions")
-async def create_exploration_session(
-    body: Dict[str, Any],
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """Create a new exploration session with a seed thought as root node."""
-    title = body.get("title")
-    if not title:
-        raise HTTPException(status_code=400, detail="title is required")
-
-    working_dir = body.get("working_directory", ".")
-    session = await manager.create_session(title=title, working_directory=working_dir)
-
-    return {
-        "session_id": session.session_id,
-        "title": session.title,
-        "root_id": session.root_id,
-        "nodes": {nid: n.model_dump() for nid, n in session.nodes.items()},
-    }
-
-
-@app.get("/library/sessions")
-async def list_exploration_sessions(
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """List all active exploration sessions."""
-    sessions = await manager.list_sessions()
-    return {"count": len(sessions), "sessions": sessions}
-
-
-@app.get("/library/sessions/{session_id}")
-async def get_exploration_session(
-    session_id: str,
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """Get the full exploration session tree."""
-    session = await manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Exploration session not found")
-
-    return {
-        "session_id": session.session_id,
-        "title": session.title,
-        "root_id": session.root_id,
-        "active_node_id": session.active_node_id,
-        "nodes": {nid: n.model_dump() for nid, n in session.nodes.items()},
-        "created_at": session.created_at.isoformat(),
-        "last_activity": session.last_activity.isoformat(),
-    }
-
-
-@app.delete("/library/sessions/{session_id}")
-async def delete_exploration_session(
-    session_id: str,
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, str]:
-    """Delete an exploration session."""
-    deleted = await manager.delete(session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Exploration session not found")
-    return {"status": "deleted", "session_id": session_id}
-
-
-@app.post("/library/sessions/{session_id}/nodes")
-async def create_exploration_node(
-    session_id: str,
-    body: Dict[str, Any],
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """Create a child node under a parent."""
-    parent_id = body.get("parent_id")
-    label = body.get("label")
-    if not parent_id or not label:
-        raise HTTPException(status_code=400, detail="parent_id and label are required")
-
-    node = await manager.add_node(
-        session_id=session_id,
-        parent_id=parent_id,
-        label=label,
-        node_type=body.get("node_type", "thought"),
-        agent_mode=body.get("agent_mode", "ideate"),
-    )
-
-    if not node:
-        raise HTTPException(status_code=404, detail="Session or parent node not found")
-
-    return {"node_id": node.id, "node": node.model_dump()}
-
-
-@app.patch("/library/sessions/{session_id}/nodes/{node_id}")
-async def rename_exploration_node(
-    session_id: str,
-    node_id: str,
-    body: Dict[str, Any],
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """Rename a node's label."""
-    label = body.get("label")
-    if not label or not label.strip():
-        raise HTTPException(status_code=400, detail="label is required")
-
-    success = await manager.rename_node(session_id, node_id, label.strip())
-    if not success:
-        raise HTTPException(status_code=404, detail="Session or node not found")
-
-    return {"success": True, "node_id": node_id, "label": label.strip()}
-
-
-@app.post("/library/sessions/{session_id}/nodes/{node_id}/chat")
-async def stream_node_chat(
-    session_id: str,
-    node_id: str,
-    body: Dict[str, Any],
-    agent: HesterDaemonAgent = Depends(get_agent),
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> StreamingResponse:
-    """
-    SSE streaming chat on a specific exploration node.
-
-    Routes to the appropriate Hester agent based on the node's agent_mode:
-    - ideate -> @ideator
-    - explore -> @idea_explorer
-    - learn -> @teacher
-    - search -> returns search results directly (no agent)
-    """
-    message = body.get("message", "")
-    if not message:
-        raise HTTPException(status_code=400, detail="message is required")
-
-    session = await manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    node = session.nodes.get(node_id)
-    if not node:
-        raise HTTPException(status_code=404, detail="Node not found")
-
-    # Save user message to node history
-    await manager.add_node_message(session_id, node_id, "user", message)
-
-    # Build breadcrumb context for system prompt injection
-    breadcrumb = session.get_breadcrumb_summary(node_id)
-
-    # Map agent_mode to @agent prefix
-    agent_prefix_map = {
-        "ideate": "@ideator",
-        "explore": "@idea_explorer",
-        "learn": "@teacher",
-        "brainstorm": "@brainstorm",
-        "visualize": "@diagram",
-    }
-    prefix = agent_prefix_map.get(node.agent_mode, "@idea_explorer")
-
-    # Construct the routed message with breadcrumb context
-    context_line = f"[Exploration context: {breadcrumb}]\n\n" if breadcrumb else ""
-    routed_message = f"{prefix} {context_line}{message}"
-
-    # Use a unique session ID per node to isolate conversation history
-    node_session_id = f"library-{session_id}-{node_id}"
-
-    request = ContextRequest(
-        session_id=node_session_id,
-        message=routed_message,
-        source="Lee",
-        editor_state=EditorState(
-            working_directory=session.working_directory,
-        ),
-    )
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        phase_queue: asyncio.Queue = asyncio.Queue()
-
-        async def phase_callback(update) -> None:
-            await phase_queue.put(update)
-
-        process_task = asyncio.create_task(
-            agent.process_context(request, phase_callback=phase_callback)
-        )
-
-        try:
-            while not process_task.done():
-                try:
-                    update = await asyncio.wait_for(phase_queue.get(), timeout=0.1)
-                    phase_data = {
-                        "phase": update.phase.value,
-                        "iteration": update.iteration,
-                    }
-                    if update.tool_name:
-                        phase_data["tool_name"] = update.tool_name
-                    if update.tool_context:
-                        phase_data["tool_context"] = update.tool_context
-                    if update.agent_id:
-                        phase_data["agent_id"] = update.agent_id
-                    yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining phase updates
-            while not phase_queue.empty():
-                update = await phase_queue.get()
-                phase_data = {"phase": update.phase.value, "iteration": update.iteration}
-                if update.tool_name:
-                    phase_data["tool_name"] = update.tool_name
-                yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-
-            response = await process_task
-
-            # If max_iterations, store continuation state so /continue can pick up
-            can_continue = False
-            if response.status == "max_iterations":
-                current_depth = getattr(response, '_current_depth', None)
-                app_state.continuation_states[node_session_id] = {
-                    "response": response,
-                    "depth": current_depth,
-                }
-                can_continue = True
-                logger.info(f"Stored continuation state for library node {node_session_id}")
-
-            # Handle max_iterations or empty response with a fallback
-            response_text = response.response
-            if not response_text and response.status == "max_iterations":
-                tools_used = []
-                if response.trace and response.trace.observations:
-                    tools_used = [obs.tool_name for obs in response.trace.observations]
-                response_text = (
-                    "I explored extensively but ran out of iterations before forming "
-                    "a complete response. Here's what I investigated:\n\n"
-                    + (f"**Tools used:** {', '.join(tools_used)}\n\n" if tools_used else "")
-                    + "Click **Continue** to let me keep going with more depth."
-                )
-            elif not response_text:
-                response_text = "I couldn't generate a response. Please try rephrasing your question."
-
-            # Save assistant response to node history
-            await manager.add_node_message(
-                session_id, node_id, "assistant", response_text
-            )
-
-            response_data = {
-                "session_id": session_id,
-                "node_id": node_id,
-                "status": response.status,
-                "text": response_text,
-                "can_continue": can_continue,
-            }
-            if response.trace:
-                response_data["iterations"] = response.trace.iterations
-                response_data["tools_used"] = [
-                    obs.tool_name for obs in response.trace.observations
-                ] if response.trace.observations else []
-
-            yield f"event: response\ndata: {json.dumps(response_data)}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'node_id': node_id})}\n\n"
-
-        except Exception as e:
-            logger.exception(f"Error streaming node chat: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-            if not process_task.done():
-                process_task.cancel()
-                try:
-                    await process_task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/library/sessions/{session_id}/nodes/{node_id}/continue")
-async def continue_node_chat(
-    session_id: str,
-    node_id: str,
-    body: Dict[str, Any],
-    agent: HesterDaemonAgent = Depends(get_agent),
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> StreamingResponse:
-    """
-    Continue processing after max_iterations on a node chat.
-
-    Escalates to a deeper thinking depth and continues the ReAct loop.
-    """
-    from .thinking_depth import ThinkingDepth
-
-    node_session_id = f"library-{session_id}-{node_id}"
-
-    # Get stored continuation state
-    state = app_state.continuation_states.get(node_session_id)
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="No continuation state found. The session may have expired."
-        )
-
-    previous_response = state["response"]
-    current_depth = state.get("depth")
-
-    # Escalate depth: STANDARD -> DEEP -> REASONING
-    new_depth_str = body.get("new_depth")
-    if new_depth_str:
-        try:
-            new_depth = ThinkingDepth[new_depth_str.upper()]
-        except KeyError:
-            raise HTTPException(status_code=400, detail=f"Invalid depth: {new_depth_str}")
-    else:
-        # Auto-escalate one level
-        depth_order = [ThinkingDepth.STANDARD, ThinkingDepth.DEEP, ThinkingDepth.REASONING]
-        current_idx = depth_order.index(current_depth) if current_depth in depth_order else 0
-        new_depth = depth_order[min(current_idx + 1, len(depth_order) - 1)]
-
-    logger.info(f"Continuing library node {node_session_id} at depth {new_depth.name}")
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        phase_queue: asyncio.Queue = asyncio.Queue()
-
-        async def phase_callback(update) -> None:
-            await phase_queue.put(update)
-
-        process_task = asyncio.create_task(
-            agent.continue_with_depth(
-                previous_response,
-                new_depth,
-                phase_callback=phase_callback,
-            )
-        )
-
-        try:
-            while not process_task.done():
-                try:
-                    update = await asyncio.wait_for(phase_queue.get(), timeout=0.1)
-                    phase_data = {
-                        "phase": update.phase.value,
-                        "iteration": update.iteration,
-                    }
-                    if update.tool_name:
-                        phase_data["tool_name"] = update.tool_name
-                    if update.tool_context:
-                        phase_data["tool_context"] = update.tool_context
-                    yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining phases
-            while not phase_queue.empty():
-                update = await phase_queue.get()
-                phase_data = {"phase": update.phase.value, "iteration": update.iteration}
-                if update.tool_name:
-                    phase_data["tool_name"] = update.tool_name
-                yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-
-            response = await process_task
-
-            # Check if we hit max_iterations again
-            can_continue = False
-            if response.status == "max_iterations":
-                new_current_depth = getattr(response, '_current_depth', None)
-                app_state.continuation_states[node_session_id] = {
-                    "response": response,
-                    "depth": new_current_depth,
-                }
-                can_continue = True
-            else:
-                # Clean up continuation state on success
-                app_state.continuation_states.pop(node_session_id, None)
-
-            response_text = response.response
-            if not response_text and response.status == "max_iterations":
-                tools_used = []
-                if response.trace and response.trace.observations:
-                    tools_used = [obs.tool_name for obs in response.trace.observations]
-                response_text = (
-                    "Still exploring — ran out of iterations again.\n\n"
-                    + (f"**Tools used:** {', '.join(tools_used)}\n\n" if tools_used else "")
-                    + "Click **Continue** to keep going."
-                )
-            elif not response_text:
-                response_text = "I couldn't generate a response."
-
-            # Save to node history
-            await manager.add_node_message(
-                session_id, node_id, "assistant", response_text
-            )
-
-            response_data = {
-                "session_id": session_id,
-                "node_id": node_id,
-                "status": response.status,
-                "text": response_text,
-                "can_continue": can_continue,
-            }
-            if response.trace:
-                response_data["iterations"] = response.trace.iterations
-                response_data["tools_used"] = [
-                    obs.tool_name for obs in response.trace.observations
-                ] if response.trace.observations else []
-
-            yield f"event: response\ndata: {json.dumps(response_data)}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'node_id': node_id})}\n\n"
-
-        except Exception as e:
-            logger.exception(f"Error continuing node chat: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-            if not process_task.done():
-                process_task.cancel()
-                try:
-                    await process_task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/library/sessions/{session_id}/save")
-async def save_exploration_to_ideas(
-    session_id: str,
-    body: Dict[str, Any],
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> Dict[str, Any]:
-    """Save an exploration session (or branch) as an idea."""
-    session = await manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Build markdown from tree
-    node_id = body.get("node_id", session.root_id)
-
-    def render_node(nid: str, depth: int = 0) -> str:
-        n = session.nodes.get(nid)
-        if not n:
-            return ""
-        indent = "#" * min(depth + 1, 6)
-        lines = [f"{indent} {n.label}"]
-        for msg in n.conversation_history:
-            if msg.role == "user":
-                lines.append(f"\n**Q:** {msg.content}")
-            elif msg.role == "assistant":
-                lines.append(f"\n{msg.content}")
-        for child_id in n.children:
-            lines.append(render_node(child_id, depth + 1))
-        return "\n".join(lines)
-
-    content = render_node(node_id)
-    tags = body.get("tags", ["exploration", "library"])
-
-    try:
-        # Look up idea_push handler from plugin system
-        handler = None
-        if app_state.plugin_loader:
-            for plugin in app_state.plugin_loader.loaded.values():
-                if "idea_push" in plugin.tool_handlers:
-                    handler = plugin.tool_handlers["idea_push"]
-                    break
-        if handler is None:
-            return {"success": False, "error": "idea_push tool not available (plugin not loaded)"}
-        result = await handler(content=content, tags=tags)
-        return result
-    except Exception as e:
-        logger.error(f"Failed to save exploration as idea: {e}")
-        return {"success": False, "error": str(e)}
-
-
-# ========================================================================
-# Library Synthesis Endpoints — Summarize, Compare, Combine nodes
-# ========================================================================
-
-
-@app.post("/library/sessions/{session_id}/synthesize")
-async def synthesize_nodes(
-    session_id: str,
-    body: Dict[str, Any],
-    agent: HesterDaemonAgent = Depends(get_agent),
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> StreamingResponse:
-    """
-    Synthesize exploration nodes — summarize, compare, or combine.
-
-    Body:
-        action: "summarize" | "compare" | "combine"
-        node_ids: list of node IDs to synthesize
-        parent_id: optional parent for the new synthesis node (default: root)
-    """
-    action = body.get("action", "summarize")
-    node_ids = body.get("node_ids", [])
-    parent_id = body.get("parent_id")
-
-    if action not in ("summarize", "compare", "combine"):
-        raise HTTPException(status_code=400, detail="action must be summarize, compare, or combine")
-    if not node_ids:
-        raise HTTPException(status_code=400, detail="node_ids is required")
-    if action in ("compare", "combine") and len(node_ids) < 2:
-        raise HTTPException(status_code=400, detail=f"{action} requires at least 2 nodes")
-
-    session = await manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Collect conversation histories
-    node_contents = []
-    node_labels = []
-    for nid in node_ids:
-        node = session.nodes.get(nid)
-        if not node:
-            continue
-        node_labels.append(node.label)
-        lines = [f'=== Node: "{node.label}" ({node.agent_mode}) ===']
-        for msg in node.conversation_history:
-            if msg.role == "user":
-                lines.append(f"User: {msg.content}")
-            elif msg.role == "assistant":
-                lines.append(f"Assistant: {msg.content}")
-        node_contents.append("\n".join(lines))
-
-    if not node_contents:
-        raise HTTPException(status_code=404, detail="No valid nodes found")
-
-    combined_content = "\n\n".join(node_contents)
-
-    # Build synthesis label
-    if action == "summarize":
-        short_label = node_labels[0]
-        if len(short_label) > 40:
-            short_label = short_label[:40] + "..."
-        label = f"Summary: {short_label}"
-    elif action == "compare":
-        label = f"Compare: {' vs '.join(l[:20] for l in node_labels[:3])}"
-    else:
-        label = f"Combined: {' + '.join(l[:20] for l in node_labels[:3])}"
-
-    # Create the synthesis node
-    target_parent = parent_id or session.root_id
-    new_node = await manager.add_node(
-        session_id=session_id,
-        parent_id=target_parent,
-        label=label,
-        node_type="thought",
-        agent_mode="ideate",
-    )
-    if not new_node:
-        raise HTTPException(status_code=500, detail="Failed to create synthesis node")
-
-    new_node_id = new_node.id
-
-    # Build the routed message for @synthesizer
-    routed_message = f"@synthesizer #{action}\n\n{combined_content}"
-    node_session_id = f"library-{session_id}-{new_node_id}"
-
-    request = ContextRequest(
-        session_id=node_session_id,
-        message=routed_message,
-        source="Lee",
-        editor_state=EditorState(
-            working_directory=session.working_directory,
-        ),
-    )
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        # Send the new node info immediately so frontend can show it
-        yield f"event: node_created\ndata: {json.dumps({'node_id': new_node_id, 'label': label, 'parent_id': target_parent})}\n\n"
-
-        phase_queue: asyncio.Queue = asyncio.Queue()
-
-        async def phase_callback(update) -> None:
-            await phase_queue.put(update)
-
-        process_task = asyncio.create_task(
-            agent.process_context(request, phase_callback=phase_callback)
-        )
-
-        try:
-            while not process_task.done():
-                try:
-                    update = await asyncio.wait_for(phase_queue.get(), timeout=0.1)
-                    phase_data = {
-                        "phase": update.phase.value,
-                        "iteration": update.iteration,
-                    }
-                    if update.tool_name:
-                        phase_data["tool_name"] = update.tool_name
-                    yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining phases
-            while not phase_queue.empty():
-                update = await phase_queue.get()
-                phase_data = {"phase": update.phase.value, "iteration": update.iteration}
-                if update.tool_name:
-                    phase_data["tool_name"] = update.tool_name
-                yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-
-            response = await process_task
-            response_text = response.response or "Synthesis could not be completed."
-
-            # Save to the synthesis node
-            await manager.add_node_message(
-                session_id, new_node_id, "assistant", response_text
-            )
-
-            response_data = {
-                "session_id": session_id,
-                "node_id": new_node_id,
-                "status": response.status,
-                "text": response_text,
-                "action": action,
-            }
-            yield f"event: response\ndata: {json.dumps(response_data)}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'node_id': new_node_id})}\n\n"
-
-        except Exception as e:
-            logger.exception(f"Error in synthesis stream: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-            if not process_task.done():
-                process_task.cancel()
-                try:
-                    await process_task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ========================================================================
-# Library Visualize Endpoints — Diagram, image gen, structured markdown
-# ========================================================================
-
-
-@app.post("/library/sessions/{session_id}/visualize")
-async def visualize_nodes(
-    session_id: str,
-    body: Dict[str, Any],
-    agent: HesterDaemonAgent = Depends(get_agent),
-    manager: ExplorationSessionManager = Depends(get_exploration_sessions),
-) -> StreamingResponse:
-    """
-    Visualize exploration nodes — create diagrams, images, or structured markdown.
-
-    Body:
-        node_ids: list of node IDs to visualize
-        prompt: optional user prompt for what to visualize
-        parent_id: optional parent for the new visualization node (default: root)
-    """
-    node_ids = body.get("node_ids", [])
-    user_prompt = body.get("prompt", "")
-    parent_id = body.get("parent_id")
-
-    if not node_ids:
-        raise HTTPException(status_code=400, detail="node_ids is required")
-
-    session = await manager.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Collect conversation histories
-    node_contents = []
-    node_labels = []
-    for nid in node_ids:
-        node = session.nodes.get(nid)
-        if not node:
-            continue
-        node_labels.append(node.label)
-        lines = [f'=== Node: "{node.label}" ({node.agent_mode}) ===']
-        for msg in node.conversation_history:
-            if msg.role == "user":
-                lines.append(f"User: {msg.content}")
-            elif msg.role == "assistant":
-                lines.append(f"Assistant: {msg.content}")
-        node_contents.append("\n".join(lines))
-
-    if not node_contents:
-        raise HTTPException(status_code=404, detail="No valid nodes found")
-
-    combined_content = "\n\n".join(node_contents)
-
-    # Build label
-    if len(node_labels) == 1:
-        short_label = node_labels[0]
-        if len(short_label) > 35:
-            short_label = short_label[:35] + "..."
-        label = f"Visualize: {short_label}"
-    else:
-        label = f"Visualize: {' + '.join(l[:20] for l in node_labels[:3])}"
-
-    # Create the visualization node
-    target_parent = parent_id or session.root_id
-    new_node = await manager.add_node(
-        session_id=session_id,
-        parent_id=target_parent,
-        label=label,
-        node_type="thought",
-        agent_mode="visualize",
-    )
-    if not new_node:
-        raise HTTPException(status_code=500, detail="Failed to create visualization node")
-
-    new_node_id = new_node.id
-
-    # Build the routed message for @diagram agent
-    prompt_line = f"\n\nUser request: {user_prompt}" if user_prompt else ""
-    routed_message = f"@diagram Visualize the following conversation threads:{prompt_line}\n\n{combined_content}"
-    node_session_id = f"library-{session_id}-{new_node_id}"
-
-    request = ContextRequest(
-        session_id=node_session_id,
-        message=routed_message,
-        source="Lee",
-        editor_state=EditorState(
-            working_directory=session.working_directory,
-        ),
-    )
-
-    async def event_generator() -> AsyncGenerator[str, None]:
-        # Send the new node info immediately so frontend can show it
-        yield f"event: node_created\ndata: {json.dumps({'node_id': new_node_id, 'label': label, 'parent_id': target_parent})}\n\n"
-
-        phase_queue: asyncio.Queue = asyncio.Queue()
-
-        async def phase_callback(update) -> None:
-            await phase_queue.put(update)
-
-        process_task = asyncio.create_task(
-            agent.process_context(request, phase_callback=phase_callback)
-        )
-
-        try:
-            while not process_task.done():
-                try:
-                    update = await asyncio.wait_for(phase_queue.get(), timeout=0.1)
-                    phase_data = {
-                        "phase": update.phase.value,
-                        "iteration": update.iteration,
-                    }
-                    if update.tool_name:
-                        phase_data["tool_name"] = update.tool_name
-                    yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining phases
-            while not phase_queue.empty():
-                update = await phase_queue.get()
-                phase_data = {"phase": update.phase.value, "iteration": update.iteration}
-                if update.tool_name:
-                    phase_data["tool_name"] = update.tool_name
-                yield f"event: phase\ndata: {json.dumps(phase_data)}\n\n"
-
-            response = await process_task
-            response_text = response.response or "Visualization could not be completed."
-
-            # Save to the visualization node
-            await manager.add_node_message(
-                session_id, new_node_id, "assistant", response_text
-            )
-
-            response_data = {
-                "session_id": session_id,
-                "node_id": new_node_id,
-                "status": response.status,
-                "text": response_text,
-            }
-            yield f"event: response\ndata: {json.dumps(response_data)}\n\n"
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'node_id': new_node_id})}\n\n"
-
-        except Exception as e:
-            logger.exception(f"Error in visualize stream: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-            if not process_task.done():
-                process_task.cancel()
-                try:
-                    await process_task
-                except asyncio.CancelledError:
-                    pass
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/library/sessions/{session_id}/promote-to-workstream")
-async def promote_to_workstream(session_id: str, request: Request):
-    """Promote library node(s) to a workstream with pre-populated brief."""
-    body = await request.json()
-    node_ids = body.get("node_ids", [])
-
-    if not node_ids:
-        raise HTTPException(status_code=400, detail="node_ids required")
-
-    manager: ExplorationSessionManager = app_state.exploration_sessions
-    session = manager.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if not app_state.ws_store:
-        raise HTTPException(status_code=503, detail="Workstream system not available")
-
-    # Render selected nodes as markdown (same pattern as save-as-idea)
-    lines = []
-    title_parts = []
-    for node_id in node_ids:
-        node = session.nodes.get(node_id)
-        if not node:
-            continue
-        title_parts.append(node.label)
-        lines.append(f'## {node.label}\n')
-        for msg in node.conversation_history:
-            if msg.role == "user":
-                lines.append(f"**User:** {msg.content}\n")
-            elif msg.role == "assistant":
-                lines.append(f"{msg.content}\n")
-        lines.append("")
-
-    content = "\n".join(lines)
-    title = title_parts[0] if title_parts else "Untitled Workstream"
-
-    # Create workstream via orchestrator
-    from .workstream.orchestrator import WorkstreamOrchestrator
-    orchestrator = WorkstreamOrchestrator(ws_store=app_state.ws_store)
-    ws = await orchestrator.promote_from_idea(
-        session_id=session_id,
-        title=title,
-        objective=content[:2000],  # Truncate to reasonable brief length
-    )
-
-    return {
-        "workstream_id": ws.id,
-        "title": ws.title,
-        "phase": ws.phase.value,
-    }
 
 
 # ========================================================================

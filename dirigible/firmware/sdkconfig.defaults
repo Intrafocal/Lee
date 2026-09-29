@@ -30,9 +30,16 @@ CONFIG_LV_LOG_LEVEL_WARN=y
 CONFIG_LV_COLOR_16_SWAP=y
 CONFIG_LV_MEM_CUSTOM=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=512
-# The ASCII bitmap monospace fonts the terminal grid is measured against.
+# The ASCII bitmap monospace fonts: the terminal grid, code in the viewer, and
+# exact strings (pairing code, host:port, device id, token entry).
 CONFIG_LV_FONT_UNSCII_8=y
 CONFIG_LV_FONT_UNSCII_16=y
+# Montserrat, the UI's proportional face (theme.hpp dg::ui_font*): 12 for meta
+# lines, footer and hints, 14 (LVGL's default, already on) for body text and
+# rows, 16 for titles.  About 45 KB of flash for the two extra sizes.
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
 # Dark variant of the stock theme (Phosphor design refresh): without this,
 # stock lv_btn/lv_list/lv_textarea/lv_bar draw the light-theme palette
 # (white bg, black text) regardless of the colours screen_*.cpp sets.
@@ -46,3 +53,6 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # Lee's PTY frames can be large; give lwip and the websocket room.
 CONFIG_LWIP_TCP_MSS=1436
 CONFIG_ESP_TLS_INSECURE=n
+
+# The T-Deck mic (checked on a device 2026-09-28)
+CONFIG_DIRIGIBLE_VOICE=y

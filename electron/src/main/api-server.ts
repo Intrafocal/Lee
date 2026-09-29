@@ -13,6 +13,11 @@ import { Server, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Socket } from 'net';
 import { ipcMain } from 'electron';
+import { copilotAuthMiddleware, authenticateWsToken, noteDeviceWsInput, noteDeviceView, issueDeviceToken } from './copilot/auth';
+import { registerCoreRoutes } from './copilot/core-routes';
+import { registerTetherRoutes, TETHER_SEND_MAX_BYTES } from './copilot/tether';
+import { getCopilotQueue } from './copilot/queue';
+import { copilotBus } from './copilot/bus';
 import { PTYManager, LeeState } from './pty-manager';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -26,6 +31,9 @@ import {
   PAIRING_MAX_PENDING_PER_IP,
 } from './pairing-store';
 import { LeeContext } from '../shared/context';
+import type { Principal } from '../shared/copilot';
+import { registerQueueRoutes } from './copilot/queue-routes';
+import { cockpitBus } from './cockpit/cockpit-bus';
 
 export interface APIServerConfig {
   port: number;
@@ -225,10 +233,24 @@ export class APIServer {
     this.ptyManager = config.ptyManager;
     this.browserManager = config.browserManager;
     this.port = config.port;
+    this.ptyManager.apiPort = config.port;
     this.authToken = APIServer.loadOrCreateAuthToken();
 
     this.app = express();
-    this.app.use(express.json());
+    // Claude Code hook bodies carry whole tool inputs (a large Write or Edit
+    // easily passes 100 KB) and come only from the local hook script, so
+    // /agent/hook from loopback gets a bigger limit. The global parser below
+    // skips a body that is already parsed.
+    const hookJson = express.json({ limit: '8mb' });
+    this.app.use('/agent/hook', (req, res, next) => {
+      const addr = req.socket?.remoteAddress ?? '';
+      if (addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1') hookJson(req, res, next);
+      else next();
+    });
+    // POST /tether/send gets its bigger parser after auth (below), so only a
+    // paired device or Lee itself can make main read 15 MB.
+    const json = express.json();
+    this.app.use((req, res, next) => (req.path === '/tether/send' ? next() : json(req, res, next)));
 
     // CORS - only allow localhost origins (Aeronaut, Flutter web, etc.)
     //
@@ -259,34 +281,22 @@ export class APIServer {
       next();
     });
 
-    // Auth middleware - require Bearer token on every route except the
-    // unauthenticated health check and CORS preflight. GET /context used to
-    // be exempt here too, which leaked the full workspace config (API keys,
-    // DB passwords, machine list) to anyone on the LAN who could reach :9001.
-    this.app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.method === 'OPTIONS' || (req.method === 'GET' && req.path === '/health')) {
-        next();
-        return;
-      }
+    // Auth middleware - require a Bearer token (the shared ~/.lee/api-token or
+    // a per-device token) on every route except the health check, CORS
+    // preflight and the /pair/* routes. Sets res.locals.principal and
+    // attributes device traffic into the event log. GET /context used to be
+    // exempt too, which leaked the full workspace config to the LAN.
+    this.app.use(copilotAuthMiddleware(() => this.authToken));
 
-      // Device pairing (E19) is unauthenticated by definition - it is how a
-      // device without the token asks for one. Both routes are listed
-      // explicitly rather than by prefix so a future /pair/* route has to opt
-      // in on purpose.
-      if (
-        (req.method === 'POST' && req.path === '/pair/request') ||
-        (req.method === 'GET' && req.path === '/pair/poll')
-      ) {
-        next();
-        return;
-      }
-
-      const authHeader = req.headers.authorization;
-      if (!authHeader || authHeader !== `Bearer ${this.authToken}`) {
-        res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing token' });
-        return;
-      }
-      next();
+    // Send to Lee (§4.2) carries photos: up to 15 MB of JSON. Anything the
+    // parser refuses answers 400 like the route's own checks.
+    const sendJson = express.json({ limit: TETHER_SEND_MAX_BYTES });
+    this.app.use('/tether/send', (req, res, next) => {
+      sendJson(req, res, (err?: unknown) => {
+        if (!err) return next();
+        const tooLarge = (err as { type?: string }).type === 'entity.too.large';
+        res.status(400).json({ success: false, error: tooLarge ? 'body is larger than 15 MB' : 'body must be JSON' });
+      });
     });
 
     // Track Lee state
@@ -424,19 +434,21 @@ export class APIServer {
           this.wss = new WebSocketServer({ noServer: true });
           this.ptyWss = new WebSocketServer({ noServer: true });
           this.browserCastWss = new WebSocketServer({ noServer: true });
+          copilotBus.setBroadcaster((msg) => { const s = JSON.stringify(msg); this.wsClients.forEach((c) => { if (c.readyState === WebSocket.OPEN) c.send(s); }); });
 
           // Manual upgrade routing (with token auth via query parameter)
           this.server!.on('upgrade', (request: IncomingMessage, socket: Socket, head: Buffer) => {
             const url = new URL(request.url || '', `http://localhost:${this.port}`);
             const pathname = url.pathname;
 
-            // Verify auth token on WebSocket upgrade
-            const token = url.searchParams.get('token');
-            if (token !== this.authToken) {
+            // Verify auth token (shared or per-device) on WebSocket upgrade
+            const principal = authenticateWsToken(request, this.authToken);
+            if (!principal) {
               socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
               socket.destroy();
               return;
             }
+            (request as any)._principal = principal;
 
             if (pathname === '/context/stream') {
               this.wss!.handleUpgrade(request, socket, head, (ws) => {
@@ -474,12 +486,19 @@ export class APIServer {
             console.log('WebSocket client connected to /context/stream');
             this.wsClients.add(ws);
 
-            // Send current context from focused (or first) window immediately on connect
+            // Send current context from focused (or first) window immediately on connect.
+            // Tagged with window_id like every later broadcast, so a client showing a
+            // different window (Aeronaut, Dirigible) knows to discard it.
             const focusedWs = windowRegistry.getFocused() || windowRegistry.getAny();
             if (focusedWs) {
               const ctx = focusedWs.contextBridge.getContext();
-              ws.send(JSON.stringify({ type: 'context_update', data: ctx }));
+              ws.send(JSON.stringify({
+                type: 'context_update',
+                window_id: focusedWs.browserWindow.id,
+                data: ctx,
+              }));
             }
+            copilotBus.runStreamConnect((msg) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); });
 
             ws.on('close', () => {
               console.log('WebSocket client disconnected');
@@ -496,6 +515,7 @@ export class APIServer {
           this.ptyWss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
             const ptyId = (request as any)._ptyId as number;
             console.log(`WebSocket client connected to /pty/${ptyId}/stream`);
+            noteDeviceView((request as any)._principal);
 
             // Track client
             if (!this.ptyClients.has(ptyId)) {
@@ -534,7 +554,9 @@ export class APIServer {
             this.ptyManager.on('exit', onExit);
 
             // Forward client input to PTY (supports raw text or JSON commands)
+            const principal = (request as any)._principal as Principal | undefined;
             ws.on('message', (msg) => {
+              noteDeviceWsInput(principal);
               const text = typeof msg === 'string' ? msg : msg.toString();
               // Try to parse as JSON command (e.g. resize)
               try {
@@ -546,7 +568,17 @@ export class APIServer {
               } catch {
                 // Not JSON — treat as raw PTY input
               }
+              // Keystrokes into an agent PTY are a Reply-class action (C3,
+              // contract §4.4): Enter or Esc on a permission prompt approves
+              // or denies it. There only a paired device (a person) may type;
+              // the shared token (Hester, scripts, the agent itself, legacy
+              // LAN clients, Spyglass) can watch and resize but its input is
+              // dropped. Shells stay typable with the shared token (Spyglass),
+              // which can already run commands via /command. The renderer
+              // types over IPC.
+              if (principal?.kind !== 'device' && this.ptyManager.isClaudePty(ptyId)) return;
               this.ptyManager.write(ptyId, text);
+              if (principal?.kind === 'device') this.ptyManager.noteUserInput(ptyId, text);
             });
 
             // Cleanup on close/error
@@ -963,6 +995,17 @@ export class APIServer {
   }
 
   private setupRoutes(): void {
+    registerCoreRoutes(this.app, { getHesterPort: () => this.pairingHesterPort, getPairingName: () => this.pairingName, isPairingEnabled: () => this.pairingEnabled, log: (level, message, details) => this.ptyManager.log(level, message, details) });
+    // Tether for devices (docs/plans/2026-09-28-tether-review-voice.md §3.3, §4.2): Lee main reads Hester and delivers Send to Lee.
+    registerTetherRoutes(this.app, {
+      log: (level, message, details) => this.ptyManager.log(level, message, details),
+      deep: () => {
+        const focus = getCopilotQueue(this.ptyManager).focus;
+        const d = focus.deep;
+        if (!d) return null;
+        return { workspace: d.workspace, card: d.card_id ? { card_id: d.card_id, title: d.title } : null, touched: focus.deepCards.touched };
+      },
+    });
     // Health check
     this.app.get('/health', (_req: Request, res: Response) => {
       res.json({
@@ -1024,11 +1067,19 @@ export class APIServer {
             return this.handleStatusCommand(action, params, res);
           case 'browser':
             return await this.handleBrowserCommand(action, params, res);
-          default:
+          default: {
+            // Copilot v2 domains ('tab', 'ops') register on the cockpit bus.
+            const cockpitDomain = cockpitBus.getCommandDomain(domain);
+            if (cockpitDomain) {
+              const out = await cockpitDomain(action, params, res.locals.principal as Principal | undefined);
+              res.status(out.status).json(out.body);
+              return;
+            }
             res.status(400).json({
               success: false,
-              error: `Unknown domain: ${domain}. Use: system, editor, tui, panel, status, browser`,
+              error: `Unknown domain: ${domain}. Use: system, editor, tui, panel, status, browser, tab, ops`,
             });
+          }
         }
       } catch (error) {
         res.status(500).json({
@@ -1108,7 +1159,8 @@ export class APIServer {
 
     // GET /pair/poll?nonce=<nonce>
     //   { status: 'pending' | 'denied' | 'expired' }
-    //   { status: 'approved', token, hester_port, name }   exactly once
+    //   { status: 'approved', token, device_id, hester_port, name }   exactly once;
+    //   the token is a fresh per-device token, not the shared one
     //
     // An unknown nonce, an expired one and one whose token was already
     // collected are all reported as 'expired', so the endpoint can't be used
@@ -1125,12 +1177,26 @@ export class APIServer {
         return;
       }
 
-      const grant = (): PairingGrant => ({
-        token: this.authToken,
-        hester_port: this.pairingHesterPort,
-        name: this.pairingName,
-      });
-      res.json(this.pairing.poll(nonce, grant));
+      // The grant is built only when an approved entry is collected, so an
+      // approved-but-never-collected request issues nothing.
+      const grant = (entry: PairingEntry): PairingGrant => {
+        const base = { hester_port: this.pairingHesterPort, name: this.pairingName };
+        try {
+          const issued = issueDeviceToken({ name: entry.device, kind: entry.kind, via: 'code', ip: entry.ip });
+          this.ptyManager.log('INFO', 'Device paired by code', { device_id: issued.device_id, device: entry.device, ip: entry.ip });
+          return { token: issued.token, device_id: issued.device_id, ...base };
+        } catch (err) {
+          // Never fall back to the shared token: it can't be listed or
+          // revoked. The approval is consumed; the device has to pair again.
+          this.ptyManager.log('ERROR', 'Device token issuance failed; pairing not completed', { error: String(err) });
+          throw err;
+        }
+      };
+      try {
+        res.json(this.pairing.poll(nonce, grant));
+      } catch {
+        res.json({ status: 'expired' });
+      }
     });
 
     // ============================================
@@ -1371,6 +1437,8 @@ export class APIServer {
         data: { killed: id },
       });
     });
+    registerQueueRoutes(this.app, { ptyManager: this.ptyManager });
+    cockpitBus.setExpressApp(this.app);
 
   }
 

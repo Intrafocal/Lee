@@ -59,9 +59,19 @@ public:
 private:
     WifiEsp() = default;
     static void event_handler(void* arg, const char* base, int32_t id, void* data);
+    void resume_reconnect();
 
     bool        initialized_ = false;
     bool        connected_   = false;
+
+    // Background reconnect policy.  Only true once we hold credentials that
+    // are worth retrying (autoConnect(), or a pairing connect that got an IP);
+    // scan()/connect()/disconnect() switch it off so the radio is idle when
+    // they need it — esp_wifi_scan_start() fails with ESP_ERR_WIFI_STATE while
+    // a connect attempt is in flight.
+    bool        auto_reconnect_    = false;
+    // scan() paused a background reconnect; resume it once the scan ends.
+    bool        resume_after_scan_ = false;
     std::string connected_ssid_;
     std::string ip_address_;
 

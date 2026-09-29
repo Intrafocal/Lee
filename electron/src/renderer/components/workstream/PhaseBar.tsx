@@ -3,7 +3,7 @@
  */
 
 import React, { useState } from 'react';
-import { WorkstreamPhase, PHASE_CONFIG, ResolvedTask } from './types';
+import { WorkstreamPhase, PHASE_CONFIG, PHASE_ORDER, ResolvedTask } from './types';
 import { Icon } from '../Icon';
 
 const HESTER_DAEMON = 'http://127.0.0.1:9000';
@@ -13,6 +13,8 @@ interface PhaseBarProps {
   title: string;
   phase: WorkstreamPhase;
   tasks: ResolvedTask[];
+  /** Goal ids the workstream serves (v4). */
+  serves?: string[];
   onPhaseChanged: () => void;
 }
 
@@ -21,6 +23,7 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
   title,
   phase,
   tasks,
+  serves,
   onPhaseChanged,
 }) => {
   const [transitioning, setTransitioning] = useState(false);
@@ -67,6 +70,17 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
       );
     }
 
+    // Phases are soft (v4): step back to the previous phase without pausing.
+    const idx = PHASE_ORDER.indexOf(phase);
+    if (idx > 0) {
+      const prev = PHASE_ORDER[idx - 1];
+      buttons.push(
+        <button key="back" className="ws-phase-btn ws-phase-btn-secondary" title={`Move back to ${PHASE_CONFIG[prev].label}`} onClick={() => advancePhase(prev)}>
+          <Icon name="arrow-left" size={12} className="icon-inline" /> Back to {PHASE_CONFIG[prev].label}
+        </button>,
+      );
+    }
+
     // Next phase button
     if (config.next && config.nextLabel && phase !== 'paused') {
       buttons.push(
@@ -86,6 +100,11 @@ export const PhaseBar: React.FC<PhaseBarProps> = ({
         <span className="ws-phase-badge" style={{ background: config.color }}>
           <Icon name={config.icon} size={12} className="icon-inline" /> {config.label}
         </span>
+        {serves && serves.length > 0 && (
+          <span className="ws-task-progress" title="Goals this workstream serves">
+            serves {serves.join(', ')}
+          </span>
+        )}
         {tasks.length > 0 && (
           <span className="ws-task-progress">
             {completedCount}/{tasks.length} tasks

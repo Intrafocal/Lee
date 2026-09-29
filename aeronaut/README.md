@@ -22,12 +22,22 @@ Lee's structured context over a WebSocket and renders it as native UI.
   the file itself (markdown, source with line numbers, images) and a Files
   browser rooted at the workspace.
 - **Steer** — tap a tab to focus it on the desktop; spawn a terminal or any
-  TUI Lee has configured; type into a real terminal (full xterm emulation).
+  TUI Lee has configured; write into a tab with Compose (Deliver, or Send
+  with Enter), or switch it to Keys for a real terminal (full xterm
+  emulation). Send to Lee puts a voice note, photo, screenshot, scribble or
+  text where Lee's focus is.
+- **Review** — read the Desk (Areas, Pages, a Page's answers and open
+  questions), the Drawer (Stashed Areas, Ideas) and Files. Read-only.
 - **Ask** — Hester chat with SSE streaming and ReAct phase indicators,
   session history, and the context bundle browser.
 
+**Voice** (when Hester has `hester.voice.enabled`): a mic beside reply,
+capture, Hester and compose fields; Hester transcribes, you review and
+send. "Speak replies" reads Hester's answers and the agents you replied to
+by voice aloud, on the phone.
+
 **Out of scope** (deliberately cut): the DevOps dashboard, in-app editing
-(the file viewer is read-only), voice input, and any VPN of our own (use
+(the file viewer and Review are read-only), and any VPN of our own (use
 Tailscale).
 
 ## Running it
@@ -75,13 +85,16 @@ Run this with a phone after any change to pairing, context, or the API.
 | 2 | **Context stream, window 1.** Tap the machine. | Tab strip matches the focused Lee window. Editor tabs show the open file; viewer tabs (pdf, model, kicad) show a type badge, a Focus button, and a Browse Files fallback — never a blank terminal. |
 | 3 | **Context stream, window 2.** Open a second Lee window on another workspace; use the workspace switcher under the machine name. | Tab strip swaps to the second window's tabs; workspace name in the app bar changes. |
 | 4 | **Focus a tab.** Tap any tab in the strip. | That tab comes forward on the desktop, in the right window. |
-| 5 | **Terminal.** New tab ▸ Terminal, then type `ls` and Return. | Output renders with colors; the same terminal exists on the desktop. Escape sequences (e.g. `htop`, `lazygit`) render correctly. |
+| 5 | **Terminal.** New tab ▸ Terminal; it opens in Compose. Write `ls`, tap Send. Then tap Keys and drive `htop` or `lazygit`. | `ls` runs once, as one paste plus Enter; Deliver types it without Enter. Output renders with colors; the same terminal exists on the desktop. In Keys, escape sequences render correctly, and the tab reopens in Keys next time. |
 | 6 | **Hester.** Tap the Hester icon; ask one question. | Phase indicator cycles preparing → thinking → … ; a markdown answer arrives. |
 | 7 | **Machine health.** Info icon in the app bar (or long-press the machine card ▸ Health & workspace). | Lee version, "token accepted", Hester `auth: bearer`, and the daemon's current workspace path. |
 | 8 | **Pairing survives a restart.** Quit Lee, relaunch it, pull-to-refresh in Aeronaut. | Reconnects with the same token — no re-pair. (The Lee window ids change, so re-pick the workspace.) |
 | 9 | **Bad token.** Edit the machine's token to garbage (or rotate `~/.lee/api-token` and restart Lee). | A red banner reads "Token rejected. Re-pair this machine.", the machine card turns amber, and the reconnect loop stops instead of spinning. Re-pair via QR clears it. |
 | 10 | **View a markdown file.** Open a `.md` file in Lee's editor (or tap one from Files). | Renders as formatted markdown, not raw text; path, size and mtime show in the header; the refresh icon re-fetches after editing the file on the desktop. |
-| 11 | **Browse files.** Tap the Files icon in the app bar (works even with no `files` tab open in Lee). | Tree rooted at the workspace; tapping a directory expands it in place; tapping a file opens the viewer; a code file shows monospace with line numbers, an image renders inline. |
+| 11 | **Browse files.** Review ▸ Files (works even with no `files` tab open in Lee). | Tree rooted at the workspace; tapping a directory expands it in place; tapping a file opens the viewer; a code file shows monospace with line numbers, an image renders inline. |
+| 12 | **Pick up and Review.** End a Desk session on the Mac with a stopped-at note, then open Work. | Pick up shows the card, its Area, your note in the writing font and up to five open questions; a tap opens the Page in Review with its answers and open questions folded underneath. Review ▸ Drawer lists Stashed Areas and Ideas. |
+| 13 | **Send to Lee.** Zoom a Page on the Mac; on the phone tap Send to Lee (Work's header), add a scribble and a line, tap Deliver. | "To: <Page> (the Page you're on)"; the text lands as a paragraph and the scribble as an image on the Page; "Delivered to <Page>". Change the target to an agent tab: Send also presses Enter. |
+| 14 | **Voice** (with `hester.voice.enabled`). Tap the mic in a reply field, say a sentence, tap again. | The transcript fills the field (never sent for you); sending it turns on Speak replies, and that agent's next item is read aloud while the app is open. |
 
 ## Architecture
 
@@ -96,6 +109,12 @@ lib/
 ├── services/
 │   ├── lee_api.dart                 # HTTP client for Lee  (:9001)
 │   ├── hester_api.dart              # HTTP client for Hester (:9000)
+│   ├── copilot_api.dart             # attention queue, focus, hand-off (Lee)
+│   ├── tether_api.dart              # /tether/*: Pick up, capture, Review, Send to Lee
+│   ├── voice_api.dart               # Hester GET /voice, POST /voice/transcribe
+│   ├── voice_recorder.dart          # record: 16 kHz mono WAV clips
+│   ├── speech_sanitizer.dart        # markdown → speech for readback
+│   ├── speech_service.dart          # flutter_tts queue
 │   ├── fs_api.dart                  # GET /fs/read, GET /fs/list
 │   ├── api_auth.dart                # shared 401 sink + ApiStatus
 │   └── machine_store.dart           # SharedPreferences persistence
@@ -107,17 +126,27 @@ lib/
 │   ├── pty_provider.dart            # per-PTY WebSocket → xterm Terminal
 │   ├── browser_cast_provider.dart   # remote browser frames
 │   ├── hester_provider.dart         # Hester SSE chat
+│   ├── tether_provider.dart         # Pick up, API/picker seams, Review page requests
+│   ├── voice_provider.dart          # capabilities cache, the one recording
+│   ├── speech_provider.dart         # Speak replies, readback
+│   ├── keys_mode_provider.dart      # Compose vs Keys, per tab
 │   └── auth_provider.dart           # turns a 401 into UI state
 ├── screens/
-│   ├── machines_screen.dart         # machine list (launch screen)
+│   ├── root_shell.dart              # tabs: Work, Review, Hester, Machine
+│   ├── work_screen.dart             # Work: Pick up, headline, waiting cards, In flight, Progress
+│   ├── agent_screen.dart            # one agent: its words, quick replies, reply bar
+│   ├── review_screen.dart           # Review: Desk · Drawer · Files
+│   ├── page_screen.dart             # a Page, read-only
+│   ├── scribble_screen.dart         # Send to Lee's scribble canvas
+│   ├── machines_screen.dart         # machine list (Machine tab until one is chosen)
 │   ├── add_machine_screen.dart      # manual pairing form
 │   ├── qr_scanner_screen.dart       # QR pairing
 │   ├── machine_detail_screen.dart   # Lee + Hester health, daemon workspace
-│   ├── home_screen.dart             # tab strip + per-tab routing
+│   ├── home_screen.dart             # Machine tab: tab strip + per-tab routing
 │   ├── editor_screen.dart           # live cursor/language bar + embedded FileViewerScreen
 │   ├── file_viewer_screen.dart      # markdown/code/image/pdf-placeholder/text file renderer
 │   ├── files_screen.dart            # Files browser (FilesBrowserBody + full-route FilesScreen)
-│   ├── terminal_screen.dart         # xterm view over a PTY
+│   ├── terminal_screen.dart         # xterm view over a PTY, Compose | Keys
 │   ├── browser_screen.dart          # remote browser cast + "Open in Safari"
 │   ├── hester_screen.dart           # chat
 │   ├── sessions_screen.dart         # Hester sessions

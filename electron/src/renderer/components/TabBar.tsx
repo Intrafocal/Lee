@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import type { TabAttention } from '../lib/copilotAttention';
 import { Icon, HesterGlyph, type IconName } from './Icon';
 
 export type DockPosition = 'center' | 'left' | 'right' | 'bottom';
@@ -15,8 +16,12 @@ export interface Tab {
   watched?: boolean; // Whether this tab is being watched for idle state (agent tabs only)
   isIdle?: boolean; // Whether this tab is currently idle (no output for 10s)
   remoteCast?: boolean; // Whether this tab is being cast to a remote client (Aeronaut)
+  attention?: TabAttention; // From Copilot hooks: the agent needs you, or finished a turn
   // Agent-specific metadata (only for type='agent')
   provider?: string; // e.g. 'hester', 'claude', 'pi', 'codex'
+  // A non-agent tab (a terminal) whose PTY is running a coding agent right
+  // now (e.g. `claude` started by hand): drawn with that agent's icon.
+  runProvider?: string;
   // File-specific metadata (only for type='file')
   filePath?: string;
   fileModified?: boolean;
@@ -53,7 +58,6 @@ export const CORE_TAB_OPTIONS: NewTabOption[] = [
 /** Feature tabs — React components, always shown */
 export const FEATURE_TAB_OPTIONS: NewTabOption[] = [
   { type: 'devops', label: 'DevOps', icon: <Icon name="devops" size={16} />, shortcut: '⇧⌘O' },
-  { type: 'library', label: 'Library', icon: <Icon name="book" size={16} />, shortcut: '⇧⌘Y' },
   { type: 'workstream', label: 'Workstream', icon: <Icon name="list" size={16} />, shortcut: '⇧⌘W' },
 ];
 
@@ -159,6 +163,13 @@ const TabDisplayIcon: React.FC<{ tab: Tab; size?: number }> = ({ tab, size = 16 
   if (tab.remoteCast) {
     return <Icon name="mobile" size={size} />;
   }
+  // Copilot hooks know exactly what the agent is doing; no opt-in needed
+  if (tab.attention === 'needs') {
+    return <Icon name="bell" size={size} className="tab-attention-needs" title="Needs you" />;
+  }
+  if (tab.attention === 'review') {
+    return <Icon name="clock" size={size} title="Finished, ready for review" />;
+  }
   // If watched and idle, show a clock
   if (tab.watched && tab.isIdle) {
     return <Icon name="clock" size={size} />;
@@ -185,6 +196,9 @@ const TabDisplayIcon: React.FC<{ tab: Tab; size?: number }> = ({ tab, size = 16 
   }
   if (tab.type === 'hester') {
     return <HesterGlyph size={size} />;
+  }
+  if (tab.runProvider) {
+    return <Icon name={AGENT_PROVIDER_ICONS[tab.runProvider] ?? TAB_ICONS.agent} size={size} />;
   }
   return <Icon name={TAB_ICONS[tab.type]} size={size} />;
 };

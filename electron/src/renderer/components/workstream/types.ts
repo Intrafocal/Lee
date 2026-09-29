@@ -34,6 +34,9 @@ export const PHASE_CONFIG: Record<WorkstreamPhase, PhaseConfig> = {
   paused:      { label: 'Paused',       color: '#888',    icon: 'stop' },
 };
 
+/** Phase order for soft (backward) moves (Copilot v4 §6): paused is not in it. */
+export const PHASE_ORDER: WorkstreamPhase[] = ['exploration', 'design', 'planning', 'execution', 'review', 'done'];
+
 // Task status computed client-side
 export type TaskStatus = 'completed' | 'ready' | 'blocked' | 'in_progress';
 
@@ -95,6 +98,8 @@ export interface WorkstreamResponse {
   updated_at: string;
   completed_task_ids: string[];
   telemetry_enabled: boolean;
+  /** Goal ids this workstream serves (Copilot v4 §6). Older daemons omit it. */
+  serves?: string[];
 }
 
 // Warehouse response from GET /workstream/{ws_id}/warehouse

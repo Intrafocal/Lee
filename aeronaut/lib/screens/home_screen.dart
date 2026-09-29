@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -26,12 +27,13 @@ import 'editor_screen.dart';
 import 'files_screen.dart';
 import 'hester_screen.dart';
 import 'machine_detail_screen.dart';
+import 'machines_screen.dart';
 import 'terminal_screen.dart';
 
-/// Main screen shown when connected to a machine.
-///
-/// Displays the machine name, tab strip from LeeContext, and
-/// tab-type-appropriate content for the active tab.
+/// The Machine tab once a machine is selected (cockpit design §8.1): the
+/// machine switcher in the app bar, then that machine's tabs (the tab strip
+/// from LeeContext and the active tab's content). Files moved to Review
+/// (docs/plans/2026-09-28-tether-review-voice.md §3.1).
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -60,6 +62,13 @@ class HomeScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const PhosphorIcon(PhosphorIcons.list, size: 20),
+            tooltip: 'All machines',
+            onPressed: () => Navigator.of(context).push(
+              CupertinoPageRoute<void>(builder: (_) => const MachinesScreen()),
+            ),
+          ),
           // Machine health / details
           IconButton(
             icon: const PhosphorIcon(PhosphorIcons.info, size: 20),
@@ -129,15 +138,10 @@ class HomeScreen extends ConsumerWidget {
   }
 
   Future<void> _refreshContext(WidgetRef ref, Machine machine) async {
-    final api = LeeApi(machine: machine);
-    try {
-      await api.getContext();
-      // The WebSocket connection will push the fresh context automatically,
-      // but triggering a GET /context ensures it's up to date.
-      ref.read(connectionProvider.notifier).reconnect();
-    } finally {
-      api.dispose();
-    }
+    // Pick up windows opened or closed since the last poll, then reconnect;
+    // the reconnect fetches the selected window's context itself.
+    await ref.read(windowsProvider.notifier).refresh();
+    ref.read(connectionProvider.notifier).reconnect();
   }
 
   void _focusTab(WidgetRef ref, Machine machine, TabContext tab) {

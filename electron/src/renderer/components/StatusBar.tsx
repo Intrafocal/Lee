@@ -7,11 +7,29 @@
  * - Click or ⌘/ to send prompt immediately (if message has prompt)
  * - ⌘? (⌘⇧/) to open blank palette
  * - Daemon status indicator with context menu for start/stop/restart
+ * - The Hester menu (right-click) carries the steward: "Steward: on / quiet
+ *   today / off", with Quiet today as the toggle (cockpit-design §2.1)
+ *
+ * In the Cockpit the bar is quieter (cockpit-design §2.1): "Cockpit ⌘0", the workspace
+ * on the left; "2 agents working · 1 waiting" (neutral, never ember),
+ * New ⌘N, Ask ⌘/ and the clock on the right.
  */
 
 import React, { useEffect, useState, useRef } from 'react';
 import { MachineStatus } from './MachineStatus';
+import { LintStatus } from './lint/LintStatus';
 import { Icon, HesterGlyph, type IconName } from './Icon';
+import { CopilotStatus } from './copilot/CopilotStatus';
+import { HandoffDialog } from './copilot/HandoffDialog';
+import type { UseCopilotResult } from '../hooks/useCopilot';
+import { offscreenNeeds } from '../lib/copilotAttention';
+import './copilot/copilot.css';
+import { CockpitModeChip } from './cockpit/CockpitModeChip';
+import { SendChip } from './tether/SendChip';
+import { cockpitModeStore, endDeepSession, goDeep, useCockpitModeState } from './cockpit/cockpitMode';
+import { cockpitShows, cockpitStatusCounts, cockpitStatusParts } from '../lib/cockpitModel';
+import { deepStatusLine } from './deep/deepView';
+import { fetchSteward, setStewardNotToday, type StewardState } from '../lib/hesterCockpit';
 
 
 export interface StatusMessage {
@@ -38,6 +56,9 @@ interface StatusBarProps {
   onDaemonAction?: (action: 'start' | 'stop' | 'restart') => void;
   onSpyglass?: (machine: any) => void;
   onBridge?: (machine: any) => void;
+  copilot: UseCopilotResult;
+  /** PTYs with a tab in this window: their state shows on the tab, not here. */
+  visiblePtyIds: ReadonlySet<number>;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -53,14 +74,53 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onDaemonAction,
   onSpyglass,
   onBridge,
+  copilot,
+  visiblePtyIds,
 }) => {
   const [time, setTime] = useState(new Date());
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [daemonMenuOpen, setDaemonMenuOpen] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [focusMenuOpen, setFocusMenuOpen] = useState(false);
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const hesterButtonRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
   const daemonMenuRef = useRef<HTMLDivElement>(null);
   const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const isFocused = !!copilot.focus?.active;
+  const isDeep = isFocused && copilot.focus?.source === 'deep';
+  // The idle-end push (deep_idle) is devices-only (Desk D2 §9.2).
+  const offscreenCount = copilot.api ? offscreenNeeds(copilot.snapshot?.items?.filter(cockpitShows), visiblePtyIds).length : 0;
+  const modeState = useCockpitModeState();
+  const inCockpit = modeState.enabled && modeState.mode === 'cockpit';
+  const cockpitParts = cockpitStatusParts(
+    cockpitStatusCounts({ workspace, agents: copilot.snapshot?.agents, items: copilot.snapshot?.items }),
+  );
+
+  // The steward, read when the Hester menu opens (it lives there now, §2.1).
+  const [steward, setSteward] = useState<StewardState | null>(null);
+  const [stewardBusy, setStewardBusy] = useState(false);
+  useEffect(() => {
+    if (!daemonMenuOpen || !workspace) return;
+    let cancelled = false;
+    fetchSteward(workspace).then((r) => {
+      if (!cancelled) setSteward(r.ok ? r.data : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [daemonMenuOpen, workspace]);
+  const toggleStewardQuiet = () => {
+    if (!steward || stewardBusy) return;
+    setStewardBusy(true);
+    setStewardNotToday(workspace, !steward.not_today_until).then((r) => {
+      setStewardBusy(false);
+      if (r.ok) setSteward(r.data);
+    });
+  };
+  const stewardLabel = steward ? (!steward.enabled ? 'off' : steward.not_today_until ? 'quiet today' : 'on') : null;
 
   // Get the most recent message
   const currentMessage = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -90,22 +150,23 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     };
   }, [flyoutOpen]);
 
-  // Close daemon menu when clicking outside
+  // Close daemon menu (and the focus menu, which shares the same container) when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (daemonMenuRef.current && !daemonMenuRef.current.contains(e.target as Node)) {
         setDaemonMenuOpen(false);
+        setFocusMenuOpen(false);
       }
     };
 
-    if (daemonMenuOpen) {
+    if (daemonMenuOpen || focusMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [daemonMenuOpen]);
+  }, [daemonMenuOpen, focusMenuOpen]);
 
   // Close workspace menu when clicking outside
   useEffect(() => {
@@ -197,6 +258,19 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   };
 
   const handleHesterClick = () => {
+    // In the Cockpit it's just Ask ⌘/ (waiting items show as Work's count).
+    if (inCockpit && onHesterClick) {
+      onHesterClick();
+      return;
+    }
+    if (isFocused) {
+      setFocusMenuOpen((v) => !v);
+      return;
+    }
+    if (offscreenCount > 0) {
+      setAttentionOpen((v) => !v);
+      return;
+    }
     if (currentMessage && onMessageClick) {
       onMessageClick(currentMessage);
     } else if (onHesterClick) {
@@ -218,6 +292,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   const handleDismiss = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    copilot.api?.logCeremony('status_dismiss');
     if (onClearMessage) {
       onClearMessage(id);
     }
@@ -233,6 +308,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   return (
     <div className="status-bar">
       <div className="status-bar-left">
+        <CockpitModeChip />
+        {/* The workspace switcher shows in every mode (Cockpit, Deep, Manual). */}
         <div className="status-workspace-container" ref={workspaceMenuRef}>
           <button
             className="status-item status-workspace"
@@ -261,8 +338,31 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-center">
+        <SendChip />
+        {inCockpit && (
+          <span className="status-cockpit-line">
+            {cockpitParts.working && <span className="status-item status-cockpit-count">{cockpitParts.working}</span>}
+            {cockpitParts.working && cockpitParts.waiting && <span className="status-cockpit-sep">·</span>}
+            {cockpitParts.waiting && (
+              <button className="status-item status-cockpit-waiting" onClick={() => cockpitModeStore.setSection('work')} title="Open Work">
+                {cockpitParts.waiting}
+              </button>
+            )}
+            {(cockpitParts.working || cockpitParts.waiting) && <span className="status-cockpit-sep">·</span>}
+            <button
+              className="status-item status-cockpit-new"
+              onClick={() => cockpitModeStore.requestLauncher()}
+              title="New: a task, an exploration or a run"
+            >
+              <span className="status-text">New</span>
+              <span className="status-shortcut">⌘N</span>
+            </button>
+            <span className="status-cockpit-sep">·</span>
+          </span>
+        )}
         <div className="status-hester-container" ref={daemonMenuRef}>
           <button
+            ref={hesterButtonRef}
             className="status-item status-hester"
             onClick={handleHesterClick}
             onContextMenu={handleDaemonContextMenu}
@@ -278,7 +378,43 @@ export const StatusBar: React.FC<StatusBarProps> = ({
                 </span>
               );
             })()}
-            {currentMessage ? (
+            {inCockpit ? (
+              <>
+                <span className="status-text">Ask</span>
+                <span className="status-shortcut">⌘/</span>
+              </>
+            ) : isDeep ? (
+              <>
+                <span className="status-icon"><Icon name="eye" size={14} /></span>
+                {(() => {
+                  const line = deepStatusLine(copilot.focus?.quiet_count ?? 0);
+                  return (
+                    <span className="status-text">
+                      {line.left}
+                      {line.right && <> · {line.right}</>}
+                    </span>
+                  );
+                })()}
+              </>
+            ) : isFocused ? (
+              <>
+                <span className="status-icon"><Icon name="eye" size={14} /></span>
+                <span className="status-text">
+                  Focus · {copilot.focus?.quiet_count ?? 0} queued
+                  {copilot.focus?.source === 'inferred' ? ' (inferred)' : ''}
+                </span>
+              </>
+            ) : offscreenCount > 0 ? (
+              <>
+                <span className="status-icon tab-attention-needs"><Icon name="bell" size={14} /></span>
+                <span className="status-text status-needs-you">
+                  {offscreenCount} {offscreenCount === 1 ? 'needs' : 'need'} you
+                </span>
+                <span className="status-shortcut status-shortcut-secondary" title="Ask something else">
+                  ⌘? Ask Hester
+                </span>
+              </>
+            ) : currentMessage ? (
               <>
                 <span className="status-icon"><Icon name={getTypeIcon(currentMessage.type)} size={14} /></span>
                 <span className="status-message-text">{currentMessage.message}</span>
@@ -296,9 +432,39 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             )}
           </button>
 
-          {/* Daemon context menu */}
-          {daemonMenuOpen && (
+          {/* Hester menu: the steward, Hester's actions, the daemon */}
+          {daemonMenuOpen && (!isFocused || inCockpit) && (
             <div className="daemon-context-menu">
+              {stewardLabel && (
+                <>
+                  <div className="status-menu-label" title={stewardLabel === 'off' ? 'Turned off by hester.steward in the config' : undefined}>
+                    Steward: {stewardLabel}
+                  </div>
+                  {steward?.enabled && (
+                    <button disabled={stewardBusy} aria-pressed={!!steward.not_today_until} onClick={toggleStewardQuiet}>
+                      {steward.not_today_until ? 'Turn the steward back on' : 'Quiet today'}
+                    </button>
+                  )}
+                  <div className="context-menu-separator" />
+                </>
+              )}
+              {copilot.api && (
+                <>
+                  <button onClick={() => { setDaemonMenuOpen(false); setAttentionOpen(true); }}>
+                    Waiting items…
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); goDeep(copilot.api, workspace); }}>
+                    Go deep
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); setCaptureOpen(true); }}>
+                    Capture idea…
+                  </button>
+                  <button onClick={() => { setDaemonMenuOpen(false); setHandoffOpen(true); }}>
+                    Hand off…
+                  </button>
+                  <div className="context-menu-separator" />
+                </>
+              )}
               {daemonStatus === 'unhealthy' ? (
                 <button onClick={() => handleDaemonMenuAction('start')}>
                   Start Daemon
@@ -315,9 +481,48 @@ export const StatusBar: React.FC<StatusBarProps> = ({
               )}
             </div>
           )}
+
+          {/* Deep menu (replaces the daemon menu during a Deep session) */}
+          {focusMenuOpen && isDeep && (
+            <div className="daemon-context-menu">
+              <button onClick={() => { setFocusMenuOpen(false); setAttentionOpen(true); }}>
+                Waiting items…
+              </button>
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  endDeepSession(copilot.api);
+                }}
+              >
+                End session…
+              </button>
+            </div>
+          )}
+
+          {/* Focus menu (replaces the daemon menu while an inferred focus is active) */}
+          {focusMenuOpen && isFocused && !isDeep && (
+            <div className="daemon-context-menu">
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  void copilot.api?.focusStop();
+                }}
+              >
+                Stop focus
+              </button>
+              <button
+                onClick={() => {
+                  setFocusMenuOpen(false);
+                  setHandoffOpen(true);
+                }}
+              >
+                Stop and hand off…
+              </button>
+            </div>
+          )}
         </div>
 
-        {messages.length > 0 && (
+        {messages.length > 0 && !inCockpit && (
           <div className="status-badge-container" ref={flyoutRef}>
             <button
               className="status-badge"
@@ -362,13 +567,34 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="status-bar-right">
-        {onSpyglass && onBridge && (
+        <LintStatus workspace={workspace} />
+        <CopilotStatus
+          workspace={workspace}
+          copilot={copilot}
+          onOpenHandoff={() => setHandoffOpen(true)}
+          attentionOpen={attentionOpen}
+          onAttentionClose={() => setAttentionOpen(false)}
+          anchorRef={hesterButtonRef}
+          captureOpen={captureOpen}
+          onOpenCapture={() => setCaptureOpen(true)}
+          onCaptureClose={() => setCaptureOpen(false)}
+        />
+        {onSpyglass && onBridge && !inCockpit && (
           <MachineStatus onSpyglass={onSpyglass} onBridge={onBridge} />
         )}
         <span className="status-item">
           <span className="status-text">{formatTime(time)}</span>
         </span>
       </div>
+
+      {handoffOpen && copilot.api && (
+        <HandoffDialog
+          api={copilot.api}
+          workspace={workspace}
+          onClose={() => setHandoffOpen(false)}
+          onLaunched={() => setHandoffOpen(false)}
+        />
+      )}
     </div>
   );
 };

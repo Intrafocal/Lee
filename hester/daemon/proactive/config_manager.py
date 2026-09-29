@@ -133,9 +133,12 @@ class ProactiveConfigManager:
 
         if old.enabled != new.enabled:
             changes.append(f"enabled: {old.enabled} -> {new.enabled}")
+        for flag in ("knowledge_auto_match", "run_while_present"):
+            if getattr(old, flag) != getattr(new, flag):
+                changes.append(f"{flag}: {getattr(old, flag)} -> {getattr(new, flag)}")
 
         # Check built-in task changes
-        for task_name in ["docs_index", "drift_check", "devops", "tests", "bundles", "ideas"]:
+        for task_name in ["docs_index", "drift_check", "devops", "tests", "bundles"]:
             old_task = getattr(old.tasks, task_name)
             new_task = getattr(new.tasks, task_name)
 
@@ -177,8 +180,6 @@ class ProactiveConfigManager:
                 enabled_tasks.append("tests")
             if cfg.tasks.bundles.enabled:
                 enabled_tasks.append("bundles")
-            if cfg.tasks.ideas.enabled:
-                enabled_tasks.append("ideas")
 
             for custom in cfg.custom:
                 if custom.enabled:

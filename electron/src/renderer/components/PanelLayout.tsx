@@ -157,12 +157,22 @@ export const PanelLayout: React.FC<PanelLayoutProps> = ({
 
 // Render the display icon for a tab (handles idle state and Hester's glyph)
 const TabDisplayIcon: React.FC<{ tab: DockableTab }> = ({ tab }) => {
+  if (tab.attention === 'needs') {
+    return <Icon name="bell" size={14} className="tab-attention-needs" title="Needs you" />;
+  }
+  if (tab.attention === 'review') {
+    return <Icon name="clock" size={14} title="Finished, ready for review" />;
+  }
   // Watched and idle overrides the type icon with a clock
   if (tab.watched && tab.isIdle) {
     return <Icon name="clock" size={14} />;
   }
   if (tab.type === 'hester') {
     return <HesterGlyph size={14} />;
+  }
+  // A terminal running a hand-started Claude/Pi shows as an agent.
+  if (tab.runProvider) {
+    return <Icon name={getTabIcon('agent')} size={14} />;
   }
   return <Icon name={getTabIcon(tab.type)} size={14} />;
 };

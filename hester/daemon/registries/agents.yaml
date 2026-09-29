@@ -36,10 +36,11 @@ toolsets:
       - git_write
 
   devops:
-    description: "Infrastructure tools - services, docker, compose, plus observation"
+    description: "Infrastructure tools - services, docker, compose, Lee operations and tabs, plus observation"
     categories:
       - observe
       - devops
+      - cockpit
       - redis
 
   full:
@@ -53,6 +54,7 @@ toolsets:
       - docs
       - git_write
       - ui
+      - cockpit
       - redis
       - copywriting
 
@@ -60,6 +62,7 @@ toolsets:
     description: "Lee IDE editor control - highlight lines, open files, navigate, manage tabs and TUI apps"
     categories:
       - ui
+      - cockpit
       - observe
 
   copywriting:

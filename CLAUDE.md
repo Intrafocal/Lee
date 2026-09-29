@@ -331,6 +331,15 @@ Hester controls Lee via `POST /command`:
 - `GET /fs/list?path=<abs dir>` - one directory's entries, dirs first; defaults to the focused window's workspace
 - No separate `/fs/workspaces` - `GET /windows` already returns `{id, workspace, focused}` per open window
 
+**Tether routes for devices** (`src/main/copilot/tether.ts`; types in `src/shared/tether.ts`; plan: `docs/plans/2026-09-28-tether-review-voice.md` §3.3, §4.2). Aeronaut and Dirigible read the Desk and steer Lee through these, with their device token; `?workspace=` defaults to the focused window's. They read Hester and trim for devices, and answer 503 `hester_offline` when it's down:
+- `GET /tether` - Pick up (your last card, a Page or a Board, where you stopped, its open questions) and counts
+- `POST /tether/capture` `{text, card_id?, input?: 'voice'}` - to Hester's Ideas (`card_id` a Page's or a Board's); spooled to `~/.lee/spool/ideas.jsonl` when Hester is offline
+- `GET /tether/desk` (cards carry `kind`), `GET /tether/pages?limit=50`, `GET /tether/pages/:id[?text_only=1]`, `GET /tether/pages/:id/assets/:name`, `GET /tether/drawer` - Review, read-only
+- `GET /tether/boards/:id` - a Board for Review (`TetherBoard`: its notes top to bottom, links, asks, hand-offs, `has_preview`); `GET /tether/boards/:id/preview` - its picture (PNG, 404 when none)
+- `GET /tether/targets`, `POST /tether/send` - **Send to Lee**: text or images into the focus (the zoomed Page or Board, the palette, the focused agent tab), a Page or Board touched this Deep session, or a chosen tab. On a Board, images become image items in the middle of the view and text a note (to the right of its content when it isn't open). Main validates (≤ 4 items, 20 000 chars, 10 MB per image, `submit` never for a Page or a Board), sends IPC `tether:send` to the window and waits up to 10 s for `tether:send-result`
+
+**Voice** is off unless `hester.voice.enabled: true`: Hester transcribes (`GET /voice`, `POST /voice/transcribe` on :9000); Lee only records. Main allows the mic for Lee's own page only (`src/main/media-permissions.ts`), and the packaged app carries `NSMicrophoneUsageDescription` and `electron/build/entitlements.mac.plist`. In dev, macOS asks for the mic on behalf of Electron (`tccutil reset Microphone com.github.Electron` to be asked again).
+
 ## Configuration
 
 Create `~/.config/lee/config.yaml` or `.lee/config.yaml` in your workspace:
@@ -339,11 +348,15 @@ Create `~/.config/lee/config.yaml` or `.lee/config.yaml` in your workspace:
 app:
   name: "Lee"
   theme: "dracula"
+  user_name: "Ben"  # Home's greeting; defaults to the first word of your macOS full name
 
 hester:
   enabled: true
   url: "http://localhost:8888/context"
   listen_port: 9000
+  voice:                # optional: the mic in Lee, Aeronaut and the T-Deck
+    enabled: false
+    provider: gemini    # or whisper (local; Lee installs the voice-local extra, then `hester voice setup`)
 
 # SQL connections for pgcli (Cmd+Shift+S)
 sql:
@@ -513,7 +526,12 @@ lee --workspace ./myproject
 | `Cmd+Shift+F` | Flutter dev tools (flx) |
 | `Cmd+Shift+E` | File tree |
 | `Cmd+Shift+O` | DevOps dashboard |
-| `Cmd+1-9` | Switch to tab by number |
+| `Cmd+0` | **Mode switcher** - Tap for the last mode, hold for Cockpit / Deep / Manual |
+| `Cmd+Shift+0` | Cockpit ↔ Deep |
+| `Cmd+Option+0` | Cockpit ↔ Manual |
+| `Cmd+.` | Deep: the action row on a Page's selection or a Board's (Ask, Hand off; on a Board also Visualize); then the underlined letter |
+| `Cmd+1-9` | Pick within the current mode: tabs in Manual, the rail's sections in the Cockpit (1 Home, 2 Work, 3 Goals, 4 Ops) |
+| `Esc` | Deep: from a zoomed card, back to the Desk overview (closes the innermost picker or popover first) |
 | `Cmd+W` | **Watch** - Toggle idle detection on current tab |
 | `Cmd+I` | **Idle tabs** - Cycle through tabs marked as idle |
 | `Cmd+Esc` | Close current tab |

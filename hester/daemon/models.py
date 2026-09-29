@@ -106,6 +106,15 @@ class ContextRequest(BaseModel):
         description="Current state of the editor"
     )
 
+    # Copilot v4 steward: the asking surface (launch-suggest, what-next,
+    # evaluate, lint-ask, rail-steer, rail-ask, goal-edit, palette, tui) and
+    # deterministic context layered on the system prompt.
+    surface: Optional[str] = Field(None, description="Asking surface (model-call trigger and steward layering)")
+    steward_context: Optional[str] = Field(None, description="Context appended after the system prompt")
+    # When set, the only tools this request may declare or run (steward
+    # surfaces pass a read-only list). Shortcuts are skipped for such requests.
+    tool_allowlist: Optional[List[str]] = Field(None, description="Restrict this request to these tools")
+
 
 class CommandType(str, Enum):
     """Types of commands Hester can send to Lee."""

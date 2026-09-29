@@ -6,9 +6,10 @@
 ## Overview
 
 **Dirigible** is a LilyGO T-Deck running firmware that connects to one or more
-Lee instances over the LAN. It shows the live tab list, lets you focus a tab,
-gives you one terminal you can type into, and asks Hester a question without
-touching your keyboard.
+Lee instances over the LAN. It is for reading and steering, not editing:
+**Work** (what needs you, and where you stopped at the Desk), **Review** (your
+Pages and the workspace's files, read-only) and **Hester**, plus the live tab
+list, where a tab opens with a compose line you write into it with.
 
 Where Aeronaut puts Lee in your pocket, Dirigible puts Lee on your desk — a
 persistent, glanceable, tactile interface that doesn't compete with your
@@ -29,8 +30,10 @@ The quartet:
 ## Hardware
 
 One shipped tier: the **LilyGO T-Deck** (ESP32-S3). Everything else that once
-appeared in this document — Linux SBCs, the ESP32-P4, LEDs, NPU voice work,
+appeared in this document — Linux SBCs, the ESP32-P4, LEDs, NPU wake-word work,
 Hester pushing to the device — is parked in [Ideas](#ideas-not-planned).
+Voice input, the part of the voice idea that is cheap, is built behind a flag
+([Voice input](#voice-input)).
 
 | Component | Spec |
 |-----------|------|
@@ -43,6 +46,7 @@ Hester pushing to the device — is parked in [Ideas](#ideas-not-planned).
 | Pointer | Optical trackball, 5 GPIOs (4 directions + click) |
 | Battery | LiPo with a 2x divider on ADC1 GPIO 4 |
 | Radio | WiFi 4 + BLE 5 (LoRa socket unpopulated on this unit) |
+| Mic | ES7210 4-channel ADC, I2C 0x40 + I2S (two mics used; voice builds only) |
 
 Pin assignments and the empirically derived display/touch transforms live in
 `dirigible/platform/esp32/components/tdeck-bsp/include/tdeck_board.h`.
@@ -53,9 +57,12 @@ Pin assignments and the empirically derived display/touch transforms live in
 dirigible/
 ├── core/                       portable C++17, no ESP-IDF
 │   ├── LeeConnection           /context/stream WebSocket + POST /command,
-│   │                           GET /fs/list + /fs/read (fs.hpp models)
+│   │                           GET /fs/list + /fs/read (fs.hpp models),
+│   │                           /attention, /tether/* (tether.hpp models)
 │   ├── PTYClient               /pty/<id>/stream WebSocket
 │   ├── HesterClient            POST /context/stream, SSE phase/response parser
+│   ├── VoiceClient             Hester's GET /voice + POST /voice/transcribe
+│   │                           (voice.hpp: WAV header, silence gate)
 │   ├── MachineManager          multi-machine state, health pings, tokens
 │   └── models / EventBus       LeeContext parsing, in-process events
 ├── platform/esp32/components/
@@ -63,10 +70,14 @@ dirigible/
 │   ├── dirigible-esp32         core's transports on esp_websocket_client /
 │   │                           esp_http_client / mdns, STA WiFi, NVS config
 │   └── tdeck-bsp               board bring-up: ST7789, GT911, keyboard,
-│                               trackball, battery, LVGL glue
+│                               trackball, battery, LVGL glue; the ES7210
+│                               mic with CONFIG_DIRIGIBLE_VOICE
 ├── firmware/                   the ESP-IDF project (main/, sdkconfig.defaults,
-│                               partitions.csv)
-└── tools/dirigible-provision/  host-side NVS provisioning over USB
+│                               partitions.csv, main/Kconfig.projbuild)
+└── tools/
+    ├── dirigible-provision/    host-side NVS provisioning over USB
+    └── md-test, vt-test, activity-test, wav-test
+                                host tests of core/ and the VT parser: make check
 ```
 
 `core/` is deliberately free of ESP-IDF so the protocol layer can be compiled
@@ -92,8 +103,28 @@ idf.py -p /dev/tty.usbmodem1101 flash monitor
 
 The first `set-target` (or `build`) resolves managed components from
 `components.espressif.com` — `lvgl/lvgl` (8.x), `espressif/esp_lcd_touch_gt911`,
-`espressif/esp_websocket_client` and `espressif/mdns` — so that step needs
-network access. Afterwards `firmware/managed_components/` is self-contained.
+`espressif/esp_websocket_client`, `espressif/mdns` and `espressif/esp_codec_dev`
+— so that step needs network access. Afterwards `firmware/managed_components/`
+is self-contained. `esp_codec_dev` is fetched in every build (IDF 5.4's
+component manager ignores Kconfig in `rules: if:`) but only linked with voice
+on.
+
+Voice input is off by default. To build it (never flash it without checking the
+mic on the device first; see [Voice input](#voice-input)):
+
+```bash
+idf.py menuconfig              # Dirigible → Voice input
+# or, for a throwaway build:
+printf 'CONFIG_DIRIGIBLE_VOICE=y\n' > /tmp/voice.defaults
+idf.py -B build-voice -DSDKCONFIG=build-voice/sdkconfig \
+       "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;/tmp/voice.defaults" build
+```
+
+Host tests, no device needed: `make check` in each of `tools/md-test`
+(markdown), `tools/vt-test` (the terminal parser), `tools/activity-test`
+(activity lines, the snapshot, Tether, Review's pages and the send body) and
+`tools/wav-test` (voice.cpp: the WAV header, the silence gate,
+`append_transcript`, Hester's answers, VoiceClient over a fake transport).
 
 Flash layout (`firmware/partitions.csv`, 16 MB):
 
@@ -208,11 +239,15 @@ provisioned device stays paired.
 
 | Screen | What it does |
 |--------|--------------|
+| **Work** | The attention queue as a pager (`screen_waiting.cpp`): one item that needs you per page, with lettered buttons. Approvals take **Y** / **N**; items that take text take the quick replies **G** Go, **W** Wait, **E** Why and **F** Show me the diff (Desk D2: a key, not a button, since the bar holds four; `d` is already Dismiss here), and **R** opens the reply box. **D** dismisses, **S** snoozes, **C** captures to Ideas. With nothing to answer, **Pick up** sits on top (`screen_tether.cpp`, from `GET /tether`): your last Desk card, its Area, two lines of where you stopped in italic (your words) and "n open questions"; **Enter**, **P** or a tap opens that Page in the viewer at the stopped-at line, and back lands in Review. With voice built in, **M** records a reply (or, with nothing to answer, a capture). The header says Work's line, "In deep work" during a Deep session at the Mac, or "Still thinking?  x" while the idle-end push is open. |
+| **In flight** | The running agents (`screen_inflight.cpp`), waiting first, then busy, then idle. Agents idle for more than two hours fold into one **Earlier (n)** row, the Mac's rule; pressing it shows them while the view stays open. A press opens an agent's words; **C** checks in. |
+| **Review** | **V** (`screen_review.cpp`): every Page on the Desk, stashed ones too, newest first (`GET /tether/pages`, 50), each with its Area, its day (UTC: the device keeps no clock) and its open questions; then **Files**. **J** / **K** or the ball move, **Enter** opens a Page read-only in the markdown viewer (`GET /tether/pages/:id?text_only=1`), **F** opens Files, **R** reloads. Back from a Page or from Files returns here. Library, Tether's old page, and its Open next are gone (2026-09-28). |
+| **Still thinking?** | The Desk's idle-end push (`screen_deep_idle.cpp`, Desk D2 §9.2): a Deep session at the Mac has been idle for 40 of its 45 minutes. **X** opens it from Work, In flight or Review while it's open. Titled "At the Desk". **E** extends by 45 minutes from now; **D** / **M** / **S** end the session rated deep / mixed / shallow, after an optional "where did you stop?" line; **C** captures a thought into the card and leaves the push open. Its own page, so `d` here is a rating, not Dismiss. |
 | **Tabs** | Live list of Lee's tabs from the context stream. Selecting one sends `system.focus_tab`; a tab that owns a PTY also opens the terminal on it, a `files` tab opens **Files**, and an editor-like tab (`editor`, `editor-panel`, `file`) opens the **Viewer** on its file. The right-hand hint says which: `pty`, `tree`, `file`. |
-| **Files** | The workspace tree over `GET /fs/list` — also on the menu, so it works with no `files` tab open. |
-| **Viewer** | One file over `GET /fs/read`, read-only. |
-| **Terminal** | A character grid over the PTY WebSocket. ESC, the header **X** or a trackball hold returns to Tabs. |
-| **Hester** | One input line. Enter streams the ReAct phases, then the answer. |
+| **Files** | The workspace tree over `GET /fs/list` — reached from Review, the menu, or a `files` tab. |
+| **Viewer** | One file over `GET /fs/read`, or one Desk Page over `/tether/pages/:id`, read-only. |
+| **Terminal** | A tab's view: a character grid over the PTY WebSocket, with a **compose** line under it (see [The terminal](#the-terminal)). The header **X** or a trackball hold returns to Tabs. |
+| **Hester** | One input line. Enter streams the ReAct phases, then the answer. With voice built in, a mic button beside it. |
 | **Pairing** | The flow above. |
 
 A 16 px header carries the machine name, a link dot and battery percentage; a
@@ -238,7 +273,7 @@ a row of text or left the terminal without a button.
 | trackball roll | moves the LVGL pointer; rolling into a screen edge scrolls what's under it |
 | trackball click | activates whatever the pointer is over |
 | trackball hold (0.8 s) | back — closes the menu, or steps the screen back; on Tabs it opens the menu |
-| trackball in Terminal | acts as a d-pad, one detent per arrow key |
+| trackball in Terminal | compose: moves the caret in the buffer; keys: a d-pad, one detent per arrow key; a click switches between them |
 | trackball in Files / Viewer | acts as a d-pad: see below |
 | ESC | same as the hold |
 | header button | same as the hold |
@@ -252,6 +287,35 @@ shortcut layer would need custom keypad firmware. The header button is the
 menu affordance instead.
 
 ### The terminal
+
+**Compose** (plan 2026-09-28 §4.6). Typing into a tab keystroke by keystroke
+is slow and awkward for anything longer than a few keys, so a tab opens with a
+compose line along the bottom: a text box in the writing face that grows
+upward over the grid to four lines while you write, with **Keys**, **Deliver**
+and **Send** touch buttons (and a mic, with voice built in). Nothing reaches the
+tab until you send it, and then it goes as one piece through Lee's
+`POST /tether/send`, which pastes it (bracketed where the program asked for
+it, so Claude Code takes a multi-line message whole):
+
+| Input | Compose |
+|-------|---------|
+| Enter, **Send** | the text, then Enter in the tab; an empty buffer sends a bare Enter over the PTY |
+| **Deliver** | the text without Enter, for you to finish |
+| a line feed (0x0A) | a new line in the buffer |
+| ball | moves the caret |
+| ball click, **Keys** | keystroke mode |
+
+The plan's **Shift+Enter** (newline) and **Alt+Enter** (Deliver) depend on what
+the keypad sends: the stock LILYGO keypad firmware applies Shift and Alt itself
+and reports no modifiers, so a CR is Send and an LF a newline, and Deliver is
+its touch button until a device check shows which byte Alt+Enter produces. No
+letter can toggle the mode either, since every letter belongs to the buffer or
+the program; the ball click (inert in the terminal before) does, and the strip
+says so. Keystroke mode is what the terminal always was: every byte upstream,
+the ball a d-pad, and a key bar with **Esc**, **Tab**, **S-Tab**, **Ctrl-C**,
+**Ctrl-D** and **Type** (back to compose). Agents and shells open in compose,
+other TUIs (lazygit, k9s) in keys, and a tab keeps whichever you last chose
+until reboot.
 
 Not a wrapping label: a real COLS×ROWS cell buffer (`firmware/main/vt.cpp`)
 painted as one LVGL label per row in `lv_font_unscii_8`. Grid size is measured
@@ -372,9 +436,20 @@ Everything is authenticated with Lee's persistent API token
 | device → Lee | `GET http://host:9001/health` | open (used for the 15 s liveness ping) |
 | device → Lee | `GET http://host:9001/fs/list?path=…` | `Authorization: Bearer …` |
 | device → Lee | `GET http://host:9001/fs/read?path=…[&stat=1]` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/attention?compact=1`, `GET /attention/:id` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/attention/:id/{reply,dismiss,snooze,open}` | `Authorization: Bearer …` (paired device) |
+| device → Lee | `POST http://host:9001/capture` `{text, workspace?, input?}` (into Ideas) | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/tether?workspace=…` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/tether/capture` `{text, card_id?, workspace?, input?}` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/tether/pages?limit=50&workspace=…` | `Authorization: Bearer …` |
+| device → Lee | `GET http://host:9001/tether/pages/:id?text_only=1&workspace=…` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/tether/send` `{workspace?, target: {kind: 'tab', pty_id, label, tab_kind, provider: null}, items: [{kind: 'text', text, input?}], submit}` | `Authorization: Bearer …` |
+| device → Lee | `POST http://host:9001/deep/idle-end` `{item_id, version, action: extend \| end_rate, rating?, stopped_at?}` | `Authorization: Bearer …` (paired device) |
 | device → Lee | `POST http://host:9001/pair/request` | **open** — pairing, pre-token (E19) |
 | device → Lee | `GET http://host:9001/pair/poll?nonce=…` | **open** — pairing, pre-token (E19) |
 | device → Hester | `POST http://host:9000/context/stream` | `Authorization: Bearer …` |
+| device → Hester | `GET http://host:9000/voice` (voice builds) | `Authorization: Bearer …` |
+| device → Hester | `POST http://host:9000/voice/transcribe?purpose=…&item_id=…&workspace=…`, raw `audio/wav` body (voice builds) | `Authorization: Bearer …` |
 
 Context messages are `{"type":"context_update","data":{…LeeContext}}`. PTY
 messages are `{"type":"data","data":"…"}` and `{"type":"exit","code":N}`;
@@ -382,8 +457,35 @@ anything the device sends that isn't JSON is written to the PTY verbatim, and
 `{"type":"resize","cols":C,"rows":R}` resizes it.
 
 Commands follow Lee's unified API: `{"domain","action","params"}`. Dirigible
-uses `system.focus_tab`, `system.close_tab`, `editor.open`, `editor.save` and
-`tui.<type>`.
+uses `system.focus_tab`, `system.close_tab`, `editor.open`, `editor.save`,
+`tui.<type>` and `tab.checkin`.
+
+The attention queue also arrives as `{"type":"attention_snapshot","data":{…}}`
+on the context stream. Desk D2 adds two things to it: the snapshot's `deep`
+carries `card_id` (and `exploration_id`, the same id, for older builds), and
+an item of kind `deep_idle` (the "Still thinking?" push) carries
+`deep_idle: {session_id, ends_at, card: {card_id, title} | null}` with the
+actions `extend`, `end_rate`, `capture` and `dismiss`. It is answered with
+`POST /deep/idle-end` (the only new route, 409 when the push was answered or
+the session moved on) or captured into with `/tether/capture`.
+
+*Renamed from Carry, 2026-09-28: the routes are `/tether/*`, the firmware's
+`tether.hpp` / `TetherState` / `screen_tether.cpp`, and an un-updated device
+simply stops talking to the new Lee (no aliases).*
+
+Tether (`GET /tether`) is your last Desk card: `pick_up: {card_id, card_kind,
+title, area_name, stopped_at, stopped_line, last_touched_at}`,
+`open_questions[]` (up to five) with `card_id`, `captured_count`, and
+`spooled`, the count of captures Lee holds while Hester is offline. There is no
+`open_next` and no `exploration_id` any more. `/tether/capture` never fails for
+an offline Hester: Lee spools the thought and answers `200 {spooled: true}`.
+The other `/tether` reads answer 503 `{error: 'hester_offline'}` then.
+
+`POST /tether/send` is Send to Lee (plan §4): the compose line always targets
+the tab you are looking at. `submit: true` is Send (Enter after the text),
+false Deliver; Lee refuses `submit` without text. It answers
+`{send_id, delivered_to}`, 503 `no_window` when no Lee window has the
+workspace, and 504 when the window doesn't answer in 10 s.
 
 Hester's SSE stream emits `event: phase` (`{"phase","iteration","tool_name"}`),
 `event: response` (`{"text","session_id"}`), `event: error` and `event: done`.
@@ -392,6 +494,51 @@ The two `/pair/*` routes are the only unauthenticated ones besides `/health` —
 they are how a device with no token asks for one. They are excluded from Lee's
 CORS headers, so a page in a browser cannot raise pairing dialogs or read a
 grant out of a poll.
+
+## Voice input
+
+On by default (`CONFIG_DIRIGIBLE_VOICE`, Kconfig in `firmware/main/Kconfig.projbuild`
+and `sdkconfig.defaults`) since it was checked on a device with the user on
+2026-09-28. Hester transcribes (plan 2026-09-28 §5): the device records, sends
+the clip, and puts the transcript in the box it belongs to. Nothing is sent by voice, and Approve / Deny are never
+voice-triggered.
+
+- **Where:** Work's reply and capture boxes (a mic on the box's heading line,
+  and **M** on a page, which opens the right box and starts recording),
+  Hester's question (a mic button), and the tab view's compose line. The mic
+  only shows when Hester's `GET /voice` says `available` (cached 5 minutes,
+  dropped after a 503).
+- **How:** tap to start, tap again (or Enter) to stop; Backspace drops the
+  clip. The keypad reports no key-up, so there is no push-to-talk hold. The
+  footer counts to the 30 s cap, which stops and still transcribes. A clip
+  under 300 ms, or one whose peak stays under about -36 dBFS, never leaves the
+  device.
+- **Wire:** 16 kHz mono 16-bit PCM WAV as the raw body of
+  `POST /voice/transcribe` (~960 KB for 30 s, recorded into PSRAM and streamed
+  up in 4 KB writes by `IHttpClient::postBody`, 35 s timeout). A reply or
+  capture made from a transcript goes up with `input: 'voice'`.
+- **Hardware** (`tdeck-bsp/tdeck_audio.cpp`, pins in `tdeck_board.h`): the
+  ES7210 through `espressif/esp_codec_dev`, I2S RX in standard mode with MIC1
+  and MIC2 averaged to mono. Its register access is our own control interface
+  on the legacy I2C bus the touch panel and keyboard already share:
+  esp_codec_dev's I2C control links IDF's new I2C driver, and IDF aborts at
+  boot when both drivers are linked.
+
+**Checked on a device (2026-09-28).** LilyGO's pins are right (MCLK 48,
+BCLK 47, LRCK 21, DIN 14, the ES7210 at I2C 0x40, no power gate beyond
+GPIO 10). Two things differ from the first build:
+- **TDM, not plain I2S.** With two mics in standard I2S every sample read 0.
+  The mic now runs as LilyGO's examples do: TDM, four 16-bit slots, all four
+  ES7210 inputs selected (three or more is what switches esp_codec_dev's
+  driver to TDM).
+- **The mics are slots 0 and 1.** Speech peaked at about 28k and 19k there,
+  while slots 2 and 3 only carried noise (about 1-2k). The mono clip is the
+  average of slots 0 and 1; summing all four clipped. `tdeck.mic` logs the
+  per-slot peaks at every stop, and `dirigible.voice` the clip's peak against
+  the silence gate, for checking a new board.
+- The button reads **Mic** (LVGL's symbol font has no microphone; its audio
+  glyph is a music note), ■ while recording, and **...** from the stop tap
+  until the transcript lands.
 
 ## Security
 
@@ -442,6 +589,10 @@ the submodule is gone.
 
 ---
 
+## Spikes
+
+- **Tailnet and Surfaces** (2026-09-28, [`spikes/2026-09-28-dirigible-tailnet-surfaces.md`](spikes/2026-09-28-dirigible-tailnet-surfaces.md)): MicroLink joins the tailnet and finds a direct path, but Tailscale 1.102.4 never answers its WireGuard handshake, so no data flows; the next step is the `fugo101/microlink` fork (IDF 6) or Tailscale Funnel. Declarative JSON Surfaces render from SD in about 58 ms and send events; SD needs MISO 38 on the shared SPI bus and long filenames.
+
 ## Ideas (not planned)
 
 Everything below was in the original specification and is not being built. It
@@ -473,11 +624,11 @@ An RGB LED or a small strip reflecting build state, idle time, or Hester
 activity — glanceable without waking the screen. Needs a status vocabulary in
 the context stream that doesn't exist yet.
 
-### On-device voice
+### Wake-word voice
 
 Microphone capture into the NPU for wake-word detection, then a spoken query to
-Hester. The T-Deck has an I2S mic and speaker and screenschema had drivers for
-both; the missing pieces are wake-word inference the S3 can afford and a
+Hester. Voice *input* is built ([Voice input](#voice-input)); the missing
+pieces here are wake-word inference the S3 can afford, speaker output, and a
 round-trip latency worth the ceremony.
 
 ### Hester → device push
@@ -495,8 +646,9 @@ nothing used it.
 and health pings, and NVS stores a list. The UI only ever drives machine 0. A
 machine picker in the menu is a small job whenever a second machine exists.
 
-### Desk mode
+### Dashboard mode
 
-A 720×720 dashboard layout — git status, running services, recent Hester
+(Called "Desk mode" before the Desk, docs/16-Desk.md, took the name.) A
+720×720 dashboard layout — git status, running services, recent Hester
 answers, a clock — as opposed to the handheld list-and-terminal layout. Tied to
 the Linux tier above.

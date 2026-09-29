@@ -14,6 +14,11 @@ class Machine extends Equatable {
   final String? workspace;
   final DateTime? lastSeen;
 
+  /// This device's own id on Lee (`dev_...`), issued at pairing under the
+  /// per-device token scheme (contracts §4). Null for a machine still
+  /// holding a pre-Copilot shared-token QR pairing (v1 payload).
+  final String? deviceId;
+
   const Machine({
     required this.id,
     required this.name,
@@ -23,6 +28,7 @@ class Machine extends Equatable {
     this.token = '',
     this.workspace,
     this.lastSeen,
+    this.deviceId,
   });
 
   Machine copyWith({
@@ -34,6 +40,7 @@ class Machine extends Equatable {
     String? token,
     String? workspace,
     DateTime? lastSeen,
+    String? deviceId,
   }) {
     return Machine(
       id: id ?? this.id,
@@ -44,6 +51,7 @@ class Machine extends Equatable {
       token: token ?? this.token,
       workspace: workspace ?? this.workspace,
       lastSeen: lastSeen ?? this.lastSeen,
+      deviceId: deviceId ?? this.deviceId,
     );
   }
 
@@ -79,6 +87,7 @@ class Machine extends Equatable {
       lastSeen: json['lastSeen'] != null
           ? DateTime.tryParse(json['lastSeen'] as String)
           : null,
+      deviceId: json['deviceId'] as String?,
     );
   }
 
@@ -92,6 +101,7 @@ class Machine extends Equatable {
       'token': token,
       'workspace': workspace,
       'lastSeen': lastSeen?.toIso8601String(),
+      'deviceId': deviceId,
     };
   }
 
@@ -105,5 +115,6 @@ class Machine extends Equatable {
         token,
         workspace,
         lastSeen,
+        deviceId,
       ];
 }

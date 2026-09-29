@@ -2,9 +2,12 @@
 ProactiveWatcher - Config-driven background tasks for Hester daemon.
 
 Reads configuration from .lee/config.yaml via Lee context and supports:
-- Built-in tasks: docs_index, drift_check, devops, tests, bundles, ideas
+- Built-in tasks: docs_index, drift_check, devops, tests, bundles
 - Custom shell command tasks
 - Hot-reload when configuration changes
+- C2 gate: model-using tasks (docs_index, drift_check, bundles) run only while
+  you're away from the machine unless `run_while_present` is set, and every
+  run is logged as an automatic model call
 
 Push status messages to Lee when issues are found.
 """
@@ -20,7 +23,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from ..copilot import presence
+from ..copilot.model_log import record_model_call, reset_trigger, set_trigger
+
 logger = logging.getLogger("hester.daemon.knowledge.proactive_watcher")
+
+# Built-in tasks that call a model. docs_index and drift_check run a `hester docs`
+# subprocess the in-process genai wrapper can't see, so each such subprocess is
+# logged as one model call; bundles refresh in-process, so their genai calls are
+# logged by the wrapper under the automatic trigger set around the run.
+MODEL_TASKS = {"docs_index", "drift_check", "bundles"}
+MODEL_SUBCOMMANDS = {"docs index", "docs check", "docs drift"}
 
 
 @dataclass
@@ -31,7 +44,6 @@ class ProactiveStatus:
     last_drift_check: Optional[datetime] = None
     last_devops_check: Optional[datetime] = None
     last_test_run: Optional[datetime] = None
-    last_ideas_check: Optional[datetime] = None
     last_bundle_refresh_check: Optional[datetime] = None
 
     # Custom task last runs (keyed by task id)
@@ -42,7 +54,6 @@ class ProactiveStatus:
     drift_failures: int = 0
     devops_failures: int = 0
     test_failures: int = 0
-    ideas_failures: int = 0
     bundle_refresh_failures: int = 0
     custom_task_failures: Dict[str, int] = field(default_factory=dict)
 
@@ -50,7 +61,6 @@ class ProactiveStatus:
     last_drift_issues: Set[str] = field(default_factory=set)
     last_devops_issues: Set[str] = field(default_factory=set)
     last_test_results: Dict[str, Any] = field(default_factory=dict)
-    last_surfaced_idea_ids: Set[str] = field(default_factory=set)
     last_bundle_refresh_count: int = 0
 
     @property
@@ -64,7 +74,6 @@ class ProactiveStatus:
             self.last_drift_check,
             self.last_devops_check,
             self.last_test_run,
-            self.last_ideas_check,
             self.last_bundle_refresh_check,
         ] + list(self.custom_task_last_runs.values())
 
@@ -84,7 +93,6 @@ class ProactiveWatcher:
     - devops: Service monitoring
     - tests: Unit test execution
     - bundles: Context bundle refresh
-    - ideas: Ideas review surfacing
 
     Custom tasks:
     - Shell commands with configurable intervals
@@ -213,11 +221,6 @@ class ProactiveWatcher:
                 self._task_loop("bundles", tasks.bundles.interval, self.check_context_bundles)
             )
 
-        if tasks.ideas.enabled:
-            self._tasks["ideas"] = asyncio.create_task(
-                self._task_loop("ideas", tasks.ideas.interval, self.check_ideas)
-            )
-
         # Custom tasks
         for custom in cfg.custom:
             if custom.enabled:
@@ -253,16 +256,45 @@ class ProactiveWatcher:
         handler: Any,
     ) -> None:
         """Generic task loop for built-in tasks."""
+        # This task may have been spawned from a request (POST /workspace); it is not one.
+        set_trigger("automatic", name=f"proactive.{task_id}")
         while self._running:
             try:
                 await asyncio.sleep(interval)
                 if not self._running:
                     return
-                await handler()
+                await self._run_task(task_id, handler)
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error(f"Error in {task_id} loop: {e}")
+
+    async def _may_run_model_task(self, task_id: str) -> bool:
+        """C2: a model-using task runs only while you're away, unless run_while_present."""
+        if self._config and self._config.run_while_present:
+            return True
+        present = await presence.at_machine()
+        if present is False:
+            return True
+        logger.debug(
+            f"Skipping {task_id}: "
+            + ("you're at the machine" if present else "presence unknown (Lee unreachable)")
+        )
+        return False
+
+    async def _run_task(self, task_id: str, handler: Any) -> bool:
+        """Run one built-in task, gated if it uses a model. Returns True if it ran."""
+        if task_id not in MODEL_TASKS:
+            await handler()
+            return True
+        if not await self._may_run_model_task(task_id):
+            return False
+        token = set_trigger("automatic", name=f"proactive.{task_id}")
+        try:
+            await handler()
+        finally:
+            reset_trigger(token)
+        return True
 
     async def _custom_task_loop(self, task_config: "CustomTaskConfig") -> None:
         """Task loop for custom shell command tasks."""
@@ -559,80 +591,6 @@ class ProactiveWatcher:
             logger.error(f"Unit test run failed: {e}")
             self._status.test_failures += 1
 
-    async def check_ideas(self) -> None:
-        """Check for review-worthy ideas and surface to Lee status bar."""
-        try:
-            self._status.last_ideas_check = datetime.now()
-
-            # Get settings from config
-            max_per_check = 1
-            min_score = 0.4
-
-            if self._config:
-                max_per_check = self._config.tasks.ideas.max_per_check
-                min_score = self._config.tasks.ideas.min_score
-
-            result = await self._run_hester_command([
-                "ideas", "list",
-                "--status", "captured",
-                "--limit", str(max_per_check * 5),
-                "--json"
-            ])
-
-            if result.returncode != 0:
-                self._status.ideas_failures += 1
-                max_failures = self._config.max_failures if self._config else 3
-                if self._status.ideas_failures <= max_failures:
-                    logger.warning(f"Ideas check failed: {result.stderr}")
-                return
-
-            try:
-                ideas = json.loads(result.stdout)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse ideas JSON: {e}")
-                self._status.ideas_failures += 1
-                return
-
-            if not ideas:
-                self._status.ideas_failures = 0
-                logger.debug("No captured ideas found")
-                return
-
-            scored_ideas = self._score_ideas(ideas)
-
-            candidates = [
-                idea for idea in scored_ideas
-                if idea.get("score", 0) >= min_score
-                and idea.get("id") not in self._status.last_surfaced_idea_ids
-            ]
-
-            if not candidates:
-                self._status.ideas_failures = 0
-                logger.debug("No review-worthy ideas above threshold")
-                return
-
-            for idea in candidates[:max_per_check]:
-                title = idea.get("title") or idea.get("content", "")[:30]
-                idea_id = idea.get("id", "")
-
-                if len(title) > 40:
-                    title = title[:37] + "..."
-
-                await self._push_status(
-                    message=f'Review "{title}"?',
-                    message_type="hint",
-                    prompt=f"@idea_explorer {idea_id}",
-                    ttl=300,
-                )
-                self._status.last_surfaced_idea_ids.add(idea_id)
-                logger.info(f"Surfaced idea for review: {idea_id}")
-
-            self._status.ideas_failures = 0
-
-        except Exception as e:
-            logger.error(f"Ideas check failed: {e}")
-            self._status.ideas_failures += 1
-
     async def check_context_bundles(self) -> None:
         """Check for stale context bundles and refresh them."""
         if not self._bundle_service:
@@ -697,61 +655,6 @@ class ProactiveWatcher:
             logger.error(f"Context bundle refresh check failed: {e}")
             self._status.bundle_refresh_failures += 1
 
-    def _score_ideas(self, ideas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Score ideas by review-worthiness."""
-        now = datetime.now()
-        scored = []
-
-        for idea in ideas:
-            score = 0.0
-
-            created_at_str = idea.get("created_at")
-            if created_at_str:
-                try:
-                    created_at_str = created_at_str.replace("Z", "+00:00")
-                    created_at = datetime.fromisoformat(created_at_str)
-                    if created_at.tzinfo:
-                        created_at = created_at.replace(tzinfo=None)
-                    age_hours = (now - created_at).total_seconds() / 3600
-
-                    if age_hours < 24:
-                        score += 0.3
-                    elif age_hours < 48:
-                        score += 0.2
-                    elif age_hours < 168:
-                        score += 0.1
-                except (ValueError, TypeError):
-                    pass
-
-            tags = idea.get("tags") or []
-            if len(tags) >= 3:
-                score += 0.2
-            elif len(tags) >= 1:
-                score += 0.1
-
-            entities = idea.get("related_entities") or {}
-            if entities.get("files") or entities.get("concepts"):
-                score += 0.2
-            elif entities:
-                score += 0.1
-
-            source = idea.get("source_type", "")
-            if source in ("slack_dm", "voice"):
-                score += 0.15
-            elif source == "cli":
-                score += 0.1
-
-            content = idea.get("content") or ""
-            if len(content) > 100:
-                score += 0.15
-            elif len(content) > 50:
-                score += 0.1
-
-            idea["score"] = score
-            scored.append(idea)
-
-        return sorted(scored, key=lambda x: x.get("score", 0), reverse=True)
-
     async def _parse_test_failures(self, stdout: str, stderr: str, test_runner: str) -> int:
         """Parse test output to extract failure count."""
         import re
@@ -784,8 +687,22 @@ class ProactiveWatcher:
         return 1
 
     async def _run_hester_command(self, args: List[str]) -> subprocess.CompletedProcess:
-        """Run a hester CLI command."""
+        """Run a hester CLI command. Model-using commands are logged as one model call."""
         hester_cmd = [sys.executable, "-m", "hester"] + args
+        model_cmd = " ".join(args[:2])
+        if model_cmd not in MODEL_SUBCOMMANDS:
+            return await self._run_command(hester_cmd)
+        # Contract §8.2: record the call, then run. Logging at launch stamps
+        # ctx (at_machine) with the presence the gate saw, and the call is
+        # recorded even if the daemon dies mid-run. The outcome isn't known
+        # yet, so ok means "launched" and no duration is sent.
+        record_model_call(
+            provider="gemini",
+            model=f"hester {model_cmd}",
+            op="subprocess",
+            location="cloud",
+            ok=True,
+        )
         return await self._run_command(hester_cmd)
 
     async def _run_command(
@@ -884,7 +801,6 @@ class ProactiveWatcher:
         self._status.drift_failures = 0
         self._status.devops_failures = 0
         self._status.test_failures = 0
-        self._status.ideas_failures = 0
         self._status.bundle_refresh_failures = 0
         self._status.custom_task_failures = {}
         logger.info("ProactiveWatcher failure counters reset")

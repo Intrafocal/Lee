@@ -72,6 +72,14 @@ void WifiEsp::scan(std::function<void(std::vector<AP>)> on_done)
     if (!initialized_) { if (on_done) on_done({}); return; }
     scan_cb_ = std::move(on_done);
 
+    // Scanning is rejected while a connect attempt is running, and a scan run
+    // while associated is only a channel-hopping background scan.  Drop the
+    // link (and any reconnect loop) first; resume_reconnect() restores it once
+    // the scan is over unless the caller connects somewhere else.
+    resume_after_scan_ = resume_after_scan_ || auto_reconnect_;
+    auto_reconnect_    = false;
+    esp_wifi_disconnect();
+
     wifi_scan_config_t scan_cfg = {};
     scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
     esp_err_t err = esp_wifi_scan_start(&scan_cfg, false);
@@ -79,6 +87,7 @@ void WifiEsp::scan(std::function<void(std::vector<AP>)> on_done)
         ESP_LOGE(TAG, "esp_wifi_scan_start failed: %s", esp_err_to_name(err));
         auto cb = std::move(scan_cb_);
         scan_cb_ = nullptr;
+        resume_reconnect();
         if (cb) cb({});
         return;
     }
@@ -90,6 +99,12 @@ void WifiEsp::connect(const std::string& ssid, const std::string& password,
 {
     if (!initialized_) { if (on_done) on_done(false); return; }
     connect_cb_ = std::move(on_done);
+
+    // This attempt supersedes any background reconnect.  Failure is reported
+    // through on_done rather than retried; auto_reconnect_ is re-armed once we
+    // actually get an IP (or by autoConnect()).
+    auto_reconnect_    = false;
+    resume_after_scan_ = false;
 
     wifi_config_t cfg = {};
     strncpy((char*)cfg.sta.ssid,     ssid.c_str(),     sizeof(cfg.sta.ssid)     - 1);
@@ -111,7 +126,20 @@ void WifiEsp::connect(const std::string& ssid, const std::string& password,
 
 void WifiEsp::disconnect()
 {
+    // Stay down: no background retry, and nothing for a finishing scan to resume.
+    auto_reconnect_    = false;
+    resume_after_scan_ = false;
     if (initialized_) esp_wifi_disconnect();
+}
+
+/// Called when a scan ends (or fails to start): bring back the reconnect loop
+/// scan() paused, unless connect()/disconnect() has since taken over.
+void WifiEsp::resume_reconnect()
+{
+    if (!resume_after_scan_) return;
+    resume_after_scan_ = false;
+    auto_reconnect_    = true;
+    esp_wifi_connect();
 }
 
 void WifiEsp::onStateChanged(std::function<void(bool, int8_t)> cb)
@@ -161,6 +189,7 @@ bool WifiEsp::autoConnect()
     }
     ESP_LOGI(TAG, "auto-connecting to %s", creds.first.c_str());
     connect(creds.first, creds.second, nullptr);
+    auto_reconnect_ = true;   // no callback to report to — keep retrying instead
     return true;
 }
 
@@ -192,6 +221,7 @@ void WifiEsp::event_handler(void* arg, const char* base, int32_t id, void* data)
         }
         ESP_LOGI(TAG, "scan done: %u APs", (unsigned)aps.size());
 
+        self->resume_reconnect();
         if (self->scan_cb_) {
             auto cb = std::move(self->scan_cb_);
             self->scan_cb_ = nullptr;
@@ -203,8 +233,9 @@ void WifiEsp::event_handler(void* arg, const char* base, int32_t id, void* data)
         auto* event = static_cast<ip_event_got_ip_t*>(data);
         char buf[16];
         esp_ip4addr_ntoa(&event->ip_info.ip, buf, sizeof(buf));
-        self->connected_  = true;
-        self->ip_address_ = buf;
+        self->connected_      = true;
+        self->auto_reconnect_ = true;   // a known-good network: retry if it drops
+        self->ip_address_     = buf;
 
         int8_t rssi = 0;
         wifi_ap_record_t ap = {};
@@ -230,13 +261,19 @@ void WifiEsp::event_handler(void* arg, const char* base, int32_t id, void* data)
         self->ip_address_.clear();
         ESP_LOGW(TAG, "disconnected (reason %d)", event->reason);
 
-        if (!was_connected && self->connect_cb_) {
+        if (event->reason == WIFI_REASON_ASSOC_LEAVE) {
+            // We asked for this (esp_wifi_disconnect() from connect(), scan()
+            // or disconnect()) — neither a failure to report nor a link to
+            // retry.  Without this the handler would reconnect on our own
+            // disconnect and undo it.
+        } else if (!was_connected && self->connect_cb_) {
             // Failed to associate at all — report the failure to the pairing UI.
             auto cb = std::move(self->connect_cb_);
             self->connect_cb_ = nullptr;
             wifi_dispatch().post([cb = std::move(cb)]() { cb(false); });
-        } else {
-            // Lost an established link: keep retrying in the background.
+        } else if (self->auto_reconnect_) {
+            // Lost an established link, or the saved AP isn't in range yet:
+            // keep retrying in the background.
             esp_wifi_connect();
         }
         if (self->state_cb_) {

@@ -12,6 +12,9 @@ import * as yaml from 'js-yaml';
 import QRCode from 'qrcode';
 import { PTYManager } from './pty-manager';
 import { APIServer } from './api-server';
+import { initCopilotCore, attachCopilotWindow, shutdownCopilotCore, issueQrTicket } from './copilot/core';
+import { logEvent } from './copilot/bus';
+import { initCockpitOps, shutdownCockpitOps } from './cockpit/ops-main';
 import { PairingEntry } from './pairing-store';
 import { ContextBridge } from './context-bridge';
 import { BrowserManager } from './browser-manager';
@@ -20,7 +23,10 @@ import { saveDebugTrace, DebugTrace } from './debug-trace';
 import { MachineManager } from './machine-manager';
 import { MdnsAdvertiser, resolveInstanceName } from './mdns-advertiser';
 import { loadMergedConfig, loadConfigWithProvenance } from './config-loader';
+import { UserNameResolver } from './user-name';
 import { fsWatcher } from './fs-watcher';
+import { initCockpitLint, shutdownCockpitLint } from './cockpit/lint-main';
+import { installMediaPermissions } from './media-permissions';
 import {
   SHORTCUTS,
   GLOBAL_FOCUS_ACTION,
@@ -39,6 +45,8 @@ interface FileEntry {
 }
 
 import { windowRegistry } from './window-registry';
+import { initCopilotQueue } from './copilot/queue';
+import { initCockpitTabs } from './cockpit/tabs-main';
 
 // Single-instance lock: a second `lee` launch used to get its own PTYManager
 // and try (and fail) to bind the same :9000/:9001 ports, with the failure
@@ -160,6 +168,7 @@ function createWindow(workspace?: string): BrowserWindow {
           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
           "img-src 'self' data: blob:; " +
           "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; " +
+          // Lee's own fonts (Newsreader) are bundled; gstatic serves KiCanvas's remote icon font only
           "font-src 'self' data: https://fonts.gstatic.com; " +
           "frame-src 'self'"
         ],
@@ -172,6 +181,7 @@ function createWindow(workspace?: string): BrowserWindow {
 
   // Register with WindowRegistry
   windowRegistry.register(bw, workspace || null, contextBridge);
+  attachCopilotWindow(bw, contextBridge);
 
   // Rebuild menu to show new window in workspace list
   setupApplicationMenu();
@@ -411,6 +421,7 @@ async function showPairingApprovalDialog(entry: PairingEntry): Promise<void> {
       : await dialog.showMessageBox(options);
     const approved = result.response === 0;
     apiServer.resolvePairing(entry.nonce, approved);
+    logEvent({ type: 'ui.ceremony', actor: { kind: 'user', surface: 'lee' }, data: { action: 'confirm', target: 'pairing' } });
     pushStatus(
       approved ? 'success' : 'info',
       approved
@@ -627,7 +638,11 @@ function setupApplicationMenu(): void {
         },
         { role: 'toggleDevTools' as const },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const },
+        // Menu only (Deep D1 §1.3): an empty accelerator stops Electron adding
+        // the role's default Cmd+0, which is the mode switcher, and Cmd+Shift+0
+        // is Deep. registerAccelerator: false in case a default is shown anyway.
+        // Zoom In / Out keep their chords.
+        { role: 'resetZoom' as const, accelerator: '', registerAccelerator: false },
         { role: 'zoomIn' as const },
         { role: 'zoomOut' as const },
         { type: 'separator' as const },
@@ -944,12 +959,18 @@ function setupIPC(): void {
     return ptyManager.spawnConfiguredTUI(tuiType, cwd, options, windowId);
   });
 
-  ipcMain.handle('pty:spawn-agent', async (event, provider: string, cwd?: string) => {
+  ipcMain.handle('pty:spawn-agent', async (event, provider: string, cwd?: string, extraArgs?: unknown) => {
     const bw = BrowserWindow.fromWebContents(event.sender);
     const windowId = bw?.id;
     const def = ptyManager.getAgentDefinition(provider, windowId);
     if (!def) {
       throw new Error(`Unknown agent provider: ${provider}`);
+    }
+    // A Cockpit launch passes its own argv (session id, name, prompt): never
+    // hand it a prewarmed process, which was started without them.
+    const args = Array.isArray(extraArgs) ? extraArgs.filter((a): a is string => typeof a === 'string') : [];
+    if (args.length > 0) {
+      return ptyManager.spawnAgent(provider, cwd, windowId, args);
     }
     if (def.prewarm) {
       return ptyManager.getOrSpawnTUI(
@@ -975,6 +996,7 @@ function setupIPC(): void {
 
   ipcMain.handle('pty:write', (_event, id: number, data: string) => {
     ptyManager.write(id, data);
+    ptyManager.noteUserInput(id, data);
   });
 
   ipcMain.handle('pty:resize', (_event, id: number, cols: number, rows: number) => {
@@ -1047,6 +1069,21 @@ function setupIPC(): void {
       return app.getPath('home');
     }
     return cwd;
+  });
+
+  // Cockpit design §7.2: the user's first name for Home's greeting. The
+  // config is read per call (it can change); the macOS full name once.
+  const userNames = new UserNameResolver();
+  ipcMain.handle('app:user-name', async (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    const workspace = (bw && windowRegistry.get(bw.id)?.workspace) || app.getPath('home');
+    let config: unknown = null;
+    try {
+      config = (await loadMergedConfig(workspace)).config;
+    } catch (error) {
+      console.error('Failed to load config for app:user-name:', error);
+    }
+    return userNames.resolve(config);
   });
 
   // Dialog operations
@@ -1917,7 +1954,7 @@ function setupIPC(): void {
       // Alias of hostPort for forward compatibility - keep hostPort too so
       // existing Aeronaut/Dirigible parsers that read that key keep working.
       apiPort,
-      token: apiServer.getAuthToken(),
+      ...issueQrTicket(),
     };
 
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairingInfo), {
@@ -1928,6 +1965,8 @@ function setupIPC(): void {
 
     return { qrDataUrl, pairingInfo };
   });
+  initCopilotQueue({ ptyManager });
+  initCockpitTabs({ ptyManager });
 }
 
 // App lifecycle
@@ -1949,6 +1988,9 @@ app.whenReady().then(() => {
       icon: aboutIcon,
     } : {}),
   });
+
+  // Voice (§5.3): the mic for Lee's own page only; every other permission as before.
+  installMediaPermissions(isDev);
 
   // Initialize PTY manager (global singleton)
   ptyManager = new PTYManager();
@@ -1984,10 +2026,13 @@ app.whenReady().then(() => {
     browserManager,
     windowRegistry,
   });
+  initCopilotCore({ apiServer, ptyManager });
+  initCockpitOps({ ptyManager });
   // mDNS advertisement (_lee._tcp) - lets Dirigible/other on-device clients
   // discover Lee without manual host/port entry (E5). Logs through
   // ptyManager's existing lee.log writer.
   mdnsAdvertiser = new MdnsAdvertiser((level, message, details) => ptyManager.log(level, message, details));
+  initCockpitLint();
 
   // Device pairing by code approval (E19). The API server owns the pending
   // state; this callback is the half that needs Electron - a native dialog on
@@ -2102,9 +2147,12 @@ app.on('before-quit', async (event) => {
 // Cleanup on quit
 app.on('will-quit', (event) => {
   globalShortcut.unregisterAll();
+  shutdownCockpitLint();
   fsWatcher.closeAll();
   mdnsAdvertiser?.stop();
+  shutdownCockpitOps();
   machineManager?.dispose();
+  shutdownCopilotCore();
 
   // If the daemon is ours, ask it to exit cleanly first so it shuts down the
   // managed redis it started (both used to outlive Lee). A restart takes the

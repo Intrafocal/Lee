@@ -53,7 +53,7 @@
 }
 
 .file-tree-item.is-selected .file-icon {
-  color: var(--lit);
+  color: var(--text-1);
 }
 
 .file-tree-filter .filter-icon,

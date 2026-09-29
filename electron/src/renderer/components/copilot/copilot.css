@@ -1,0 +1,1029 @@
+/*
+ * copilot.css - styles for the Copilot v0/v1 surfaces (status pill, flyout,
+ * blocking banner, capture, handoff, digest, retro, devices).
+ *
+ * Reuses the existing semantic variables (index.css aliases over
+ * styles/tokens.css - the generated Phosphor tokens). No new tokens.
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Needs-you pill / focus chip / retro chip (status-bar-center)           */
+/* ---------------------------------------------------------------------- */
+
+.copilot-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--error);
+  border: none;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.copilot-pill:hover {
+  filter: brightness(1.1);
+}
+
+.copilot-pill.is-quiet {
+  background: var(--ember);
+  color: var(--on-phosphor);
+}
+
+/* Zero-state: nothing needs you, but Focus/Capture/Hand off must stay reachable.
+   No alert color here - it's a quiet, always-available entry point (C2). */
+.copilot-pill.is-idle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+}
+
+.copilot-retro-chip,
+.copilot-digest-ready-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.copilot-retro-chip:hover,
+.copilot-digest-ready-chip:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Focus dropdown menu (Stop focus / Stop and hand off...)                */
+/* ---------------------------------------------------------------------- */
+
+.copilot-focus-menu {
+  position: fixed;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 4px;
+  z-index: 1400;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 160px;
+}
+
+.copilot-focus-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-control);
+}
+
+.copilot-focus-menu button:hover {
+  background: var(--bg-tertiary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Attention flyout                                                       */
+/* ---------------------------------------------------------------------- */
+
+.copilot-flyout {
+  position: fixed;
+  width: 380px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 1300;
+  overflow: hidden;
+}
+
+.copilot-flyout-scroll {
+  overflow-y: auto;
+  padding: 6px;
+  flex: 1;
+}
+
+.copilot-flyout-section + .copilot-flyout-section {
+  margin-top: 6px;
+}
+
+.copilot-flyout-section-title {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.copilot-flyout-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.copilot-flyout-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+
+.copilot-flyout-footer-btn {
+  flex: 1;
+  padding: 6px 8px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.1s, color 0.1s;
+}
+
+.copilot-flyout-footer-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.copilot-flyout-footer-btn.is-active {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Attention item row (used by flyout and banner)                         */
+/* ---------------------------------------------------------------------- */
+
+.copilot-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.copilot-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.copilot-item.severity-blocking {
+  border-left-color: var(--error);
+}
+
+.copilot-item.severity-needs-you {
+  border-left-color: var(--ember);
+}
+
+.copilot-item.severity-ambient {
+  border-left-color: var(--border-primary);
+  opacity: 0.85;
+}
+
+.copilot-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.copilot-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.copilot-item-age {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.copilot-item-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.copilot-item-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copilot-item-text .agent-md {
+  margin-top: 2px;
+  max-height: 18em;
+  overflow-y: auto;
+}
+
+.copilot-item-text-label {
+  color: var(--text-muted);
+  font-style: italic;
+  margin-right: 4px;
+}
+
+.copilot-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  position: relative;
+}
+
+.copilot-item-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.copilot-item-btn:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.copilot-item-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.copilot-item-btn-approve {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-item-btn-deny {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.copilot-item-btn.is-active {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-item-reply {
+  width: 100%;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.copilot-item-reply textarea {
+  width: 100%;
+  min-height: 44px;
+  resize: vertical;
+  background: var(--ground-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.copilot-item-reply textarea:focus {
+  outline: none;
+  border-color: var(--phosphor);
+}
+
+.copilot-item-snooze-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  min-width: 140px;
+}
+
+.copilot-item-snooze-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.copilot-item-snooze-menu button:hover {
+  background: var(--bg-tertiary);
+}
+
+.copilot-item-error {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--error);
+}
+
+/* Question items (AskUserQuestion): the question and its options */
+
+.copilot-question {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copilot-question-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.copilot-question-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-size: 10px;
+  color: var(--text-muted);
+  vertical-align: 1px;
+}
+
+.copilot-question-note {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.copilot-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.copilot-question-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  text-align: left;
+  font-family: inherit;
+}
+
+.copilot-question-option.is-choosable {
+  cursor: pointer;
+}
+
+.copilot-question-option.is-choosable:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.copilot-question-option.is-picked {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-question-option-label {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.copilot-question-option-desc {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.copilot-question-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+.copilot-question-confirm strong {
+  color: var(--phosphor);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Blocking banner (portal, raised above the status bar)                  */
+/* ---------------------------------------------------------------------- */
+
+.copilot-banner-wrap {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 1250;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+}
+
+.copilot-banner {
+  background: var(--bg-secondary);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+}
+
+.copilot-banner-more {
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 2px 0 4px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Generic modal overlay (capture / handoff / digest)                     */
+/* ---------------------------------------------------------------------- */
+
+.copilot-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1500;
+  backdrop-filter: blur(2px);
+}
+
+.copilot-modal {
+  background: var(--ground-1);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-modal);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.copilot-modal.copilot-modal-wide {
+  width: 560px;
+}
+
+.copilot-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--ground-4);
+  flex-shrink: 0;
+}
+
+.copilot-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.copilot-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.copilot-modal-close:hover {
+  color: var(--text-1);
+}
+
+.copilot-modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+
+.copilot-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--ground-4);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Buttons shared by the modals                                          */
+/* ---------------------------------------------------------------------- */
+
+.copilot-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius-control);
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.copilot-btn:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.copilot-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.copilot-btn-primary {
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  color: var(--on-phosphor);
+  font-weight: 600;
+}
+
+.copilot-btn-primary:hover:not(:disabled) {
+  background: var(--phosphor-hi, var(--phosphor));
+}
+
+.copilot-field-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-2);
+  margin: 10px 0 4px;
+}
+
+.copilot-field-label:first-child {
+  margin-top: 0;
+}
+
+.copilot-input,
+.copilot-textarea,
+.copilot-select {
+  width: 100%;
+  background: var(--ground-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.copilot-textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.copilot-input:focus,
+.copilot-textarea:focus,
+.copilot-select:focus {
+  outline: none;
+  border-color: var(--phosphor);
+}
+
+.copilot-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Capture popover                                                        */
+/* ---------------------------------------------------------------------- */
+
+.copilot-capture-toast {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--phosphor);
+}
+
+.copilot-capture-toast.is-spooled {
+  color: var(--ember);
+}
+
+.copilot-capture-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--error);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Handoff dialog                                                         */
+/* ---------------------------------------------------------------------- */
+
+.copilot-handoff-section {
+  margin-bottom: 16px;
+}
+
+.copilot-handoff-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.copilot-handoff-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  background: var(--ground-0);
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-control);
+  margin-bottom: 6px;
+}
+
+.copilot-handoff-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.copilot-handoff-row-title {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.copilot-handoff-row-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.copilot-handoff-launch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.copilot-handoff-launch-grid .copilot-field-label {
+  grid-column: 1 / -1;
+}
+
+.copilot-handoff-add-launch {
+  margin-top: 4px;
+}
+
+.copilot-handoff-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.copilot-handoff-remove:hover {
+  color: var(--error);
+}
+
+.copilot-handoff-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.copilot-handoff-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.copilot-handoff-error {
+  color: var(--error);
+  font-size: 12px;
+  margin-right: auto;
+  align-self: center;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Digest panel                                                           */
+/* ---------------------------------------------------------------------- */
+
+.copilot-digest-topline {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+}
+
+.copilot-digest-offline {
+  padding: 20px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.copilot-digest-section {
+  margin-bottom: 16px;
+}
+
+.copilot-digest-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.copilot-digest-win {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+
+.copilot-digest-win-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-digest-win-ref {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.copilot-digest-badge {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.copilot-digest-badge.is-related {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-digest-badge.is-unverified {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.copilot-digest-claim {
+  padding: 6px 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.copilot-digest-claim-label {
+  color: var(--text-muted);
+  font-style: italic;
+  margin-right: 4px;
+}
+
+.copilot-digest-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.copilot-digest-someday {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Retro card                                                             */
+/* ---------------------------------------------------------------------- */
+
+.copilot-retro-card {
+  border: 1px solid var(--ground-4);
+  border-radius: var(--radius-card);
+  padding: 12px;
+  background: var(--ground-0);
+}
+
+.copilot-retro-question {
+  margin-bottom: 10px;
+}
+
+.copilot-retro-question-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.copilot-retro-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.copilot-retro-saved {
+  font-size: 12px;
+  color: var(--phosphor);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Devices list (inside PairingDialog)                                    */
+/* ---------------------------------------------------------------------- */
+
+.copilot-devices {
+  width: 100%;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ground-4);
+}
+
+.copilot-devices-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.copilot-device-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ground-2);
+  font-size: 12px;
+}
+
+.copilot-device-row:last-child {
+  border-bottom: none;
+}
+
+.copilot-device-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.copilot-device-name {
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-device-meta {
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.copilot-device-revoke {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.copilot-device-revoke:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.copilot-device-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 6px 0;
+}
+
+.copilot-device-create-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.copilot-device-create-btn:hover {
+  border-color: var(--phosphor);
+  color: var(--phosphor);
+}
+
+.copilot-device-create-form {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copilot-device-token-reveal {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--ground-0);
+  border: 1px solid var(--phosphor);
+  border-radius: var(--radius-control);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copilot-device-token-reveal code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.copilot-device-token-copy {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.copilot-device-token-copy:hover {
+  color: var(--text-1);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Ticket QR expiry                                                       */
+/* ---------------------------------------------------------------------- */
+
+.copilot-ticket-expiry {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 6px;
+}
+
+.copilot-ticket-expiry.is-expiring {
+  color: var(--ember);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Narrow window (~800px) adjustments                                     */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .copilot-flyout {
+    width: min(380px, calc(100vw - 24px));
+  }
+
+  .copilot-modal,
+  .copilot-modal.copilot-modal-wide {
+    width: calc(100vw - 32px);
+  }
+
+  .copilot-handoff-launch-grid {
+    grid-template-columns: 1fr;
+  }
+}

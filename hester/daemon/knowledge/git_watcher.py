@@ -1,9 +1,9 @@
 """
 GitWatcher - Background task for git status polling.
 
-Polls git status periodically and suggests:
-- Documentation for new files
-- Commits for uncommitted changes
+Polls the working tree status periodically and caches it
+(``get_last_status``). The commit and document hints moved into Lee's lint
+(copilot v4).
 
 Poll Interval: 10 minutes (600s)
 """
@@ -57,11 +57,8 @@ class GitStatus:
 
 class GitWatcher:
     """
-    Background task that polls git status and suggests actions.
-
-    Suggests:
-    - "N new files. Document?" when untracked files detected
-    - "N uncommitted changes. Commit?" when changes exist
+    Background task that polls the working tree status and caches it. It
+    pushes no hints (copilot v4 moved them into Lee's lint).
 
     Usage:
         watcher = GitWatcher(working_dir=Path("/workspace"))
@@ -131,46 +128,19 @@ class GitWatcher:
 
     async def check_status(self) -> None:
         """
-        Check git status and push suggestions if needed.
+        Refresh the cached status. Called periodically by the poll loop.
 
-        Called periodically by the poll loop.
+        v4: the "N uncommitted changes. Commit?" and "N new files. Document?"
+        status pushes are gone; they are Lee lint rules now
+        (``commit/large-diff``, ``commit/new-files-undocumented``). This only
+        keeps ``get_last_status()`` current.
         """
         try:
             status = await self._get_git_status()
-            if not status:
-                return
-
-            self._last_status = status
-
-            # Check for new untracked files
-            new_untracked = [
-                f for f in status.untracked_files
-                if f not in self._seen_untracked
-            ]
-
-            if new_untracked:
-                # Mark as seen
-                self._seen_untracked.update(new_untracked)
-
-                # Suggest documentation
-                await self._push_status(
-                    f"{len(new_untracked)} new files. Document?",
-                    "hint",
-                    prompt=f"document new files: {', '.join(new_untracked[:5])}",
-                    ttl=180,
-                )
-
-            # Check for uncommitted changes
-            if status.has_changes and status.total_changes >= 5:
-                await self._push_status(
-                    f"{status.total_changes} uncommitted changes. Commit?",
-                    "hint",
-                    prompt="commit the current changes",
-                    ttl=180,
-                )
-
+            if status:
+                self._last_status = status
         except Exception as e:
-            logger.debug(f"Git status check failed: {e}")
+            logger.debug(f"Status check failed: {e}")
 
     async def _get_git_status(self) -> Optional[GitStatus]:
         """

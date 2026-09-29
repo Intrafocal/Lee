@@ -1,0 +1,89 @@
+/*
+ * voice.css - the mic next to a field (§5.3). Tokens only, and quiet: the mic
+ * is not the next step, so no phosphor; recording is shown by a neutral ring
+ * that follows your level, never ember (nothing here needs you).
+ */
+
+.voice-mic {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.voice-mic-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.voice-mic-btn:hover:not(:disabled) {
+  background: var(--ground-3);
+  color: var(--text-1);
+}
+
+.voice-mic-btn:disabled {
+  cursor: default;
+}
+
+/* The level ring: 0 at rest, a fuller ring as you speak. */
+.voice-mic-btn.is-recording {
+  color: var(--text-1);
+  background: var(--ground-3);
+  box-shadow: 0 0 0 calc(1px + var(--voice-level, 0) * 4px) rgba(var(--text-1-rgb), 0.28);
+  transition: box-shadow 80ms linear;
+}
+
+.voice-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(var(--text-2-rgb), 0.35);
+  border-top-color: var(--text-1);
+  animation: voice-spin 0.8s linear infinite;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.voice-elapsed {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One line under the field, not a toast. */
+.voice-error {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-spinner {
+    animation-duration: 2.4s;
+  }
+  .voice-mic-btn.is-recording {
+    transition: none;
+  }
+}

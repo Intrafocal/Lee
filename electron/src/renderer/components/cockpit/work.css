@@ -1,0 +1,559 @@
+/*
+ * work.css - Work (cockpit-design §4; package R2): the one-column list
+ * (waiting cards, In flight rows, the empty state), the detail view, the ⋯
+ * menu and the swipe's Undo row. Built on the primitives (ui/ui.css); this
+ * file only lays them out. Loaded after cockpit-shell.css (CockpitHost
+ * imports both).
+ *
+ * Also the .cockpit-chip tones the Launcher, Proposals and Goals still use,
+ * and the Reply popover's .cockpit-agent-words (the tile dock is gone, §2.1).
+ */
+
+/* ---------------------------------------------------------------------- */
+/* The column                                                              */
+/* ---------------------------------------------------------------------- */
+
+.work {
+  max-width: var(--col-home);
+  margin: 0 auto;
+  padding: var(--space-5) 0 var(--space-6);
+  color: var(--text-1);
+}
+
+.work .ui-eyebrow:first-of-type {
+  margin-top: var(--space-4);
+}
+
+.work-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.work-error {
+  font-size: 12px;
+  color: var(--error);
+}
+
+.work-gone {
+  color: var(--text-2);
+}
+
+/* Waiting on you */
+
+.work-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.work-swipe {
+  /* The card slides sideways without a horizontal scrollbar; the ⋯ menu still drops below. */
+  overflow-x: clip;
+}
+
+.work-card {
+  transition: transform 160ms ease;
+}
+
+.work-card.is-swiping {
+  transition: none;
+}
+
+.work-card-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.work-card-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-card-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.work-card-age {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* docs/15-Usage.md §6.2: the agent's tokens, quiet, after the time */
+.work-card-usage {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* §6.1: the limits in the summary line stay neutral text */
+.work-limits {
+  font-variant-numeric: tabular-nums;
+}
+
+.work-card-line {
+  margin-top: var(--space-2);
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.work-command {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 6px;
+  background: var(--ground-1);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12em;
+  overflow: auto;
+}
+
+/* The agent's words, clipped at six lines ("More" opens the detail). */
+.work-words {
+  margin-top: var(--space-2);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-line;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+}
+
+.work-more-link {
+  font-size: 12px;
+}
+
+.work-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.work-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.work-card-actions .work-chips {
+  margin-top: 0;
+}
+
+.work-chips .ui-chip.is-on {
+  border-color: var(--ground-5);
+  color: var(--text-1);
+}
+
+/* A swiped card for its Undo window. */
+.work-swiped {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-4);
+  border: 1px dashed var(--ground-4);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.work-swiped-name {
+  color: var(--text-3);
+}
+
+/* The ⋯ menu */
+
+.work-more {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.work-more > .ui-btn {
+  padding: 0 var(--space-1);
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-3);
+}
+
+.work-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: var(--space-1);
+  border: 1px solid var(--ground-4);
+  border-radius: 8px;
+  background: var(--ground-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.work-more-item {
+  padding: 6px var(--space-3);
+  border: none;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.work-more-item:hover:not(:disabled) {
+  background: var(--ground-3);
+  color: var(--text-1);
+}
+
+.work-more-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* New work from Work's header: quiet, one click */
+
+.work-new {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+/* Where things stand: "Two things need you." / "Working on it." / "All clear." */
+
+.work-line {
+  margin: var(--space-2) 0 var(--space-1);
+  font-family: var(--font-write);
+  font-size: 22px;
+  color: var(--text-1);
+}
+
+.work-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin: var(--space-6) 0 var(--space-5);
+}
+
+.work-empty .work-line {
+  margin: 0;
+}
+
+/* In flight: one Card of Rows */
+
+.work-flight {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.work-row-slot + .work-row-slot {
+  border-top: 1px solid var(--ground-3);
+}
+
+.work-row-slot > .ui-row {
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+}
+
+/* ---------------------------------------------------------------------- */
+/* The detail view                                                         */
+/* ---------------------------------------------------------------------- */
+
+.work-detail {
+  outline: none;
+}
+
+.work-detail-nav {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.work-detail-esc {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.work-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.work-detail-name {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.work-detail-meta {
+  margin-top: var(--space-1);
+  padding-left: 19px;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.work-prose {
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--text-1);
+  user-select: text;
+}
+
+.work-pending {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--ground-4);
+  border-radius: 10px;
+  background: var(--ground-2);
+}
+
+.work-pending > .work-card-line:first-child {
+  margin-top: 0;
+}
+
+.work-reply {
+  margin-top: var(--space-5);
+}
+
+.work-reply-field {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--ground-4);
+  border-radius: 8px;
+  background: var(--ground-1);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  caret-color: var(--caret);
+  outline: none;
+}
+
+.work-reply-field:focus {
+  border-color: var(--ground-5);
+}
+
+.work-reply-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: var(--space-2);
+}
+
+/* The mic sits next to Send (§5.3). */
+.work-reply-foot .voice-mic {
+  margin-left: auto;
+  margin-right: var(--space-2);
+}
+
+.work-along {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.work-along li {
+  display: flex;
+  gap: var(--space-3);
+  padding: 3px 0;
+  color: var(--text-2);
+}
+
+.work-along li.is-failed .work-along-text {
+  color: var(--text-1);
+}
+
+.work-along-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.work-reply.is-waiting .work-reply-field {
+  opacity: 0.6;
+}
+
+/* Updates: the agent's recent turn summaries, newest first */
+
+.work-updates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.work-updates li {
+  display: flex;
+  gap: var(--space-3);
+  padding: 4px 0;
+  color: var(--text-2);
+}
+
+.work-update-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
+.work-update-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+}
+
+.work-update-text {
+  color: var(--text-1);
+}
+
+.work-update-next {
+  flex-basis: 100%;
+  color: var(--text-3);
+}
+
+/* Along the way: folded by default */
+
+.work-along-fold {
+  margin-top: var(--space-5);
+}
+
+.work-fold-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.work-fold-toggle:hover {
+  color: var(--text-2);
+}
+
+.work-fold-chevron {
+  font-size: 10px;
+}
+
+.work-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--ground-4);
+  border-radius: 10px;
+}
+
+.work-picker-note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.work-picker-axis {
+  min-width: 72px;
+  align-self: center;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.work-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.work-select {
+  align-self: flex-start;
+  padding: 4px var(--space-2);
+  border: 1px solid var(--ground-4);
+  border-radius: 6px;
+  background: var(--ground-1);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .work-card {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Chips (Launcher, Proposals, Goals) and the Reply popover's words        */
+/* ---------------------------------------------------------------------- */
+
+.cockpit-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.cockpit-chip.tone-needs {
+  background: var(--ember);
+  color: var(--on-phosphor);
+}
+
+.cockpit-chip.tone-busy {
+  background: rgba(var(--info-rgb), 0.18);
+  color: var(--info);
+}
+
+.cockpit-chip.tone-idle {
+  background: rgba(var(--phosphor-rgb), 0.15);
+  color: var(--accent-light);
+}
+
+.cockpit-agent-words {
+  color: var(--text-secondary);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  margin-top: 2px;
+}
+
+.cockpit-agent-label {
+  color: var(--text-muted);
+  font-style: italic;
+}

@@ -128,6 +128,7 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
       name: machine.name,
       hesterPort: machine.hesterPort,
       token: machine.token,
+      deviceId: machine.deviceId,
     );
     final updated = [...state.machines]..[existingIndex] = merged;
     state = state.copyWith(

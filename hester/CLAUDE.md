@@ -38,7 +38,10 @@ hester/
 ├── daemon/                 # FastAPI daemon service
 │   ├── main.py             # HTTP server on port 9000
 │   ├── agent.py            # ReAct loop agent
-│   ├── session.py          # Redis session management
+│   ├── session.py          # Redis session management (chat sessions)
+│   ├── cockpit/            # Cockpit tasks, follower, the Desk (desk.py, board.py, desk_routes.py); explorations.py is the Desk migration's source
+│   ├── copilot/            # Ideas store, digest, opener, retro, usage, metrics, model-call logging
+│   ├── voice/              # Transcription for the mic (config, audio, hints, routes, providers/)
 │   ├── settings.py         # Configuration
 │   ├── models.py           # Pydantic models
 │   ├── thinking_depth.py   # Response depth control
@@ -357,6 +360,32 @@ hester docs index --all --clear
 hester docs index-status
 ```
 
+### Ideas, Goals, Desk and Voice Commands
+
+```bash
+# Capture an idea (writes <dir>/.hester/ideas/idea_*.md; no daemon needed). Was `hester someday`.
+hester ideas capture "Try a CRDT for the queue" [--dir PATH] [--explore]
+hester ideas list [--dir PATH] [--all]
+
+# GOALS.md metrics from Lee's event log (~/.lee/events/), deterministic
+hester goals metrics [--since 14d] [--until now] [--workspace PATH] [--write] [--json]
+
+# The Desk and the Drawer, read-only from .hester/desk/ and .hester/ideas/ (no daemon; never writes).
+# --dir is any directory inside the workspace (it looks upward); --json for machines.
+# Claude Code sessions Lee launches get these as the lee:desk and lee:drawer skills
+# (electron/src/main/copilot/claude-plugin.ts, passed with --plugin-dir).
+hester desk overview              # Areas and their cards (Pages and Boards, with kind), the Goals card, the Drawer's counts, the last card
+hester desk page <id or title>    # a Page's text, answers, hand-offs, open questions, references, images (as paths) [--text-only]
+hester desk board <id or title>   # a Board's images (absolute paths, with source), annotations, highlights, links, asks, hand-offs and visualizes (the image's path, or "mermaid diagram"/"markdown" and the title)
+hester desk last                  # the last card and where you stopped
+hester desk drawer [words...]     # Stashed Areas and Ideas, newest first; words filter
+
+# Voice (docs/plans/2026-09-28-tether-review-voice.md §5): off unless hester.voice.enabled: true
+hester voice status [--json]      # what GET /voice says: provider, model, available or why not
+hester voice setup                # provider whisper: download the model (the only network fetch; needs lee-tools[voice-local])
+hester voice test FILE.wav        # transcribe a 16 kHz mono 16-bit WAV with the configured provider
+```
+
 ### Ask Commands
 
 Ask questions using Gemini with web search.
@@ -516,6 +545,44 @@ When running as a server (`hester daemon start`), exposes REST API:
 | GET | `/session/{id}` | Get session info |
 | DELETE | `/session/{id}` | Delete session |
 | GET | `/sessions` | List active sessions |
+| POST | `/ideas` | Capture an idea into `<workspace>/.hester/ideas/` (was `/someday`; the old directory is never read) |
+| GET | `/ideas` | List ideas (`?workspace=&status=open\|all`) |
+| POST | `/ideas/{id}/triage` | Triage an idea (`explore`, `promote`, `drop`, `keep`; `to: task` makes a task, `to: explore` a Page card); logs `idea.triage {idea_id}` (metrics also count the old `someday.triage`) |
+| GET | `/copilot/digest` | Deterministic session-start digest: verified wins, agent claims, waiting items |
+| GET/POST | `/copilot/retro` | Weekly retro questions / answers (`~/.hester/retro/`) |
+| GET/POST/PUT | `/desk`, `/desk/migrate`, `/desk/last` | The Desk (`docs/16-Desk.md`; contract `docs/plans/2026-09-27-desk-foundation-contract.md` §3–§6) in `<ws>/.hester/desk/`: `desk.json` (Areas, card layout, Drawers, the Goals card, strokes, `last`, the migration map), `sessions.jsonl`, and `pages/<pg-id>/` (`card.json`, `page.md`, `answers.jsonl`, `references.jsonl`, `questions.jsonl`, `assets/`). Every Desk read first migrates `.hester/explore/` when it's due: copies (never writes there), idempotent through `migration.map`, `exp-<hex>` → `pg-<hex>` / `area-<hex>`, empty Untitled ones skipped, archived ones stashed, node trees and chats dropped; a `desk.json` from before 2026-09-28 has its `put-away` Drawer and `put_away_at` rewritten to `stashed` / `stashed_at` once. `GET /desk/last` is the last card and its stopped-at line (`last`, the last session's card, the most recently written) with what arrived since |
+| POST/PATCH/DELETE | `/desk/areas[/{id}]`, `/desk/areas/{id}/stash`, `/unstash`, `/desk/drawers[/{id}]`, `/desk/cards/{id}` | Areas (an empty Desk gets `Main`; DELETE only when empty, else 409 `not_empty`, unless `{with_cards: true}`: the user confirmed, and its cards go too; its strokes always go), the Stashed Drawer (`stashed`; unstash of an Area on the Desk is 409 `not_stashed`) and your own (`drw-`; `ideas` is the Ideas store's), card layout (`{x, y, w, h, area_id}`: a card moves within its Area or into another on the Desk, 400 for a malformed or stashed Area; the pinned Goals card doesn't move) |
+| POST/DELETE | `/desk/strokes[/{id}]` | Freehand lines you draw on the Desk; they mean nothing, so Hester never reads, places or connects them. `{area_id: str\|null, points: [[x, y], …], width?}` → `{id: 'stk-<hex>', area_id, points, width, created_at}`; points are relative to the Area (or the Desk when `area_id` is null), 2–2000 per stroke, at most 2000 strokes per Desk, width above 0 and at most 64 (default 2), 400 otherwise. An Area's strokes move with it, stay with it when stashed, and go when it's deleted. `GET /desk` returns `strokes` |
+| * | `/desk/pages[/{id}[/page\|/references\|/answers\|/asks\|/handoffs\|/questions\|/draft-from-readme]]` | Page cards: the Page's routes (deep.py's functions, the rules the pre-Desk exploration Page had: 1 MB, 409 `version_conflict`, anchors, file references, DELETE only an empty Untitled card, unless `{force: true}`: the user confirmed). `POST /desk/pages {purpose: 'goals'}` returns the existing Goals card with 200. Hand-offs launch with origin `{kind: 'page', ref: '<pg>#<ans>'}`; `deep.answer` carries `card_id` and `exploration_id` (the same id) |
+| POST/GET | `/desk/pages/{id}/assets`, `/desk/pages/{id}/assets/{name}` | Images on a Page: the raw body with `Content-Type: image/png\|image/jpeg` (checked against the bytes), up to 10 MB (413; 415 for another type), optional `?source=` JSON (`AssetSource` in `shared/board.ts`: card, answer, file or url, plus `taken_at`; recorded only) → 201 `{name: 'img-<hex>.png', path: 'assets/<name>'}`, stored 0600 in `pages/<id>/assets/` with a row in `assets.jsonl`; GET serves it. Deleting the card deletes them |
+| * | `/desk/boards[/{id}[/board\|/assets[/{name}]\|/preview\|/answers\|/asks\|/handoffs\|/visualize]]` | Board cards (`docs/16-Desk.md` §3.1, plan `docs/plans/2026-09-28-boards.md`; `cockpit/board.py`, contract `electron/src/shared/board.ts`) in `boards/<bd-id>/`: `card.json`, `board.json` (`{version, items}`, the whole document: PUT with a stale `version` is 409 `version_conflict` with the current `items`, `null` only for an empty Board; 1 MB, 2000 items; items checked by kind: image, note, highlight, stroke, ask, handoff, link, visual), `assets.jsonl` + `assets/` (`img-<hex>` images, `sel-<hex>.png` selections with `?kind=selection`; `?source=`), `preview.png` (PUT by Lee, GET `no-cache`), `answers.jsonl`. `POST /desk/boards {area_id?, title?, x?, y?}` → `{card, board}`; DELETE like a Page's (`{force}`). In `desk.json` a Board is a card with `kind: 'board'`, so Areas, Move, Stash, Delete, the Drawer, `GET /desk` (its `summary.board` has counts, `asks_open`, `preview_at`), `last` and sessions take it. An Ask's or hand-off's anchor is `{kind: 'board', item_ids, rect, snapshot: 'assets/sel-<hex>.png', notes}` (the snapshot must be that Board's). **A Board Ask** goes straight to Gemini with the snapshot as an image part and the annotations (`hester.google_api_key`, `hester.voice.gemini_model`), never to a local model; with no key it ends in `error` saying so. A Board hand-off's brief gets the snapshot's absolute path and the annotations; Lee launches it with origin `{kind: 'board', ref: '<bd>#<ans>'}`. **Visualize** (B6, `cockpit/visualize.py`): `POST /desk/boards/{id}/visualize {brief, anchor}` → 201 a `kind: 'visualize'` row (`visual: null`; `brief` whole, `question` its first line), run by the Ask runner (queue, trigger, `deep.answer`, Retry, interrupted on restart) through the registry's `diagram` agent (prompt `visualize`, its tier and steps) in its own Gemini ReAct loop with the snapshot as an image part and only the visualization tools; never the prepare step or a local model. The last visual tool result becomes `visual` (`VisualResult`): an image is saved as a Board asset (`img-<hex>`, source `{kind: 'answer', card_id, answer_id}`), a Mermaid diagram or markdown is kept as text; Lee places it. `generate_image` reads the key like the rest of Hester (`voice/config.google_api_key`) |
+| GET/POST | `/desk/sessions`, `/desk/ideas/{idea_id}/page` | Desk session records (`cards_touched`, `stopped_card_id`, `questions_kept` as card-and-question pairs, reason `device` too; away/quit sessions with no record are written from the event log by the opener). An idea as a Page card in a new Area (or `area_id`), marking it explored; 409 `not_open` |
+| GET | `/voice` | Voice capabilities (`shared/voice.ts` `VoiceCapabilities`): `{enabled, available, reason?, provider, model, location, accepts, sample_rate, channels, max_seconds, max_bytes}`; `reason` is `disabled`, `no_api_key`, `whisper_not_installed` or `whisper_model_missing`. Config `hester.voice: {enabled, provider: gemini\|whisper, gemini_model, whisper_model, max_seconds, timeout_s}` (merged config, `HESTER_VOICE_*` overrides) |
+| POST | `/voice/transcribe?purpose=reply\|capture\|ask\|send&item_id=&workspace=` | A 16 kHz mono 16-bit PCM WAV as the raw body (`Content-Type: audio/wav`) → `{text, provider, model, location, audio_ms, latency_ms}`. Errors: 503 `voice_disabled` / `voice_unavailable` (+ `reason`), 415 `unsupported_media_type`, 413 `too_large` (Content-Length, before reading) or `too_long`, 422 `too_short`, 502 `provider_error`, 504 `timeout`. The vocabulary hint (≤ 40 terms) comes from the attention item (`reply`) a Page card (`item_id` = `pg-…`: title and headings) or a Board card (`bd-…`: title and annotation text), Lee's tab labels and open files, and the workspace name. Single pass, no session; audio, hint and text are never stored or logged. Each attempt logs `voice.transcribe` (sizes and timings only) |
+| GET | `/cockpit/usage?range=today\|week\|month` | Usage (`docs/15-Usage.md` §5): latest `limits` with age, `totals` and `by_day` by source (claude, pi, hester_cloud, hester_local) with spend (billed + estimate, dollars) apart from subscription (tokens only) and local, `hester` split by trigger, `top_tasks`. Pull-only. Tasks carry `usage` from `agent.usage` (follower) |
+| GET/POST | `/workspace` | The active workspace (focused Lee window's); POST sets it and re-points plugins, knowledge and watchers |
+| GET | `/workspaces` | Workspaces the daemon is serving (`POST /workspaces/open`, `/workspaces/close`) |
+| GET | `/cockpit/snapshot` | Cockpit model for a workspace (`?since_version=` returns `{unchanged}`) |
+| GET/POST/PATCH | `/cockpit/tasks[/{id}]` | Task records in `<ws>/.hester/cockpit/tasks/`; `/{id}/confirm`, `/link`, `/close`, `/promote`. Each save derives `quadrant`, `urgency` and `importance_rank` from GOALS.md; PATCH `{important?, urgent?}` sets or clears overrides (logged as `task.override`) |
+| GET | `/cockpit/goals`, `/cockpit/history`, `/cockpit/readings` | GOALS.md ids, verified wins + closed tasks (with `goal_impact`) + readings (with `goal_id`, `delta`), operation readings |
+| GET | `/cockpit/goals/status?days=7` | Per goal: metric values, trend and ok against targets, what serves it, `flagged`, `last_evaluated_at`, focus time; constraints, tensions and the `human_balance` strip. Deterministic (computes a metrics record when the newest one of that window length is over an hour old; `previous` is a record at least half a window older) |
+| POST | `/cockpit/what-next`, `/cockpit/goals/{gid}/evaluate`, `/cockpit/tasks/{id}/suggest`, `/cockpit/ask` | Steward answers (user-triggered model calls): `{text, proposals, steer, surface, request_id}`. Evaluate adds the deterministic `packet`, `stale_measure` and saves `.hester/goals/evaluations/<gid>-<stamp>.md` (`{packet_only: true}` returns the packet without a model call). Ask classifies steer vs ask deterministically; a steer returns the exact text to type and sends nothing |
+| POST | `/cockpit/goals/draft`, `/cockpit/goals/draft/{id}/apply` | Guided GOALS.md edit: a draft in `.hester/goals/drafts/` with a unified diff; apply writes GOALS.md only on that call and only if the file is unchanged since the draft (409 otherwise). Never commits |
+| POST | `/cockpit/goals/{gid}/workstream` | Build toward: a workstream with `serves: [gid]` |
+| GET/POST | `/cockpit/steward` | `{enabled, not_today_until, active}`; POST `{not_today: bool}` quiets the steward until local midnight. `hester.steward: on\|off` in `.lee/config.yaml` |
+| POST | `/cockpit/proposals/{id}/outcome` | `{outcome: accepted\|dismissed}` for a proposal from a steward answer (`.hester/cockpit/proposals.jsonl`) |
+| POST | `/cockpit/tasks/{id}/escalate` | A Page card from the task (its title, the agent's last report, its files), origin `{kind: 'task', ref}`, in the Desk's first Area → 201 `{card, area}`; the task stays open with the note `page:<card id>`. The pre-Desk `/cockpit/explorations/*` and `/library/sessions/*` routes are gone (2026-09-28); `.hester/explore/` is only the Desk migration's source |
+| POST/PATCH | `/desk/pages/{id}/handoffs`, `/answers/{aid}` | Deep hand-offs (`docs/plans/2026-09-27-deep-next-contract.md` §2): a `kind: 'handoff'` record in `answers.jsonl`; PATCH `{task_id}` links Lee's launched task (origin `{kind: 'page', ref: '<pg>#<aid>'}`; an old `exploration` origin still syncs) and `handoffs.sync` (follower, task routes) keeps its state and result in step. `GET /cockpit/handoff-template?kind=` returns the brief template |
+
+Every endpoint except `/health` needs `Authorization: Bearer <token>`: the shared `~/.lee/api-token`, or a paired device's own token (checked against `~/.lee/devices/*.json`).
+
+**Which workspace a request is about:** `?workspace=<abs>` or the `X-Lee-Workspace` header (the auth middleware validates it, 400 otherwise, and scopes `get_current_workspace()` to it for the request), else the active workspace. Copilot endpoints also accept a JSON-body `workspace`. One daemon serves every Lee window: Cockpit tasks, readings and workstreams are per workspace (`hester/daemon/workspaces/`), while plugins, knowledge, watchers and the bundle service follow the active workspace. **`.hester/` stays out of git:** the first time Hester writes to a workspace's `.hester/` (opening it, the Desk, an idea), it adds `.hester/.gitignore` (`*`, `!plugins/`, `!plugins/**`; `hester/daemon/hester_dir.py`), so the Desk, Ideas and tasks are never committed while a project's own Hester plugins can be. The project's `.gitignore` is never touched, and an existing `.hester/.gitignore` is left alone. The Cockpit event follower (`hester/daemon/cockpit/follower.py`) tails `~/.lee/events/` (cursor in `~/.hester/cockpit/follower.json`) and keeps task records current; it is deterministic and runs no model.
+
+### Copilot: C1/C2 gating and model-call logging
+
+- Every Gemini call in the daemon (class-level wrap of `google.genai` `Models`/`AsyncModels`) and every Ollama call in `prepare.py` is sent to Lee's event log (`POST :9001/events/ingest`) as `model.call` with its trigger: `user` inside an authenticated request (surface: the `ContextRequest.surface`, else `X-Lee-Trigger` (the palette sends `palette`, the Hester TUI `tui`), else `http`), `automatic` for background loops, `unknown` otherwise.
+- Each `model.call` carries a `usage` object when tokens are known (`docs/15-Usage.md` §4.1): Gemini `usage_metadata` (streams: the last chunk's; embeddings: per-embedding token counts), Ollama eval counts (basis `local`), Claude delegates (`provider: anthropic`, basis `billed` with `ANTHROPIC_API_KEY`, else `subscription`). Gemini dollars are estimates from `hester/daemon/copilot/prices.yaml`, overridable under `usage.prices` in `~/.lee/config.yaml`; unknown models get tokens, no cost.
+- Knowledge auto-match (`hester.proactive.knowledge_auto_match`) is off by default. The model-using proactive tasks (`docs_index`, `drift_check`, `bundles`) are off by default and, when enabled, run only while you're away from the machine (Lee's `GET /presence`) unless `hester.proactive.run_while_present` is true.
 
 ### Health Check Response
 

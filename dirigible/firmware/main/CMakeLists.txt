@@ -3,6 +3,13 @@ idf_component_register(
         "main.cpp"
         "app.cpp"
         "vt.cpp"
+        "ui_text.cpp"
+        "screen_waiting.cpp"
+        "screen_inflight.cpp"
+        "screen_tether.cpp"
+        "screen_review.cpp"
+        "voice_input.cpp"
+        "screen_deep_idle.cpp"
         "screen_tabs.cpp"
         "screen_terminal.cpp"
         "screen_hester.cpp"
@@ -10,6 +17,7 @@ idf_component_register(
         "screen_files.cpp"
         "screen_viewer.cpp"
         "brand_images.c"
+        "dg_montserrat_italic_14.c"
     INCLUDE_DIRS
         "."
     REQUIRES

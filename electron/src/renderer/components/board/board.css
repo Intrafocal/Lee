@@ -1,0 +1,319 @@
+/*
+ * board.css - a zoomed Board (docs/16-Desk.md §3.1): the Desk's room and
+ * taskbar (desk.css), a transformed world of images, notes, highlights and
+ * lines, and the selection. Themed from the Phosphor tokens; no new tokens.
+ *
+ * Quiet like the Desk: one colour for lines and leaders (--text-2), a
+ * highlight is a translucent box, notes are your words in --font-write.
+ * Chrome that must stay a readable size divides by --board-scale.
+ */
+
+.board {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+  background: var(--ground-0);
+}
+
+.board-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  background: var(--ground-1);
+  user-select: none;
+}
+
+.board-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.board-empty {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  pointer-events: none;
+  text-align: center;
+}
+
+/* ---- items ---- */
+
+.board-image,
+.board-highlight,
+.board-note,
+.board-answer,
+.board-link,
+.board-selection,
+.board-marquee {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.board-image {
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+.board-image.is-loading {
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+}
+
+.board-highlight {
+  background: color-mix(in srgb, var(--text-1) 12%, transparent);
+  border: calc(1px / var(--board-scale, 1)) solid color-mix(in srgb, var(--text-1) 45%, transparent);
+  border-radius: 2px;
+}
+
+.board-highlight.is-drawing {
+  z-index: 100000;
+  pointer-events: none;
+}
+
+/* Lines and leaders: SVGs at the world's origin, drawn in Board px. */
+.board-stroke,
+.board-leader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.board-stroke path {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.board-stroke.is-selected path {
+  stroke: var(--text-1);
+}
+
+.board-stroke.is-drawing {
+  z-index: 100000;
+}
+
+.board-leader line {
+  stroke: var(--text-2);
+}
+
+.board-leader circle {
+  fill: var(--text-2);
+}
+
+/* An annotation: your words, on the ground of a card. */
+.board-note {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: var(--font-write);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
+.board-note.is-editing {
+  border-color: var(--ground-5);
+  user-select: text;
+}
+
+.board-note-text {
+  font-family: var(--font-write);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.board-note-edit {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  resize: none;
+  background: none;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: var(--text-1);
+  caret-color: var(--caret);
+  overflow: hidden;
+}
+
+/* Asks and hand-offs: placeholders until their cards (B3) replace them. */
+.board-answer {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--ground-4);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ground-3) 70%, var(--ground-2));
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+}
+
+.board-answer.is-handoff {
+  border-radius: 6px;
+  background: var(--ground-2);
+  border-top-width: 4px;
+}
+
+.board-link {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  background: var(--ground-2);
+  border: 1px solid var(--ground-4);
+  border-radius: 6px;
+  font-family: var(--font-write);
+  font-size: 14px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An Ask or hand-off card (AskCard, HandoffCard) places itself in Board px from the world's origin. */
+.board-answer-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.board-link {
+  gap: 6px;
+}
+
+.board-link.is-missing,
+.board-note-link.is-missing {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+/* A note's card links, under its text: each opens its card. */
+.board-note-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.board-note-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--ground-3);
+  border: 1px solid var(--ground-4);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-note-link:hover {
+  color: var(--text-1);
+  border-color: var(--ground-5);
+}
+
+/* The action row under a selection: the Page's row (deep.css), and its Ask field. */
+.board-slot {
+  flex-direction: column;
+  align-items: flex-start;
+  width: 420px;
+}
+
+.board-slot .deep-ask-input {
+  width: 100%;
+}
+
+/* ---- selection ---- */
+
+.board-note.is-selected,
+.board-answer.is-selected,
+.board-link.is-selected,
+.board-image.is-selected {
+  outline: calc(1px / var(--board-scale, 1)) solid var(--ground-5);
+}
+
+.board-selection {
+  z-index: 100001;
+  border: calc(1px / var(--board-scale, 1)) dashed var(--text-3);
+  pointer-events: none;
+}
+
+.board-handle {
+  /* The same size on screen at any zoom. */
+  --h: calc(8px / var(--board-scale, 1));
+  position: absolute;
+  width: var(--h);
+  height: var(--h);
+  box-sizing: border-box;
+  background: var(--ground-1);
+  border: calc(1px / var(--board-scale, 1)) solid var(--text-2);
+  border-radius: 1px;
+}
+
+.board-handle.is-nw {
+  left: calc(var(--h) / -2);
+  top: calc(var(--h) / -2);
+}
+
+.board-handle.is-ne {
+  right: calc(var(--h) / -2);
+  top: calc(var(--h) / -2);
+}
+
+.board-handle.is-sw {
+  left: calc(var(--h) / -2);
+  bottom: calc(var(--h) / -2);
+}
+
+.board-handle.is-se {
+  right: calc(var(--h) / -2);
+  bottom: calc(var(--h) / -2);
+}
+
+.board-marquee {
+  z-index: 100001;
+  border: calc(1px / var(--board-scale, 1)) dashed var(--text-3);
+  background: color-mix(in srgb, var(--text-3) 8%, transparent);
+  pointer-events: none;
+}
+
+/* The integrator's actions on a selection (Ask, Hand off), in screen px. */
+.board-slot {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* The Board's taskbar has no Drawer: the tools stay in the middle. */
+.board-taskbar {
+  flex-shrink: 0;
+}

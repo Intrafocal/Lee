@@ -136,6 +136,7 @@ export const WorkstreamPickerModal: React.FC<WorkstreamPickerModalProps> = ({
                   <span className="ws-picker-meta">
                     {config.label}
                     {total > 0 && ` · ${completed}/${total} tasks`}
+                    {ws.serves && ws.serves.length > 0 && ` · serves ${ws.serves.join(', ')}`}
                     {' · '}
                     {timeAgo(ws.updated_at)}
                   </span>

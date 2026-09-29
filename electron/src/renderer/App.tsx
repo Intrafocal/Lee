@@ -16,7 +16,6 @@ import { FileTreePane } from './components/FileTreePane';
 import { EditorPanel } from './components/EditorPanel';
 import { BrowserPane } from './components/BrowserPane';
 import { StatusBar, StatusMessage, DaemonStatus } from './components/StatusBar';
-import { LibraryPane } from './components/LibraryPane';
 import { WorkstreamPane } from './components/workstream/WorkstreamPane';
 import { WorkstreamPickerModal } from './components/WorkstreamPickerModal';
 import { SpyglassPane } from './components/SpyglassPane';
@@ -32,6 +31,19 @@ import { useHotkeys } from './hooks/useHotkeys';
 import { rendererShortcuts, resolveChord, formatChord } from '../shared/shortcuts';
 import { focusManager } from './hooks/useFocusManager';
 import { ptyEventManager } from './hooks/usePtyEvents';
+import { useCopilot } from './hooks/useCopilot';
+import { attentionByPty } from './lib/copilotAttention';
+import { mergeResumeRefs, restorePlan, resumeArgs, resumeForTab, type ResumeRef } from './lib/sessionResume';
+import { CockpitHost } from './components/cockpit/CockpitHost';
+import { useCockpitMode, useCockpitTabDisplay, cockpitModeStore } from './components/cockpit/cockpitMode';
+import { digitTarget } from './lib/cockpitModel';
+import { ModeSwitcher, switcherIntercept } from './components/cockpit/ModeSwitcher';
+import { DeepHost } from './components/deep/DeepHost';
+import { requestDeepActions } from './components/deep/deepBridge';
+import { registerPaletteSink, startTetherDelivery, type PaletteImage } from './lib/tetherDelivery';
+import { buildSendTargets } from './lib/tetherModel';
+import { cardKindOf } from '../shared/desk';
+import { publishSendTargets } from './lib/tetherIpc';
 
 // Get the Lee API from preload
 const lee = window.lee;
@@ -69,6 +81,8 @@ export interface TabData extends Tab {
   browserCheckpointReady?: boolean; // True when session+email captured for Frame checkpoint
   // Workstream-specific data (for type='workstream')
   workstreamId?: string;
+  /** Hester chat tabs resumed on a known session (an Explore deep dive), so a second open refocuses it. */
+  hesterSessionId?: string;
   // Machine-specific data (for type='spyglass' or 'bridge')
   machineConfig?: {
     name: string;
@@ -146,6 +160,8 @@ const App: React.FC = () => {
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // Whether to auto-submit the pending prompt (default true for most cases)
   const [autoSubmitPrompt, setAutoSubmitPrompt] = useState<boolean>(true);
+  // Images for the palette's question (Send to Lee, Tether §4.3)
+  const [pendingImages, setPendingImages] = useState<PaletteImage[] | null>(null);
 
   // Hester daemon health status
   const [daemonStatus, setDaemonStatus] = useState<DaemonStatus>('checking');
@@ -204,10 +220,59 @@ const App: React.FC = () => {
   }, [tabs]);
 
   // Filter tabs by dock position - memoize to prevent unnecessary re-renders
-  const centerTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'center'), [tabs]);
-  const leftTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'left'), [tabs]);
-  const rightTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'right'), [tabs]);
-  const bottomTabs = useMemo(() => tabs.filter(t => t.dockPosition === 'bottom'), [tabs]);
+  // Copilot: each agent's state (needs you / finished) comes from its hooks and
+  // is shown on its own tab; the status bar mentions only what isn't on a tab here.
+  const copilot = useCopilot();
+  const tabAttention = useMemo(() => attentionByPty(copilot.snapshot?.items), [copilot.snapshot]);
+  // Claude sessions a restore can resume: pty -> {session_id, cwd}, learned
+  // from the snapshot's agents (their hooks). Sticky while Lee runs, so a
+  // save made as agents end (Lee quitting) still carries them.
+  const resumeRefs = useRef<ReadonlyMap<number, ResumeRef>>(new Map());
+  const [resumeVersion, setResumeVersion] = useState(0);
+  useEffect(() => {
+    const next = mergeResumeRefs(resumeRefs.current, copilot.snapshot?.agents, workspace);
+    if (next === resumeRefs.current) return;
+    resumeRefs.current = next;
+    setResumeVersion((v) => v + 1);
+  }, [copilot.snapshot, workspace]);
+  // Agent ptys A knows (TabRuntimeInfo): a terminal running a hand-started
+  // Claude/Pi gets that agent's icon, and an agent's session name is its label.
+  const tabDisplay = useCockpitTabDisplay();
+  const tabsWithAttention = useMemo(
+    () => tabs.map(t => {
+      const attention = t.ptyId != null ? tabAttention.get(t.ptyId) : undefined;
+      const shown = t.ptyId != null ? tabDisplay.get(t.ptyId) : undefined;
+      const runProvider = shown && t.type !== 'agent' ? shown.provider ?? undefined : undefined;
+      if (attention === t.attention && runProvider === t.runProvider) return t;
+      return { ...t, attention, runProvider };
+    }),
+    [tabs, tabAttention, tabDisplay],
+  );
+  const visiblePtyIds = useMemo(
+    () => new Set(tabs.map(t => t.ptyId).filter((id): id is number => id != null)),
+    [tabs],
+  );
+
+  const centerTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'center'), [tabsWithAttention]);
+  // Cockpit / Deep / Manual (Deep D1 §1). Manual is the full tab layout:
+  // every tab shows in its dock, nothing is hidden (the wall is gone, §1.4).
+  const cockpitMode = useCockpitMode({
+    workspace,
+    snapshot: copilot.snapshot,
+    tabs: tabsWithAttention,
+  });
+  const leftTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'left'), [tabsWithAttention]);
+  const rightTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'right'), [tabsWithAttention]);
+  const bottomTabs = useMemo(() => tabsWithAttention.filter(t => t.dockPosition === 'bottom'), [tabsWithAttention]);
+  // The tab a dock falls back to when its active tab closes or moves: its plain neighbour.
+  const neighbourTab = useCallback(
+    (dockTabs: TabData[], leavingId: number, pick: 'first' | 'last'): number | null => {
+      const rest = dockTabs.filter((t) => t.id !== leavingId);
+      if (!rest.length) return null;
+      return (pick === 'first' ? rest[0] : rest[rest.length - 1]).id;
+    },
+    [],
+  );
 
   // Get localStorage key for workspace session
   const getSessionStorageKey = useCallback((ws: string) => `lee:session:${ws}`, []);
@@ -224,18 +289,26 @@ const App: React.FC = () => {
     // match the key, so restoring via label breaks non-default providers.
     // Older sessions won't have this; restore falls back to the label.
     provider?: string;
+    // Claude agent tabs: the session to resume (`claude --resume`) and the
+    // directory it ran in (Claude files sessions per directory). Older
+    // sessions and other providers restore as a new session.
+    resume?: ResumeRef;
   }
 
   // Save session (open tabs and their positions) to localStorage
   const saveSession = useCallback((currentTabs: TabData[], ws: string) => {
     if (!ws) return;
-    const sessionTabs: SessionTab[] = currentTabs.map(t => ({
-      type: t.type,
-      label: t.label,
-      dockPosition: t.dockPosition,
-      ...(t.filePath ? { filePath: t.filePath } : {}),
-      ...(t.type === 'agent' && t.provider ? { provider: t.provider } : {}),
-    }));
+    const sessionTabs: SessionTab[] = currentTabs.map(t => {
+      const resume = resumeForTab(t, resumeRefs.current);
+      return {
+        type: t.type,
+        label: t.label,
+        dockPosition: t.dockPosition,
+        ...(t.filePath ? { filePath: t.filePath } : {}),
+        ...(t.type === 'agent' && t.provider ? { provider: t.provider } : {}),
+        ...(resume ? { resume } : {}),
+      };
+    });
     const storageKey = getSessionStorageKey(ws);
     console.log('[Lee] Saving session:', storageKey, sessionTabs);
     localStorage.setItem(storageKey, JSON.stringify(sessionTabs));
@@ -261,7 +334,11 @@ const App: React.FC = () => {
   // spawnOptions: only consulted for type === 'terminal' — lets a caller (the
   // ui_control `tui custom` command) run a specific command/args instead of
   // the default login shell, while still going through normal tab creation.
-  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[] }) => {
+  // For type === 'agent', spawnOptions.args are extra argv for the provider
+  // (a Cockpit launch: session id, name, prompt), spawnOptions.label the
+  // tab's display label (default: the provider's name) and spawnOptions.cwd
+  // the directory it runs in (a resumed session's; default: the workspace).
+  const createTab = useCallback(async (type: Tab['type'], dockPosition?: DockPosition, label?: string, spawnOptions?: { command?: string; args?: string[]; label?: string; cwd?: string }) => {
     // Bridge type opens the picker instead of creating a tab directly
     if (type === 'bridge' as any) {
       setBridgePreselectedMachine(null);
@@ -291,7 +368,7 @@ const App: React.FC = () => {
             console.log('[Lee] Converting legacy editor tab to editor-panel');
             return createTab('editor-panel', dockPosition, label || 'Editor');
           case 'terminal':
-            ptyId = await lee.pty.spawn(spawnOptions?.command, spawnOptions?.args, workspace, tabLabel);
+            ptyId = await lee.pty.spawn(spawnOptions?.command, spawnOptions?.args, spawnOptions?.cwd || workspace, tabLabel);
             break;
           case 'git':
             ptyId = await lee.pty.spawnTUI('git', workspace);
@@ -326,7 +403,10 @@ const App: React.FC = () => {
           case 'agent': {
             // label is used as the provider key when creating agent tabs
             const provider = label || 'hester';
-            ptyId = await lee.pty.spawnAgent(provider, workspace);
+            const cwd = spawnOptions?.cwd || workspace;
+            ptyId = spawnOptions?.args?.length
+              ? await lee.pty.spawnAgent(provider, cwd, spawnOptions.args)
+              : await lee.pty.spawnAgent(provider, cwd);
             break;
           }
         }
@@ -349,7 +429,7 @@ const App: React.FC = () => {
     // For agent tabs, use the provider key as label during creation, then set display label
     const agentProvider = type === 'agent' ? (label || 'hester') : undefined;
     const displayLabel = type === 'agent'
-      ? (agentProviders[agentProvider!]?.name ?? agentProvider!)
+      ? (spawnOptions?.label || agentProviders[agentProvider!]?.name || agentProvider!)
       : tabLabel;
 
     const newTab: TabData = {
@@ -406,28 +486,16 @@ const App: React.FC = () => {
     // Clear active state from old position
     switch (oldPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) {
-          const remaining = leftTabs.filter((t) => t.id !== tabId);
-          setActiveLeftTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeLeftTabId === tabId) setActiveLeftTabId(neighbourTab(leftTabs, tabId, 'first'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) {
-          const remaining = rightTabs.filter((t) => t.id !== tabId);
-          setActiveRightTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeRightTabId === tabId) setActiveRightTabId(neighbourTab(rightTabs, tabId, 'first'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) {
-          const remaining = bottomTabs.filter((t) => t.id !== tabId);
-          setActiveBottomTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeBottomTabId === tabId) setActiveBottomTabId(neighbourTab(bottomTabs, tabId, 'first'));
         break;
       default:
-        if (activeTabId === tabId) {
-          const remaining = centerTabs.filter((t) => t.id !== tabId);
-          setActiveTabId(remaining.length > 0 ? remaining[0].id : null);
-        }
+        if (activeTabId === tabId) setActiveTabId(neighbourTab(centerTabs, tabId, 'first'));
     }
 
     // Set active state for new position
@@ -448,7 +516,7 @@ const App: React.FC = () => {
     // Save session to localStorage
     const updatedTabs = tabs.map((t) => (t.id === tabId ? { ...t, dockPosition: newPosition } : t));
     saveSession(updatedTabs, workspace);
-  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
+  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, neighbourTab, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession]);
 
   // ---------------------------------------------------------------------
   // C4: external-change detection
@@ -652,34 +720,22 @@ const App: React.FC = () => {
     // Clear active tab for the appropriate panel
     switch (tab.dockPosition) {
       case 'left':
-        if (activeLeftTabId === tabId) {
-          const remaining = leftTabs.filter((t) => t.id !== tabId);
-          setActiveLeftTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeLeftTabId === tabId) setActiveLeftTabId(neighbourTab(leftTabs, tabId, 'last'));
         break;
       case 'right':
-        if (activeRightTabId === tabId) {
-          const remaining = rightTabs.filter((t) => t.id !== tabId);
-          setActiveRightTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeRightTabId === tabId) setActiveRightTabId(neighbourTab(rightTabs, tabId, 'last'));
         break;
       case 'bottom':
-        if (activeBottomTabId === tabId) {
-          const remaining = bottomTabs.filter((t) => t.id !== tabId);
-          setActiveBottomTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeBottomTabId === tabId) setActiveBottomTabId(neighbourTab(bottomTabs, tabId, 'last'));
         break;
       default:
-        if (activeTabId === tabId) {
-          const remaining = centerTabs.filter((t) => t.id !== tabId);
-          setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
-        }
+        if (activeTabId === tabId) setActiveTabId(neighbourTab(centerTabs, tabId, 'last'));
     }
 
     // Save session to localStorage (without the closed tab)
     const remainingTabs = tabs.filter((t) => t.id !== tabId);
     saveSession(remainingTabs, workspace);
-  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
+  }, [tabs, centerTabs, leftTabs, rightTabs, bottomTabs, neighbourTab, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, workspace, saveSession, saveTabToDisk]);
 
   // Keep closeTabRef in sync for use in event handlers (avoids stale closures)
   useEffect(() => {
@@ -737,6 +793,7 @@ const App: React.FC = () => {
     }
 
     // Reset session restore gate so the restore effect re-triggers for the new workspace
+    restoreStartedFor.current = null;
     setSessionRestored(false);
 
     // Set new workspace
@@ -763,12 +820,35 @@ const App: React.FC = () => {
     setTimeout(() => { isSwitchingRef.current = false; }, 0);
   }, [workspace, saveSession, closeAllTabs]);
 
-  // Rename a tab
+  // Rename a tab. Renaming an agent's tab names its session (yours: the
+  // Cockpit relays it to the agent's task, and it wins over Claude's titles).
   const renameTab = useCallback((tabId: number, newLabel: string) => {
+    const tab = tabsRef.current.find((t) => t.id === tabId);
     setTabs(prev => prev.map(tab =>
       tab.id === tabId ? { ...tab, label: newLabel } : tab
     ));
+    if (tab?.ptyId != null && tabDisplayRef.current.has(tab.ptyId)) {
+      void window.lee?.cockpit?.tabs.rename(tab.ptyId, newLabel).catch(() => {});
+    }
   }, []);
+
+  // An agent's session name (yours, a Claude /rename, or Claude's own title)
+  // is its tab label, so the tab strip, saved context and attention items say it.
+  const tabDisplayRef = useRef(tabDisplay);
+  tabDisplayRef.current = tabDisplay;
+  useEffect(() => {
+    if (tabDisplay.size === 0) return;
+    setTabs(prev => {
+      let changed = false;
+      const next = prev.map(t => {
+        const name = t.ptyId != null ? tabDisplay.get(t.ptyId)?.name : null;
+        if (!name || name === t.label) return t;
+        changed = true;
+        return { ...t, label: name };
+      });
+      return changed ? next : prev;
+    });
+  }, [tabDisplay]);
 
   // Toggle watch state for agent tabs only
   const toggleWatch = useCallback((tabId: number) => {
@@ -1167,14 +1247,22 @@ const App: React.FC = () => {
   }, []);
 
   // Handle opening a Hester session from the command palette as a full tab
-  const handleOpenHesterTab = useCallback(async (sessionId: string) => {
+  const handleOpenHesterTab = useCallback(async (sessionId: string, label?: string): Promise<number | null> => {
     console.log('Opening Hester session as tab:', sessionId);
 
-    // Spawn a new Hester TUI with the session ID to resume the conversation
-    // This always creates a new tab (doesn't reuse existing) since it's resuming a specific session
+    // Spawn a new Hester TUI with the session ID to resume the conversation.
+    // A labelled open (an Explore deep dive) refocuses its tab if it's still open.
     if (!isElectron) {
       console.warn('Cannot create tab - not running in Electron');
-      return;
+      return null;
+    }
+    if (label) {
+      const existing = tabs.find((t) => t.hesterSessionId === sessionId && t.ptyId != null && t.dockPosition === 'center');
+      if (existing) {
+        setActiveTabId(existing.id);
+        setFocusedPanel('center');
+        return existing.id;
+      }
     }
 
     try {
@@ -1187,23 +1275,27 @@ const App: React.FC = () => {
         const newTab: TabData = {
           id: tabId,
           type: 'agent',
-          label: 'Hester',
+          label: label || 'Hester',
           closable: true,
           ptyId,
           dockPosition: 'center',
           provider: 'hester',
+          ...(label ? { hesterSessionId: sessionId } : {}),
         };
 
         lee.context.recordAction('tab_create', `${tabId}:hester:${sessionId}`);
         setTabs((prev) => [...prev, newTab]);
         setActiveTabId(tabId);
         setFocusedPanel('center');
+        return tabId;
       }
+      return null;
     } catch (error) {
       console.error('Failed to spawn Hester with session:', error);
       notify('error', `Couldn't resume that Hester session: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
-  }, [workspace, notify]);
+  }, [workspace, notify, tabs]);
 
   // Handle Ask Hester from file tree context menu
   // autoSubmit defaults to true - set false to pre-populate without sending
@@ -1354,17 +1446,6 @@ const App: React.FC = () => {
           onErrorCountChange={(count) => handleBrowserErrorCountChange(tab.id, count)}
           onFrameSnapshotCaptured={(dir) => handleFrameSnapshotCaptured(tab.id, dir)}
           onCheckpointReadyChange={(ready) => handleBrowserCheckpointReadyChange(tab.id, ready)}
-        />
-      );
-    }
-
-    if (tab.type === 'library') {
-      return (
-        <LibraryPane
-          key={tab.id}
-          active={active}
-          workspace={workspace}
-          onOpenFile={handleFileOpen}
         />
       );
     }
@@ -1802,9 +1883,15 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Restore session when workspace is set
+  // Restore session when workspace is set. The restore is async and
+  // createTab (a dependency) changes as soon as the first tab opens, so the
+  // effect re-runs before sessionRestored flips; this ref makes sure one
+  // restore per workspace runs (a second one opened every tab twice).
+  const restoreStartedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!workspace || !workspaceInitialized || sessionRestored || !isElectron) return;
+    if (restoreStartedFor.current === workspace) return;
+    restoreStartedFor.current = workspace;
 
     const savedSession = loadSession(workspace);
     if (savedSession && savedSession.length > 0) {
@@ -1817,10 +1904,14 @@ const App: React.FC = () => {
         // setSessionRestored(true) below, silently disabling autosave for
         // the rest of the session. Isolate each tab and always flip the gate.
         try {
+          // Two saved tabs on one Claude session (an earlier double restore) open once.
+          const resumed = new Set<string>();
           for (const sessionTab of savedSession) {
             try {
               // Skip tabs that require runtime state not persisted in sessions
               if (sessionTab.type === ('spyglass' as any) || sessionTab.type === ('bridge' as any)) continue;
+              // The Library pane is gone (Desk D2 §8): explorations are Pages on the Desk.
+              if (sessionTab.type === 'library') continue;
 
               // File-backed tabs (editor and every viewer) are restored by
               // reopening the path, which re-runs the normal routing: viewers get
@@ -1859,6 +1950,21 @@ const App: React.FC = () => {
               // sessions saved before `provider` was persisted.
               if (sessionTab.type === 'agent') {
                 const provider = sessionTab.provider || sessionTab.label.toLowerCase();
+                // A Claude tab with a saved session resumes it in the directory
+                // it ran in; if that worktree is gone, a new session in the
+                // workspace root (and say so).
+                const plan = await restorePlan(sessionTab, provider, (dir) => lee.fs.exists(dir));
+                if (plan.kind === 'resume') {
+                  if (resumed.has(plan.session_id)) continue;
+                  resumed.add(plan.session_id);
+                  await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider, {
+                    args: resumeArgs(plan.session_id),
+                    cwd: plan.cwd,
+                    label: sessionTab.label,
+                  });
+                  continue;
+                }
+                if (plan.kind === 'fallback') notifyRef.current('warn', plan.message);
                 await createTab('agent' as Tab['type'], sessionTab.dockPosition, provider);
                 continue;
               }
@@ -1886,6 +1992,17 @@ const App: React.FC = () => {
     if (isSwitchingRef.current) return;
     saveSession(tabs, workspace);
   }, [tabs, workspace, sessionRestored, saveSession]);
+
+  // An agent's session id arrives by its hooks after its tab opened: re-save
+  // (debounced) when the known Claude sessions change, so a restore can resume them.
+  useEffect(() => {
+    if (!resumeVersion || !workspace || !sessionRestored) return;
+    const t = window.setTimeout(() => {
+      if (isSwitchingRef.current || tabsRef.current.length === 0) return;
+      saveSession(tabsRef.current, workspace);
+    }, 1000);
+    return () => window.clearTimeout(t);
+  }, [resumeVersion, workspace, sessionRestored, saveSession]);
 
   // Report context to main process for Hester integration
   // This enables bidirectional context awareness between Lee and Hester
@@ -1944,9 +2061,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isElectron) return;
 
-    // File > New - creates new untitled file tab
+    // File > New - creates new untitled file tab (the Launcher, in the Cockpit)
     lee.file.onNew(() => {
       console.log('New file requested');
+      if (cockpitModeStore.requestLauncher()) return;
       handleNewFile();
     });
 
@@ -2327,6 +2445,15 @@ const App: React.FC = () => {
     // Agent tab launchers
     handlers['hester'] = () => createTab('agent' as Tab['type'], undefined, 'hester');
     handlers['claude'] = () => createTab('agent' as Tab['type'], undefined, 'claude');
+    // Modes (Deep D1 §1.3). ⌘0 feeds the switcher (tap, hold, cycle); its
+    // keyup and Esc are handled by switcherIntercept below.
+    handlers['mode_switcher'] = () => cockpitModeStore.switcher({ kind: 'zero', now: Date.now(), lastMode: cockpitModeStore.get().lastMode });
+    handlers['mode_deep'] = () => cockpitModeStore.toggleDeep();
+    handlers['mode_manual'] = () => cockpitModeStore.toggleManual();
+    // ⌘. in Deep: the Page's action row or affordance, wherever focus is.
+    handlers['deep_actions'] = () => {
+      if (cockpitModeStore.get().mode === 'deep') requestDeepActions();
+    };
     handlers['pi'] = () => createTab('agent' as Tab['type'], undefined, 'pi');
     handlers['devops'] = () => getOrCreateTab('devops');
     // Config-only TUI launchers (work when user has configured these in .lee/config.yaml)
@@ -2336,36 +2463,44 @@ const App: React.FC = () => {
     handlers['k8s'] = () => createTab('k8s');
     handlers['sql'] = () => createTab('sql');
     handlers['hester_qa'] = () => createTab('hester-qa');
-    handlers['library'] = () => getOrCreateTab('library');
     handlers['system'] = () => getOrCreateTab('system');
     handlers['workstream'] = () => setShowWorkstreamPicker(true);
     handlers['aeronaut_pairing'] = () => setShowPairingDialog(true);
 
-    // Tab switching (Cmd+1-9)
-    handlers['tab_1'] = () => { activateTab(centerTabs[0]); setFocusedPanel('center'); };
-    handlers['tab_2'] = () => { activateTab(centerTabs[1]); setFocusedPanel('center'); };
-    handlers['tab_3'] = () => { activateTab(centerTabs[2]); setFocusedPanel('center'); };
-    handlers['tab_4'] = () => { activateTab(centerTabs[3]); setFocusedPanel('center'); };
-    handlers['tab_5'] = () => { activateTab(centerTabs[4]); setFocusedPanel('center'); };
-    handlers['tab_6'] = () => { activateTab(centerTabs[5]); setFocusedPanel('center'); };
-    handlers['tab_7'] = () => { activateTab(centerTabs[6]); setFocusedPanel('center'); };
-    handlers['tab_8'] = () => { activateTab(centerTabs[7]); setFocusedPanel('center'); };
-    handlers['tab_9'] = () => { activateTab(centerTabs[8]); setFocusedPanel('center'); };
+    // Tab switching (Cmd+1-9) over every center tab.
+    // ⌘1–⌘9 pick within the current mode: the rail's four sections in the
+    // Cockpit, tabs in Manual, nothing at the Desk (digitTarget; Desk D2 §8).
+    for (let i = 0; i < 9; i++) {
+      handlers[`tab_${i + 1}`] = () => {
+        const m = cockpitModeStore.get();
+        const t = digitTarget(m.mode, m.enabled, i);
+        if (!t) return;
+        if (t.kind === 'section') cockpitModeStore.setSection(t.section);
+        else {
+          activateTab(centerTabs[t.index]);
+          setFocusedPanel('center');
+        }
+      };
+    }
 
-    // Tab navigation
+    // Tab navigation: the plain neighbour among the center tabs.
+    const neighbour = (delta: 1 | -1): TabData | null => {
+      if (centerTabs.length < 2 || activeTabId == null) return null;
+      const i = centerTabs.findIndex((t) => t.id === activeTabId);
+      if (i < 0) return delta > 0 ? centerTabs[0] : centerTabs[centerTabs.length - 1];
+      return centerTabs[(i + delta + centerTabs.length) % centerTabs.length];
+    };
     handlers['next_tab'] = () => {
-      if (centerTabs.length > 1 && activeTabId) {
-        const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
-        const nextIndex = (currentIndex + 1) % centerTabs.length;
-        setActiveTabId(centerTabs[nextIndex].id);
+      const next = neighbour(1);
+      if (next) {
+        setActiveTabId(next.id);
         setFocusedPanel('center');
       }
     };
     handlers['prev_tab'] = () => {
-      if (centerTabs.length > 1 && activeTabId) {
-        const currentIndex = centerTabs.findIndex((t) => t.id === activeTabId);
-        const prevIndex = currentIndex === 0 ? centerTabs.length - 1 : currentIndex - 1;
-        setActiveTabId(centerTabs[prevIndex].id);
+      const prev = neighbour(-1);
+      if (prev) {
+        setActiveTabId(prev.id);
         setFocusedPanel('center');
       }
     };
@@ -2377,10 +2512,14 @@ const App: React.FC = () => {
       if (focusedTab?.type === 'agent') toggleWatch(focusedTabId!);
     };
     handlers['cycle_idle'] = () => {
-      const idleTabs = tabs.filter(t => t.type === 'agent' && t.watched && t.isIdle);
+      // Tabs that need you first, then finished turns, then Watch's idle tabs
+      // (the fallback for agents without hooks).
+      const rank = (t: TabData) =>
+        t.attention === 'needs' ? 0 : t.attention === 'review' ? 1 : t.type === 'agent' && t.watched && t.isIdle ? 2 : -1;
+      const idleTabs = tabsWithAttention.filter(t => rank(t) >= 0).sort((a, b) => rank(a) - rank(b));
       if (idleTabs.length === 0) return;
 
-      const currentTab = tabs.find(t => {
+      const currentTab = tabsWithAttention.find(t => {
         switch (t.dockPosition) {
           case 'left': return t.id === activeLeftTabId;
           case 'right': return t.id === activeRightTabId;
@@ -2389,9 +2528,7 @@ const App: React.FC = () => {
         }
       });
 
-      const currentIdleIndex = currentTab && currentTab.isIdle
-        ? idleTabs.findIndex(t => t.id === currentTab.id)
-        : -1;
+      const currentIdleIndex = currentTab ? idleTabs.findIndex(t => t.id === currentTab.id) : -1;
 
       const nextIndex = (currentIdleIndex + 1) % idleTabs.length;
       const nextIdleTab = idleTabs[nextIndex];
@@ -2428,7 +2565,8 @@ const App: React.FC = () => {
     // Resolve each action to its chord. A chord bound to two actions is a
     // registry bug, so warn rather than silently letting one win.
     const map: Record<string, () => void> = {};
-    for (const shortcut of rendererShortcuts()) {
+    const shortcuts = rendererShortcuts();
+    for (const shortcut of shortcuts) {
       const handler = handlers[shortcut.action];
       if (!handler) continue;
       const chord = resolveChord(shortcut.action, config?.keybindings);
@@ -2447,10 +2585,53 @@ const App: React.FC = () => {
     }
 
     return map;
-  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
+  }, [config, getKeybinding, statusMessages, workspace, centerTabs, activeTabId, activeLeftTabId, activeRightTabId, activeBottomTabId, focusedPanel, tabs, tabsWithAttention, createTab, getOrCreateTab, activateTab, toggleWatch, closeTab]);
 
-  // Setup hotkeys
-  useHotkeys(hotkeyMap);
+  // ---- Send to Lee (Tether §4.3): deliver what devices send this window ----
+  const tetherWorkspace = useRef(workspace);
+  tetherWorkspace.current = workspace;
+  useEffect(() => startTetherDelivery(() => tetherWorkspace.current), []);
+  // Hester as a target: the palette opens with the question (asked only with Send).
+  useEffect(
+    () =>
+      registerPaletteSink(({ text, images, submit }) => {
+        setPendingPrompt(text || null);
+        setAutoSubmitPrompt(submit);
+        setPendingImages(images.length ? images : null);
+        setShowCommandPalette(true);
+      }),
+    [],
+  );
+  // What this window can take (GET /tether/targets): the zoomed Page or Board, the palette, the focused PTY tab, the rest.
+  const touchedCardTitles = useRef(new Map<string, string>());
+  const deepNav = cockpitMode.state.deep;
+  if (cardKindOf(deepNav.card_id) && deepNav.card_id && deepNav.title) touchedCardTitles.current.set(deepNav.card_id, deepNav.title);
+  const focusedTabId = focusedPanel === 'left' ? activeLeftTabId : focusedPanel === 'right' ? activeRightTabId : focusedPanel === 'bottom' ? activeBottomTabId : activeTabId;
+  const focusedPtyId = tabs.find((t) => t.id === focusedTabId)?.ptyId ?? null;
+  const zoomedCard = cockpitMode.state.mode === 'deep' && deepNav.zoom === 'card' && deepNav.card_id && cardKindOf(deepNav.card_id) ? { card_id: deepNav.card_id, title: deepNav.title } : null;
+  const sendTargetsKey = JSON.stringify([zoomedCard, showCommandPalette, focusedPtyId, [...touchedCardTitles.current], tabs.map((t) => [t.ptyId, t.label, t.type, t.provider ?? t.runProvider ?? null])]);
+  useEffect(() => {
+    publishSendTargets(
+      buildSendTargets({
+        zoomedCard,
+        paletteOpen: showCommandPalette,
+        focusedPtyId: cockpitMode.state.mode === 'manual' ? focusedPtyId : null,
+        touchedCards: [...touchedCardTitles.current].map(([card_id, title]) => ({ card_id, title })),
+        tabs: tabs.map((t) => ({ ptyId: t.ptyId, label: t.label, type: t.type, provider: t.provider ?? t.runProvider ?? null })),
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendTargetsKey, cockpitMode.state.mode]);
+
+  // While Deep shows an exploration, the palette can Keep its answer there (D1 §5).
+  const deepExplorationId = cockpitMode.state.mode === 'deep' ? cockpitMode.state.deep.exploration_id : null;
+  const paletteExploration = useMemo(
+    () => (deepExplorationId ? { workspace, id: deepExplorationId } : undefined),
+    [deepExplorationId, workspace],
+  );
+
+  // Setup hotkeys; the ⌘0 switcher sees keys first while it is pending or open.
+  useHotkeys(hotkeyMap, { intercept: switcherIntercept });
 
   return (
     <div className="app">
@@ -2493,6 +2674,7 @@ const App: React.FC = () => {
         }}
       />
       <CommandPalette
+        exploration={paletteExploration}
         isOpen={showCommandPalette}
         onClose={() => setShowCommandPalette(false)}
         onOpenAsTab={handleOpenHesterTab}
@@ -2511,6 +2693,8 @@ const App: React.FC = () => {
           setPendingPrompt(null);
           setAutoSubmitPrompt(true); // Reset to default
         }}
+        initialImages={pendingImages}
+        onImagesConsumed={() => setPendingImages(null)}
       />
       <TitleBar />
       <TabBar
@@ -2631,11 +2815,6 @@ const App: React.FC = () => {
                     <span className="shortcut-name">Browser</span>
                     <kbd>{getDisplayKeybinding('browser', 'meta+shift+b')}</kbd>
                   </div>
-                  <div className="shortcut-chip" onClick={() => getOrCreateTab('library')}>
-                    <span className="shortcut-icon"><Icon name="book" size={14} /></span>
-                    <span className="shortcut-name">Library</span>
-                    <kbd>{getDisplayKeybinding('library', 'meta+shift+y')}</kbd>
-                  </div>
                   <div className="shortcut-chip" onClick={() => handleBridge()}>
                     <span className="shortcut-icon"><Icon name="link" size={14} /></span>
                     <span className="shortcut-name">Bridge</span>
@@ -2666,6 +2845,36 @@ const App: React.FC = () => {
         </div>
         </PanelLayout>
       </div>
+      <CockpitHost
+        mode={cockpitMode}
+        workspace={workspace}
+        config={config?.cockpit ?? null}
+        tabs={tabsWithAttention}
+        activeTabId={activeTabId}
+        copilot={copilot}
+        onCreateTab={createTab}
+        onCloseTab={closeTab}
+        onOpenTab={(tabId: number) => {
+          const t = tabs.find((x) => x.id === tabId);
+          if (!t) return;
+          if (t.dockPosition === 'center') { setActiveTabId(tabId); setFocusedPanel('center'); }
+          else handlePanelTabSelect(tabId, t.dockPosition);
+        }}
+        onOpenFile={(path: string) => handleFileOpenRef.current(path)}
+        onOpenWorkstream={handleWorkstreamSelect}
+        onAskHester={(prompt: string) => { setPendingPrompt(prompt); setAutoSubmitPrompt(false); setShowCommandPalette(true); }}
+        onNotify={(message: string, level: 'info' | 'error') => notify(level === 'error' ? 'warn' : 'info', message, { id: 'cockpit-checkin' })}
+      />
+      {cockpitMode.state.enabled && (
+        <DeepHost
+          workspace={workspace}
+          visible={cockpitMode.state.mode === 'deep'}
+          explorationId={cockpitMode.state.deep.exploration_id}
+          copilot={copilot}
+          onHop={(to) => cockpitModeStore.set(to, 'hop')}
+        />
+      )}
+      <ModeSwitcher />
       <StatusBar
         workspace={workspace}
         messages={statusMessages}
@@ -2679,6 +2888,8 @@ const App: React.FC = () => {
         onDaemonAction={handleDaemonAction}
         onSpyglass={handleSpyglass}
         onBridge={handleBridge}
+        copilot={copilot}
+        visiblePtyIds={visiblePtyIds}
       />
       {showPairingDialog && (
         <PairingDialog onClose={() => setShowPairingDialog(false)} />

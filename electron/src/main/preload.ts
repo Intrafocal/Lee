@@ -21,6 +21,11 @@ import type {
   FileChangedEvent,
   StatusMessagePayload,
 } from '../shared/lee-api';
+import { COPILOT_IPC } from '../shared/copilot';
+import { TETHER_IPC, VOICE_IPC } from '../shared/lee-api';
+import type { TetherSendDelivery } from '../shared/lee-api';
+import { copilotApi, deepApi } from './preload-copilot';
+import { cockpitApi } from './preload-cockpit';
 
 export type {
   LeeAPI,
@@ -43,8 +48,8 @@ const api: LeeAPI = {
     spawnTUI: (tuiType: string, cwd?: string, options?: any) =>
       ipcRenderer.invoke('pty:spawn-tui', tuiType, cwd, options),
 
-    spawnAgent: (provider: string, cwd?: string) =>
-      ipcRenderer.invoke('pty:spawn-agent', provider, cwd),
+    spawnAgent: (provider: string, cwd?: string, args?: string[]) =>
+      ipcRenderer.invoke('pty:spawn-agent', provider, cwd, args),
 
     getAvailableTUIs: () =>
       ipcRenderer.invoke('pty:getAvailableTUIs'),
@@ -102,6 +107,9 @@ const api: LeeAPI = {
 
   app: {
     getWorkspace: () => ipcRenderer.invoke('app:get-workspace'),
+    quit: (reason) => ipcRenderer.send(COPILOT_IPC.appQuit, { reason }),
+    // Cockpit design §7.2: app.user_name, else the macOS full name's first word, else null.
+    userName: () => ipcRenderer.invoke('app:user-name'),
   },
 
   dialog: {
@@ -516,6 +524,25 @@ const api: LeeAPI = {
       ipcRenderer.on('aeronaut:show-pairing', listener);
       return () => ipcRenderer.removeListener('aeronaut:show-pairing', listener);
     },
+  },
+  copilot: copilotApi,
+  cockpit: cockpitApi,
+  deep: deepApi,
+
+  tether: {
+    onSend: (callback) => {
+      const listener = (_event: unknown, delivery: TetherSendDelivery) => callback(delivery);
+      ipcRenderer.on(TETHER_IPC.send, listener);
+      return () => ipcRenderer.removeListener(TETHER_IPC.send, listener);
+    },
+    sendResult: (outcome) => ipcRenderer.send(TETHER_IPC.sendResult, outcome),
+    setPaletteOpen: (open) => ipcRenderer.send(TETHER_IPC.palette, { open: !!open }),
+    saveInboxImage: (image) => ipcRenderer.invoke(TETHER_IPC.inboxImage, image),
+  },
+
+  voice: {
+    micStatus: () => ipcRenderer.invoke(VOICE_IPC.micStatus),
+    requestMic: () => ipcRenderer.invoke(VOICE_IPC.micRequest),
   },
 };
 

@@ -31,7 +31,7 @@ abstract final class Phosphor {
   /// Muted text and hints
   static const text3 = Color(0xFF6B8A7E);
 
-  /// Brand, primary action, online, active
+  /// The one next step: at most one filled control per view, plus the caret, the selection and the new-answer dot
   static const phosphor = Color(0xFF44AA99);
 
   /// Hover and pressed primary
@@ -43,10 +43,10 @@ abstract final class Phosphor {
   /// Text and icons on phosphor fills
   static const onPhosphor = Color(0xFF07110D);
 
-  /// Focus ring, cursor, selection, links
+  /// Reserved for the terminal's bright green; never UI
   static const lit = Color(0xFF7FE0C0);
 
-  /// Needs you: warnings, approvals, acting
+  /// Needs you only: a dot, never a number, button or border
   static const ember = Color(0xFFF0A04B);
 
   /// Errors, offline, destructive
@@ -56,6 +56,10 @@ abstract final class Phosphor {
   static const info = Color(0xFF6FB7D9);
 
   static const overlay = Color(0xB807110D);
+
+  /// Your words (Newsreader, bundled under assets/fonts/): family, then fallbacks.
+  static const fontWrite = 'Newsreader';
+  static const fontWriteFallback = <String>['Iowan Old Style', 'Georgia'];
 
   static const radiusControl = 4.0;
   static const radiusCard = 8.0;

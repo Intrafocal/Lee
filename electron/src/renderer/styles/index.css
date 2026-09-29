@@ -14,7 +14,7 @@
   --bg-hover: var(--ground-3);
   --accent: var(--phosphor);
   --accent-color: var(--phosphor);
-  --accent-light: var(--lit);
+  --accent-light: var(--phosphor-hi); /* --lit is the terminal's; never UI (§1.1) */
   --accent-hover: var(--phosphor-hi);
   --text-primary: var(--text-1);
   --text-secondary: var(--text-2);
@@ -84,16 +84,41 @@ body {
   background: rgba(var(--error-rgb), 0.12);
 }
 
+/*
+ * Global focus (cockpit-design §1.4). Controls (buttons, rows, chips,
+ * [tabindex]) get a quiet 1px --focus-ring and brighten one ground step
+ * (a --text-1 wash over whatever fill they have). Text inputs get no ring:
+ * their border brightens to --ground-5 and the caret (--caret) shows where
+ * you're typing. tabindex="-1" is a script-focused container (an overlay, a
+ * sheet), never a keyboard stop, so it gets no ring either. The input rule
+ * is wrapped in :where() so a component's own :focus style still wins.
+ */
 .btn:focus-visible,
 .btn-primary:focus-visible,
 .btn-danger:focus-visible,
 button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
 select:focus-visible,
-[tabindex]:focus-visible {
+[role="button"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+input[type="range"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--lit);
+  box-shadow: 0 0 0 1px var(--focus-ring);
+  background-image: linear-gradient(rgba(var(--text-1-rgb), 0.05), rgba(var(--text-1-rgb), 0.05));
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  caret-color: var(--caret);
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"])):focus,
+:where(textarea):focus {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--ground-5);
 }
 
 .app {
@@ -1085,7 +1110,7 @@ select:focus-visible,
 }
 
 .file-tree-filter .filter-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .file-tree-filter .filter-clear {
@@ -1549,6 +1574,20 @@ select:focus-visible,
   flex: 0 0 auto;
 }
 
+.tab-attention-needs {
+  color: var(--ember);
+}
+
+.status-needs-you {
+  color: var(--ember);
+}
+
+.daemon-context-menu .context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
 .status-item {
   display: flex;
   align-items: center;
@@ -1902,12 +1941,57 @@ select:focus-visible,
   }
 }
 
+/* cockpit-design §6.2: the about line (quiet), then the field. No ring on
+   the input: the header's rule brightens and the caret shows (§1.4). */
+.command-palette-about {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 16px 0;
+  font-size: 13px;
+  color: var(--text-3);
+  min-width: 0;
+}
+
+.command-palette-about-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.command-palette-about-title {
+  color: var(--text-2);
+}
+
+.command-palette-about-clear {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.command-palette-about-clear:hover {
+  color: var(--text-1);
+}
+
 .command-palette-header {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--ground-4);
+  transition: border-color 0.15s;
+}
+
+.command-palette-header:focus-within {
+  border-bottom-color: var(--ground-5);
 }
 
 .command-palette-icon {
@@ -1923,6 +2007,13 @@ select:focus-visible,
   font-size: 16px;
   color: var(--text-primary);
   font-family: inherit;
+  caret-color: var(--caret);
+}
+
+.command-palette-input:focus,
+.command-palette-input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .command-palette-input::placeholder {
@@ -1933,13 +2024,72 @@ select:focus-visible,
   opacity: 0.5;
 }
 
-.command-palette-shortcut {
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
+/* Tether §4.3: the image button and the attached images, quiet. */
+.command-palette-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.command-palette-attach:hover:not(:disabled) {
+  background: var(--ground-3);
+  color: var(--text-1);
+}
+
+.command-palette-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) 16px;
+  border-bottom: 1px solid var(--ground-4);
+}
+
+.command-palette-image {
+  position: relative;
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  background: var(--ground-3);
+}
+
+.command-palette-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.command-palette-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--overlay);
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.command-palette-shortcut {
+  flex-shrink: 0;
   font-family: var(--font-ui);
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 /* Daemon warning */
@@ -2123,14 +2273,41 @@ select:focus-visible,
   font-weight: 600;
 }
 
+/* A steward answer's proposals and steer (cockpit-design §6.2): listed, acted on in Home */
+.command-palette-proposals {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.command-palette-proposals-head {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.command-palette-proposals ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.command-palette-steer {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
 /* Footer with actions */
 .command-palette-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
-  background: var(--bg-tertiary);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--ground-3);
 }
 
 .command-palette-btn {
@@ -2147,26 +2324,28 @@ select:focus-visible,
 }
 
 .command-palette-btn kbd {
-  padding: 2px 5px;
-  border-radius: 3px;
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: 400;
 }
 
+/* Dismiss and Keep: plain buttons (the primitives' Btn plain). */
 .command-palette-btn.secondary {
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
+  background: var(--ground-4);
+  color: var(--text-1);
 }
 
 .command-palette-btn.secondary kbd {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-3);
 }
 
-.command-palette-btn.secondary:hover {
-  background: var(--bg-primary);
-  color: var(--text-primary);
+.command-palette-btn.secondary:hover:not(:disabled) {
+  background: var(--ground-5);
+}
+
+.command-palette-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .command-palette-btn.primary {
@@ -2175,8 +2354,8 @@ select:focus-visible,
 }
 
 .command-palette-btn.primary kbd {
-  background: rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.9);
+  color: inherit;
+  opacity: 0.7;
 }
 
 .command-palette-btn.primary:hover {
@@ -2428,7 +2607,7 @@ select:focus-visible,
 
 .config-input:focus {
   outline: none;
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .config-input.disabled {
@@ -2579,7 +2758,7 @@ select:focus-visible,
 }
 
 .config-raw-editor:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 /* Error message */
@@ -3117,7 +3296,7 @@ select:focus-visible,
 }
 
 .browser-url-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .browser-url-input::placeholder {
@@ -3205,12 +3384,14 @@ select:focus-visible,
 }
 
 .markdown-preview a {
-  color: var(--lit);
-  text-decoration: none;
+  color: var(--text-1);
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
+  text-underline-offset: 2px;
 }
 
 .markdown-preview a:hover {
-  text-decoration: underline;
+  text-decoration-color: var(--text-2);
 }
 
 .markdown-preview .external-link-icon {
@@ -3742,7 +3923,7 @@ select:focus-visible,
 }
 
 .library-tree-new-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .library-tree-new-input::placeholder {
@@ -4619,7 +4800,7 @@ select:focus-visible,
 }
 
 .library-input-field:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .library-input-field::placeholder {
@@ -4980,7 +5161,7 @@ select:focus-visible,
 }
 
 .ws-add-task-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-add-task-input::placeholder {
@@ -5254,7 +5435,7 @@ select:focus-visible,
 }
 
 .ws-picker-filter:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-picker-filter::placeholder {
@@ -5367,7 +5548,7 @@ select:focus-visible,
 }
 
 .ws-picker-create-input:focus {
-  border-color: var(--lit);
+  border-color: var(--ground-5);
 }
 
 .ws-picker-create-input::placeholder {
@@ -6367,7 +6548,7 @@ select:focus-visible,
 
 .config-raw-file.active {
   border-color: var(--phosphor);
-  color: var(--lit);
+  color: var(--text-1);
   background: rgba(var(--phosphor-rgb), 0.12);
 }
 
@@ -6383,5 +6564,131 @@ select:focus-visible,
   border-bottom: 1px solid rgba(var(--error-rgb), 0.4);
   color: var(--error);
   font-size: 12px;
+  cursor: pointer;
+}
+
+/* LibraryPane (Copilot v3): confirmations, the spike prompt, read-only nodes */
+.library-notice-banner {
+  padding: 6px 12px;
+  background: rgba(var(--phosphor-rgb), 0.12);
+  border-bottom: 1px solid rgba(var(--phosphor-rgb), 0.4);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.library-spike-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.library-spike-form-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.library-spike-form-input {
+  width: 100%;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.library-spike-form-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.library-spike-form-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.library-tree-item.is-pruned .library-tree-label {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.library-tree-item.is-readonly .library-tree-icon,
+.library-tree-item.is-readonly .library-tree-label {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.library-tree-session-delete.is-archive:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.library-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.library-readonly-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.library-readonly-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-readonly-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.library-readonly-pre {
+  margin: 0;
+  padding: 6px 8px;
+  max-width: 100%;
+  overflow: auto;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Send to Lee's chip (Tether §4.3): a quiet line, Undo as plain text. */
+.status-send-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-2);
+  max-width: 420px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-send-chip .status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-send-undo {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--text-3);
   cursor: pointer;
 }

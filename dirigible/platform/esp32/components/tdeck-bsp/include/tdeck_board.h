@@ -81,8 +81,32 @@
 #define TDECK_TB_PIN_LEFT         1
 #define TDECK_TB_PIN_RIGHT        2
 #define TDECK_TB_PIN_CLICK        0
-#define TDECK_TB_STEP_PX         10
 #define TDECK_TB_LONG_PRESS_MS  800
+
+// ---------------------------------------------------------------------------
+// Microphone — ES7210 4-channel ADC: control on the shared I2C bus, audio over
+// I2S (RX only; the speaker amp is on its own I2S pins, unused).  Only
+// tdeck_audio.cpp (CONFIG_DIRIGIBLE_VOICE) reads these.
+//
+// UNVERIFIED on a device (plan 2026-09-28 §5.6).  From LilyGO's T-Deck
+// utilities.h (BOARD_ES7210_MCLK / LRCK / SCK / DIN) and the pin map in
+// hardware/microcontrollers/lilygo-t-deck/BOARD.md; check on the first boot
+// with voice on:
+//   - the I2C address: 0x40 (AD1/AD0 low); esp_codec_dev wants it shifted,
+//     0x80, which is ES7210_CODEC_DEFAULT_ADDR;
+//   - power: there is no separate mic gate we know of; the board's GPIO 10
+//     power gate (above) is HIGH from boot;
+//   - LilyGO's examples run the ES7210 in TDM with four slots; two mics in
+//     plain Philips I2S is what this asks for, which the ES7210 supports.
+//   - none of these share GPIO 0 (the ball's click / BOOT).
+// ---------------------------------------------------------------------------
+#define TDECK_MIC_I2S_PORT        1       // I2S_NUM_1; port 0 is the speaker's
+#define TDECK_MIC_PIN_MCLK       48
+#define TDECK_MIC_PIN_BCLK       47       // SCK
+#define TDECK_MIC_PIN_WS         21       // LRCK
+#define TDECK_MIC_PIN_DIN        14
+#define TDECK_MIC_I2C_ADDR     0x40       // 7-bit
+#define TDECK_MIC_GAIN_DB      30.0f      // a starting point for speech at arm's length
 
 // ---------------------------------------------------------------------------
 // Battery — ADC1 with a 2x divider on VBAT

@@ -45,7 +45,7 @@ inline constexpr int PAIR_LEFT_W  = 184;
 inline constexpr int PAIR_CARD_X  = PAIR_LEFT_X + PAIR_LEFT_W + 4;   // 190
 inline constexpr int PAIR_CARD_W  = SCREEN_W - PAIR_CARD_X - 2;      // 128
 
-enum class View { Tabs, Terminal, Hester, Pairing, Files, Viewer };
+enum class View { Waiting, InFlight, Review, Tabs, Terminal, Hester, Pairing, Files, Viewer, DeepIdle };
 
 // ---------------------------------------------------------------------------
 // Everything the firmware owns.  One instance, built on the LVGL task.
@@ -80,15 +80,20 @@ struct App {
     lv_group_t* group       = nullptr;
 
     // --- views ----------------------------------------------------------
+    lv_obj_t* view_waiting  = nullptr;
     lv_obj_t* view_tabs     = nullptr;
     lv_obj_t* view_terminal = nullptr;
     lv_obj_t* view_hester   = nullptr;
     lv_obj_t* view_pairing  = nullptr;
     lv_obj_t* view_files    = nullptr;
     lv_obj_t* view_viewer   = nullptr;
+    lv_obj_t* view_inflight = nullptr;
+    lv_obj_t* view_review   = nullptr;
+    lv_obj_t* view_deep_idle = nullptr;
     lv_obj_t* menu          = nullptr;   // overlay, nullptr when closed
 
-    View view = View::Tabs;
+    View view = View::Waiting;
+    View files_from = View::Tabs;   // where back from Files goes (Tabs or Review)
 
     // --- tab list -------------------------------------------------------
     lv_obj_t*        tab_list = nullptr;
@@ -114,7 +119,7 @@ struct App {
     lv_obj_t*   pair_chip_lbl[4] = { nullptr, nullptr, nullptr, nullptr };
     lv_obj_t*   pair_chip_tick[4] = { nullptr, nullptr, nullptr, nullptr };
     lv_obj_t*   pair_card      = nullptr;   // persistent summary panel
-    lv_obj_t*   pair_card_lbl  = nullptr;
+    lv_obj_t*   pair_card_col  = nullptr;   // card rows, rebuilt by card_update()
     lv_obj_t*   pair_input     = nullptr;
     lv_obj_t*   pair_meter     = nullptr;   // token n/36 or password hint
     int         pair_step      = 0;
@@ -130,6 +135,7 @@ struct App {
     std::string pair_ip;        // device IP once WiFi is up
     int         pair_rssi   = 0;
     std::string pair_error;     // shown in red in the summary card
+    std::string pair_device_id; // from the grant; shown in the summary card
 };
 
 App& app();
@@ -140,14 +146,13 @@ void app_show(View v);
 
 /// The one way out of wherever you are.  Closes the menu if it is open,
 /// otherwise steps the current view back: the terminal drops its PTY and
-/// returns to the tab list, Hester and pairing unwind, and the tab list (which
-/// has nowhere further back) opens the menu.
+/// returns to the tab list, Hester and pairing unwind, the tab list returns to
+/// Waiting, and Waiting (which has nowhere further back once its reply/capture
+/// box or an opened finished turn is closed) opens the menu.
 ///
-/// Three things call this and they must stay in agreement: the header's
-/// on-screen button, the ESC key, and a trackball long-press.  Before E15 the
-/// long-press opened the menu and did nothing at all in the terminal — the
-/// d-pad hook returned before the BSP's long-press detector ran — so a PTY tab
-/// was a dead end for anyone not reaching for ESC.
+/// Two things call this and they must stay in agreement: the header's
+/// on-screen button and a trackball long-press.  (The T-Deck keyboard has no
+/// Esc; a 0x1B byte, should another keyboard send one, is only a silent alias.)
 void app_back();
 
 // Chrome ---------------------------------------------------------------------
@@ -164,21 +169,152 @@ void chrome_show_footer(bool show);
 void chrome_set_back_glyph(const char* glyph);
 
 /// Footer action buttons (right-hand slot).  Views own their own set; adding
-/// one hides the right-hand hint label.  Buttons join the input group, so the
-/// trackball, touch and Tab all reach them — this is how pairing gets a
-/// visible "Back" affordance rather than only the ESC key.
+/// one hides the right-hand hint label.  They are touch targets first: the
+/// 15 px band is all the chrome allows, so each carries an extended hit area
+/// that reaches into the body above.  Buttons also join the input group, so
+/// Tab and Enter reach them.  A button that has a key names it after the word,
+/// capitalised: "Reload (R)".
 void      chrome_clear_footer_buttons();
 lv_obj_t* chrome_add_footer_button(const char* text, lv_event_cb_t cb, void* user);
 
 /// Legacy shim: left -> header centre, right -> footer right hint.
 void app_set_status(const char* left, const char* right = nullptr);
 
+// Trackball ------------------------------------------------------------------
+// The ball is never a pointer (tdeck_bsp_set_ball_hook).  Everywhere except
+// the terminal it scrolls: lists move a highlighted row, text scrolls by
+// pixels.  These are the shared pieces every screen uses so the feel is the
+// same on each.
+
+/// Detents of roll per list row.  One per detent made a five-row menu
+/// twitchy; two keeps a slow roll precise and a flick still covers a list.
+inline constexpr int BALL_ROW_DETENTS = 2;
+
+/// A per-axis detent accumulator for whole-step moves (rows, expand/collapse,
+/// pan columns).  Resets when the direction flips or the ball rests.
+struct BallAcc {
+    int      acc  = 0;
+    uint32_t tick = 0;
+};
+int ball_steps(BallAcc& a, int detents, int per_step = BALL_ROW_DETENTS);
+
+/// Pixels to scroll for `detents` of vertical roll: ~10 px a detent when
+/// rolled slowly, up to 4x that on a fast flick.
+int ball_scroll_px(int detents);
+
+/// The ball over a list of touch rows (tabs, menu, window picker, pairing
+/// lists, Waiting's empty state): a vertical roll moves the highlight — LVGL
+/// group focus, drawn by dg::style_focus — among the visible, focusable
+/// descendants of `list` and keeps it in view; a click activates the
+/// highlighted row, or just highlights the first visible one if nothing is.
+/// Touch taps a row directly (LVGL focuses it on the way).  Returns false if
+/// `list` has no rows, so a caller can fall back to something else.
+bool ball_list(lv_obj_t* list, int dy, bool click);
+
 // Views ---------------------------------------------------------------------
+
+// The device Cockpit (Cockpit design §8.2; plan 2026-09-28 §3.2): Work ·
+// Review · Hester, the views a plain letter apart, from each other and from
+// Tabs.
+//   w  Work       the waiting pager with Pick up on top (screen_waiting.cpp,
+//                 View::Waiting; the Pick up block is screen_tether.cpp)
+//   i  In flight  the running agents (screen_inflight.cpp)
+//   v  Review     Pages, newest first, then Files: read-only
+//                 (screen_review.cpp)
+//   x  Still thinking?  the idle-end push, while one is open
+//                 (screen_deep_idle.cpp)
+// On Work, a question page takes w as Wait (you are already on Work).
+
+/// The snapshot the three views draw (Lee's, or the demo build's canned one);
+/// null until one has arrived.
+const dirigible::AttentionSnapshot* cockpit_snapshot();
+/// Lee is reachable (always, in the demo build).
+bool cockpit_linked();
+/// Header centre for the three views: "In deep work" while a Deep session
+/// runs at the machine, else Work's line ("One thing needs you.", "Working
+/// on it.", "All clear."), with the away / link states ahead of it.
+std::string cockpit_status();
+/// w / i / v from any of the three views (and i / v from Tabs), and x for
+/// the idle-end push while one is open.  True when the key moved somewhere.
+bool cockpit_nav_key(uint8_t ascii);
+
+// Waiting ("Work"): Lee's attention queue (Copilot v0, contracts §9.3), the
+// default view once connected.  A pager, one needs-you item per page, with
+// big lettered action buttons; reply and capture open a full-body text box.
+// State lives in screen_waiting.cpp.
+void waiting_build(lv_obj_t* parent);
+void waiting_open();                       // show it, refetch the queue
+void waiting_open_capture();               // show it with the capture box open
+void waiting_render(bool new_snapshot = false);   // snapshot or link changed
+void waiting_chrome();                     // header centre, footer, page
+bool waiting_back();                       // close a box / opened item; false at root
+void waiting_alert();                      // an item's notify flipped: blink
+bool waiting_key(uint8_t ascii);
+void waiting_ball(int dx, int dy, bool click);
+
+// In flight: agents[] from the snapshot as a trackball list (state dot, name,
+// what it is doing now, age, tokens); a press opens the agent's words as a
+// page; c checks in.  State lives in screen_inflight.cpp.
+void inflight_build(lv_obj_t* parent);
+void inflight_open();
+void inflight_render();                    // a new snapshot
+bool inflight_back();                      // close an opened agent; false at the list
+bool inflight_key(uint8_t ascii);
+void inflight_ball(int dx, int dy, bool click);
+
+// Tether (docs/14-Deep-Work.md §8.1): GET /tether, where you stopped, drawn
+// as the Pick up block at the top of Work when nothing needs you: the card's
+// title, the stopped-at line (two lines, italic: your words) and "n open
+// questions".  Enter (or p, or a tap) opens the Page in the viewer, and back
+// lands in Review.  State lives in screen_tether.cpp.
+void tether_fetch();                       // refetch; Work redraws when it lands
+/// Build the (hidden) block into `parent` at `y`, full width.
+void pick_up_build(lv_obj_t* parent, int y);
+/// Show or hide the block for the last GET /tether; its height, 0 when hidden.
+int  pick_up_render(bool show);
+lv_obj_t* pick_up_obj();                   // the block's touch row, or null
+bool pick_up_open();                       // open the Page; false when nothing to pick up
+
+// Review (plan 2026-09-28 §3.2): GET /tether/pages, every Page newest first
+// (50, stashed ones too), j/k or the ball to move, Enter opens the Page's
+// markdown in the viewer; then Files, today's tree (f).  Read-only.  State
+// lives in screen_review.cpp.
+void review_build(lv_obj_t* parent);
+void review_open();                        // show it and refetch
+void review_show();                        // show it as it was (back from a Page)
+bool review_key(uint8_t ascii);
+void review_ball(int dx, int dy, bool click);
+
+// Still thinking? (Desk D2 §9.2): the idle-end push as its own page: e
+// extend, d / m / s end and rate (then an optional stopped-at line), c
+// capture into the card.  State lives in screen_deep_idle.cpp.
+void deep_idle_build(lv_obj_t* parent);
+bool deep_idle_pending();                  // the snapshot has an open push
+void deep_idle_open();
+void deep_idle_render();                   // a new snapshot
+bool deep_idle_back();                     // close the text box; false otherwise
+bool deep_idle_key(uint8_t ascii);
+void deep_idle_ball(int dx, int dy, bool click);
+
 void tabs_build(lv_obj_t* parent);
 void tabs_render(const dirigible::LeeContext* ctx);
+/// Tab-list header centre and footer: the active Lee window when there is
+/// more than one (with a Win button), otherwise the idle time.
+void tabs_chrome();
 
+/// Overlay listing the host's Lee windows; picking one makes it the window
+/// Dirigible follows (tabs, files, commands).  'w' on the tab list, or Menu.
+void windows_open();
+
+// Terminal: the tab view.  It opens in compose (plan 2026-09-28 §4.6): a
+// line you type into locally and send as one piece over POST /tether/send,
+// Enter = Send (typed, then Enter), Deliver = typed without Enter.  The
+// trackball click toggles keystroke mode, where every key goes straight to
+// the PTY (TUIs).  State lives in screen_terminal.cpp.
 void terminal_build(lv_obj_t* parent);
-void terminal_open(int pty_id, const char* label);
+/// `type` is the Lee tab type (claude, terminal, git, ...), for the send's
+/// tab_kind and whether the view opens in compose or keys.
+void terminal_open(int pty_id, const char* label, const char* type = nullptr);
 void terminal_close();
 void terminal_repaint();
 bool terminal_key(uint8_t ascii);          // true = consumed
@@ -187,38 +323,55 @@ void terminal_ball(int dx, int dy, bool click);
 void hester_build(lv_obj_t* parent);
 void hester_focus();
 void hester_submit();
+/// Keys on the Hester view: Esc goes back; with voice built in, Enter stops a
+/// clip and Backspace drops it.  False lets the question box type.
+bool hester_key(uint8_t ascii);
+void hester_ball(int dx, int dy, bool click);   // scrolls the answer
 
 void pairing_build(lv_obj_t* parent);
 void pairing_begin();                      // restart the flow at step 0
-void pairing_back();                       // one step back (ESC / Back button)
+void pairing_back();                       // one step back (Back buttons, hold)
 bool pairing_key(uint8_t ascii);
+void pairing_ball(int dx, int dy, bool click);  // list steps: highlight + pick
 
 // Files: the workspace tree over GET /fs/list (Aeronaut's FilesBrowserBody).
 // Its own state lives in screen_files.cpp.
 void files_build(lv_obj_t* parent);
-void files_open();                         // show the tree for the workspace
+/// Show the tree for the workspace; back returns to `from` (Tabs or Review).
+void files_open(View from = View::Tabs);
 bool files_key(uint8_t ascii);
 void files_ball(int dx, int dy, bool click);
 
-// Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen), paged to
-// the 40x21 cell window.  State lives in screen_viewer.cpp.
+// Viewer: one file over GET /fs/read (Aeronaut's FileViewerScreen): code in a
+// monospace cell window with a gutter, prose and rendered markdown in wrapped
+// Montserrat, all scrolled by the pixel.  State lives in screen_viewer.cpp;
+// markdown is parsed by dirigible/markdown.hpp (host-tested, tools/md-test).
 void viewer_build(lv_obj_t* parent);
 /// Open `path`; back returns to `from` (Files or Tabs).
 void viewer_open_path(const std::string& path, View from);
+/// Open a Desk Page's markdown (GET /tether/pages/:id?text_only=1),
+/// scrolled to `line` (1-based, 0 = the top); back returns to `from`.
+void viewer_open_page(const std::string& card_id, const std::string& title,
+                      View from, int line = 0);
 /// Follow an editor-like tab: shows `editors[tab_id].file`, reloads when the
 /// tab switches file, and tracks its modified flag and cursor line.
 void viewer_open_tab(int tab_id);
 void viewer_on_context(const dirigible::LeeContext* ctx);
 void viewer_close();                       // drop the file and any tab binding
 View viewer_return_view();
+#if defined(DIRIGIBLE_UI_DEMO) && DIRIGIBLE_UI_DEMO
+void viewer_open_demo();                   // demo build: a markdown sample
+#endif
 bool viewer_key(uint8_t ascii);
 void viewer_ball(int dx, int dy, bool click);
 
 // Helpers -------------------------------------------------------------------
-const lv_font_t* mono_font();      // lv_font_unscii_8  — 8x9,  dense UI
-const lv_font_t* mono_font_big();  // lv_font_unscii_16 — 8x17, text entry
-const lv_font_t* sym_font();       // montserrat_14 — the only font with glyphs
-lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour);
+// Fonts are named in theme.hpp (dg::ui_font*, dg::mono_font*).
+
+/// A label in `font` (nullptr: dg::ui_font(), Montserrat 14).  Text goes
+/// through ui_fold() unless the font is monospace, so wire text is safe here.
+lv_obj_t* make_label(lv_obj_t* parent, const char* text, lv_color_t colour,
+                     const lv_font_t* font = nullptr);
 
 /// A 4-bar signal strength indicator, `level` of 4 filled.  Returns the
 /// container, sized SIGNAL_W x SIGNAL_H; caller positions it.

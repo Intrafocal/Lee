@@ -49,3 +49,5 @@ export const xtermTheme = {
 
 export const fontMono = "'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace";
 export const fontUi = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif";
+/** Your words (Newsreader, bundled): the opener, the Page, quotes of what you wrote. */
+export const fontWrite = "'Newsreader', 'Iowan Old Style', Georgia, serif";

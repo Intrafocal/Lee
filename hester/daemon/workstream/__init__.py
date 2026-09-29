@@ -18,7 +18,6 @@ from .warehouse import ContextWarehouse
 from .slicer import ContextSlicer, ContextSlice, AgentType, get_context_limit, escalate_depth_for_context
 from .telemetry import WorkstreamEvent
 from .orchestrator import WorkstreamOrchestrator
-from .hooks import setup_workstream_hooks, generate_claude_code_hooks
 
 __all__ = [
     "Workstream", "WorkstreamPhase", "WorkstreamBrief",
@@ -30,5 +29,4 @@ __all__ = [
     "get_context_limit", "escalate_depth_for_context",
     "WorkstreamEvent",
     "WorkstreamOrchestrator",
-    "setup_workstream_hooks", "generate_claude_code_hooks",
 ]

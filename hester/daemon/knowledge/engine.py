@@ -3,9 +3,9 @@ KnowledgeEngine - Main orchestrator for proactive knowledge management.
 
 Watches Lee context and conversation to:
 - Pre-load relevant knowledge based on current file/topic
-- Detect documentation gaps
-- Suggest documentation for new code
 - Push status notifications to Lee
+
+(The idle doc-gap hint moved into Lee's lint in copilot v4.)
 
 Debounce Configuration:
 - file_open: 500ms
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 from .store import KnowledgeStore
 from .buffer import WarmContextBuffer, WarmContext
 from ..semantic.router import SemanticRouter
+from ..copilot.model_log import set_trigger
 
 logger = logging.getLogger("hester.daemon.knowledge.engine")
 
@@ -142,6 +143,10 @@ class KnowledgeEngine:
         self._debounce_task: Optional[asyncio.Task] = None
         self._idle_task: Optional[asyncio.Task] = None
         self._redis_warning_shown = False
+        # Automatic knowledge matching embeds editor context with a cloud model
+        # on every context change, so it is off unless the user turns it on
+        # (hester.proactive.knowledge_auto_match; C1/C2).
+        self._auto_match = False
 
         # Metrics
         self.metrics = KnowledgeMetrics()
@@ -150,6 +155,17 @@ class KnowledgeEngine:
     def is_available(self) -> bool:
         """Check if engine is available (store and router ready)."""
         return self.store.is_available and self.router.is_available
+
+    @property
+    def auto_match(self) -> bool:
+        return self._auto_match
+
+    def set_auto_match(self, enabled: bool) -> None:
+        """Enable or disable automatic knowledge matching on Lee context changes."""
+        enabled = bool(enabled)
+        if enabled != self._auto_match:
+            logger.info(f"Knowledge auto-match {'enabled' if enabled else 'disabled'}")
+        self._auto_match = enabled
 
     async def start(self, session_id: str) -> None:
         """
@@ -166,8 +182,8 @@ class KnowledgeEngine:
         self._running = True
         self._redis_warning_shown = False
 
-        # Start idle check task
-        self._idle_task = asyncio.create_task(self._idle_check_loop())
+        # v4: no idle doc-gap check; it is Lee's lint rule
+        # commit/new-files-undocumented now.
 
         logger.info(f"Knowledge engine started for session {session_id}")
 
@@ -196,6 +212,11 @@ class KnowledgeEngine:
         Args:
             context: Updated LeeContext from Lee editor
         """
+        if not self._auto_match:
+            # Keep the latest context for the (model-free) idle doc-gap check.
+            self._last_context = context
+            return
+
         if not self._running or not self._session_id:
             return
 
@@ -325,7 +346,8 @@ class KnowledgeEngine:
 
         self._last_trigger = trigger
 
-        # Match knowledge
+        # Match knowledge (an automatic model call: logged, and counts against C2)
+        set_trigger("automatic", name="knowledge.auto_match")
         try:
             match_result = await self.router.match_knowledge(
                 context=context_text,
@@ -404,63 +426,6 @@ class KnowledgeEngine:
 
         except Exception as e:
             logger.debug(f"Conversation matching failed: {e}")
-
-    async def _idle_check_loop(self) -> None:
-        """
-        Background loop checking for idle time suggestions.
-
-        Runs every 30s and suggests documentation for undocumented files.
-        """
-        while self._running:
-            try:
-                await asyncio.sleep(DEBOUNCE_CONFIG["idle_check"] / 1000)
-            except asyncio.CancelledError:
-                return
-
-            if not self._running or not self._session_id:
-                return
-
-            await self._check_doc_gap()
-
-    async def _check_doc_gap(self) -> None:
-        """
-        Check if current file has documentation.
-
-        If the current file is undocumented and user has been idle,
-        suggest creating documentation.
-        """
-        if not self._last_context:
-            return
-
-        # Get current file
-        current_file = None
-        if hasattr(self._last_context, "editor") and self._last_context.editor:
-            current_file = getattr(self._last_context.editor, "file_path", None)
-
-        if not current_file:
-            return
-
-        # Check if file is documented
-        indexed_files = await self.store.get_indexed_files()
-        file_name = Path(current_file).name
-
-        # Simple check: is there any doc mentioning this file?
-        has_doc = any(file_name in f for f in indexed_files)
-
-        if not has_doc:
-            # Check idle time
-            idle_seconds = 0
-            if hasattr(self._last_context, "activity"):
-                idle_seconds = getattr(self._last_context.activity, "idle_seconds", 0)
-
-            if idle_seconds >= 30:  # Only suggest after 30s idle
-                self.metrics.doc_suggestions += 1
-                await self._push_status(
-                    f"No docs for {file_name}. Create?",
-                    "hint",
-                    prompt=f"document {current_file}",
-                    ttl=90,
-                )
 
     def _build_match_context(self, context: "LeeContext") -> str:
         """

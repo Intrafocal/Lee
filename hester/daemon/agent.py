@@ -13,6 +13,7 @@ Users can override with /quick, /deep, or /reason prefixes.
 """
 
 import asyncio
+import contextvars
 import logging
 import json
 import re
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from .semantic import SemanticRouter
     from .semantic.embeddings import EmbeddingService
 
+from .cockpit.explorations import record_session_turn_locked as record_explore_turn
 from .models import (
     ContextRequest,
     ContextResponse,
@@ -139,6 +141,16 @@ from .tools import (
     execute_workstream_set_brief,
     execute_workstream_advance_to_design,
     execute_workstream_list,
+    # Cockpit tools
+    cockpit_tasks,
+    knowledge_notes,
+    lee_tabs,
+    lee_tab_read,
+    lee_tab_checkin,
+    lee_operations,
+    lee_operation_run,
+    lee_operation_propose,
+    lee_operation_result,
 )
 from ..shared.gemini_tools import HybridGeminiCapability, ToolResult, PhaseCallback, PhaseUpdate, ReActPhase
 from .prepare import (
@@ -172,6 +184,25 @@ except ImportError as e:
 from .tools.definitions import get_tools_description_for_names
 
 logger = logging.getLogger("hester.daemon.agent")
+
+# The tools the current request may run (``ContextRequest.tool_allowlist``);
+# None means unrestricted. A context variable because ``_tool_handlers`` is
+# shared by concurrent requests.
+_TOOL_ALLOWLIST: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
+    "hester_tool_allowlist", default=None
+)
+
+
+def effective_tool_filter(tool_filter: Optional[List[str]], allowlist: Optional[List[str]]) -> Optional[List[str]]:
+    """The prepare step's tool selection narrowed to ``allowlist`` (never widened; never empty when restricted)."""
+    if allowlist is None:
+        return tool_filter
+    allowed = list(dict.fromkeys(allowlist))
+    if tool_filter:
+        narrowed = [t for t in tool_filter if t in set(allowed)]
+        if narrowed:
+            return narrowed
+    return allowed
 
 
 # Command prefixes for manual depth override
@@ -559,13 +590,23 @@ class HesterDaemonAgent(HybridGeminiCapability):
             "summarize": summarize_text,
             # Visualization tools
             "render_mermaid": execute_render_mermaid,
-            "generate_image": execute_generate_image,
+            "generate_image": partial(execute_generate_image, working_dir=working_dir),
             "render_markdown": execute_render_markdown,
             # Workstream tools (no working_dir needed - use orchestrator)
             "workstream_create": execute_workstream_create,
             "workstream_set_brief": execute_workstream_set_brief,
             "workstream_advance_to_design": execute_workstream_advance_to_design,
             "workstream_list": execute_workstream_list,
+            # Cockpit tools (read tasks; tabs and operations via Lee's tab/ops domains)
+            "cockpit_tasks": partial(cockpit_tasks, working_dir=working_dir),
+            "knowledge_notes": partial(knowledge_notes, working_dir=working_dir),
+            "lee_tabs": partial(lee_tabs, working_dir=working_dir),
+            "lee_tab_read": partial(lee_tab_read, working_dir=working_dir),
+            "lee_tab_checkin": partial(lee_tab_checkin, working_dir=working_dir),
+            "lee_operations": partial(lee_operations, working_dir=working_dir),
+            "lee_operation_run": partial(lee_operation_run, working_dir=working_dir),
+            "lee_operation_propose": partial(lee_operation_propose, working_dir=working_dir),
+            "lee_operation_result": partial(lee_operation_result, working_dir=working_dir),
         }
 
         # Plugin tool handlers
@@ -581,6 +622,7 @@ class HesterDaemonAgent(HybridGeminiCapability):
         session: HesterSession,
         warm_context: Optional["WarmContext"] = None,
         prepare_result: Optional[PrepareResult] = None,
+        extra_layer: str = "",
     ) -> str:
         """
         Build the system prompt using the bespoke agent registry.
@@ -592,6 +634,8 @@ class HesterDaemonAgent(HybridGeminiCapability):
             session: Current session with editor state
             warm_context: Optional pre-loaded knowledge context from KnowledgeEngine
             prepare_result: Prepare result with prompt_id and tool list
+            extra_layer: Appended last (copilot v4 steward: steward.md on steer
+                surfaces when the steward is on, then the request's steward_context)
 
         Returns:
             Complete system prompt with all context sections
@@ -627,7 +671,21 @@ class HesterDaemonAgent(HybridGeminiCapability):
                     f"{len(warm_context.docs)} docs, ~{warm_context.token_estimate} tokens"
                 )
 
+        if extra_layer:
+            base_prompt += "\n\n" + extra_layer
+
         return base_prompt
+
+    @staticmethod
+    def _steward_layer(request: ContextRequest, working_dir: Optional[str]) -> str:
+        """steward.md / steward_context for this request (never fails the request)."""
+        try:
+            from .cockpit.steward import prompt_layer_for_request
+
+            return prompt_layer_for_request(request, working_dir)
+        except Exception as e:
+            logger.warning(f"Steward layer unavailable: {e}")
+            return ""
 
     def _build_editor_context(self, session: HesterSession) -> str:
         """Build the editor context section from multiple sources."""
@@ -769,6 +827,33 @@ You are operating in: {working_dir}
         request: ContextRequest,
         phase_callback: Optional[PhaseCallback] = None,
     ) -> ContextResponse:
+        """Process a context request; model calls carry ``request.surface`` when it is set."""
+        from .copilot.model_log import surface_override
+
+        allowlist = getattr(request, "tool_allowlist", None)
+        token = _TOOL_ALLOWLIST.set(frozenset(allowlist) if allowlist is not None else None)
+        try:
+            with surface_override(getattr(request, "surface", None)):
+                return await self._process_context(request, phase_callback=phase_callback)
+        finally:
+            _TOOL_ALLOWLIST.reset(token)
+
+    async def _execute_tool(self, tool_name: str, arguments: Dict[str, Any]):
+        """Run a tool unless the request's allow-list excludes it (checked at call time, not just declared)."""
+        allowed = _TOOL_ALLOWLIST.get()
+        if allowed is not None and tool_name not in allowed:
+            logger.warning(f"Tool {tool_name} refused: not in this request's allow-list")
+            return ToolResult(
+                tool_name=tool_name, arguments=arguments, result=None, success=False,
+                error=f"Tool {tool_name} is not available for this request (read-only)",
+            )
+        return await super()._execute_tool(tool_name, arguments)
+
+    async def _process_context(
+        self,
+        request: ContextRequest,
+        phase_callback: Optional[PhaseCallback] = None,
+    ) -> ContextResponse:
         """
         Process a context request from Lee editor.
 
@@ -796,8 +881,10 @@ You are operating in: {working_dir}
         # =====================================================================
         # SHORTCUT DETECTION - Fast path for simple commands like cd, ls, cat
         # =====================================================================
+        tool_allowlist = getattr(request, "tool_allowlist", None)
         shortcut = detect_shortcut(cleaned_message)
-        if shortcut.is_shortcut and shortcut.tool_name:
+        # Shortcuts run tools and CLI commands directly; a restricted request never takes them.
+        if tool_allowlist is None and shortcut.is_shortcut and shortcut.tool_name:
             logger.info(f"Shortcut detected: {shortcut.tool_name} - {shortcut.reason}")
             shortcut_response = await self._execute_shortcut(
                 request=request,
@@ -924,6 +1011,11 @@ You are operating in: {working_dir}
                 explicit_depth,
             )
 
+        if tool_allowlist is not None:
+            tool_filter = effective_tool_filter(tool_filter, tool_allowlist)
+            if prepare_result is not None:
+                prepare_result.relevant_tools = list(tool_filter or [])
+
         logger.info(
             f"Processing with depth={depth.name}, model={model}, "
             f"reason={classification.reason}"
@@ -990,6 +1082,7 @@ You are operating in: {working_dir}
             session,
             warm_context=warm_context,
             prepare_result=prepare_result,
+            extra_layer=self._steward_layer(request, working_dir),
         )
 
         # Create handlers bound to working directory
@@ -1117,6 +1210,10 @@ You are operating in: {working_dir}
                 session.add_message("assistant", response_text)
                 session.trace_ids.append(trace_id)
                 await self.sessions.save(session)
+
+                # An Explore deep dive (session explore-<id>) writes each turn
+                # back to its exploration file (.hester/explore/<id>/exploration.md).
+                await record_explore_turn(request.session_id, working_dir, cleaned_message, response_text)
 
                 # Extract any editor commands from response
                 commands = self._extract_commands(response_text, result.get("tool_calls", []))

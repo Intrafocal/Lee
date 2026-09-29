@@ -54,6 +54,13 @@ public:
     virtual void post(const std::string& url, cJSON* body,
                       std::function<void(int status, cJSON* resp)> cb) = 0;
 
+    // Async POST of a raw body (a voice clip: ~1 MB of WAV, which the
+    // fully-buffered cJSON post cannot carry).  Streamed from `bytes` in
+    // chunks; the response is parsed as JSON like post()'s.
+    virtual void postBody(const std::string& url, const char* content_type,
+                          std::vector<uint8_t> bytes,
+                          std::function<void(int status, cJSON* resp)> cb) = 0;
+
     // SSE streaming POST — used for Hester ReAct phase events
     //
     // event_cb fires once per SSE event (event name + data string).
