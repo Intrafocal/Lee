@@ -6,6 +6,7 @@ import '../models/machine.dart';
 import '../services/api_auth.dart';
 import '../services/lee_api.dart';
 import '../services/machine_store.dart';
+import '../services/network_route.dart';
 
 /// Reachability of a saved machine, as seen by the background pinger.
 ///
@@ -84,7 +85,7 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
     state = state.copyWith(machines: updated);
     await _store.saveMachines(updated);
     // Ping the new machine immediately
-    _pingMachine(machine);
+    _pingMachine(machine, onTailnet: await deviceOnTailnet());
   }
 
   /// Remove a machine by ID and persist.
@@ -112,12 +113,13 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
     await _store.saveActiveMachineId(id);
   }
 
-  /// Add a machine, or update the one already saved for the same
-  /// `host:hostPort` — re-pairing refreshes the token rather than
-  /// stacking up duplicate entries.
+  /// Add a machine, or update the one already saved at any of the same
+  /// addresses and port — re-pairing refreshes the token (and picks up a
+  /// tailnet address) rather than stacking up duplicate entries.
   Future<Machine> addOrUpdateMachine(Machine machine) async {
+    final addresses = [machine.host, machine.lanHost, machine.tailnetHost].whereType<String>();
     final existingIndex = state.machines.indexWhere(
-      (m) => m.host == machine.host && m.hostPort == machine.hostPort,
+      (m) => m.hostPort == machine.hostPort && addresses.any(m.knowsHost),
     );
     if (existingIndex < 0) {
       await addMachine(machine);
@@ -126,6 +128,9 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
     final existing = state.machines[existingIndex];
     final merged = existing.copyWith(
       name: machine.name,
+      host: machine.host,
+      lanHost: machine.lanHost,
+      tailnetHost: machine.tailnetHost,
       hesterPort: machine.hesterPort,
       token: machine.token,
       deviceId: machine.deviceId,
@@ -136,7 +141,7 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
       healthStatus: {...state.healthStatus}..remove(merged.id),
     );
     await _store.saveMachines(updated);
-    unawaited(_pingMachine(merged));
+    unawaited(_pingMachine(merged, onTailnet: await deviceOnTailnet()));
     return merged;
   }
 
@@ -152,40 +157,49 @@ class MachinesNotifier extends StateNotifier<MachinesState> {
 
   /// Ping all machines for health status.
   Future<void> pingAll() async {
-    await Future.wait(state.machines.map(_pingMachine));
+    final onTailnet = await deviceOnTailnet();
+    await Future.wait(state.machines.map((m) => _pingMachine(m, onTailnet: onTailnet)));
   }
 
   /// Probe a machine on an authenticated route so a rejected token shows up
   /// as [MachineHealth.unauthorized] rather than a false "online".
-  Future<MachineHealth> _pingMachine(Machine machine) async {
-    final api = LeeApi(machine: machine);
-    try {
-      final status = await api.probe();
-      final health = switch (status) {
-        ApiStatus.ok => MachineHealth.online,
-        ApiStatus.unauthorized => MachineHealth.unauthorized,
-        ApiStatus.unreachable => MachineHealth.offline,
-      };
-      if (!mounted) return health;
-
-      var machines = state.machines;
-      if (health == MachineHealth.online) {
-        final updated = machine.copyWith(lastSeen: DateTime.now());
-        machines = machines.map((m) {
-          return m.id == machine.id ? updated : m;
-        }).toList();
+  ///
+  /// A machine paired with both a local and a tailnet address is tried on
+  /// each, best first ([Machine.hostCandidates]); the first that answers
+  /// becomes its [Machine.host], so leaving the house switches to Tailscale
+  /// and coming home switches back when the phone isn't on the tailnet.
+  Future<MachineHealth> _pingMachine(Machine machine, {required bool onTailnet}) async {
+    var health = MachineHealth.offline;
+    var host = machine.host;
+    for (final candidate in machine.hostCandidates(onTailnet: onTailnet)) {
+      final api = LeeApi(machine: machine.copyWith(host: candidate));
+      try {
+        final status = await api.probe();
+        if (status == ApiStatus.unreachable) continue;
+        health = status == ApiStatus.ok ? MachineHealth.online : MachineHealth.unauthorized;
+        host = candidate;
+        break;
+      } finally {
+        api.dispose();
       }
-      state = state.copyWith(
-        machines: machines,
-        healthStatus: {...state.healthStatus, machine.id: health},
-      );
-      if (health == MachineHealth.online) {
-        await _store.saveMachines(machines);
-      }
-      return health;
-    } finally {
-      api.dispose();
     }
+    if (!mounted) return health;
+
+    final current = state.machines.where((m) => m.id == machine.id).firstOrNull;
+    if (current == null) return health;
+    final updated = current.copyWith(
+      host: host,
+      lastSeen: health == MachineHealth.online ? DateTime.now() : null,
+    );
+    final machines = state.machines.map((m) => m.id == machine.id ? updated : m).toList();
+    state = state.copyWith(
+      machines: machines,
+      healthStatus: {...state.healthStatus, machine.id: health},
+    );
+    if (health == MachineHealth.online || host != current.host) {
+      await _store.saveMachines(machines);
+    }
+    return health;
   }
 
   @override

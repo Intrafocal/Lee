@@ -23,6 +23,11 @@ class PairingPayload {
   final String? token;
   final String? error;
 
+  /// The machine's local-network and tailnet addresses, when Lee sent both
+  /// (`host` is then the tailnet one, for older builds that read only it).
+  final String? lanHost;
+  final String? tailnetHost;
+
   const PairingPayload._({
     required this.kind,
     this.host,
@@ -32,6 +37,8 @@ class PairingPayload {
     this.ticket,
     this.token,
     this.error,
+    this.lanHost,
+    this.tailnetHost,
   });
 
   factory PairingPayload.parse(String raw) {
@@ -57,6 +64,8 @@ class PairingPayload {
     final name = json['name'] as String?;
     final hostPort = _port(json, const ['hostPort', 'apiPort', 'leePort']);
     final hesterPort = _port(json, const ['hesterPort', 'daemonPort']);
+    final lanHost = _host(json['lanHost']);
+    final tailnetHost = _host(json['tailnetHost']);
 
     final ticket = (json['ticket'] as String?)?.trim();
     if (ticket != null && ticket.isNotEmpty) {
@@ -67,6 +76,8 @@ class PairingPayload {
         hostPort: hostPort,
         hesterPort: hesterPort,
         ticket: ticket,
+        lanHost: lanHost,
+        tailnetHost: tailnetHost,
       );
     }
 
@@ -79,6 +90,8 @@ class PairingPayload {
         hostPort: hostPort,
         hesterPort: hesterPort,
         token: token,
+        lanHost: lanHost,
+        tailnetHost: tailnetHost,
       );
     }
 
@@ -86,6 +99,11 @@ class PairingPayload {
       kind: PairingPayloadKind.invalid,
       error: 'QR code missing a pairing token or ticket.',
     );
+  }
+
+  static String? _host(Object? value) {
+    final s = value is String ? value.trim() : null;
+    return (s == null || s.isEmpty) ? null : s;
   }
 
   /// Read the first present port key, tolerating numbers sent as strings.

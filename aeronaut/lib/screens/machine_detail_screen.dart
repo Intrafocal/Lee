@@ -96,6 +96,9 @@ class _MachineDetailScreenState extends ConsumerState<MachineDetailScreen> {
                   title: 'Connection',
                   rows: [
                     _Row('Host', '${machine.host}:${machine.hostPort}'),
+                    _Row('Route', machine.routeLabel),
+                    if (machine.lanHost != null) _Row('Local address', machine.lanHost!),
+                    if (machine.tailnetHost != null) _Row('Tailscale address', machine.tailnetHost!),
                     _Row(
                       'Hester port',
                       machine.hesterPort?.toString() ?? 'not configured',

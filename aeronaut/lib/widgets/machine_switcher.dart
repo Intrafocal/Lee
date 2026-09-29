@@ -63,6 +63,13 @@ class MachineSwitcher extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                const SizedBox(width: 8),
+                Text(
+                  machine.routeLabel,
+                  style: AeronautTheme.caption1.copyWith(
+                    color: AeronautColors.textTertiary,
+                  ),
+                ),
               ],
             ),
           );

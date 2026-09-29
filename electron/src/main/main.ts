@@ -1917,18 +1917,22 @@ function setupIPC(): void {
   // ============================================
 
   ipcMain.handle('aeronaut:get-pairing-qr', async () => {
-    // Find a non-internal IPv4 address
+    // `host` prefers the Tailscale address (100.64.0.0/10), which reaches
+    // this Mac from the LAN and from mobile data alike; older Aeronaut and
+    // Dirigible read only that. `lanHost` and `tailnetHost` let newer ones
+    // pick per network: Tailscale when the phone is on it, local otherwise.
     const interfaces = os.networkInterfaces();
-    let localIp = '127.0.0.1';
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name] || []) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          localIp = iface.address;
-          break;
-        }
-      }
-      if (localIp !== '127.0.0.1') break;
-    }
+    const ipv4 = Object.values(interfaces)
+      .flat()
+      .filter((iface): iface is os.NetworkInterfaceInfo => !!iface && iface.family === 'IPv4' && !iface.internal)
+      .map((iface) => iface.address);
+    const isTailscale = (addr: string) => {
+      const [a, b] = addr.split('.').map(Number);
+      return a === 100 && b >= 64 && b <= 127;
+    };
+    const tailnetHost = ipv4.find(isTailscale);
+    const lanHost = ipv4.find((addr) => !isTailscale(addr));
+    const localIp = tailnetHost ?? lanHost ?? '127.0.0.1';
 
     // The daemon is always spawned on :9000 today (see pty-manager.ts), but
     // read `hester.listen_port` from the focused window's merged config so
@@ -1949,6 +1953,8 @@ function setupIPC(): void {
     const pairingInfo = {
       name: os.hostname(),
       host: localIp,
+      ...(lanHost ? { lanHost } : {}),
+      ...(tailnetHost ? { tailnetHost } : {}),
       hostPort: apiPort,
       hesterPort,
       // Alias of hostPort for forward compatibility - keep hostPort too so

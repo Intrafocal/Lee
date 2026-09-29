@@ -90,7 +90,7 @@ class MachineCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${machine.host}:${machine.hostPort}',
+                      '${machine.host}:${machine.hostPort} · ${machine.routeLabel}',
                       style: AeronautTheme.mono.copyWith(
                         color: AeronautColors.textSecondary,
                       ),

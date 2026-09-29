@@ -57,7 +57,10 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     // Watch for active machine changes
     _ref.listen<MachinesState>(machinesProvider, (prev, next) {
       final newId = next.activeMachineId;
-      if (newId != _connectedMachineId) {
+      // A new machine, or the same one reached on its other address
+      // (Tailscale ↔ local): reconnect either way.
+      final hostChanged = prev?.activeMachine?.host != next.activeMachine?.host;
+      if (newId != _connectedMachineId || (newId != null && hostChanged)) {
         _disconnect();
         if (newId != null && next.activeMachine != null) {
           _connect(next.activeMachine!);

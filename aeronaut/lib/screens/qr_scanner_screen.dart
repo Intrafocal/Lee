@@ -9,6 +9,7 @@ import '../models/pairing_payload.dart';
 import '../providers/auth_provider.dart';
 import '../providers/machines_provider.dart';
 import '../services/copilot_api.dart';
+import '../services/network_route.dart';
 import '../theme/aeronaut_colors.dart';
 import '../theme/aeronaut_theme.dart';
 
@@ -71,12 +72,28 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
     }
   }
 
+  /// The address to pair on: of the ones the QR carried, the first that
+  /// answers, best first for where this phone is right now.
+  Future<String> _pairingHost(PairingPayload payload) async {
+    final candidates = Machine(
+      id: '',
+      name: '',
+      host: payload.host!,
+      lanHost: payload.lanHost,
+      tailnetHost: payload.tailnetHost,
+    ).hostCandidates(onTailnet: await deviceOnTailnet());
+    if (candidates.length == 1) return candidates.first;
+    return await firstReachableHost(candidates, payload.hostPort ?? 9001) ?? payload.host!;
+  }
+
   Future<void> _pairWithToken(PairingPayload payload) async {
-    final host = payload.host!;
+    final host = await _pairingHost(payload);
     final machine = Machine(
       id: const Uuid().v4(),
       name: (payload.name != null && payload.name!.isNotEmpty) ? payload.name! : host,
       host: host,
+      lanHost: payload.lanHost,
+      tailnetHost: payload.tailnetHost,
       hostPort: payload.hostPort ?? 9001,
       hesterPort: payload.hesterPort ?? 9000,
       token: payload.token!,
@@ -85,7 +102,7 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
   }
 
   Future<void> _redeemTicket(PairingPayload payload) async {
-    final host = payload.host!;
+    final host = await _pairingHost(payload);
     final hostPort = payload.hostPort ?? 9001;
     final api = PairingApi(host: host, hostPort: hostPort);
     final PairRedeemResult result;
@@ -116,6 +133,8 @@ class _QrScannerScreenState extends ConsumerState<QrScannerScreen> {
           ? payload.name!
           : (result.name ?? host),
       host: host,
+      lanHost: payload.lanHost,
+      tailnetHost: payload.tailnetHost,
       hostPort: hostPort,
       hesterPort: result.hesterPort ?? payload.hesterPort ?? 9000,
       token: result.token!,

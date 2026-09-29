@@ -19,6 +19,12 @@ class Machine extends Equatable {
   /// holding a pre-Copilot shared-token QR pairing (v1 payload).
   final String? deviceId;
 
+  /// The machine's address on the local network and on the tailnet, when
+  /// the pairing QR carried them. [host] is whichever of the two answered
+  /// last (see `MachinesNotifier`); a manually added machine has neither.
+  final String? lanHost;
+  final String? tailnetHost;
+
   const Machine({
     required this.id,
     required this.name,
@@ -29,6 +35,8 @@ class Machine extends Equatable {
     this.workspace,
     this.lastSeen,
     this.deviceId,
+    this.lanHost,
+    this.tailnetHost,
   });
 
   Machine copyWith({
@@ -41,6 +49,8 @@ class Machine extends Equatable {
     String? workspace,
     DateTime? lastSeen,
     String? deviceId,
+    String? lanHost,
+    String? tailnetHost,
   }) {
     return Machine(
       id: id ?? this.id,
@@ -52,8 +62,35 @@ class Machine extends Equatable {
       workspace: workspace ?? this.workspace,
       lastSeen: lastSeen ?? this.lastSeen,
       deviceId: deviceId ?? this.deviceId,
+      lanHost: lanHost ?? this.lanHost,
+      tailnetHost: tailnetHost ?? this.tailnetHost,
     );
   }
+
+  /// Tailscale hands out 100.64.0.0/10 addresses and `*.ts.net` names.
+  static bool isTailnetAddress(String host) {
+    if (host.endsWith('.ts.net')) return true;
+    final parts = host.split('.');
+    if (parts.length != 4) return false;
+    final a = int.tryParse(parts[0]);
+    final b = int.tryParse(parts[1]);
+    return a == 100 && b != null && b >= 64 && b <= 127;
+  }
+
+  /// Addresses to try, best first: the tailnet when this phone is on it,
+  /// otherwise the local network, then the other, then [host] if it's
+  /// neither (a manual entry).
+  List<String> hostCandidates({required bool onTailnet}) {
+    final ordered = onTailnet ? [tailnetHost, lanHost] : [lanHost, tailnetHost];
+    return {...ordered.whereType<String>(), host}.toList();
+  }
+
+  /// Whether [host] is a known address of this machine.
+  bool knowsHost(String address) =>
+      address == host || address == lanHost || address == tailnetHost;
+
+  /// "Tailscale" or "Local", for the route [host] is on.
+  String get routeLabel => isTailnetAddress(host) ? 'Tailscale' : 'Local';
 
   /// Base URL for Lee Host API
   String get hostUrl => 'http://$host:$hostPort';
@@ -88,6 +125,8 @@ class Machine extends Equatable {
           ? DateTime.tryParse(json['lastSeen'] as String)
           : null,
       deviceId: json['deviceId'] as String?,
+      lanHost: json['lanHost'] as String?,
+      tailnetHost: json['tailnetHost'] as String?,
     );
   }
 
@@ -102,6 +141,8 @@ class Machine extends Equatable {
       'workspace': workspace,
       'lastSeen': lastSeen?.toIso8601String(),
       'deviceId': deviceId,
+      'lanHost': lanHost,
+      'tailnetHost': tailnetHost,
     };
   }
 
@@ -116,5 +157,7 @@ class Machine extends Equatable {
         workspace,
         lastSeen,
         deviceId,
+        lanHost,
+        tailnetHost,
       ];
 }
