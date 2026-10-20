@@ -1023,6 +1023,16 @@ export class PTYManager extends EventEmitter {
     // window config for it. Apply the daemon window's `source:` files here
     // instead - they carry things like GOOGLE_APPLICATION_CREDENTIALS.
     const daemonConfig = this.daemonConfig;
+
+    // A workspace .env is the common place for the key. Take only that one
+    // variable - the daemon is shared and long-lived, so it shouldn't inherit
+    // the rest of a project's .env. `source:` files and config override it.
+    const dotEnvPath = this.daemonWorkspace ? path.join(this.daemonWorkspace, '.env') : null;
+    if (dotEnvPath && fs.existsSync(dotEnvPath)) {
+      const dotEnvKey = parseEnvFile(dotEnvPath).GOOGLE_API_KEY;
+      if (dotEnvKey) env.GOOGLE_API_KEY = dotEnvKey;
+    }
+
     if (daemonConfig?.source && daemonConfig.source.length > 0) {
       const sourceEnv = loadSourceEnv(daemonConfig.source, this.daemonWorkspace || undefined);
       delete sourceEnv.PATH; // PATH is owned by the extendedPath getter
@@ -1084,13 +1094,14 @@ export class PTYManager extends EventEmitter {
   }
 
   /**
-   * Check if GOOGLE_API_KEY is available from workspace config, global config, or process environment.
+   * Check if GOOGLE_API_KEY is available from config, `source:` files, the
+   * workspace .env, or process environment.
    * Returns the source if found, or null if missing.
    */
-  private getGoogleApiKeySource(): 'config' | 'env' | null {
-    // Same source of truth as getDaemonEnvironment(): the deep-merged
-    // workspace config (~/.config/lee < ~/.lee < <workspace>/.lee).
-    if (this.daemonConfig?.hester?.google_api_key) return 'config';
+  private getGoogleApiKeySource(): 'workspace' | 'env' | null {
+    // Ask getDaemonEnvironment() itself so the check can't drift from what
+    // the daemon is actually spawned with.
+    if (this.getDaemonEnvironment().GOOGLE_API_KEY) return 'workspace';
     if (process.env.GOOGLE_API_KEY) return 'env';
     return null;
   }
@@ -1122,7 +1133,7 @@ export class PTYManager extends EventEmitter {
     if (!apiKeySource) {
       this.log('WARN', 'Skipping daemon start: GOOGLE_API_KEY not found in workspace config or environment');
       this.emit('daemon-warning', {
-        message: 'Hester needs GOOGLE_API_KEY — set it in .lee/config.yaml under hester.google_api_key or export it in your shell',
+        message: 'Hester needs GOOGLE_API_KEY — set it in .lee/config.yaml under hester.google_api_key, in the workspace .env, or export it in your shell',
         type: 'warning' as const,
       });
       return;
@@ -1303,7 +1314,7 @@ export class PTYManager extends EventEmitter {
     // Pre-flight: check API key before attempting to start
     const apiKeySource = this.getGoogleApiKeySource();
     if (!apiKeySource) {
-      const error = 'GOOGLE_API_KEY not configured. Set hester.google_api_key in .lee/config.yaml or export GOOGLE_API_KEY in your shell.';
+      const error = 'GOOGLE_API_KEY not configured. Set hester.google_api_key in .lee/config.yaml, add it to the workspace .env, or export GOOGLE_API_KEY in your shell.';
       this.log('WARN', error);
       this.emit('daemon-warning', { message: error, type: 'warning' as const });
       return { success: false, error };
