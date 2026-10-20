@@ -404,8 +404,10 @@ export class PTYManager extends EventEmitter {
       const value = line?.slice('__LEE_PATH__'.length).trim();
       // Sanity check: a PATH is colon-separated. A shell whose $PATH isn't a
       // plain string (fish expands it as a list) would hand back something
-      // space-separated - ignore that rather than poisoning the PATH.
-      if (value && value.includes(':') && !value.includes(' ')) {
+      // space-separated - ignore that rather than poisoning the PATH. Spaces
+      // alone aren't disqualifying ("Application Support" is a legitimate
+      // directory name), so require every non-empty entry to be absolute.
+      if (value && value.includes(':') && value.split(':').filter(Boolean).every((p) => p.startsWith('/'))) {
         this.loginShellPath = value;
         this.log('INFO', 'Resolved login-shell PATH', { entries: value.split(':').length });
       }
